@@ -84,7 +84,7 @@ class Settings(BaseSettings):
         )
         return (init_settings, env_settings, toml_settings, dotenv_settings, file_secret_settings)
 
-    issuer: str = "http://localhost:8000"
+    issuer: str = "http://127.0.0.1:8000"
     base_url: str = ""
     host: str = "127.0.0.1"
     port: int = 8000

@@ -10,7 +10,7 @@ Elle est lue au démarrage par [pydantic-settings](https://docs.pydantic.dev/lat
 
 | Variable | Défaut | Description |
 | --- | --- | --- |
-| `THEPUROIDC_ISSUER` | `http://localhost:8000` | Identifiant public de l'émetteur : l'URL où le serveur est joignable. Doit être stable et, en production, en **HTTPS**. |
+| `THEPUROIDC_ISSUER` | `http://127.0.0.1:8000` | Identifiant public de l'émetteur : l'URL où le serveur est joignable. Doit être stable et, en production, en **HTTPS**. |
 | `THEPUROIDC_BASE_URL` | *(issuer)* | Base utilisée pour construire les URL des endpoints publiées dans le document de discovery (`/authorize`, `/token`, `/userinfo`, `/.well-known/jwks.json`, …). Par défaut : l'issuer. |
 | `THEPUROIDC_HOST` | `127.0.0.1` | Interface réseau sur laquelle écoute le serveur Uvicorn. |
 | `THEPUROIDC_PORT` | `8000` | Port d'écoute. |
@@ -93,7 +93,7 @@ Le fichier ne contient actuellement :
 ### Lancement local simple (en mémoire)
 
 ```sh
-THEPUROIDC_ISSUER=http://localhost:8000 uv run python -m thepuroidc
+THEPUROIDC_ISSUER=http://127.0.0.1:8000 uv run python -m thepuroidc
 ```
 
 ### Stockage SQL pour la production

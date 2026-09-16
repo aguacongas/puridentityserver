@@ -182,7 +182,7 @@ class TestSettingsProfiles:
 
     def test_defaults_to_empty_dict(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config = tmp_path / "config.toml"
-        config.write_text("[settings]\nissuer = 'http://localhost:8000'\n", encoding="utf-8")
+        config.write_text("[settings]\nissuer = 'http://127.0.0.1:8000'\n", encoding="utf-8")
         monkeypatch.setenv("THEPUROIDC_SETTINGS_FILE", str(config))
 
         settings = Settings(_env_file=None)
