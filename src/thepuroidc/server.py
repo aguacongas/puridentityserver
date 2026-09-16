@@ -14,7 +14,7 @@ from thepuroidc.application.token import TokenConfig, TokenUseCase
 from thepuroidc.application.userinfo import UserInfoConfig, UserInfoUseCase
 from thepuroidc.domain.jwks import JWTAlgorithm
 from thepuroidc.domain.userinfo import UserClaims
-from thepuroidc.infrastructure.claims import InMemoryClaimsProvider
+from thepuroidc.infrastructure.claims import UserStoreClaimsProvider
 from thepuroidc.infrastructure.jwks import DefaultKeyManager
 from thepuroidc.infrastructure.persistence.factory import (
     build_authorization_code_repository,
@@ -82,7 +82,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     userinfo_usecase = UserInfoUseCase(
         UserInfoConfig(issuer=settings.issuer),
         token_manager,
-        InMemoryClaimsProvider(user_repository),
+        UserStoreClaimsProvider(user_repository),
     )
 
     @asynccontextmanager

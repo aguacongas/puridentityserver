@@ -21,7 +21,7 @@ from thepuroidc.application.userinfo import (
 from thepuroidc.domain.authorization import Scope
 from thepuroidc.domain.jwks import JWTAlgorithm
 from thepuroidc.domain.userinfo import UserClaims
-from thepuroidc.infrastructure.claims import InMemoryClaimsProvider
+from thepuroidc.infrastructure.claims import UserStoreClaimsProvider
 from thepuroidc.infrastructure.jwks import DefaultKeyManager
 from thepuroidc.infrastructure.persistence.memory import InMemoryKeyPairRepository
 from thepuroidc.infrastructure.persistence.users_memory import InMemoryUserRepository
@@ -158,7 +158,7 @@ class TestUserInfoUseCase:
 
     def _claims_provider(
         self, profiles: dict[str, dict[str, object]] | None = None
-    ) -> InMemoryClaimsProvider:
+    ) -> UserStoreClaimsProvider:
         """Construit un ClaimsProvider adossé à un user store mémoire seedé."""
         repository = InMemoryUserRepository()
         if profiles:
@@ -170,7 +170,7 @@ class TestUserInfoUseCase:
                     ]
                 )
             )
-        return InMemoryClaimsProvider(repository)
+        return UserStoreClaimsProvider(repository)
 
     def _result(
         self,

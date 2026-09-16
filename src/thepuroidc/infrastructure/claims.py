@@ -1,10 +1,9 @@
-"""Implémentation de démonstration du port ``ClaimsProvider``.
+"""Implémentation du port ``ClaimsProvider`` adossée au user store.
 
-Résout les claims utilisateur via le ``UserRepository`` injecté (le user
-store). Les données de démonstration ne sont pas en dur dans le code :
-elles sont déclarées dans ``config.toml`` (`THEPUROIDC_USERINFO_PROFILES`)
-et déversées dans le store au démarrage. Une vraie base d'utilisateurs
-implémenterait le même port pour alimenter ``/userinfo``.
+Résout les claims utilisateur via le ``UserRepository`` injecté (backends
+``memory`` ou ``sql``, choisi par ``KEY_STORE_TYPE``), alimenté au démarrage
+depuis les profils déclarés dans la configuration
+(`THEPUROIDC_USERINFO_PROFILES`).
 """
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ from thepuroidc.domain.userinfo import UserClaims
 from thepuroidc.interfaces.repositories.user_repository import UserRepository
 
 
-class InMemoryClaimsProvider:
+class UserStoreClaimsProvider:
     """Résout les claims depuis le user store (repository injecté).
 
     Un ``subject`` inconnu retourne des claims vides (seul ``sub`` est
