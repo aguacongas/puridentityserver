@@ -1,6 +1,7 @@
 """Tests de la persistance SQL des clients et des codes d'autorisation."""
 
 import asyncio
+import sqlite3
 from collections.abc import Awaitable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -106,6 +107,50 @@ def test_sql_code_repo_delete(tmp_path: Path) -> None:
     run(repo.delete("to-delete"))
     run(repo.delete("missing"))
     assert run(repo.find_by_code("to-delete")) is None
+    run(repo.close())
+
+
+def test_sql_code_repo_migrates_table_created_before_subject(tmp_path: Path) -> None:
+    db_path = tmp_path / "codes.db"
+    connection = sqlite3.connect(db_path)
+    connection.executescript(
+        """
+        CREATE TABLE authorization_codes (
+            code VARCHAR(128) NOT NULL,
+            client_id VARCHAR(128) NOT NULL,
+            redirect_uri VARCHAR(1024) NOT NULL,
+            scopes JSON NOT NULL,
+            code_challenge VARCHAR(512) NOT NULL,
+            code_challenge_method VARCHAR(8) NOT NULL,
+            nonce VARCHAR(256) NOT NULL,
+            expires_at DATETIME NOT NULL,
+            is_consumed BOOLEAN NOT NULL,
+            PRIMARY KEY (code)
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO authorization_codes
+        (code, client_id, redirect_uri, scopes, code_challenge,
+         code_challenge_method, nonce, expires_at, is_consumed)
+        VALUES ('legacy-code', 'web-app', 'https://app.example/callback', '["openid"]',
+                'challenge-like', 'S256', 'n-legacy',
+                '2026-01-01T00:00:00+00:00', 0)
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    repo = SQLAuthorizationCodeRepository(f"sqlite+aiosqlite:///{db_path}")
+    run(repo.initialise())
+
+    code = run(repo.find_by_code("legacy-code"))
+    assert code is not None
+    assert code.subject == ""
+    assert run(repo.find_by_code("legacy-code")).is_consumed is False
+    run(repo.save(AuthorizationCode(code="new-code", client_id="web-app", subject="alice-uuid")))
+    assert run(repo.find_by_code("new-code")).subject == "alice-uuid"
     run(repo.close())
 
 
