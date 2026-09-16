@@ -24,6 +24,7 @@ Elle est lue au démarrage par [pydantic-settings](https://docs.pydantic.dev/lat
 | `THEPUROIDC_ACCESS_TOKEN_TTL_SECONDS` | `3600` | Durée de vie de l'access token émis (secondes). |
 | `THEPUROIDC_SETTINGS_FILE` | `config.toml` | Chemin du fichier TOML des défauts du projet (table `[settings]`), notamment les clients seed. |
 | `THEPUROIDC_CLIENTS_SEED` | *(config.toml)* | Liste JSON de clients seed au démarrage (format `[{"client_id":"...","client_secret":"...","redirect_uris":["..."],"scopes":"openid","client_type":"public"}]`). Par défaut, `config.toml` fournit le client de démo `sample-pkce-client`. |
+| `THEPUROIDC_USERINFO_PROFILES` | *(config.toml)* | Annuaire des profils utilisateurs servis par `/userinfo` : objet JSON mappant un `subject` (`sub`) à ses claims (format `{"web-app": {"name": "...", "email": "..."}}`). Par défaut, `config.toml` fournit les profils de démo des clients `sample-pkce-client` et `web-app`. |
 
 ### `issuer` vs `base_url`
 
@@ -67,21 +68,24 @@ défauts, avec la hiérarchie de priorité suivante :
 arguments d'init > variables d'environnement (THEPUROIDC_*) > config.toml > défauts du code
 ```
 
-Le fichier ne contient actuellement que le **client de démo du flow
-Authorization Code + PKCE** (`sample-pkce-client`, client *public*, callback
-`http://127.0.0.1:5173/callback`, scopes `openid profile email`) utilisé par
-[`samples/pkce-client`](../samples/pkce-client/README.md).
+Le fichier ne contient actuellement :
 
-Pour personnaliser ou ajouter des clients sans toucher au code, deux options :
+- le **client de démo du flow Authorization Code + PKCE** (`sample-pkce-client`, client
+  *public*, callback `http://127.0.0.1:5173/callback`, scopes `openid profile email`) ;
+- les **profils utilisateurs de démonstration** servis par `/userinfo` (clés
+  `sample-pkce-client` et `web-app`, claims `name`, `email`, `address`, … filtrés selon les
+  scopes accordés au token, voir OIDC Core 1.0 §5.4).
 
-- surcharger le chemin via `THEPUROIDC_SETTINGS_FILE` (ex. copier
-  `config.toml` vers `config.local.toml`, l'éditer, puis
-  `THEPUROIDC_SETTINGS_FILE=config.local.toml uv run python -m thepuroidc`) ;
-- passer la liste complète par l'environnement :
-  `THEPUROIDC_CLIENTS_SEED='[{"client_id": "my-app", ...}]'` (remplace `config.toml`).
+- Pour personnaliser ou ajouter des clients sans toucher au code, deux options :
 
-> Note : `THEPUROIDC_CLIENTS_SEED` **remplace** la liste par défaut, il ne la
-> fusionne pas. Déclarez la liste complète des clients souhaités.
+  - surcharger le chemin via `THEPUROIDC_SETTINGS_FILE` (ex. copier
+    `config.toml` vers `config.local.toml`, l'éditer, puis
+    `THEPUROIDC_SETTINGS_FILE=config.local.toml uv run python -m thepuroidc`) ;
+  - passer la liste complète par l'environnement :
+    `THEPUROIDC_CLIENTS_SEED='[{"client_id": "my-app", ...}]'` (remplace `config.toml`).
+
+> Note : `THEPUROIDC_CLIENTS_SEED` et `THEPUROIDC_USERINFO_PROFILES` **remplacent**
+> les valeurs par défaut, ils ne les fusionnent pas. Déclarez l'ensemble complet.
 
 ## Exemples
 
@@ -123,7 +127,8 @@ THEPUROIDC_ISSUER=https://id.example.com uv run uvicorn thepuroidc.server:app --
   `exp`) puis renvoie les claims filtrés par les scopes accordés au jeton
   (OIDC Core 1.0 §5.4). Les claims sont résolus par un `ClaimsProvider`
   (`interfaces/domain/userinfo.py`) dont l'implémentation livrée est un
-  annuaire **en mémoire & de démonstration** (`infrastructure/claims.py`) —
+  annuaire **en mémoire** (`infrastructure/claims.py`), alimenté par les
+  profils déclarés dans la configuration (`THEPUROIDC_USERINFO_PROFILES`) —
   prête à être remplacée par un vrai user store.
 - Toutes les opérations sont asynchrones (`async/await`), compatibles avec l'event loop
   de FastAPI.

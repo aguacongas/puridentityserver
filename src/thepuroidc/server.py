@@ -79,7 +79,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     userinfo_usecase = UserInfoUseCase(
         UserInfoConfig(issuer=settings.issuer),
         token_manager,
-        InMemoryClaimsProvider(),
+        InMemoryClaimsProvider(settings.userinfo_profiles),
     )
 
     @asynccontextmanager

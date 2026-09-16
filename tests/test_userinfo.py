@@ -234,7 +234,7 @@ class TestUserInfoUseCase:
         usecase = UserInfoUseCase(
             UserInfoConfig(issuer=_ISSUER),
             _NoSubTokenManager(),  # type: ignore[arg-type]
-            InMemoryClaimsProvider(),
+            InMemoryClaimsProvider({}),
         )
         value = "useless-token"
         result = run(usecase.execute(UserInfoRequest(access_token=value)))

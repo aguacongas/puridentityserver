@@ -38,6 +38,17 @@ pytest                       # tests + couverture (min 80 %)
 - **Formatage** (automatisé par `ruff format`) : double quotes, 4 espaces,
   100 caractères max, imports triés (`isort`).
 
+## Configuration
+
+- **Pas de configuration par défaut en dur dans le code** : les valeurs de démonstration
+  (adresses, ports, clients seed, profils utilisateurs du `ClaimsProvider`, …) se déclarent
+  dans le **`config.toml`** de la racine (table `[settings]`), pas dans `src/`. Le code ne
+  déclare qu'un défaut *neutre* — l'option absente — et reçoit la configuration par injection
+  (`Settings`, composition root).
+- Tout nouveau paramètre (`THEPUROIDC_*`) est exposé dans `Settings`
+  (`infrastructure/settings.py`), documenté dans `docs/configuration.md` et, si ses défauts
+  de démonstration comptent pour l'exécution locale, déclaré dans `config.toml`.
+
 ## Sécurité
 
 - **Jamais de secret en dur** ni de token dans les logs (utiliser `SecretStr`).

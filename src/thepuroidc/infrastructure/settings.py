@@ -104,6 +104,9 @@ class Settings(BaseSettings):
     access_token_ttl_seconds: int = 3600
     clients_seed: Annotated[tuple[dict[str, object], ...], NoDecode] = ()
 
+    # UserInfo (OIDC Core §5.3) — annuaire des profils (`sub` -> claims)
+    userinfo_profiles: Annotated[dict[str, dict[str, object]], NoDecode] = {}
+
     @field_validator("jwks_algorithms", mode="before")
     @classmethod
     def _split_algorithms(cls, value: object) -> object:
@@ -123,6 +126,19 @@ class Settings(BaseSettings):
             if not isinstance(parsed, list):
                 raise ValueError("THEPUROIDC_CLIENTS doit être une liste JSON")
             return tuple(parsed)
+        return value
+
+    @field_validator("userinfo_profiles", mode="before")
+    @classmethod
+    def _parse_userinfo_profiles(cls, value: object) -> object:
+        """Transforme `THEPUROIDC_USERINFO_PROFILES='{...}'` (JSON) en dict."""
+        if isinstance(value, str):
+            import json
+
+            parsed = json.loads(value)
+            if not isinstance(parsed, dict):
+                raise ValueError("THEPUROIDC_USERINFO_PROFILES doit être un objet JSON")
+            return parsed
         return value
 
     @field_validator("key_store_type")
