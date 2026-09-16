@@ -13,12 +13,14 @@ from thepuroidc.application.jwks import JWKSetConfig, JWKSetUseCase
 from thepuroidc.application.token import TokenConfig, TokenUseCase
 from thepuroidc.application.userinfo import UserInfoConfig, UserInfoUseCase
 from thepuroidc.domain.jwks import JWTAlgorithm
-from thepuroidc.infrastructure.claims import InMemoryClaimsProvider
+from thepuroidc.domain.userinfo import UserClaims
+from thepuroidc.infrastructure.claims import UserStoreClaimsProvider
 from thepuroidc.infrastructure.jwks import DefaultKeyManager
 from thepuroidc.infrastructure.persistence.factory import (
     build_authorization_code_repository,
     build_client_repository,
     build_key_pair_repository,
+    build_user_repository,
 )
 from thepuroidc.infrastructure.settings import Settings
 from thepuroidc.infrastructure.tokens import PyJWTTokenManager
@@ -53,6 +55,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     client_repository = build_client_repository(settings)
     code_repository = build_authorization_code_repository(settings)
+    user_repository = build_user_repository(settings)
 
     authorize_usecase = AuthorizeUseCase(
         AuthorizeConfig(
@@ -79,17 +82,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     userinfo_usecase = UserInfoUseCase(
         UserInfoConfig(issuer=settings.issuer),
         token_manager,
-        InMemoryClaimsProvider(settings.userinfo_profiles),
+        UserStoreClaimsProvider(user_repository),
     )
 
     @asynccontextmanager
     async def _lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
-        """Prépare les stockages, alimente le registre client puis génère les clés."""
+        """Prépare les stockages, alimente le registre clients + user store puis génère les clés."""
         await key_repository.initialise()
         await client_repository.initialise()
         await code_repository.initialise()
+        await user_repository.initialise()
         for client in settings.seed_clients:
             await client_repository.save(client)
+        await user_repository.save_all(
+            [
+                UserClaims(subject=subject, claims=claims)
+                for subject, claims in settings.users_seed.items()
+            ]
+        )
         await jwks_usecase.initialise()
         try:
             yield
@@ -97,6 +107,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await key_repository.close()
             await client_repository.close()
             await code_repository.close()
+            await user_repository.close()
 
     app = FastAPI(
         title="ThePurOidc",

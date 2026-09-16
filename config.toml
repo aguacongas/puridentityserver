@@ -16,12 +16,13 @@
 
 [settings]
 
-# annuaire de démonstration des profils utilisateurs servi par /userinfo :
-# clé = subject (sub), valeur = claims exposés selon les scopes accordés au
-# jeton (openid > sub, profile > identité, email, address, phone).
-# Surchargeable en bloc via `THEPUROIDC_USERINFO_PROFILES` (JSON).
+# seed utilisateurs (user store) : clé = subject (sub), valeur = claims
+# exposés selon les scopes accordés au jeton (openid > sub, profile >
+# identité, email, address, phone). Ils sont déversés dans le store au
+# démarrage, comme les clients seed.
+# Surchargeable en bloc via `THEPUROIDC_USERS_SEED` (JSON).
 
-[settings.userinfo_profiles.sample-pkce-client]
+[settings.users_seed.sample-pkce-client]
 name = "Alice Martin"
 family_name = "Martin"
 given_name = "Alice"
@@ -41,14 +42,14 @@ email_verified = true
 phone_number = "+33142000000"
 phone_number_verified = true
 
-[settings.userinfo_profiles.sample-pkce-client.address]
+[settings.users_seed.sample-pkce-client.address]
 formatted = "12 rue de la Paix, 75002 Paris, France"
 street_address = "12 rue de la Paix"
 locality = "Paris"
 postal_code = "75002"
 country = "FR"
 
-[settings.userinfo_profiles.web-app]
+[settings.users_seed.web-app]
 name = "Alice Martin"
 family_name = "Martin"
 given_name = "Alice"

@@ -79,7 +79,7 @@ class UserInfoUseCase:
             return UserInfoError(error="invalid_token", error_description="Claim 'sub' manquante")
 
         granted_scopes = Scope.from_space_separated(str(claims.get("scope", "")))
-        user_claims = self._claims_provider.get_claims(str(subject))
+        user_claims = await self._claims_provider.get_claims(str(subject))
 
         allowed = set(_CLAIMS_BY_SCOPE[Scope.OPENID])
         for scope in granted_scopes:

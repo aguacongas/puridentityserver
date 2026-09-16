@@ -1,29 +1,31 @@
-"""Implémentation de démonstration du port ``ClaimsProvider``.
+"""Implémentation du port ``ClaimsProvider`` adossée au user store.
 
-Résout des claims utilisateur à partir d'un annuaire de profils injecté au
-constructeur. Les données de démonstration ne sont pas en dur dans le code :
-elles sont déclarées dans ``config.toml`` (`THEPUROIDC_USERINFO_PROFILES`).
-Une vraie base d'utilisateurs implémenterait le même port pour alimenter
-``/userinfo``.
+Résout les claims utilisateur via le ``UserRepository`` injecté (backends
+``memory`` ou ``sql``, choisi par ``KEY_STORE_TYPE``), alimenté au démarrage
+depuis les profils déclarés dans la configuration
+(`THEPUROIDC_USERS_SEED`).
 """
 
 from __future__ import annotations
 
 from thepuroidc.domain.userinfo import UserClaims
+from thepuroidc.interfaces.repositories.user_repository import UserRepository
 
 
-class InMemoryClaimsProvider:
-    """Résout les claims depuis un annuaire mémoire fourni à la construction.
+class UserStoreClaimsProvider:
+    """Résout les claims depuis le user store (repository injecté).
 
-    La table ``profiles`` mappe un ``sub`` vers son jeu de claims. Un
-    sujet inconnu retourne des claims vides (seul ``sub`` est renvoyé
-    ensuite par le use case).
+    Un ``subject`` inconnu retourne des claims vides (seul ``sub`` est
+    renvoyé ensuite par le use case).
     """
 
-    def __init__(self, profiles: dict[str, dict[str, object]]) -> None:
-        """Injection de l'annuaire des profils (déclaré dans la configuration)."""
-        self._profiles = profiles
+    def __init__(self, user_repository: UserRepository) -> None:
+        """Injection du user store (port ``UserRepository``)."""
+        self._user_repository = user_repository
 
-    def get_claims(self, subject: str) -> UserClaims:
+    async def get_claims(self, subject: str) -> UserClaims:
         """Retourne les claims de l'utilisateur ``subject`` (vide si inconnu)."""
-        return UserClaims(subject=subject, claims=dict(self._profiles.get(subject, {})))
+        user = await self._user_repository.find_by_subject(subject)
+        if user is None:
+            return UserClaims(subject=subject)
+        return user
