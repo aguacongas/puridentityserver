@@ -11,6 +11,7 @@ from thepuroidc.application.authorize import (
     AuthorizeRequest,
     AuthorizeUseCase,
 )
+from thepuroidc.identity.config import CurrentUserOptional
 
 
 def authorize_router(usecase: AuthorizeUseCase) -> APIRouter:
@@ -27,12 +28,14 @@ def authorize_router(usecase: AuthorizeUseCase) -> APIRouter:
         nonce: str = Query(default=""),
         code_challenge: str = Query(default=""),
         code_challenge_method: str = Query(default="S256"),
+        user: CurrentUserOptional = None,
     ) -> RedirectResponse:
         auth_request = AuthorizeRequest(
             response_type=response_type,
             client_id=client_id,
             redirect_uri=redirect_uri,
             scope=scope,
+            subject=str(user.id) if user is not None else "",
             state=state,
             nonce=nonce,
             code_challenge=code_challenge,

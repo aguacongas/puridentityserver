@@ -39,12 +39,15 @@ def _parse_client(raw: dict[str, object]) -> Client:
         redirect_uris = frozenset()
     scopes = frozenset(Scope(token) for token in str(raw.get("scopes", "openid")).split() if token)
     client_type = _parse_client_type(raw.get("client_type", "public"))
+    lifetime_raw = raw.get("session_lifetime_seconds")
+    session_lifetime_seconds = int(str(lifetime_raw)) if lifetime_raw is not None else None
     return Client(
         client_id=client_id,
         redirect_uris=redirect_uris,
         scopes=scopes,
         client_type=client_type,
         client_secret_hash=_hash_client_secret(secret),
+        session_lifetime_seconds=session_lifetime_seconds,
     )
 
 
@@ -84,7 +87,7 @@ class Settings(BaseSettings):
         )
         return (init_settings, env_settings, toml_settings, dotenv_settings, file_secret_settings)
 
-    issuer: str = "http://localhost:8000"
+    issuer: str = "http://127.0.0.1:8000"
     base_url: str = ""
     host: str = "127.0.0.1"
     port: int = 8000
@@ -106,6 +109,14 @@ class Settings(BaseSettings):
 
     # UserInfo (OIDC Core §5.4) — seed du user store (`sub` -> claims)
     users_seed: Annotated[dict[str, dict[str, object]], NoDecode] = {}
+
+    # Identité (FastAPI Users, spike) — durée par client du cookie de session.
+    # Le cookie est signé RS256 avec une clé rotative dédiée (KeyUse.SESSION,
+    # jamais publiée) : ni secret statique, ni collision avec les clés de
+    # signature des tokens OIDC. La durée effective peut être réduite par
+    # client via ``session_lifetime_seconds`` dans ``clients_seed``.
+    identity_jwt_lifetime_seconds: int = 3600
+    identity_seed_users: Annotated[dict[str, dict[str, str]], NoDecode] = {}
 
     @field_validator("jwks_algorithms", mode="before")
     @classmethod
@@ -138,6 +149,19 @@ class Settings(BaseSettings):
             parsed = json.loads(value)
             if not isinstance(parsed, dict):
                 raise ValueError("THEPUROIDC_USERS_SEED doit être un objet JSON")
+            return parsed
+        return value
+
+    @field_validator("identity_seed_users", mode="before")
+    @classmethod
+    def _parse_identity_seed_users(cls, value: object) -> object:
+        """Transforme `THEPUROIDC_IDENTITY_SEED_USERS='{...}'` (JSON) en dict."""
+        if isinstance(value, str):
+            import json
+
+            parsed = json.loads(value)
+            if not isinstance(parsed, dict):
+                raise ValueError("THEPUROIDC_IDENTITY_SEED_USERS doit être un objet JSON")
             return parsed
         return value
 

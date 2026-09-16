@@ -10,7 +10,7 @@ Elle est lue au démarrage par [pydantic-settings](https://docs.pydantic.dev/lat
 
 | Variable | Défaut | Description |
 | --- | --- | --- |
-| `THEPUROIDC_ISSUER` | `http://localhost:8000` | Identifiant public de l'émetteur : l'URL où le serveur est joignable. Doit être stable et, en production, en **HTTPS**. |
+| `THEPUROIDC_ISSUER` | `http://127.0.0.1:8000` | Identifiant public de l'émetteur : l'URL où le serveur est joignable. Doit être stable et, en production, en **HTTPS**. |
 | `THEPUROIDC_BASE_URL` | *(issuer)* | Base utilisée pour construire les URL des endpoints publiées dans le document de discovery (`/authorize`, `/token`, `/userinfo`, `/.well-known/jwks.json`, …). Par défaut : l'issuer. |
 | `THEPUROIDC_HOST` | `127.0.0.1` | Interface réseau sur laquelle écoute le serveur Uvicorn. |
 | `THEPUROIDC_PORT` | `8000` | Port d'écoute. |
@@ -23,8 +23,25 @@ Elle est lue au démarrage par [pydantic-settings](https://docs.pydantic.dev/lat
 | `THEPUROIDC_AUTHORIZATION_CODE_TTL_SECONDS` | `600` | Durée de vie du code d'autorisation (secondes). |
 | `THEPUROIDC_ACCESS_TOKEN_TTL_SECONDS` | `3600` | Durée de vie de l'access token émis (secondes). |
 | `THEPUROIDC_SETTINGS_FILE` | `config.toml` | Chemin du fichier TOML des défauts du projet (table `[settings]`), notamment les clients seed et les profils utilisateurs. |
-| `THEPUROIDC_CLIENTS_SEED` | *(config.toml)* | Liste JSON de clients seed au démarrage (format `[{"client_id":"...","client_secret":"...","redirect_uris":["..."],"scopes":"openid","client_type":"public"}]`). Par défaut, `config.toml` fournit le client de démo `sample-pkce-client`. |
-| `THEPUROIDC_USERS_SEED` | *(config.toml)* | Seed du user store servi par `/userinfo` (déversé dans le store au démarrage, comme `clients_seed`) : objet JSON mappant un `subject` (`sub`) à ses claims (format `{"web-app": {"name": "...", "email": "..."}}`). Par défaut, `config.toml` fournit les profils de démo `sample-pkce-client` et `web-app`. |
+| `THEPUROIDC_CLIENTS_SEED` | *(config.toml)* | Liste JSON de clients seed au démarrage (format `[{"client_id":"...","client_secret":"...","redirect_uris":["..."],"scopes":"openid","client_type":"public","session_lifetime_seconds":1800}]`). `session_lifetime_seconds` (optionnel) fixe la durée du cookie de session accordée à ce client ; par défaut `identity_jwt_lifetime_seconds`. |
+| `THEPUROIDC_USERS_SEED` | *(config.toml)* | Seed du user store servi par `/userinfo` (déversé dans le store au démarrage, comme `clients_seed`) : objet JSON mappant un `subject` (`sub`) à ses claims (format `{"alice": {"name": "...", "email": "...", "roles": ["admin"]}}`). Les clés `alice` / `bob` sont des sujets utilisateurs que le pont identité recopie sous l'UUID FastAPI Users correspondant (même email que `THEPUROIDC_IDENTITY_SEED_USERS`). Par défaut, `config.toml` fournit les profils démo `alice` (admin) et `bob` (user). |
+| `THEPUROIDC_IDENTITY_SEED_USERS` | *(config.toml)* | Comptes de connexion du login navigateur (FastAPI Users) : objet JSON mappant un `subject` à ses identifiants (format `{"alice": {"email": "alice@example.com", "password": "..."}}`). Le serveur les crée (mot de passe haché) au démarrage via `seed_users`. Par défaut `config.toml` fournit `alice` et `bob`. |
+| `THEPUROIDC_IDENTITY_JWT_LIFETIME_SECONDS` | `3600` | Durée de vie par défaut du cookie de session (surchargée par `session_lifetime_seconds` du client du flow, voir `THEPUROIDC_CLIENTS_SEED`). |
+
+Cookie de session : signé RS256 avec une clé dédiée (`KeyUse.SESSION`,
+stockée au même endroit que les clés de signature, mais **jamais publiée**
+dans le JWKS). Sa rotation est calée sur `THEPUROIDC_JWKS_ROTATION_DAYS` et
+`THEPUROIDC_JWKS_GRACE_PERIOD_DAYS` : une session reste valide tant que sa
+clé n'a pas dépassé la période de grâce, puis force un nouveau login.
+
+Tokens de gestion de compte (réinitialisation de mot de passe, vérification
+de compte) : signés RS256 de la même façon par une clé dédiée et rotative
+(`KeyUse.RESET` / `KeyUse.VERIFY`), jamais publiée dans le JWKS et sans
+aucun secret statique en configuration.
+
+Aucun secret statique n'est requis pour signer le cookie ni les jetons de
+gestion de compte : plus de `identity_jwt_secret`, de
+`identity_reset_password_secret` ou de `identity_verification_secret`.
 
 ### `issuer` vs `base_url`
 
@@ -93,7 +110,7 @@ Le fichier ne contient actuellement :
 ### Lancement local simple (en mémoire)
 
 ```sh
-THEPUROIDC_ISSUER=http://localhost:8000 uv run python -m thepuroidc
+THEPUROIDC_ISSUER=http://127.0.0.1:8000 uv run python -m thepuroidc
 ```
 
 ### Stockage SQL pour la production

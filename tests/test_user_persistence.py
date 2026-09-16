@@ -167,21 +167,69 @@ class TestSettingsProfiles:
         monkeypatch.setenv("THEPUROIDC_SETTINGS_FILE", str(config))
         settings = Settings(_env_file=None)
 
-        assert settings.users_seed["sample-pkce-client"]["email"] == ("alice.martin@example.com")
-        assert "web-app" in settings.users_seed
+        assert settings.users_seed["alice"]["email"] == "alice.martin@example.com"
+        assert settings.users_seed["bob"]["email"] == "bob.durand@example.com"
+        assert settings.users_seed["alice"]["roles"] == ["admin", "member"]
+        assert settings.users_seed["bob"]["roles"] == ["member"]
+        assert "sample-pkce-client" not in settings.users_seed
+        assert "web-app" not in settings.users_seed
 
     def test_reads_json_from_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(
             "THEPUROIDC_USERS_SEED",
-            '{"web-app": {"name": "Alice", "email_verified": true}}',
+            '{"alice": {"name": "Alice", "roles": ["admin"]}}',
         )
         settings = Settings(_env_file=None)
 
-        assert settings.users_seed == {"web-app": {"name": "Alice", "email_verified": True}}
+        assert settings.users_seed == {"alice": {"name": "Alice", "roles": ["admin"]}}
 
     def test_defaults_to_empty_dict(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config = tmp_path / "config.toml"
-        config.write_text("[settings]\nissuer = 'http://localhost:8000'\n", encoding="utf-8")
+        config.write_text("[settings]\nissuer = 'http://127.0.0.1:8000'\n", encoding="utf-8")
+        monkeypatch.setenv("THEPUROIDC_SETTINGS_FILE", str(config))
+
+        settings = Settings(_env_file=None)
+
+        assert settings.users_seed == {}
+
+    def test_reads_identity_seed_from_config_toml(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        config = Path(__file__).resolve().parents[1] / "config.toml"
+        monkeypatch.setenv("THEPUROIDC_SETTINGS_FILE", str(config))
+        settings = Settings(_env_file=None)
+
+        assert settings.identity_seed_users["alice"]["email"] == "alice@example.com"
+        assert settings.identity_seed_users["bob"]["password"] == "password"
+        assert settings.identity_jwt_lifetime_seconds == 3600
+        # plus aucun secret statique de gestion de compte (jetons signés RS256 rotatifs)
+        assert not hasattr(settings, "identity_reset_password_secret")
+        assert not hasattr(settings, "identity_verification_secret")
+
+    def test_reads_identity_seed_from_json_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(
+            "THEPUROIDC_IDENTITY_SEED_USERS",
+            '{"alice": {"email": "a@example.com", "password": "p"}}',
+        )
+        settings = Settings(_env_file=None)
+
+        assert settings.identity_seed_users == {
+            "alice": {"email": "a@example.com", "password": "p"}
+        }
+
+    def test_overrides_identity_settings_via_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("THEPUROIDC_IDENTITY_JWT_LIFETIME_SECONDS", "7200")
+        settings = Settings(_env_file=None)
+
+        assert settings.identity_jwt_lifetime_seconds == 7200
+
+    def test_defaults_identity_seed_to_empty(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config = tmp_path / "config.toml"
+        config.write_text("[settings]\nissuer = 'http://127.0.0.1:8000'\n", encoding="utf-8")
         monkeypatch.setenv("THEPUROIDC_SETTINGS_FILE", str(config))
 
         settings = Settings(_env_file=None)

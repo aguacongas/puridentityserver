@@ -111,6 +111,7 @@ _CLAIMS_BY_SCOPE: dict[Scope, frozenset[str]] = {
             "zoneinfo",
             "locale",
             "updated_at",
+            "roles",
         }
     ),
     Scope.EMAIL: frozenset({"email", "email_verified"}),

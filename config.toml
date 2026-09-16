@@ -16,13 +16,23 @@
 
 [settings]
 
+# identité (FastAPI Users, spike) : durée par défaut du cookie et comptes de
+# connexion démo. Surchargeables via `THEPUROIDC_IDENTITY_*` (env) ou une
+# entrée `.env`. Le cookie de session est signé RS256 avec une clé rotative
+# dédiée (`KeyUse.SESSION`) stockée au même endroit que les clés de signature
+# des tokens : aucun secret statique (cookies, reset, verify) n'est nécessaire.
+# La durée effective peut être réduite par client via `session_lifetime_seconds`
+# dans `[[settings.clients_seed]]`.
+identity_jwt_lifetime_seconds = 3600
+
 # seed utilisateurs (user store) : clé = subject (sub), valeur = claims
 # exposés selon les scopes accordés au jeton (openid > sub, profile >
-# identité, email, address, phone). Ils sont déversés dans le store au
-# démarrage, comme les clients seed.
+# identité, email, address, phone). Sujets = utilisateurs, jamais des
+# clients ; les clés "alice" / "bob" sont recopiées par le pont identité
+# sous l'UUID FastAPI Users correspondant au même email (`DEMO_USERS`).
 # Surchargeable en bloc via `THEPUROIDC_USERS_SEED` (JSON).
 
-[settings.users_seed.sample-pkce-client]
+[settings.users_seed.alice]
 name = "Alice Martin"
 family_name = "Martin"
 given_name = "Alice"
@@ -37,29 +47,61 @@ birthdate = "1990-04-12"
 zoneinfo = "Europe/Paris"
 locale = "fr-FR"
 updated_at = 1738000000
+roles = ["admin", "member"]
 email = "alice.martin@example.com"
 email_verified = true
 phone_number = "+33142000000"
 phone_number_verified = true
 
-[settings.users_seed.sample-pkce-client.address]
+[settings.users_seed.alice.address]
 formatted = "12 rue de la Paix, 75002 Paris, France"
 street_address = "12 rue de la Paix"
 locality = "Paris"
 postal_code = "75002"
 country = "FR"
 
-[settings.users_seed.web-app]
-name = "Alice Martin"
-family_name = "Martin"
-given_name = "Alice"
-preferred_username = "alice-martin"
-email = "alice.martin@example.com"
+[settings.users_seed.bob]
+name = "Bob Durand"
+family_name = "Durand"
+given_name = "Bob"
+nickname = "bob"
+preferred_username = "bob-durand"
+profile = "https://example.com/bob-durand"
+picture = "https://example.com/bob-durand.jpg"
+gender = "male"
+birthdate = "1985-11-03"
+zoneinfo = "Europe/Paris"
+locale = "fr-FR"
+updated_at = 1739000000
+roles = ["member"]
+email = "bob.durand@example.com"
 email_verified = true
-updated_at = 1738000000
+phone_number = "+33142000001"
+phone_number_verified = true
+
+[settings.users_seed.bob.address]
+formatted = "4 avenue Jean Moulin, 75014 Paris, France"
+street_address = "4 avenue Jean Moulin"
+locality = "Paris"
+postal_code = "75014"
+country = "FR"
+
+# comptes de connexion (email + password) pour le login navigateur. La clé
+# (subject) réutilise celle de `users_seed` pour le pont identité ⊕ user store.
+# Surchargeables en bloc via `THEPUROIDC_IDENTITY_SEED_USERS` (JSON).
+
+[settings.identity_seed_users.alice]
+email = "alice@example.com"
+password = "password"
+
+[settings.identity_seed_users.bob]
+email = "bob@example.com"
+password = "password"
 
 [[settings.clients_seed]]
 client_id = "sample-pkce-client"
 redirect_uris = ["http://127.0.0.1:5173/callback"]
 scopes = "openid profile email"
 client_type = "public"
+# durée du cookie de session accordée à ce client (par défaut :
+# `identity_jwt_lifetime_seconds`) — laisse le défaut si absente.
