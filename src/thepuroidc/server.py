@@ -17,9 +17,10 @@ from thepuroidc.domain.userinfo import UserClaims
 from thepuroidc.identity.config import (
     apply_schema,
     auth_router,
+    configure_identity,
     login_router,
     register_router,
-    seed_demo_users,
+    seed_users,
 )
 from thepuroidc.infrastructure.claims import UserStoreClaimsProvider
 from thepuroidc.infrastructure.jwks import DefaultKeyManager
@@ -43,6 +44,12 @@ _PACKAGE_VERSION = "0.1.0"
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Assemble l'application FastAPI ; câble les usecases avec les réglages fournis."""
     settings = settings if settings is not None else Settings()
+    configure_identity(
+        cookie_secret=settings.identity_jwt_secret,
+        cookie_lifetime_seconds=settings.identity_jwt_lifetime_seconds,
+        reset_password_secret=settings.identity_reset_password_secret,
+        verification_secret=settings.identity_verification_secret,
+    )
     config = DiscoveryConfig(
         issuer=settings.issuer,
         base_url=settings.base_url,
@@ -96,7 +103,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def _lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
         """Prépare les stockages, alimente le registre clients + user store puis génère les clés."""
         await apply_schema()
-        demo_users = await seed_demo_users()
+        identity_users = await seed_users(settings.identity_seed_users)
         await key_repository.initialise()
         await client_repository.initialise()
         await code_repository.initialise()
@@ -107,13 +114,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             [
                 UserClaims(subject=subject, claims=claims)
                 for subject, claims in settings.users_seed.items()
-                if subject not in demo_users  # profils démo → pont sous UUID ci-dessous
+                if subject not in identity_users  # profils d'identité → pont sous UUID ci-dessous
             ]
         )
-        # Pont identité ⊕ user store : chaque utilisateur démo connecté (UUID
-        # FastAPI Users) récupère le profil seed correspondant afin que
-        # /userinfo renvoie ses claims après un login navigateur réel.
-        for subject, user in demo_users.items():
+        # Pont identité ⊕ user store : chaque compte configuré (UUID FastAPI
+        # Users, `Settings.identity_seed_users`) récupère le profil seed
+        # correspondant afin que /userinfo renvoie ses claims après un login
+        # navigateur réel.
+        for subject, user in identity_users.items():
             profile = settings.users_seed.get(subject)
             if profile is not None:
                 await user_repository.save(UserClaims(subject=str(user.id), claims=profile))

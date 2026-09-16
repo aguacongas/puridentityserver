@@ -16,6 +16,13 @@
 
 [settings]
 
+# identité (FastAPI Users, spike) : secrets et comptes de connexion démo.
+# Surchargeables via `THEPUROIDC_IDENTITY_*` (env) ou une entrée `.env`.
+identity_jwt_secret = "spike-dev-only-256bits-secret-change-in-prod!"
+identity_jwt_lifetime_seconds = 3600
+identity_reset_password_secret = "spike-reset-secret"
+identity_verification_secret = "spike-verify-secret"
+
 # seed utilisateurs (user store) : clé = subject (sub), valeur = claims
 # exposés selon les scopes accordés au jeton (openid > sub, profile >
 # identité, email, address, phone). Sujets = utilisateurs, jamais des
@@ -76,6 +83,18 @@ street_address = "4 avenue Jean Moulin"
 locality = "Paris"
 postal_code = "75014"
 country = "FR"
+
+# comptes de connexion (email + password) pour le login navigateur. La clé
+# (subject) réutilise celle de `users_seed` pour le pont identité ⊕ user store.
+# Surchargeables en bloc via `THEPUROIDC_IDENTITY_SEED_USERS` (JSON).
+
+[settings.identity_seed_users.alice]
+email = "alice@example.com"
+password = "password"
+
+[settings.identity_seed_users.bob]
+email = "bob@example.com"
+password = "password"
 
 [[settings.clients_seed]]
 client_id = "sample-pkce-client"

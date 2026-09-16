@@ -107,6 +107,14 @@ class Settings(BaseSettings):
     # UserInfo (OIDC Core §5.4) — seed du user store (`sub` -> claims)
     users_seed: Annotated[dict[str, dict[str, object]], NoDecode] = {}
 
+    # Identité (FastAPI Users, spike) — secrets et comptes de connexion.
+    # Configurables via config.toml, `THEPUROIDC_IDENTITY_*` ou `.env`.
+    identity_jwt_secret: str = "spike-dev-only-256bits-secret-change-in-prod!"  # ruff: ignore[hardcoded-password-string]
+    identity_jwt_lifetime_seconds: int = 3600
+    identity_reset_password_secret: str = "spike-reset-secret"  # ruff: ignore[hardcoded-password-string]
+    identity_verification_secret: str = "spike-verify-secret"  # ruff: ignore[hardcoded-password-string]
+    identity_seed_users: Annotated[dict[str, dict[str, str]], NoDecode] = {}
+
     @field_validator("jwks_algorithms", mode="before")
     @classmethod
     def _split_algorithms(cls, value: object) -> object:
@@ -138,6 +146,19 @@ class Settings(BaseSettings):
             parsed = json.loads(value)
             if not isinstance(parsed, dict):
                 raise ValueError("THEPUROIDC_USERS_SEED doit être un objet JSON")
+            return parsed
+        return value
+
+    @field_validator("identity_seed_users", mode="before")
+    @classmethod
+    def _parse_identity_seed_users(cls, value: object) -> object:
+        """Transforme `THEPUROIDC_IDENTITY_SEED_USERS='{...}'` (JSON) en dict."""
+        if isinstance(value, str):
+            import json
+
+            parsed = json.loads(value)
+            if not isinstance(parsed, dict):
+                raise ValueError("THEPUROIDC_IDENTITY_SEED_USERS doit être un objet JSON")
             return parsed
         return value
 

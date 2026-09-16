@@ -24,7 +24,13 @@ Elle est lue au démarrage par [pydantic-settings](https://docs.pydantic.dev/lat
 | `THEPUROIDC_ACCESS_TOKEN_TTL_SECONDS` | `3600` | Durée de vie de l'access token émis (secondes). |
 | `THEPUROIDC_SETTINGS_FILE` | `config.toml` | Chemin du fichier TOML des défauts du projet (table `[settings]`), notamment les clients seed et les profils utilisateurs. |
 | `THEPUROIDC_CLIENTS_SEED` | *(config.toml)* | Liste JSON de clients seed au démarrage (format `[{"client_id":"...","client_secret":"...","redirect_uris":["..."],"scopes":"openid","client_type":"public"}]`). Par défaut, `config.toml` fournit le client de démo `sample-pkce-client`. |
-| `THEPUROIDC_USERS_SEED` | *(config.toml)* | Seed du user store servi par `/userinfo` (déversé dans le store au démarrage, comme `clients_seed`) : objet JSON mappant un `subject` (`sub`) à ses claims (format `{"alice": {"name": "...", "email": "...", "roles": ["admin"]}}`). Les clés `alice` / `bob` sont des sujets utilisateurs que le pont identité recopie sous l'UUID FastAPI Users correspondant (même email que `DEMO_USERS`). Par défaut, `config.toml` fournit les profils démo `alice` (admin) et `bob` (user). |
+| `THEPUROIDC_USERS_SEED` | *(config.toml)* | Seed du user store servi par `/userinfo` (déversé dans le store au démarrage, comme `clients_seed`) : objet JSON mappant un `subject` (`sub`) à ses claims (format `{"alice": {"name": "...", "email": "...", "roles": ["admin"]}}`). Les clés `alice` / `bob` sont des sujets utilisateurs que le pont identité recopie sous l'UUID FastAPI Users correspondant (même email que `THEPUROIDC_IDENTITY_SEED_USERS`). Par défaut, `config.toml` fournit les profils démo `alice` (admin) et `bob` (user). |
+| `THEPUROIDC_IDENTITY_SEED_USERS` | *(config.toml)* | Comptes de connexion du login navigateur (FastAPI Users) : objet JSON mappant un `subject` à ses identifiants (format `{"alice": {"email": "alice@example.com", "password": "..."}}`). Le serveur les crée (mot de passe haché) au démarrage via `seed_users`. Par défaut `config.toml` fournit `alice` et `bob`. |
+| `THEPUROIDC_IDENTITY_JWT_SECRET` | `spike-dev-only-...` | Secret de signature HS256 du cookie de session FastAPI Users. Démo uniquement — à remplacer en production. |
+| `THEPUROIDC_IDENTITY_JWT_LIFETIME_SECONDS` | `3600` | Durée de vie du cookie de session. |
+| `THEPUROIDC_IDENTITY_RESET_PASSWORD_SECRET` / `THEPUROIDC_IDENTITY_VERIFICATION_SECRET` | `spike-*` | Secrets de signature des jetons de réinitialisation / vérification de compte. |
+
+Secret de session : les secrets peuvent aussi être passés via un fichier `.env` (préfixe `THEPUROIDC_`), prioritaire sur `config.toml`.
 
 ### `issuer` vs `base_url`
 

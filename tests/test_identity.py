@@ -4,7 +4,7 @@ Les appels directs aux fonctions de route (``pytest.anyio``) garantissent une
 couverture fiable : Starlette ``TestClient`` exécute l'app dans un thread
 anyio + greenlets SQLAlchemy, un contexte où coverage.py perd le traçage de
 certaines lignes (constaté empiriquement sur le corps de ``POST /login`` et la
-branche d'insertion de ``seed_demo_users``).
+branche d'insertion de ``seed_users``).
 
 Les tests ``pytest.anyio`` utilisent un ``monkeypatch`` pour injecter leur
 propre moteur et session factory (liés à la boucle d'événements du test) sans
@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import StaticPool
 
-from thepuroidc.identity.config import apply_schema, seed_demo_users
+from thepuroidc.identity.config import apply_schema, seed_users
 from thepuroidc.infrastructure.settings import Settings
 from thepuroidc.server import create_app
 
@@ -46,6 +46,11 @@ _CLIENT_JSON = {
     "client_type": "confidential",
 }
 
+_IDENTITY_SEED = {
+    "alice": {"email": "alice@example.com", "password": "password"},
+    "bob": {"email": "bob@example.com", "password": "password"},
+}
+
 
 def _app(**settings: object) -> FastAPI:
     return create_app(
@@ -54,6 +59,7 @@ def _app(**settings: object) -> FastAPI:
             base_url=_ISSUER,
             jwks_algorithms=("RS256",),
             clients_seed=(_CLIENT_JSON,),
+            identity_seed_users=_IDENTITY_SEED,
             **settings,
         )
     )
@@ -133,14 +139,18 @@ def test_get_session_factory_raises_before_init(
 
 
 @pytest.mark.anyio
-async def test_seed_demo_users_insert_then_return_idempotent(
+async def test_seed_users_insert_then_return_idempotent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Premier appel insère Alice et Bob ; les suivants les rechargent (idempotent)."""
+    """Premier appel crée les comptes ; les suivants les rechargent (idempotent)."""
     _inject_test_db(monkeypatch)
     await apply_schema()
-    users = await seed_demo_users()
+    users = await seed_users(_IDENTITY_SEED)
     assert set(users) == {"alice", "bob"}
+    again = await seed_users(_IDENTITY_SEED)
+    assert {subject: user.id for subject, user in again.items()} == {
+        subject: user.id for subject, user in users.items()
+    }
 
 
 def test_parse_id_converts_uuid_string() -> None:
@@ -152,6 +162,31 @@ def test_parse_id_converts_uuid_string() -> None:
     assert manager.parse_id(value) == uuid_mod.UUID(value)
 
 
+def test_configure_identity_wires_settings_values() -> None:
+    """configure_identity applique les secrets depuis la configuration (Settings)."""
+    from thepuroidc.identity import config as mod
+
+    mod.configure_identity(
+        cookie_secret="unit-test-cookie-secret-0123456789abcdef",  # ruff: ignore[hardcoded-password-func-arg]
+        cookie_lifetime_seconds=7200,
+        reset_password_secret="unit-reset-verify-secret",  # ruff: ignore[hardcoded-password-func-arg]
+        verification_secret="unit-verify-secret",  # ruff: ignore[hardcoded-password-func-arg]
+    )
+    try:
+        strategy = mod._jwt_strategy()
+        assert strategy.secret == "unit-test-cookie-secret-0123456789abcdef"  # type: ignore[attr-defined]
+        assert mod._cookie_lifetime_seconds == 7200
+        assert mod.UserManager.reset_password_token_secret == "unit-reset-verify-secret"
+        assert mod.UserManager.verification_token_secret == "unit-verify-secret"
+    finally:
+        mod.configure_identity(
+            cookie_secret=mod._cookie_secret,
+            cookie_lifetime_seconds=mod._cookie_lifetime_seconds,
+            reset_password_secret=mod.UserManager.reset_password_token_secret,
+            verification_secret=mod.UserManager.verification_token_secret,
+        )
+
+
 @pytest.mark.anyio
 async def test_post_login_success_sets_cookie_and_redirects(
     monkeypatch: pytest.MonkeyPatch,
@@ -159,7 +194,7 @@ async def test_post_login_success_sets_cookie_and_redirects(
     """POST /login valide le redirect + cookie de session (appel direct)."""
     _inject_test_db(monkeypatch)
     await apply_schema()
-    await seed_demo_users()
+    await seed_users(_IDENTITY_SEED)
 
     endpoint = _post_login_endpoint()
     response = await endpoint(
@@ -180,7 +215,7 @@ async def test_post_login_rejects_wrong_password(
     """POST /login avec un mauvais mot de passe redirige vers le formulaire."""
     _inject_test_db(monkeypatch)
     await apply_schema()
-    await seed_demo_users()
+    await seed_users(_IDENTITY_SEED)
 
     endpoint = _post_login_endpoint()
     response = await endpoint(
@@ -203,7 +238,7 @@ async def test_post_login_handles_awaitable_strategy_and_empty_cookie(
 
     _inject_test_db(monkeypatch)
     await apply_schema()
-    await seed_demo_users()
+    await seed_users(_IDENTITY_SEED)
 
     async def _awaitable_strategy() -> mod.JWTStrategy:  # ruff: ignore[unused-async]
         return mod._jwt_strategy()
@@ -394,3 +429,22 @@ def test_login_authorize_token_full_flow(
         assert userinfo["sub"] == sub
         assert userinfo["name"] == expected_name
         assert userinfo["roles"] == expected_roles
+
+
+def test_login_cookie_signed_with_configured_secret() -> None:
+    """Le cookie de session est signé avec le secret configuré (surchargé par Settings)."""
+    import re
+
+    secret = "custom-cookie-signing-secret-0123456789abcdefghij"
+    with TestClient(_app(identity_jwt_secret=secret)) as client:  # type: ignore[arg-type]
+        resp = client.post(
+            "/login",
+            data={"username": "alice@example.com", "password": "password", "next": "/"},
+            follow_redirects=False,
+        )
+    cookie = resp.headers["set-cookie"]
+    token = re.search(r"fastapiusersauth=([^;]+)", cookie).group(1)  # type: ignore[union-attr]
+    claims = jwt.decode(
+        token, secret, algorithms=["HS256"], options={"verify_exp": False, "verify_aud": False}
+    )
+    assert claims["sub"]

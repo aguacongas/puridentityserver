@@ -8,7 +8,8 @@ Fournit l'identité utilisateur du serveur OIDC :
 - ``CurrentUser``            : dependency d'utilisateur authentifié (requis)
 - ``CurrentUserOptional``    : dependency d'utilisateur authentifié (facultatif)
 - ``apply_schema``           : crée la table ``user`` (SQLite en mémoire, spike)
-- ``seed_demo_users``        : insère les utilisateurs démo (``DEMO_USERS``)
+- ``seed_users``             : crée les comptes décrits par ``Settings.identity_seed_users``
+- ``configure_identity``     : injecte les secrets (config.toml / THEPUROIDC_* / .env)
 
 Note spike : la base utilisateurs est en mémoire (``StaticPool``) ; en
 production elle sera remplacée par un vrai magasin (DSN dédié ou la base
@@ -20,7 +21,7 @@ from __future__ import annotations
 import html
 import inspect
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from typing import Annotated
 from urllib.parse import quote
 
@@ -40,17 +41,13 @@ from sqlalchemy.pool import StaticPool
 
 from thepuroidc.identity.user import Base, User
 
-# ── secrets de démonstration (spike) ────────────────────────────────────────
-JWT_SECRET = "spike-dev-only-256bits-secret-change-in-prod!"  # ruff: ignore[hardcoded-password-string]  (spike uniquement)
-JWT_LIFETIME_SECONDS = 3600
-
-# ── utilisateurs démo (sujets du user store, jamais des clients) ────────────
-# La clé du dict est le ``subject`` utilisé dans `users_seed` (config.toml) :
-# le bridge recopie le profil de claims correspondant sous l'UUID FastAPI Users.
-DEMO_USERS: dict[str, tuple[str, str]] = {
-    "alice": ("alice@example.com", "password"),
-    "bob": ("bob@example.com", "password"),
-}
+# ── configuration d'exécution (injectée par ``configure_identity``) ─────────
+# Valeurs de repli de démonstration : la composition root (``server.py``)
+# injecte celles de ``Settings`` (config.toml, ``THEPUROIDC_*``, ``.env``).
+_cookie_secret = "spike-dev-only-256bits-secret-change-in-prod!"  # ruff: ignore[hardcoded-password-string]
+_cookie_lifetime_seconds = 3600
+_reset_password_secret = "spike-reset-secret"  # ruff: ignore[hardcoded-password-string]
+_verification_secret = "spike-verify-secret"  # ruff: ignore[hardcoded-password-string]
 
 # ── base de données users (async, séparée des stores OIDC) ──────────────────
 _session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -72,14 +69,41 @@ async def _manager_dependency() -> AsyncGenerator[UserManager, None]:
 
 
 class UserManager(BaseUserManager[User, uuid.UUID]):
-    """Manager démo (reset_password / verification avec secrets statiques)."""
+    """Manager d'authentification.
 
+    Les secrets de token de gestion (reset / verify) sont surchargés par
+    ``configure_identity`` à partir de la configuration du serveur.
+    """
+
+    # Repli de démonstration — remplacés par configure_identity depuis Settings.
     reset_password_token_secret = "spike-reset-secret"  # ruff: ignore[hardcoded-password-string]
     verification_token_secret = "spike-verify-secret"  # ruff: ignore[hardcoded-password-string]
 
     def parse_id(self, value: str) -> uuid.UUID:
         """Convertit le ``sub`` (string) du JWT en ``uuid.UUID`` (clé primaire)."""
         return uuid.UUID(value)
+
+
+def configure_identity(
+    *,
+    cookie_secret: str,
+    cookie_lifetime_seconds: int,
+    reset_password_secret: str,
+    verification_secret: str,
+) -> None:
+    """Injecte les secrets de session et de gestion de compte depuis la configuration.
+
+    Appelée par la composition root avec les valeurs de ``Settings`` : la
+    hiérarchie config.toml → `THEPUROIDC_*` → ``.env`` permet de remplacer
+    les valeurs de démonstration sans toucher au code.
+    """
+    global _cookie_secret, _cookie_lifetime_seconds, _reset_password_secret, _verification_secret
+    _cookie_secret = cookie_secret
+    _cookie_lifetime_seconds = cookie_lifetime_seconds
+    _reset_password_secret = reset_password_secret
+    _verification_secret = verification_secret
+    UserManager.reset_password_token_secret = reset_password_secret
+    UserManager.verification_token_secret = verification_secret
 
 
 class UserRead(BaseUser[uuid.UUID]):
@@ -92,8 +116,8 @@ class UserCreate(BaseUserCreate):
 
 def _jwt_strategy() -> JWTStrategy[User, uuid.UUID]:
     return JWTStrategy(
-        secret=JWT_SECRET,
-        lifetime_seconds=JWT_LIFETIME_SECONDS,
+        secret=_cookie_secret,
+        lifetime_seconds=_cookie_lifetime_seconds,
         algorithm="HS256",
     )
 
@@ -139,17 +163,23 @@ async def apply_schema() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
-async def seed_demo_users() -> dict[str, User]:
-    """Insère les utilisateurs démo (``DEMO_USERS``) et les retourne par subject.
+async def seed_users(seed: Mapping[str, Mapping[str, str]]) -> dict[str, User]:
+    """Crée ou recharge les comptes décrits par ``seed`` et les retourne par subject.
 
-    Retourne un dict ``{subject: User}`` — les utilisateurs existants sont
-    rechargés plutôt que recréés (idempotent entre deux démarrages).
+    Chaque entrée associe un ``subject`` à ses identifiants de connexion
+    (``email``, ``password``). Source : ``Settings.identity_seed_users``
+    (config.toml / `THEPUROIDC_IDENTITY_SEED_USERS` / ``.env``). Les comptes
+    existants sont rechargés plutôt que recréés (idempotent entre démarrages).
     """
+    if not seed:
+        return {}
     factory = _get_session_factory()
     result: dict[str, User] = {}
     async with factory() as session:
         user_db: SQLAlchemyUserDatabase[User, uuid.UUID] = SQLAlchemyUserDatabase(session, User)
-        for subject, (email, password) in DEMO_USERS.items():
+        for subject, credentials in seed.items():
+            email = str(credentials["email"])
+            password = str(credentials["password"])
             existing = await user_db.get_by_email(email)
             if existing is not None:
                 result[subject] = existing
