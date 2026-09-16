@@ -124,7 +124,7 @@ class Settings(BaseSettings):
     # Identité (FastAPI Users, spike) — durée par défaut du cookie de session.
     # Le cookie est signé RS256 avec une clé rotative dédiée (KeyUse.SESSION,
     # jamais publiée) : ni secret statique, ni collision avec les clés de
-    # signature des tokens OIDC. La durée effective peut être réduite par
+    # signature des tokens OIDC. La durée effective peut être surchargée par
     # client via ``session_lifetime_seconds`` dans ``clients_seed``.
     identity_jwt_lifetime_seconds: int = 3600
     identity_seed_users: Annotated[dict[str, dict[str, str]], NoDecode] = {}

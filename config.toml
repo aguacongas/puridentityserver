@@ -37,7 +37,7 @@ access_token_ttl_seconds = 3600
 # entrée `.env`. Le cookie de session est signé RS256 avec une clé rotative
 # dédiée (`KeyUse.SESSION`) stockée au même endroit que les clés de signature
 # des tokens : aucun secret statique (cookies, reset, verify) n'est nécessaire.
-# La durée effective peut être réduite par client via `session_lifetime_seconds`
+# La durée effective peut être surchargée par client via `session_lifetime_seconds`
 # dans `[[settings.clients_seed]]`.
 identity_jwt_lifetime_seconds = 3600
 
