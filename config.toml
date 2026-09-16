@@ -13,8 +13,24 @@
 #                    "confidential" (échange de tokens via client_secret)
 # - client_secret  : secret du client (haché SHA-256 en base, jamais stocké
 #                    en clair) — facultatif pour un client "public"
+# Durées de vie accordées au client (facultatives ; le défaut serveur
+# s'applique si absentes) :
+# - session_lifetime_seconds          : cookie de session (par défaut
+#                                       `identity_jwt_lifetime_seconds`)
+# - access_token_lifetime_seconds     : id_token + access_token (par défaut
+#                                       `access_token_ttl_seconds`)
+# - authorization_code_lifetime_seconds : code d'autorisation (par défaut
+#                                         `authorization_code_ttl_seconds`)
 
 [settings]
+
+# OAuth 2.0 / OIDC : durées de vie par défaut du serveur, appliquées quand le
+# client ne précise pas les siennes (`access_token_lifetime_seconds` /
+# `authorization_code_lifetime_seconds` dans `clients_seed`). L'id_token et
+# l'access_token partagent la même durée. Surchargeables via
+# `THEPUROIDC_AUTHORIZATION_CODE_TTL_SECONDS` / `THEPUROIDC_ACCESS_TOKEN_TTL_SECONDS`.
+authorization_code_ttl_seconds = 600
+access_token_ttl_seconds = 3600
 
 # identité (FastAPI Users, spike) : durée par défaut du cookie et comptes de
 # connexion démo. Surchargeables via `THEPUROIDC_IDENTITY_*` (env) ou une
@@ -103,5 +119,3 @@ client_id = "sample-pkce-client"
 redirect_uris = ["http://127.0.0.1:5173/callback"]
 scopes = "openid profile email"
 client_type = "public"
-# durée du cookie de session accordée à ce client (par défaut :
-# `identity_jwt_lifetime_seconds`) — laisse le défaut si absente.

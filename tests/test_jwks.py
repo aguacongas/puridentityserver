@@ -215,6 +215,28 @@ def test_settings_client_seed_reads_defaults_from_config_toml(
     assert client.redirect_uris == frozenset({"http://127.0.0.1:5173/callback"})
     assert client.scopes == frozenset({"openid", "profile", "email"})
     assert client.client_type == ClientType.PUBLIC
+    assert client.session_lifetime_seconds is None
+    assert client.access_token_lifetime_seconds is None
+    assert client.authorization_code_lifetime_seconds is None
+
+
+def test_settings_client_seed_parses_lifetime_fields() -> None:
+    settings = Settings(
+        clients_seed=(
+            {
+                "client_id": "x",
+                "redirect_uris": ("https://x.example/cb",),
+                "session_lifetime_seconds": 1800,
+                "access_token_lifetime_seconds": 120,
+                "authorization_code_lifetime_seconds": 30,
+            },
+        )
+    )
+
+    client = settings.seed_clients[0]
+    assert client.session_lifetime_seconds == 1800
+    assert client.access_token_lifetime_seconds == 120
+    assert client.authorization_code_lifetime_seconds == 30
 
 
 def test_settings_client_seed_rejects_non_list_json(monkeypatch: pytest.MonkeyPatch) -> None:

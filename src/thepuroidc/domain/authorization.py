@@ -62,6 +62,13 @@ class Client:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     is_active: bool = True
     session_lifetime_seconds: int | None = None
+    access_token_lifetime_seconds: int | None = None
+    authorization_code_lifetime_seconds: int | None = None
+
+
+def resolve_lifetime_seconds(configured: int | None, default: int) -> int:
+    """Durée de vie effective : celle du client si renseignée, sinon le défaut serveur."""
+    return configured if configured is not None and configured > 0 else default
 
 
 @dataclass(frozen=True, slots=True)

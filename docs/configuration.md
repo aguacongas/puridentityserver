@@ -20,10 +20,10 @@ Elle est lue au démarrage par [pydantic-settings](https://docs.pydantic.dev/lat
 | `THEPUROIDC_JWKS_ALGORITHMS` | *(tous)* | Liste (séparée par des virgules) des algorithmes de signature fournis. Supporte `RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`, `ES256`, `ES384`, `ES512`. |
 | `THEPUROIDC_JWKS_ROTATION_DAYS` | `90` | Âge à partir duquel une clé de signature est retirée du JWKS et remplacée. |
 | `THEPUROIDC_JWKS_GRACE_PERIOD_DAYS` | `7` | Délai après la rotation avant suppression définitive de l'ancienne clé. |
-| `THEPUROIDC_AUTHORIZATION_CODE_TTL_SECONDS` | `600` | Durée de vie du code d'autorisation (secondes). |
-| `THEPUROIDC_ACCESS_TOKEN_TTL_SECONDS` | `3600` | Durée de vie de l'access token émis (secondes). |
+| `THEPUROIDC_AUTHORIZATION_CODE_TTL_SECONDS` | `600` | Durée de vie du code d'autorisation (secondes) — défaut serveur, réduite par client via `authorization_code_lifetime_seconds` (voir `THEPUROIDC_CLIENTS_SEED`). |
+| `THEPUROIDC_ACCESS_TOKEN_TTL_SECONDS` | `3600` | Durée de vie de l'access token émis (secondes) — défaut serveur, réduite par client via `access_token_lifetime_seconds` (voir `THEPUROIDC_CLIENTS_SEED`). L'`id_token` partage la même durée. |
 | `THEPUROIDC_SETTINGS_FILE` | `config.toml` | Chemin du fichier TOML des défauts du projet (table `[settings]`), notamment les clients seed et les profils utilisateurs. |
-| `THEPUROIDC_CLIENTS_SEED` | *(config.toml)* | Liste JSON de clients seed au démarrage (format `[{"client_id":"...","client_secret":"...","redirect_uris":["..."],"scopes":"openid","client_type":"public","session_lifetime_seconds":1800}]`). `session_lifetime_seconds` (optionnel) fixe la durée du cookie de session accordée à ce client ; par défaut `identity_jwt_lifetime_seconds`. |
+| `THEPUROIDC_CLIENTS_SEED` | *(config.toml)* | Liste JSON de clients seed au démarrage (format `[{"client_id":"...","client_secret":"...","redirect_uris":["..."],"scopes":"openid","client_type":"public","session_lifetime_seconds":1800,"access_token_lifetime_seconds":120,"authorization_code_lifetime_seconds":30}]`). Champs de durée **facultatifs**, le défaut serveur s'applique si absents : `session_lifetime_seconds` (cookie de session, défaut `identity_jwt_lifetime_seconds`), `access_token_lifetime_seconds` (id_token + access_token, défaut `access_token_ttl_seconds`) et `authorization_code_lifetime_seconds` (code d'autorisation, défaut `authorization_code_ttl_seconds`). |
 | `THEPUROIDC_USERS_SEED` | *(config.toml)* | Seed du user store servi par `/userinfo` (déversé dans le store au démarrage, comme `clients_seed`) : objet JSON mappant un `subject` (`sub`) à ses claims (format `{"alice": {"name": "...", "email": "...", "roles": ["admin"]}}`). Les clés `alice` / `bob` sont des sujets utilisateurs que le pont identité recopie sous l'UUID FastAPI Users correspondant (même email que `THEPUROIDC_IDENTITY_SEED_USERS`). Par défaut, `config.toml` fournit les profils démo `alice` (admin) et `bob` (user). |
 | `THEPUROIDC_IDENTITY_SEED_USERS` | *(config.toml)* | Comptes de connexion du login navigateur (FastAPI Users) : objet JSON mappant un `subject` à ses identifiants (format `{"alice": {"email": "alice@example.com", "password": "..."}}`). Le serveur les crée (mot de passe haché) au démarrage via `seed_users`. Par défaut `config.toml` fournit `alice` et `bob`. |
 | `THEPUROIDC_IDENTITY_JWT_LIFETIME_SECONDS` | `3600` | Durée de vie par défaut du cookie de session (surchargée par `session_lifetime_seconds` du client du flow, voir `THEPUROIDC_CLIENTS_SEED`). |
@@ -86,8 +86,10 @@ défauts, avec la hiérarchie de priorité suivante :
 arguments d'init > variables d'environnement (THEPUROIDC_*) > config.toml > défauts du code
 ```
 
-Le fichier ne contient actuellement :
+Le fichier contient actuellement :
 
+- les **durées de vie par défaut** des codes d'autorisation et des jetons émis
+  (`authorization_code_ttl_seconds`, `access_token_ttl_seconds`) ;
 - le **client de démo du flow Authorization Code + PKCE** (`sample-pkce-client`, client
   *public*, callback `http://127.0.0.1:5173/callback`, scopes `openid profile email`) ;
 - le **seed utilisateurs de démonstration** servi par `/userinfo` (clés

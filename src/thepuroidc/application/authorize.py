@@ -10,6 +10,7 @@ from thepuroidc.domain.authorization import (
     AuthorizationCode,
     ResponseMode,
     Scope,
+    resolve_lifetime_seconds,
 )
 from thepuroidc.interfaces.repositories.authorization_code_repository import (
     AuthorizationCodeRepository,
@@ -121,7 +122,10 @@ class AuthorizeUseCase:
                 description="code_challenge_method doit être 'S256' ou 'plain'",
             )
 
-        code = self._generate_code(request, scopes)
+        code_ttl = resolve_lifetime_seconds(
+            client.authorization_code_lifetime_seconds, self._config.code_ttl_seconds
+        )
+        code = self._generate_code(request, scopes, code_ttl)
         await self._codes.save(code)
 
         return AuthorizeRedirect(
@@ -132,7 +136,7 @@ class AuthorizeUseCase:
         )
 
     def _generate_code(
-        self, request: AuthorizeRequest, scopes: frozenset[Scope]
+        self, request: AuthorizeRequest, scopes: frozenset[Scope], code_ttl: int
     ) -> AuthorizationCode:
         """Génère un code d'autorisation à durée de vie limitée."""
         now = datetime.now(timezone.utc)
@@ -145,7 +149,7 @@ class AuthorizeUseCase:
             code_challenge=request.code_challenge,
             code_challenge_method=request.code_challenge_method,
             nonce=request.nonce,
-            expires_at=now + timedelta(seconds=self._config.code_ttl_seconds),
+            expires_at=now + timedelta(seconds=code_ttl),
         )
 
     def _build_redirect_uri(self, redirect_uri: str, code: str, state: str) -> str:
