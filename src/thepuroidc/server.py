@@ -15,6 +15,7 @@ from thepuroidc.application.userinfo import UserInfoConfig, UserInfoUseCase
 from thepuroidc.domain.jwks import JWTAlgorithm
 from thepuroidc.domain.userinfo import UserClaims
 from thepuroidc.identity.config import (
+    DEMO_USER_SUBJECT,
     apply_schema,
     auth_router,
     login_router,
@@ -110,9 +111,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ]
         )
         # Pont identité ⊕ user store : l'utilisateur démo connecté (UUID FastAPI
-        # Users) récupère le même profil Alice que le sujet générique `web-app`,
-        # afin que /userinfo renvoie des claims après un login navigateur réel.
-        demo_profile = settings.users_seed.get("web-app")
+        # Users) récupère le profil seed démo afin que /userinfo renvoie
+        # des claims après un login navigateur réel.
+        demo_profile = settings.users_seed.get(DEMO_USER_SUBJECT)
         if demo_profile is not None:
             await user_repository.save(UserClaims(subject=str(alice.id), claims=demo_profile))
         await jwks_usecase.initialise()

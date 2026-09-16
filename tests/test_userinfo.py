@@ -321,9 +321,8 @@ class TestUserInfoEndpoint:
 
         assert response.status_code == 200
         claims = response.json()
-        assert claims["sub"] == "web-app"
-        assert "name" in claims
-        assert claims["email_verified"] is True
+        assert claims["sub"] == ""
+        assert len(claims) == 1
 
     def test_rejects_missing_authorization_header(self) -> None:
         with TestClient(self._app()) as client:

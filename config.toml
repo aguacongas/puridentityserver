@@ -18,11 +18,11 @@
 
 # seed utilisateurs (user store) : clé = subject (sub), valeur = claims
 # exposés selon les scopes accordés au jeton (openid > sub, profile >
-# identité, email, address, phone). Ils sont déversés dans le store au
-# démarrage, comme les clients seed.
+# identité, email, address, phone). Sujets = utilisateurs, jamais des
+# clients ; le pont identité recopie ce profil sous l'UUID d'Alice.
 # Surchargeable en bloc via `THEPUROIDC_USERS_SEED` (JSON).
 
-[settings.users_seed.sample-pkce-client]
+[settings.users_seed.demo]
 name = "Alice Martin"
 family_name = "Martin"
 given_name = "Alice"
@@ -42,21 +42,12 @@ email_verified = true
 phone_number = "+33142000000"
 phone_number_verified = true
 
-[settings.users_seed.sample-pkce-client.address]
+[settings.users_seed.demo.address]
 formatted = "12 rue de la Paix, 75002 Paris, France"
 street_address = "12 rue de la Paix"
 locality = "Paris"
 postal_code = "75002"
 country = "FR"
-
-[settings.users_seed.web-app]
-name = "Alice Martin"
-family_name = "Martin"
-given_name = "Alice"
-preferred_username = "alice-martin"
-email = "alice.martin@example.com"
-email_verified = true
-updated_at = 1738000000
 
 [[settings.clients_seed]]
 client_id = "sample-pkce-client"

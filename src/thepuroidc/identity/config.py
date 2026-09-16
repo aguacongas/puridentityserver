@@ -44,6 +44,9 @@ from thepuroidc.identity.user import Base, User
 JWT_SECRET = "spike-dev-only-256bits-secret-change-in-prod!"  # ruff: ignore[hardcoded-password-string]  (spike uniquement)
 JWT_LIFETIME_SECONDS = 3600
 
+# ── subject seed du profil démo (copié sur l'UUID d'Alice au démarrage) ─────
+DEMO_USER_SUBJECT = "demo"
+
 # ── base de données users (async, séparée des stores OIDC) ──────────────────
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 _engine: AsyncEngine | None = None
