@@ -20,9 +20,11 @@ from thepuroidc.application.userinfo import (
 )
 from thepuroidc.domain.authorization import Scope
 from thepuroidc.domain.jwks import JWTAlgorithm
+from thepuroidc.domain.userinfo import UserClaims
 from thepuroidc.infrastructure.claims import InMemoryClaimsProvider
 from thepuroidc.infrastructure.jwks import DefaultKeyManager
 from thepuroidc.infrastructure.persistence.memory import InMemoryKeyPairRepository
+from thepuroidc.infrastructure.persistence.users_memory import InMemoryUserRepository
 from thepuroidc.infrastructure.settings import Settings
 from thepuroidc.infrastructure.tokens import PyJWTTokenManager
 from thepuroidc.server import create_app
@@ -154,6 +156,22 @@ class TestValidateAccessToken:
 class TestUserInfoUseCase:
     """Couvre les branches du use case UserInfoUseCase."""
 
+    def _claims_provider(
+        self, profiles: dict[str, dict[str, object]] | None = None
+    ) -> InMemoryClaimsProvider:
+        """Construit un ClaimsProvider adossé à un user store mémoire seedé."""
+        repository = InMemoryUserRepository()
+        if profiles:
+            run(
+                repository.save_all(
+                    [
+                        UserClaims(subject=subject, claims=claims)
+                        for subject, claims in profiles.items()
+                    ]
+                )
+            )
+        return InMemoryClaimsProvider(repository)
+
     def _result(
         self,
         tm: PyJWTTokenManager,
@@ -163,7 +181,7 @@ class TestUserInfoUseCase:
         usecase = UserInfoUseCase(
             UserInfoConfig(issuer=_ISSUER),
             tm,
-            InMemoryClaimsProvider(profiles),
+            self._claims_provider(profiles),
         )
         return run(usecase.execute(UserInfoRequest(access_token=token)))
 
@@ -174,6 +192,14 @@ class TestUserInfoUseCase:
         result = self._result(tm, token, {"alice": {"name": "Alice", "email": "a@b.com"}})
 
         assert result.claims == {"sub": "alice"}
+
+    def test_returns_sub_only_when_subject_unknown(self) -> None:
+        tm = _make_token_manager()
+        token = _access_token(tm, subject="ghost")
+
+        result = self._result(tm, token, {"alice": {"name": "Alice"}})
+
+        assert result.claims == {"sub": "ghost"}
 
     def test_returns_profile_and_email_claims_when_allowed(self) -> None:
         tm = _make_token_manager()
@@ -234,7 +260,7 @@ class TestUserInfoUseCase:
         usecase = UserInfoUseCase(
             UserInfoConfig(issuer=_ISSUER),
             _NoSubTokenManager(),  # type: ignore[arg-type]
-            InMemoryClaimsProvider({}),
+            self._claims_provider(),
         )
         value = "useless-token"
         result = run(usecase.execute(UserInfoRequest(access_token=value)))

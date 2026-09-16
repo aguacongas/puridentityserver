@@ -1,8 +1,9 @@
 """Port de résolution des claims utilisateur (OIDC Core 1.0 §5.3).
 
 Le port isole la couche application de la source de vérité des profils
-utilisateurs : l'infrastructure fournit l'implémentation de démonstration
-en mémoire, prête à être remplacée par un vrai user store.
+utilisateurs : l'infrastructure fournit une implémentation qui s'appuie
+sur le user store (``UserRepository``), prête à être remplacée par un
+autre backend (LDAP, API…).
 """
 
 from __future__ import annotations
@@ -20,6 +21,6 @@ class ClaimsProvider(Protocol):
     root selon la configuration du serveur.
     """
 
-    def get_claims(self, subject: str) -> UserClaims:
+    async def get_claims(self, subject: str) -> UserClaims:
         """Retourne les claims de l'utilisateur identifié par ``subject``."""
         ...
