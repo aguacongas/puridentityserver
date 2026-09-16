@@ -5,10 +5,11 @@ exécute le flux complet et vérifie chaque étape :
 
 1. la page d'accueil du client répond ;
 2. `/login` redirige vers `/authorize` avec un challenge PKCE S256 ;
-3. le serveur émet un `code` d'autorisation ;
-4. `/callback` échange le code, vérifie l'`id_token` (JWKS), appelle
+3. le login réel du serveur (`/login`, cookie de session) est validé ;
+4. le serveur émet un `code` d'autorisation pour l'utilisateur connecté ;
+5. `/callback` échange le code, vérifie l'`id_token` (JWKS), appelle
    `/userinfo` avec le Bearer token et affiche les claims ;
-5. le rejeu d'un code consommé est refusé.
+6. le rejeu d'un code consommé est refusé.
 
 Les sous-processus sont terminés dans tous les cas (``finally``). Un
 garde-fou borne la durée totale afin de ne jamais bloquer.
@@ -90,21 +91,34 @@ def _run_flow() -> None:
     with httpx.Client(follow_redirects=False, timeout=_HTTP_TIMEOUT) as http:
         response = http.get(f"{CLIENT_URL}/")
         assert response.status_code == 200, response.text
-        print(f"  [1/5] accueil OK (status={response.status_code})")
+        print(f"  [1/6] accueil OK (status={response.status_code})")
 
         response = http.get(f"{CLIENT_URL}/login")
         assert response.status_code == 302, response.text
         authorize_url = response.headers["location"]
         assert "authorize" in urlparse(authorize_url).path, authorize_url
         state, nonce = _assert_login_redirect(authorize_url)
-        print(f"  [2/5] login OK (state={state[:8]}...)")
+        print(f"  [2/6] login OK (state={state[:8]}...)")
+
+        response = http.post(
+            f"{SERVER_URL}/login",
+            data={
+                "username": "alice@example.com",
+                "password": "password",
+                "next": "/",
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 302, response.text
+        assert "fastapiusersauth" in response.headers.get("set-cookie", "")
+        print("  [3/6] login serveur OK (cookie de session posé)")
 
         response = http.get(authorize_url)
         assert response.status_code == 302, response.text
         callback_params = parse_qs(urlparse(response.headers["location"]).query)
         assert callback_params["state"] == [state]
         code = callback_params["code"][0]
-        print(f"  [3/5] authorize OK (code={code[:8]}...)")
+        print(f"  [4/6] authorize OK (code={code[:8]}...)")
 
         callback_url = f"{CLIENT_URL}/callback?code={code}&state={state}"
         response = http.get(callback_url)
@@ -114,11 +128,11 @@ def _run_flow() -> None:
         assert "access_token" in response.text
         assert "UserInfo" in response.text
         assert "alice.martin@example.com" in response.text
-        print("  [4/5] callback OK (id_token vérifié + /userinfo interrogé)")
+        print("  [5/6] callback OK (id_token vérifié + /userinfo interrogé)")
 
         response = http.get(callback_url)
         assert response.status_code == 400, response.text
-        print("  [5/5] rejeu du code refusé OK")
+        print("  [6/6] rejeu du code refusé OK")
     print("\n=== FLOW OK ===")
     print(f"nonce contrôlé : {nonce[:8]}...")
 

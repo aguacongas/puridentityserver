@@ -33,6 +33,7 @@ class AuthorizeRequest:
     client_id: str
     redirect_uri: str
     scope: str
+    subject: str = ""
     state: str = ""
     nonce: str = ""
     code_challenge: str = ""
@@ -139,6 +140,7 @@ class AuthorizeUseCase:
             code=token_urlsafe(32),
             client_id=request.client_id,
             redirect_uri=request.redirect_uri,
+            subject=request.subject,
             scopes=scopes,
             code_challenge=request.code_challenge,
             code_challenge_method=request.code_challenge_method,

@@ -14,6 +14,13 @@ from thepuroidc.application.token import TokenConfig, TokenUseCase
 from thepuroidc.application.userinfo import UserInfoConfig, UserInfoUseCase
 from thepuroidc.domain.jwks import JWTAlgorithm
 from thepuroidc.domain.userinfo import UserClaims
+from thepuroidc.identity.config import (
+    apply_schema,
+    auth_router,
+    login_router,
+    register_router,
+    seed_demo_user,
+)
 from thepuroidc.infrastructure.claims import UserStoreClaimsProvider
 from thepuroidc.infrastructure.jwks import DefaultKeyManager
 from thepuroidc.infrastructure.persistence.factory import (
@@ -88,6 +95,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def _lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
         """Prépare les stockages, alimente le registre clients + user store puis génère les clés."""
+        await apply_schema()
+        await seed_demo_user()
         await key_repository.initialise()
         await client_repository.initialise()
         await code_repository.initialise()
@@ -117,6 +126,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(discovery_router(DiscoveryUseCase(config)))
     app.include_router(jwk_set_router(jwks_usecase))
+    app.include_router(login_router())
+    app.include_router(auth_router)
+    app.include_router(register_router)
     app.include_router(authorize_router(authorize_usecase))
     app.include_router(token_router(token_usecase))
     app.include_router(userinfo_router(userinfo_usecase))

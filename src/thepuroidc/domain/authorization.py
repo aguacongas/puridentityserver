@@ -70,11 +70,15 @@ class AuthorizationCode:
     Porte l'identifiant du client émetteur, l'URI de redirection attendue
     au moment de l'échange, les scopes accordés et le challenge PKCE
     (sélectionné par le client à l'étape ``/authorize``).
+
+    ``subject`` est l'identifiant de l'utilisateur authentifié (UUID UUID
+    issu de FastAPI Users, stocké en chaîne pour la flexibilité).
     """
 
     code: str = field(default_factory=lambda: f"{uuid4().hex[:16]}")
     client_id: str = ""
     redirect_uri: str = ""
+    subject: str = ""
     scopes: frozenset[Scope] = frozenset()
     code_challenge: str = ""
     code_challenge_method: str = "S256"

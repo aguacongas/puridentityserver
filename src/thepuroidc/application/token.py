@@ -109,7 +109,7 @@ class TokenUseCase:
 
         await self._codes.consume(auth_code.code)
 
-        subject = request.client_id
+        subject = auth_code.subject or request.client_id
         expires_at = now + timedelta(seconds=self._config.access_token_ttl_seconds)
         issued_at = int(now.timestamp())
         expires_epoch = int(expires_at.timestamp())
