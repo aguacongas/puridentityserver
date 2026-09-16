@@ -58,5 +58,6 @@ class DiscoveryDocument(BaseModel):
             "address",
             "phone_number",
             "phone_number_verified",
+            "roles",
         ]
     )

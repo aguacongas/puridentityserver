@@ -24,7 +24,7 @@ Elle est lue au démarrage par [pydantic-settings](https://docs.pydantic.dev/lat
 | `THEPUROIDC_ACCESS_TOKEN_TTL_SECONDS` | `3600` | Durée de vie de l'access token émis (secondes). |
 | `THEPUROIDC_SETTINGS_FILE` | `config.toml` | Chemin du fichier TOML des défauts du projet (table `[settings]`), notamment les clients seed et les profils utilisateurs. |
 | `THEPUROIDC_CLIENTS_SEED` | *(config.toml)* | Liste JSON de clients seed au démarrage (format `[{"client_id":"...","client_secret":"...","redirect_uris":["..."],"scopes":"openid","client_type":"public"}]`). Par défaut, `config.toml` fournit le client de démo `sample-pkce-client`. |
-| `THEPUROIDC_USERS_SEED` | *(config.toml)* | Seed du user store servi par `/userinfo` (déversé dans le store au démarrage, comme `clients_seed`) : objet JSON mappant un `subject` (`sub`) à ses claims (format `{"web-app": {"name": "...", "email": "..."}}`). Par défaut, `config.toml` fournit les profils de démo `sample-pkce-client` et `web-app`. |
+| `THEPUROIDC_USERS_SEED` | *(config.toml)* | Seed du user store servi par `/userinfo` (déversé dans le store au démarrage, comme `clients_seed`) : objet JSON mappant un `subject` (`sub`) à ses claims (format `{"alice": {"name": "...", "email": "...", "roles": ["admin"]}}`). Les clés `alice` / `bob` sont des sujets utilisateurs que le pont identité recopie sous l'UUID FastAPI Users correspondant (même email que `DEMO_USERS`). Par défaut, `config.toml` fournit les profils démo `alice` (admin) et `bob` (user). |
 
 ### `issuer` vs `base_url`
 

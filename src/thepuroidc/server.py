@@ -15,12 +15,11 @@ from thepuroidc.application.userinfo import UserInfoConfig, UserInfoUseCase
 from thepuroidc.domain.jwks import JWTAlgorithm
 from thepuroidc.domain.userinfo import UserClaims
 from thepuroidc.identity.config import (
-    DEMO_USER_SUBJECT,
     apply_schema,
     auth_router,
     login_router,
     register_router,
-    seed_demo_user,
+    seed_demo_users,
 )
 from thepuroidc.infrastructure.claims import UserStoreClaimsProvider
 from thepuroidc.infrastructure.jwks import DefaultKeyManager
@@ -97,7 +96,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def _lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
         """Prépare les stockages, alimente le registre clients + user store puis génère les clés."""
         await apply_schema()
-        alice = await seed_demo_user()
+        demo_users = await seed_demo_users()
         await key_repository.initialise()
         await client_repository.initialise()
         await code_repository.initialise()
@@ -108,14 +107,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             [
                 UserClaims(subject=subject, claims=claims)
                 for subject, claims in settings.users_seed.items()
+                if subject not in demo_users  # profils démo → pont sous UUID ci-dessous
             ]
         )
-        # Pont identité ⊕ user store : l'utilisateur démo connecté (UUID FastAPI
-        # Users) récupère le profil seed démo afin que /userinfo renvoie
-        # des claims après un login navigateur réel.
-        demo_profile = settings.users_seed.get(DEMO_USER_SUBJECT)
-        if demo_profile is not None:
-            await user_repository.save(UserClaims(subject=str(alice.id), claims=demo_profile))
+        # Pont identité ⊕ user store : chaque utilisateur démo connecté (UUID
+        # FastAPI Users) récupère le profil seed correspondant afin que
+        # /userinfo renvoie ses claims après un login navigateur réel.
+        for subject, user in demo_users.items():
+            profile = settings.users_seed.get(subject)
+            if profile is not None:
+                await user_repository.save(UserClaims(subject=str(user.id), claims=profile))
         await jwks_usecase.initialise()
         try:
             yield

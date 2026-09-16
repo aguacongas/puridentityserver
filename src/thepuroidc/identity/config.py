@@ -8,7 +8,7 @@ Fournit l'identité utilisateur du serveur OIDC :
 - ``CurrentUser``            : dependency d'utilisateur authentifié (requis)
 - ``CurrentUserOptional``    : dependency d'utilisateur authentifié (facultatif)
 - ``apply_schema``           : crée la table ``user`` (SQLite en mémoire, spike)
-- ``seed_demo_user``         : insère ``alice@example.com / password``
+- ``seed_demo_users``        : insère les utilisateurs démo (``DEMO_USERS``)
 
 Note spike : la base utilisateurs est en mémoire (``StaticPool``) ; en
 production elle sera remplacée par un vrai magasin (DSN dédié ou la base
@@ -44,8 +44,13 @@ from thepuroidc.identity.user import Base, User
 JWT_SECRET = "spike-dev-only-256bits-secret-change-in-prod!"  # ruff: ignore[hardcoded-password-string]  (spike uniquement)
 JWT_LIFETIME_SECONDS = 3600
 
-# ── subject seed du profil démo (copié sur l'UUID d'Alice au démarrage) ─────
-DEMO_USER_SUBJECT = "demo"
+# ── utilisateurs démo (sujets du user store, jamais des clients) ────────────
+# La clé du dict est le ``subject`` utilisé dans `users_seed` (config.toml) :
+# le bridge recopie le profil de claims correspondant sous l'UUID FastAPI Users.
+DEMO_USERS: dict[str, tuple[str, str]] = {
+    "alice": ("alice@example.com", "password"),
+    "bob": ("bob@example.com", "password"),
+}
 
 # ── base de données users (async, séparée des stores OIDC) ──────────────────
 _session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -134,21 +139,24 @@ async def apply_schema() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
-async def seed_demo_user() -> User:
-    """Insère ``alice@example.com / password`` et la retourne (créée ou existante)."""
-    from sqlalchemy import select
+async def seed_demo_users() -> dict[str, User]:
+    """Insère les utilisateurs démo (``DEMO_USERS``) et les retourne par subject.
 
+    Retourne un dict ``{subject: User}`` — les utilisateurs existants sont
+    rechargés plutôt que recréés (idempotent entre deux démarrages).
+    """
     factory = _get_session_factory()
+    result: dict[str, User] = {}
     async with factory() as session:
-        result = await session.execute(select(User).limit(1))
-        existing = result.scalars().first()
-        if existing is not None:
-            return existing
         user_db: SQLAlchemyUserDatabase[User, uuid.UUID] = SQLAlchemyUserDatabase(session, User)
-        user = await UserManager(user_db).create(
-            BaseUserCreate(email="alice@example.com", password="password")  # ruff: ignore[hardcoded-password-func-arg]  (démo spike)
-        )
-        return user
+        for subject, (email, password) in DEMO_USERS.items():
+            existing = await user_db.get_by_email(email)
+            if existing is not None:
+                result[subject] = existing
+                continue
+            user = await UserManager(user_db).create(BaseUserCreate(email=email, password=password))
+            result[subject] = user
+    return result
 
 
 _LOGIN_PAGE = """<!doctype html>
@@ -172,7 +180,8 @@ _LOGIN_PAGE = """<!doctype html>
     <label>Mot de passe <input type="password" name="password" required></label>
     <button type="submit">Se connecter</button>
   </form>
-  <p><small>Démo : <code>alice@example.com / password</code></small></p>
+  <p><small>Démo : <code>alice@example.com / password</code> (admin)
+    &nbsp;·&nbsp; <code>bob@example.com / password</code> (user)</small></p>
 </body>
 </html>
 """

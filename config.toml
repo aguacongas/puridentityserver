@@ -19,10 +19,11 @@
 # seed utilisateurs (user store) : clé = subject (sub), valeur = claims
 # exposés selon les scopes accordés au jeton (openid > sub, profile >
 # identité, email, address, phone). Sujets = utilisateurs, jamais des
-# clients ; le pont identité recopie ce profil sous l'UUID d'Alice.
+# clients ; les clés "alice" / "bob" sont recopiées par le pont identité
+# sous l'UUID FastAPI Users correspondant au même email (`DEMO_USERS`).
 # Surchargeable en bloc via `THEPUROIDC_USERS_SEED` (JSON).
 
-[settings.users_seed.demo]
+[settings.users_seed.alice]
 name = "Alice Martin"
 family_name = "Martin"
 given_name = "Alice"
@@ -37,16 +38,43 @@ birthdate = "1990-04-12"
 zoneinfo = "Europe/Paris"
 locale = "fr-FR"
 updated_at = 1738000000
+roles = ["admin", "member"]
 email = "alice.martin@example.com"
 email_verified = true
 phone_number = "+33142000000"
 phone_number_verified = true
 
-[settings.users_seed.demo.address]
+[settings.users_seed.alice.address]
 formatted = "12 rue de la Paix, 75002 Paris, France"
 street_address = "12 rue de la Paix"
 locality = "Paris"
 postal_code = "75002"
+country = "FR"
+
+[settings.users_seed.bob]
+name = "Bob Durand"
+family_name = "Durand"
+given_name = "Bob"
+nickname = "bob"
+preferred_username = "bob-durand"
+profile = "https://example.com/bob-durand"
+picture = "https://example.com/bob-durand.jpg"
+gender = "male"
+birthdate = "1985-11-03"
+zoneinfo = "Europe/Paris"
+locale = "fr-FR"
+updated_at = 1739000000
+roles = ["member"]
+email = "bob.durand@example.com"
+email_verified = true
+phone_number = "+33142000001"
+phone_number_verified = true
+
+[settings.users_seed.bob.address]
+formatted = "4 avenue Jean Moulin, 75014 Paris, France"
+street_address = "4 avenue Jean Moulin"
+locality = "Paris"
+postal_code = "75014"
 country = "FR"
 
 [[settings.clients_seed]]

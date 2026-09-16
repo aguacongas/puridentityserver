@@ -224,6 +224,31 @@ class TestUserInfoUseCase:
         assert result.claims["email"] == "alice@example.com"
         assert "address" not in result.claims
 
+    def test_returns_roles_claim_when_profile_scope_granted(self) -> None:
+        tm = _make_token_manager()
+        token = _access_token(tm, scopes=frozenset({Scope.OPENID, Scope.PROFILE}))
+
+        result = self._result(
+            tm,
+            token,
+            {"alice": {"name": "Alice Martin", "roles": ["admin", "member"]}},
+        )
+
+        assert result.claims["sub"] == "alice"
+        assert result.claims["roles"] == ["admin", "member"]
+
+    def test_hides_roles_claim_without_profile_scope(self) -> None:
+        tm = _make_token_manager()
+        token = _access_token(tm, scopes=frozenset({Scope.OPENID, Scope.EMAIL}))
+
+        result = self._result(
+            tm,
+            token,
+            {"alice": {"name": "Alice Martin", "roles": ["admin"]}},
+        )
+
+        assert result.claims == {"sub": "alice"}
+
     def test_returns_address_claims_when_scope_granted(self) -> None:
         tm = _make_token_manager()
         token = _access_token(tm, scopes=frozenset({Scope.OPENID, Scope.PROFILE, Scope.ADDRESS}))
@@ -353,6 +378,7 @@ class TestUserInfoEndpoint:
         metadata = response.json()
         assert "name" in metadata["claims_supported"]
         assert "email_verified" in metadata["claims_supported"]
+        assert "roles" in metadata["claims_supported"]
         assert metadata["scopes_supported"] == [
             "openid",
             "profile",

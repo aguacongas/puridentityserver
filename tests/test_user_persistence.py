@@ -167,18 +167,21 @@ class TestSettingsProfiles:
         monkeypatch.setenv("THEPUROIDC_SETTINGS_FILE", str(config))
         settings = Settings(_env_file=None)
 
-        assert settings.users_seed["demo"]["email"] == "alice.martin@example.com"
+        assert settings.users_seed["alice"]["email"] == "alice.martin@example.com"
+        assert settings.users_seed["bob"]["email"] == "bob.durand@example.com"
+        assert settings.users_seed["alice"]["roles"] == ["admin", "member"]
+        assert settings.users_seed["bob"]["roles"] == ["member"]
         assert "sample-pkce-client" not in settings.users_seed
         assert "web-app" not in settings.users_seed
 
     def test_reads_json_from_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(
             "THEPUROIDC_USERS_SEED",
-            '{"demo": {"name": "Alice", "email_verified": true}}',
+            '{"alice": {"name": "Alice", "roles": ["admin"]}}',
         )
         settings = Settings(_env_file=None)
 
-        assert settings.users_seed == {"demo": {"name": "Alice", "email_verified": True}}
+        assert settings.users_seed == {"alice": {"name": "Alice", "roles": ["admin"]}}
 
     def test_defaults_to_empty_dict(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config = tmp_path / "config.toml"

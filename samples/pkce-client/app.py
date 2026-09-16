@@ -145,7 +145,8 @@ def _index_html(settings: Settings) -> str:
 contre le serveur <code>{html.escape(settings.issuer)}</code>.</p>
 <p>Client : <code>{html.escape(settings.client_id)}</code></p>
 <p><a class="button" href="/login">Se connecter avec ThePurOidc</a></p>
-<p><small>Compte démo : <code>alice@example.com</code> / <code>password</code></small></p>
+<p><small>Comptes démo : <code>alice@example.com</code> / <code>password</code> (admin)
+    &nbsp;·&nbsp; <code>bob@example.com</code> / <code>password</code> (user)</small></p>
 """
     return _page(body)
 

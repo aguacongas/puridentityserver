@@ -22,8 +22,14 @@ Le client effectue :
    l'affichage des claims de l'utilisateur renvoyés par le serveur
    (filtrés selon les scopes `openid profile email` accordés au token).
 
-Compte de démonstration fourni par le serveur : `alice@example.com` /
-`password` (le serveur crée automatiquement ce compté au démarrage).
+Comptes de démonstration fournis par le serveur (créés automatiquement au
+démarrage) :
+
+- `alice@example.com` / `password` — rôle `admin`
+- `bob@example.com` / `password` — rôle `user`
+
+Les rôles sont portés par le claim `roles` du profil seed (scope `profile`)
+et restitués dans la réponse de `/userinfo`.
 
 ## Lancement
 

@@ -4,7 +4,7 @@ Les appels directs aux fonctions de route (``pytest.anyio``) garantissent une
 couverture fiable : Starlette ``TestClient`` exécute l'app dans un thread
 anyio + greenlets SQLAlchemy, un contexte où coverage.py perd le traçage de
 certaines lignes (constaté empiriquement sur le corps de ``POST /login`` et la
-branche d'insertion de ``seed_demo_user``).
+branche d'insertion de ``seed_demo_users``).
 
 Les tests ``pytest.anyio`` utilisent un ``monkeypatch`` pour injecter leur
 propre moteur et session factory (liés à la boucle d'événements du test) sans
@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import StaticPool
 
-from thepuroidc.identity.config import DEMO_USER_SUBJECT, apply_schema, seed_demo_user
+from thepuroidc.identity.config import apply_schema, seed_demo_users
 from thepuroidc.infrastructure.settings import Settings
 from thepuroidc.server import create_app
 
@@ -133,14 +133,14 @@ def test_get_session_factory_raises_before_init(
 
 
 @pytest.mark.anyio
-async def test_seed_demo_user_insert_then_returns_idempotent(
+async def test_seed_demo_users_insert_then_return_idempotent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Premier appel insère Alice ; les suivants sortent par la branche early."""
+    """Premier appel insère Alice et Bob ; les suivants les rechargent (idempotent)."""
     _inject_test_db(monkeypatch)
     await apply_schema()
-    await seed_demo_user()
-    await seed_demo_user()
+    users = await seed_demo_users()
+    assert set(users) == {"alice", "bob"}
 
 
 def test_parse_id_converts_uuid_string() -> None:
@@ -159,7 +159,7 @@ async def test_post_login_success_sets_cookie_and_redirects(
     """POST /login valide le redirect + cookie de session (appel direct)."""
     _inject_test_db(monkeypatch)
     await apply_schema()
-    await seed_demo_user()
+    await seed_demo_users()
 
     endpoint = _post_login_endpoint()
     response = await endpoint(
@@ -180,7 +180,7 @@ async def test_post_login_rejects_wrong_password(
     """POST /login avec un mauvais mot de passe redirige vers le formulaire."""
     _inject_test_db(monkeypatch)
     await apply_schema()
-    await seed_demo_user()
+    await seed_demo_users()
 
     endpoint = _post_login_endpoint()
     response = await endpoint(
@@ -203,7 +203,7 @@ async def test_post_login_handles_awaitable_strategy_and_empty_cookie(
 
     _inject_test_db(monkeypatch)
     await apply_schema()
-    await seed_demo_user()
+    await seed_demo_users()
 
     async def _awaitable_strategy() -> mod.JWTStrategy:  # ruff: ignore[unused-async]
         return mod._jwt_strategy()
@@ -289,25 +289,44 @@ def test_post_login_bad_credentials_redirects() -> None:
     assert response.headers["location"].startswith("/login?next=")
 
 
-def test_login_authorize_token_full_flow() -> None:
+@pytest.mark.parametrize(
+    ("email", "expected_name", "expected_roles"),
+    (
+        ("alice@example.com", "Alice Martin", ["admin", "member"]),
+        ("bob@example.com", "Bob Durand", ["member"]),
+    ),
+)
+def test_login_authorize_token_full_flow(
+    email: str, expected_name: str, expected_roles: list[str]
+) -> None:
     """Flow E2E : login (cookie) → /authorize → /token → /userinfo.
 
-    Vérifie que le ``sub`` du id_token est l'UUID d'Alice (pas vide =
-    requête anonyme), et que `/userinfo` renvoie le profil Alice ponté
-    identité ⊕ user store.
+    Vérifie que le ``sub`` du id_token est l'UUID FastAPI Users de
+    l'utilisateur (pas vide = requête anonyme), et que `/userinfo` renvoie
+    son profil ponté identité ⊕ user store, rôles inclus.
     """
     verifier = "verifier-verifier"
-    demo_profile = {
-        "name": "Alice Martin",
-        "preferred_username": "alice-martin",
-        "email": "alice.martin@example.com",
-        "email_verified": True,
+    users_seed = {
+        "alice": {
+            "name": "Alice Martin",
+            "preferred_username": "alice-martin",
+            "email": "alice.martin@example.com",
+            "email_verified": True,
+            "roles": ["admin", "member"],
+        },
+        "bob": {
+            "name": "Bob Durand",
+            "preferred_username": "bob-durand",
+            "email": "bob.durand@example.com",
+            "email_verified": True,
+            "roles": ["member"],
+        },
     }
-    with TestClient(_app(users_seed={DEMO_USER_SUBJECT: demo_profile})) as client:
+    with TestClient(_app(users_seed=users_seed)) as client:
         login_resp = client.post(
             "/login",
             data={
-                "username": "alice@example.com",
+                "username": email,
                 "password": "password",
                 "next": "/",
             },
@@ -363,7 +382,7 @@ def test_login_authorize_token_full_flow() -> None:
         assert "email" in id_claims["scope"]
 
         sub = id_claims["sub"]
-        assert sub != ""  # sub = UUID d'Alice, pas vide (requête anonyme)
+        assert sub != ""  # sub = UUID de l'utilisateur, pas vide (requête anonyme)
         assert uuid_mod.UUID(sub)
 
         userinfo_resp = client.get(
@@ -373,5 +392,5 @@ def test_login_authorize_token_full_flow() -> None:
         assert userinfo_resp.status_code == 200
         userinfo = userinfo_resp.json()
         assert userinfo["sub"] == sub
-        assert userinfo["name"] == "Alice Martin"
-        assert userinfo["email"] == "alice.martin@example.com"
+        assert userinfo["name"] == expected_name
+        assert userinfo["roles"] == expected_roles
