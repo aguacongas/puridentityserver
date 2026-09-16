@@ -33,6 +33,9 @@ _CLIENT = Client(
     scopes=frozenset({Scope.OPENID, Scope.PROFILE}),
     client_type=ClientType.CONFIDENTIAL,
     client_secret_hash="a" * 64,
+    session_lifetime_seconds=1800,
+    access_token_lifetime_seconds=120,
+    authorization_code_lifetime_seconds=30,
 )
 
 _T = TypeVar("_T")
@@ -65,6 +68,9 @@ def test_sql_client_repo_round_trip(tmp_path: Path) -> None:
     assert stored is not None
     assert stored.redirect_uris == frozenset({"https://app.example/callback"})
     assert stored.client_secret_hash == "a" * 64
+    assert stored.session_lifetime_seconds == 1800
+    assert stored.access_token_lifetime_seconds == 120
+    assert stored.authorization_code_lifetime_seconds == 30
     run(repo.close())
 
 
@@ -74,6 +80,46 @@ def test_sql_client_repo_find_all_and_missing(tmp_path: Path) -> None:
 
     assert run(repo.find_by_id("nope")) is None
     assert len(run(repo.find_all())) == 1
+    run(repo.close())
+
+
+def test_sql_client_repo_migrates_table_without_lifetime_columns(tmp_path: Path) -> None:
+    db_path = tmp_path / "clients.db"
+    connection = sqlite3.connect(db_path)
+    connection.executescript(
+        """
+        CREATE TABLE clients (
+            client_id VARCHAR(128) NOT NULL,
+            redirect_uris JSON NOT NULL,
+            scopes JSON NOT NULL,
+            client_type VARCHAR(16) NOT NULL,
+            client_secret_hash VARCHAR(64) NOT NULL,
+            created_at DATETIME NOT NULL,
+            is_active BOOLEAN NOT NULL,
+            PRIMARY KEY (client_id)
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO clients
+        (client_id, redirect_uris, scopes, client_type, client_secret_hash,
+         created_at, is_active)
+        VALUES ('legacy-app', '["https://app.example/callback"]', '["openid"]', 'public',
+                '', '2026-01-01T00:00:00+00:00', 1)
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    repo = SQLClientRepository(f"sqlite+aiosqlite:///{db_path}")
+    run(repo.initialise())
+
+    stored = run(repo.find_by_id("legacy-app"))
+    assert stored is not None
+    assert stored.session_lifetime_seconds is None
+    assert stored.access_token_lifetime_seconds is None
+    assert stored.authorization_code_lifetime_seconds is None
     run(repo.close())
 
 

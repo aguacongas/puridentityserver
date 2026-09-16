@@ -7,7 +7,12 @@ import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from thepuroidc.domain.authorization import AuthorizationCode, Client, ClientType
+from thepuroidc.domain.authorization import (
+    AuthorizationCode,
+    Client,
+    ClientType,
+    resolve_lifetime_seconds,
+)
 from thepuroidc.domain.jwks import JWTAlgorithm
 from thepuroidc.interfaces.domain.tokens import TokenManager
 from thepuroidc.interfaces.repositories.authorization_code_repository import (
@@ -110,7 +115,10 @@ class TokenUseCase:
         await self._codes.consume(auth_code.code)
 
         subject = auth_code.subject  # vide si requête anonyme, UUID si login
-        expires_at = now + timedelta(seconds=self._config.access_token_ttl_seconds)
+        token_ttl = resolve_lifetime_seconds(
+            client.access_token_lifetime_seconds, self._config.access_token_ttl_seconds
+        )
+        expires_at = now + timedelta(seconds=token_ttl)
         issued_at = int(now.timestamp())
         expires_epoch = int(expires_at.timestamp())
 
@@ -136,7 +144,7 @@ class TokenUseCase:
         return TokenResponse(
             access_token=access_token,
             id_token=id_token,
-            expires_in=self._config.access_token_ttl_seconds,
+            expires_in=token_ttl,
             scope=" ".join(sorted(scope.value for scope in auth_code.scopes)),
         )
 

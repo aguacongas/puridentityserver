@@ -8,15 +8,17 @@ codes (load balancing) et de survivre aux redémarrages.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import cast
 
-import sqlalchemy as sa
 from sqlalchemy import JSON, Boolean, DateTime, String
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Mapped, mapped_column
 
 from thepuroidc.domain.authorization import AuthorizationCode, Scope
-from thepuroidc.infrastructure.persistence.base import PersistenceBase, async_dsn
+from thepuroidc.infrastructure.persistence.base import (
+    PersistenceBase,
+    async_dsn,
+    migrate_add_missing_columns,
+)
 
 
 class AuthorizationCodeRow(PersistenceBase):
@@ -48,7 +50,9 @@ class SQLAuthorizationCodeRepository:
         """Crée la table ``authorization_codes`` si nécessaire puis migre le schéma."""
         async with self._engine.begin() as connection:
             await connection.run_sync(PersistenceBase.metadata.create_all)
-            await connection.run_sync(_migrate_schema)
+            await connection.run_sync(
+                lambda sync: migrate_add_missing_columns(sync, AuthorizationCodeRow)
+            )
 
     async def close(self) -> None:
         """Ferme proprement le moteur (libère les connexions)."""
@@ -81,43 +85,6 @@ class SQLAuthorizationCodeRepository:
             if row is not None:
                 await session.delete(row)
                 await session.commit()
-
-
-def _migrate_schema(connection: sa.Connection) -> None:
-    """Ajoute les colonnes du modèle absentes de la table existante (migration légère).
-
-    ``create_all(checkfirst=True)`` ne modifie jamais une table présente : une base
-    créée avec un schéma antérieur (sans la colonne ``subject``) provoquerait un
-    ``OperationalError: no such column`` à la lecture. On complète l'écart via
-    ``ALTER TABLE ADD COLUMN``, sans toucher aux données.
-    """
-    table = cast(sa.Table, AuthorizationCodeRow.__table__)
-    existing = {column["name"] for column in sa.inspect(connection).get_columns(table.name)}
-    for column in table.columns:
-        if column.name in existing:
-            continue
-        column_type = column.type.compile(dialect=connection.dialect)
-        default = getattr(column.default, "arg", None) if column.default is not None else None
-        default_clause = ""
-        if default is not None:
-            default_clause = f" DEFAULT {_sql_literal(default)}"
-        null_clause = " NOT NULL" if column.nullable is False else ""
-        add_column_sql = (
-            f"ALTER TABLE {table.name} ADD COLUMN {column.name} "
-            f"{column_type}{null_clause}{default_clause}"
-        )
-        connection.exec_driver_sql(add_column_sql)
-
-
-def _sql_literal(value: object) -> str:
-    """Rend un littéral SQL portable (booléens, entiers, chaînes)."""
-    if isinstance(value, bool):
-        return "1" if value else "0"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, str):
-        return "'" + value.replace("'", "''") + "'"
-    return str(value)
 
 
 def _to_row(code: AuthorizationCode) -> AuthorizationCodeRow:

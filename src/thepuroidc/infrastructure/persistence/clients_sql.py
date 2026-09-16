@@ -8,12 +8,16 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, String, select
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Mapped, mapped_column
 
 from thepuroidc.domain.authorization import Client, ClientType, Scope
-from thepuroidc.infrastructure.persistence.base import PersistenceBase, async_dsn
+from thepuroidc.infrastructure.persistence.base import (
+    PersistenceBase,
+    async_dsn,
+    migrate_add_missing_columns,
+)
 
 
 class ClientRow(PersistenceBase):
@@ -28,6 +32,9 @@ class ClientRow(PersistenceBase):
     client_secret_hash: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    session_lifetime_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    access_token_lifetime_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    authorization_code_lifetime_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class SQLClientRepository:
@@ -44,9 +51,10 @@ class SQLClientRepository:
         self._session_factory = async_sessionmaker(self._engine, expire_on_commit=False)
 
     async def initialise(self) -> None:
-        """Crée la table ``clients`` si elle n'existe pas encore."""
+        """Crée la table ``clients`` si elle n'existe pas encore puis migre le schéma."""
         async with self._engine.begin() as connection:
             await connection.run_sync(PersistenceBase.metadata.create_all)
+            await connection.run_sync(lambda sync: migrate_add_missing_columns(sync, ClientRow))
 
     async def close(self) -> None:
         """Ferme proprement le moteur (libère les connexions)."""
@@ -81,6 +89,9 @@ def _to_row(client: Client) -> ClientRow:
         client_secret_hash=client.client_secret_hash,
         created_at=client.created_at,
         is_active=client.is_active,
+        session_lifetime_seconds=client.session_lifetime_seconds,
+        access_token_lifetime_seconds=client.access_token_lifetime_seconds,
+        authorization_code_lifetime_seconds=client.authorization_code_lifetime_seconds,
     )
 
 
@@ -97,4 +108,7 @@ def _from_row(row: ClientRow) -> Client:
         client_secret_hash=row.client_secret_hash,
         created_at=created_at,
         is_active=row.is_active,
+        session_lifetime_seconds=row.session_lifetime_seconds,
+        access_token_lifetime_seconds=row.access_token_lifetime_seconds,
+        authorization_code_lifetime_seconds=row.authorization_code_lifetime_seconds,
     )

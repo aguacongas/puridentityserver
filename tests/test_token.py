@@ -5,6 +5,7 @@ from collections.abc import Awaitable
 from datetime import datetime, timedelta, timezone
 from typing import TypeVar
 
+import jwt
 import pytest
 
 from thepuroidc.application.token import TokenConfig, TokenRequest, TokenUseCase
@@ -157,6 +158,41 @@ class TestTokenUseCaseErrors:
 
         assert hasattr(result, "access_token")
         assert hasattr(result, "id_token")
+
+    def test_ttl_uses_client_lifetime(self) -> None:
+        client = Client(
+            client_id="spa",
+            redirect_uris=frozenset({"https://spa.example/cb"}),
+            scopes=frozenset({Scope.OPENID}),
+            client_type=ClientType.PUBLIC,
+            access_token_lifetime_seconds=120,
+        )
+        uc, codes = _make_usecase(client)
+        code = AuthorizationCode(
+            code="ttl-code",
+            client_id="spa",
+            redirect_uri="https://spa.example/cb",
+            scopes=frozenset({Scope.OPENID}),
+            code_challenge="exact-match",
+            code_challenge_method="plain",
+            expires_at=_future_expiry(),
+        )
+        run(codes.save(code))
+
+        req = TokenRequest(
+            grant_type="authorization_code",
+            code="ttl-code",
+            redirect_uri="https://spa.example/cb",
+            client_id="spa",
+            code_verifier="exact-match",
+        )
+        result = run(uc.execute(req))
+
+        assert result.expires_in == 120
+        id_claims = jwt.decode(result.id_token, options={"verify_signature": False})
+        assert id_claims["exp"] - id_claims["iat"] == 120
+        access_claims = jwt.decode(result.access_token, options={"verify_signature": False})
+        assert access_claims["exp"] - access_claims["iat"] == 120
 
 
 class TestScope:

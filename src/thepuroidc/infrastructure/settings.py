@@ -28,6 +28,12 @@ def _hash_client_secret(secret: str) -> str:
     return sha256(secret.encode("utf-8")).hexdigest()
 
 
+def _optional_int(raw: dict[str, object], key: str) -> int | None:
+    """Lit un entier facultatif de la configuration d'un client (ou ``None``)."""
+    value = raw.get(key)
+    return int(str(value)) if value is not None else None
+
+
 def _parse_client(raw: dict[str, object]) -> Client:
     """Convertit un dictionnaire de configuration en Client domaine."""
     client_id = str(raw["client_id"])
@@ -39,15 +45,17 @@ def _parse_client(raw: dict[str, object]) -> Client:
         redirect_uris = frozenset()
     scopes = frozenset(Scope(token) for token in str(raw.get("scopes", "openid")).split() if token)
     client_type = _parse_client_type(raw.get("client_type", "public"))
-    lifetime_raw = raw.get("session_lifetime_seconds")
-    session_lifetime_seconds = int(str(lifetime_raw)) if lifetime_raw is not None else None
     return Client(
         client_id=client_id,
         redirect_uris=redirect_uris,
         scopes=scopes,
         client_type=client_type,
         client_secret_hash=_hash_client_secret(secret),
-        session_lifetime_seconds=session_lifetime_seconds,
+        session_lifetime_seconds=_optional_int(raw, "session_lifetime_seconds"),
+        access_token_lifetime_seconds=_optional_int(raw, "access_token_lifetime_seconds"),
+        authorization_code_lifetime_seconds=_optional_int(
+            raw, "authorization_code_lifetime_seconds"
+        ),
     )
 
 
@@ -102,7 +110,10 @@ class Settings(BaseSettings):
     jwks_rotation_days: int = 90
     jwks_grace_period_days: int = 7
 
-    # OAuth 2.0 / OIDC (RFC 6749, RFC 7636)
+    # OAuth 2.0 / OIDC (RFC 6749, RFC 7636) — durées de vie par défaut du
+    # serveur. Un client peut les surcharger via `access_token_lifetime_seconds`
+    # et/ou `authorization_code_lifetime_seconds` dans `clients_seed`.
+    # L'`id_token` et l'`access_token` partagent la même durée de vie.
     authorization_code_ttl_seconds: int = 600
     access_token_ttl_seconds: int = 3600
     clients_seed: Annotated[tuple[dict[str, object], ...], NoDecode] = ()
@@ -110,10 +121,10 @@ class Settings(BaseSettings):
     # UserInfo (OIDC Core §5.4) — seed du user store (`sub` -> claims)
     users_seed: Annotated[dict[str, dict[str, object]], NoDecode] = {}
 
-    # Identité (FastAPI Users, spike) — durée par client du cookie de session.
+    # Identité (FastAPI Users, spike) — durée par défaut du cookie de session.
     # Le cookie est signé RS256 avec une clé rotative dédiée (KeyUse.SESSION,
     # jamais publiée) : ni secret statique, ni collision avec les clés de
-    # signature des tokens OIDC. La durée effective peut être réduite par
+    # signature des tokens OIDC. La durée effective peut être surchargée par
     # client via ``session_lifetime_seconds`` dans ``clients_seed``.
     identity_jwt_lifetime_seconds: int = 3600
     identity_seed_users: Annotated[dict[str, dict[str, str]], NoDecode] = {}

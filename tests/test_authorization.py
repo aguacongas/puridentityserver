@@ -1,13 +1,28 @@
 """Tests de la feature Authorization Code + PKCE (RFC 6749, RFC 7636)."""
 
+import asyncio
 import hashlib
+from collections.abc import Awaitable
+from datetime import datetime, timezone
+from typing import TypeVar
 from urllib.parse import parse_qs, urlparse
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from thepuroidc.application.authorize import (
+    AuthorizeConfig,
+    AuthorizeRedirect,
+    AuthorizeRequest,
+    AuthorizeUseCase,
+)
+from thepuroidc.domain.authorization import Client, Scope
+from thepuroidc.infrastructure.persistence.clients_memory import InMemoryClientRepository
+from thepuroidc.infrastructure.persistence.codes_memory import InMemoryAuthorizationCodeRepository
 from thepuroidc.infrastructure.settings import Settings
 from thepuroidc.server import create_app
+
+_T = TypeVar("_T")
 
 _ISSUER = "https://id.example"
 
@@ -434,3 +449,55 @@ def _authorize_code(app: object, client_id: str, redirect_uri: str) -> str:
             follow_redirects=False,
         )
         return _redirect_query(auth.headers["location"])["code"][0]
+
+
+def run(awaitable: Awaitable[_T]) -> _T:
+    """Exécute une coroutine de manière synchrone (tests unitaires du use case)."""
+    return asyncio.run(awaitable)
+
+
+def _authorize_code_ttl(client: Client, server_ttl: int = 600) -> float:
+    """Durée de vie effective d'un code émis pour ``client`` (en secondes)."""
+    clients = InMemoryClientRepository()
+    codes = InMemoryAuthorizationCodeRepository()
+    run(clients.save(client))
+    usecase = AuthorizeUseCase(AuthorizeConfig(code_ttl_seconds=server_ttl), clients, codes)
+    result = run(
+        usecase.execute(
+            AuthorizeRequest(
+                response_type="code",
+                client_id=client.client_id,
+                redirect_uri=next(iter(client.redirect_uris)),
+                scope="openid",
+            )
+        )
+    )
+    assert isinstance(result, AuthorizeRedirect)
+    code = run(codes.find_by_code(result.code))
+    assert code is not None
+    return (code.expires_at - datetime.now(timezone.utc)).total_seconds()
+
+
+def test_code_lifetime_uses_client_setting() -> None:
+    client = Client(
+        client_id="web-app",
+        redirect_uris=frozenset({"https://app.example/callback"}),
+        scopes=frozenset({Scope.OPENID}),
+        authorization_code_lifetime_seconds=30,
+    )
+
+    delta = _authorize_code_ttl(client)
+
+    assert 28 <= delta <= 32
+
+
+def test_code_lifetime_defaults_to_server_ttl() -> None:
+    client = Client(
+        client_id="web-app",
+        redirect_uris=frozenset({"https://app.example/callback"}),
+        scopes=frozenset({Scope.OPENID}),
+    )
+
+    delta = _authorize_code_ttl(client)
+
+    assert 598 <= delta <= 602
