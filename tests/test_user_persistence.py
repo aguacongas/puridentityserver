@@ -201,7 +201,6 @@ class TestSettingsProfiles:
 
         assert settings.identity_seed_users["alice"]["email"] == "alice@example.com"
         assert settings.identity_seed_users["bob"]["password"] == "password"
-        assert settings.identity_jwt_secret == "spike-dev-only-256bits-secret-change-in-prod!"
         assert settings.identity_reset_password_secret == "spike-reset-secret"
         assert settings.identity_verification_secret == "spike-verify-secret"
         assert settings.identity_jwt_lifetime_seconds == 3600
@@ -219,14 +218,14 @@ class TestSettingsProfiles:
             "alice": {"email": "a@example.com", "password": "p"}
         }
 
-    def test_overrides_identity_secret_via_environment(
+    def test_overrides_identity_settings_via_environment(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("THEPUROIDC_IDENTITY_JWT_SECRET", "env-jwt-secret")
+        monkeypatch.setenv("THEPUROIDC_IDENTITY_JWT_LIFETIME_SECONDS", "7200")
         monkeypatch.setenv("THEPUROIDC_IDENTITY_RESET_PASSWORD_SECRET", "env-reset")
         settings = Settings(_env_file=None)
 
-        assert settings.identity_jwt_secret == "env-jwt-secret"
+        assert settings.identity_jwt_lifetime_seconds == 7200
         assert settings.identity_reset_password_secret == "env-reset"
 
     def test_defaults_identity_seed_to_empty(

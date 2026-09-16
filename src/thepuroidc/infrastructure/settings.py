@@ -107,9 +107,11 @@ class Settings(BaseSettings):
     # UserInfo (OIDC Core §5.4) — seed du user store (`sub` -> claims)
     users_seed: Annotated[dict[str, dict[str, object]], NoDecode] = {}
 
-    # Identité (FastAPI Users, spike) — secrets et comptes de connexion.
-    # Configurables via config.toml, `THEPUROIDC_IDENTITY_*` ou `.env`.
-    identity_jwt_secret: str = "spike-dev-only-256bits-secret-change-in-prod!"  # ruff: ignore[hardcoded-password-string]
+    # Identité (FastAPI Users, spike) — durée et rotation cookie + secrets de
+    # gestion de compte. Configurables via config.toml, `THEPUROIDC_IDENTITY_*`
+    # ou `.env`. Le cookie de session est signé RS256 avec une clé rotative
+    # dédiée (KeyUse.SESSION, jamais publiée) : ni secret statique, ni
+    # collision avec les clés de signature des tokens OIDC.
     identity_jwt_lifetime_seconds: int = 3600
     identity_reset_password_secret: str = "spike-reset-secret"  # ruff: ignore[hardcoded-password-string]
     identity_verification_secret: str = "spike-verify-secret"  # ruff: ignore[hardcoded-password-string]

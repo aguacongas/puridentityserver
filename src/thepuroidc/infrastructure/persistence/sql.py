@@ -7,12 +7,14 @@ PostgreSQL et MySQL ; le dialecte est dérivé du DSN fourni.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import cast
 
+import sqlalchemy as sa
 from sqlalchemy import Boolean, DateTime, Integer, String, Text, select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Mapped, mapped_column
 
-from thepuroidc.domain.jwks import JWTAlgorithm, KeyPair
+from thepuroidc.domain.jwks import JWTAlgorithm, KeyPair, KeyUse
 from thepuroidc.infrastructure.persistence.base import PersistenceBase, async_dsn
 
 
@@ -23,6 +25,7 @@ class KeyPairRow(PersistenceBase):
 
     kid: Mapped[str] = mapped_column(String(128), primary_key=True)
     algorithm: Mapped[str] = mapped_column(String(16), index=True)
+    use: Mapped[str] = mapped_column(String(16), default="sig")
     private_key_pem: Mapped[str] = mapped_column(Text)
     public_key_pem: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -43,9 +46,10 @@ class SQLKeyPairRepository:
         self._session_factory = async_sessionmaker(self._engine, expire_on_commit=False)
 
     async def initialise(self) -> None:
-        """Crée la table ``key_pairs`` si elle n'existe pas encore."""
+        """Crée la table ``key_pairs`` puis migre le schéma si nécessaire."""
         async with self._engine.begin() as connection:
             await connection.run_sync(PersistenceBase.metadata.create_all)
+            await connection.run_sync(_migrate_schema)
 
     async def close(self) -> None:
         """Ferme proprement le moteur (libère les connexions)."""
@@ -76,11 +80,50 @@ class SQLKeyPairRepository:
                 await session.commit()
 
 
+def _migrate_schema(connection: sa.Connection) -> None:
+    """Ajoute les colonnes absentes de la table existante (migration légère).
+
+    ``create_all(checkfirst=True)`` ne modifie jamais une table présente : une
+    base créée avec un schéma antérieur (avant la colonne ``use`` pour la
+    rotation des clés de session) provoquerait un ``OperationalError`` à la
+    lecture. On complète l'écart via ``ALTER TABLE ADD COLUMN``, sans toucher
+    aux données — les clés existantes restent des clés de signature (``sig``).
+    """
+    table = cast(sa.Table, KeyPairRow.__table__)
+    existing = {column["name"] for column in sa.inspect(connection).get_columns(table.name)}
+    for column in table.columns:
+        if column.name in existing:
+            continue
+        column_type = column.type.compile(dialect=connection.dialect)
+        default = getattr(column.default, "arg", None) if column.default is not None else None
+        default_clause = ""
+        if default is not None:
+            default_clause = f" DEFAULT {_sql_literal(default)}"
+        null_clause = " NOT NULL" if column.nullable is False else ""
+        add_column_sql = (
+            f"ALTER TABLE {table.name} ADD COLUMN {column.name} "
+            f"{column_type}{null_clause}{default_clause}"
+        )
+        connection.exec_driver_sql(add_column_sql)
+
+
+def _sql_literal(value: object) -> str:
+    """Rend un littéral SQL portable (booléens, entiers, chaînes)."""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str):
+        return "'" + value.replace("'", "''") + "'"
+    return str(value)
+
+
 def _to_row(key_pair: KeyPair) -> KeyPairRow:
     """Convertit une KeyPair domaine en ligne de persistance."""
     return KeyPairRow(
         kid=key_pair.kid,
         algorithm=key_pair.algorithm.value,
+        use=key_pair.use.value,
         private_key_pem=key_pair.private_key_pem,
         public_key_pem=key_pair.public_key_pem,
         created_at=key_pair.created_at,
@@ -100,4 +143,5 @@ def _from_row(row: KeyPairRow) -> KeyPair:
         public_key_pem=row.public_key_pem,
         created_at=created_at,
         is_active=row.is_active,
+        use=KeyUse(row.use) if row.use else KeyUse.SIG,
     )

@@ -29,23 +29,26 @@ from fastapi import APIRouter, Depends, Form, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi_users import BaseUserManager, FastAPIUsers
-from fastapi_users.authentication import (
-    AuthenticationBackend,
-    CookieTransport,
-    JWTStrategy,
-)
+from fastapi_users.authentication import AuthenticationBackend, CookieTransport
 from fastapi_users.db import SQLAlchemyUserDatabase
 from fastapi_users.schemas import BaseUser, BaseUserCreate
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from thepuroidc.identity.session_strategy import SessionJWTStrategy
 from thepuroidc.identity.user import Base, User
+from thepuroidc.interfaces.domain.jwks import KeyManager
 
 # ── configuration d'exécution (injectée par ``configure_identity``) ─────────
 # Valeurs de repli de démonstration : la composition root (``server.py``)
 # injecte celles de ``Settings`` (config.toml, ``THEPUROIDC_*``, ``.env``).
-_cookie_secret = "spike-dev-only-256bits-secret-change-in-prod!"  # ruff: ignore[hardcoded-password-string]
+# Plus aucun secret statique ne signe le cookie de session — la
+# signature RS256 repose sur la clé de session (``KeyUse.SESSION``) gérée par
+# un KeyManager rotatif, distinct des clés de signature des tokens OIDC.
+_session_key_manager: KeyManager | None = None
 _cookie_lifetime_seconds = 3600
+_session_rotation_days = 90
+_session_grace_period_days = 7
 _reset_password_secret = "spike-reset-secret"  # ruff: ignore[hardcoded-password-string]
 _verification_secret = "spike-verify-secret"  # ruff: ignore[hardcoded-password-string]
 
@@ -86,20 +89,29 @@ class UserManager(BaseUserManager[User, uuid.UUID]):
 
 def configure_identity(
     *,
-    cookie_secret: str,
+    session_key_manager: KeyManager,
     cookie_lifetime_seconds: int,
+    session_rotation_days: int = 90,
+    session_grace_period_days: int = 7,
     reset_password_secret: str,
     verification_secret: str,
 ) -> None:
-    """Injecte les secrets de session et de gestion de compte depuis la configuration.
+    """Injecte la clé de session et les secrets de gestion depuis la configuration.
 
     Appelée par la composition root avec les valeurs de ``Settings`` : la
     hiérarchie config.toml → `THEPUROIDC_*` → ``.env`` permet de remplacer
-    les valeurs de démonstration sans toucher au code.
+    les valeurs de démonstration sans toucher au code. Le cookie de session
+    est signé RS256 avec la clé de session rotative (``KeyUse.SESSION``),
+    jamais un secret statique : seules les durées et la politique de
+    rotation sont injectées ici.
     """
-    global _cookie_secret, _cookie_lifetime_seconds, _reset_password_secret, _verification_secret
-    _cookie_secret = cookie_secret
+    global _session_key_manager, _cookie_lifetime_seconds
+    global _session_rotation_days, _session_grace_period_days
+    global _reset_password_secret, _verification_secret
+    _session_key_manager = session_key_manager
     _cookie_lifetime_seconds = cookie_lifetime_seconds
+    _session_rotation_days = session_rotation_days
+    _session_grace_period_days = session_grace_period_days
     _reset_password_secret = reset_password_secret
     _verification_secret = verification_secret
     UserManager.reset_password_token_secret = reset_password_secret
@@ -114,18 +126,21 @@ class UserCreate(BaseUserCreate):
     """Schéma de création d'un utilisateur (inscription)."""
 
 
-def _jwt_strategy() -> JWTStrategy[User, uuid.UUID]:
-    return JWTStrategy(
-        secret=_cookie_secret,
+def _session_strategy() -> SessionJWTStrategy[User, uuid.UUID]:
+    if _session_key_manager is None:
+        raise RuntimeError("configure_identity() n'a pas encore été appelé")
+    return SessionJWTStrategy(
+        key_manager=_session_key_manager,
         lifetime_seconds=_cookie_lifetime_seconds,
-        algorithm="HS256",
+        rotation_days=_session_rotation_days,
+        grace_period_days=_session_grace_period_days,
     )
 
 
 cookie_backend = AuthenticationBackend(
     name="cookie",
     transport=CookieTransport(cookie_secure=False, cookie_max_age=3600),
-    get_strategy=_jwt_strategy,
+    get_strategy=_session_strategy,
 )
 
 fastapi_users = FastAPIUsers[User, uuid.UUID](_manager_dependency, [cookie_backend])

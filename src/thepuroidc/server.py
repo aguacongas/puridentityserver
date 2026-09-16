@@ -12,7 +12,7 @@ from thepuroidc.application.discovery import DiscoveryConfig, DiscoveryUseCase
 from thepuroidc.application.jwks import JWKSetConfig, JWKSetUseCase
 from thepuroidc.application.token import TokenConfig, TokenUseCase
 from thepuroidc.application.userinfo import UserInfoConfig, UserInfoUseCase
-from thepuroidc.domain.jwks import JWTAlgorithm
+from thepuroidc.domain.jwks import JWTAlgorithm, KeyUse
 from thepuroidc.domain.userinfo import UserClaims
 from thepuroidc.identity.config import (
     apply_schema,
@@ -44,9 +44,16 @@ _PACKAGE_VERSION = "0.1.0"
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Assemble l'application FastAPI ; câble les usecases avec les réglages fournis."""
     settings = settings if settings is not None else Settings()
+
+    key_repository = build_key_pair_repository(settings)
+    key_manager = DefaultKeyManager(key_repository)
+    session_key_manager = DefaultKeyManager(key_repository, use=KeyUse.SESSION)
+
     configure_identity(
-        cookie_secret=settings.identity_jwt_secret,
+        session_key_manager=session_key_manager,
         cookie_lifetime_seconds=settings.identity_jwt_lifetime_seconds,
+        session_rotation_days=settings.jwks_rotation_days,
+        session_grace_period_days=settings.jwks_grace_period_days,
         reset_password_secret=settings.identity_reset_password_secret,
         verification_secret=settings.identity_verification_secret,
     )
@@ -56,8 +63,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         signing_algorithms=settings.jwks_algorithms,
     )
 
-    key_repository = build_key_pair_repository(settings)
-    key_manager = DefaultKeyManager(key_repository)
     jwks_config = JWKSetConfig(
         key_size=settings.jwks_key_size,
         algorithms=settings.jwks_signing_algorithms,
@@ -126,6 +131,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if profile is not None:
                 await user_repository.save(UserClaims(subject=str(user.id), claims=profile))
         await jwks_usecase.initialise()
+        await session_key_manager.ensure_active_key(2048, JWTAlgorithm.RS256)
         try:
             yield
         finally:

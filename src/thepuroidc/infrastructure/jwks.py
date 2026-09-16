@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives.serialization import (
     PublicFormat,
 )
 
-from thepuroidc.domain.jwks import JWTAlgorithm, KeyPair
+from thepuroidc.domain.jwks import JWTAlgorithm, KeyPair, KeyUse
 from thepuroidc.interfaces.repositories.key_pair_repository import KeyPairRepository
 
 _RSA_ALGORITHMS = (
@@ -62,21 +62,37 @@ class DefaultKeyManager:
     Supporte les familles RSA (RS*, PS*) et EC (ES*) : le type de clé
     générée dépend de l'algorithme demandé. Le repository injecté fournit
     la persistance (mémoire pour les tests, SQL/Redis/Mongo en production).
+    Un gestionnaire est scopé sur un usage précis (``KeyUse.SIG`` pour les
+    tokens OIDC, ``KeyUse.SESSION`` pour les cookies) et ne manipule que
+    les clés de sa famille — les usages partagent le même repository mais
+    restent isolés.
     """
 
-    def __init__(self, repository: KeyPairRepository) -> None:
-        """Injection du repository de persistance des clés."""
+    def __init__(self, repository: KeyPairRepository, use: KeyUse = KeyUse.SIG) -> None:
+        """Injection du repository de persistance + usage des clés gérées."""
         self._repository = repository
+        self._use = use
+
+    async def _keys(self) -> list[KeyPair]:
+        """Retourne les clés du repository appartenant à la famille gérée."""
+        return [key for key in await self._repository.find_all() if key.use is self._use]
 
     async def generate_key_pair(self, key_size: int, algorithm: JWTAlgorithm) -> KeyPair:
         """Génère une paire de clés pour l'algorithme et la persiste."""
-        key_pair = _generate_key_pair(key_size, algorithm)
+        key_pair = replace(_generate_key_pair(key_size, algorithm), use=self._use)
         await self._repository.save(key_pair)
         return key_pair
 
     async def get_active_keys(self) -> list[KeyPair]:
-        """Retourne les clés marquées actives."""
-        return [k for k in await self._repository.find_all() if k.is_active]
+        """Retourne les clés marquées actives, parmi la famille gérée."""
+        return [k for k in await self._keys() if k.is_active]
+
+    async def get_key_by_kid(self, kid: str) -> KeyPair | None:
+        """Retourne la clé de la famille gérée identifiée par ``kid``."""
+        for key in await self._keys():
+            if key.kid == kid:
+                return key
+        return None
 
     async def mark_expired_keys(self, rotation_days: int, grace_period_days: int) -> int:
         """Marque les clés expirées, supprime celles dépassant la grace period.
@@ -87,7 +103,7 @@ class DefaultKeyManager:
         rotation_deadline = now - timedelta(days=rotation_days)
         grace_deadline = now - timedelta(days=rotation_days + grace_period_days)
         removed = 0
-        for key in await self._repository.find_all():
+        for key in await self._keys():
             if key.created_at <= grace_deadline:
                 await self._repository.delete(key.kid)
                 removed += 1

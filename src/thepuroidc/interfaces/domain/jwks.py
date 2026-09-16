@@ -22,6 +22,14 @@ class KeyManager(Protocol):
         """Retourne les clés encore actives (non expirées)."""
         ...
 
+    async def get_key_by_kid(self, kid: str) -> KeyPair | None:
+        """Retourne la clé identifiée par ``kid`` (quel que soit son état).
+
+        Nécessaire à la validation des tokens signés avec une clé inactive
+        mais encore dans sa période de grâce (rotations successives).
+        """
+        ...
+
     async def mark_expired_keys(self, rotation_days: int, grace_period_days: int) -> int:
         """Passe les clés périmées en inactives, supprime celles hors grace period.
 

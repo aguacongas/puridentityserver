@@ -17,6 +17,7 @@ import base64
 import hashlib
 import uuid as uuid_mod
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -163,25 +164,35 @@ def test_parse_id_converts_uuid_string() -> None:
 
 
 def test_configure_identity_wires_settings_values() -> None:
-    """configure_identity applique les secrets depuis la configuration (Settings)."""
+    """configure_identity applique clé de session + secrets depuis la configuration."""
+    from thepuroidc.domain.jwks import KeyUse
     from thepuroidc.identity import config as mod
+    from thepuroidc.infrastructure.jwks import DefaultKeyManager
+    from thepuroidc.infrastructure.persistence.memory import InMemoryKeyPairRepository
 
+    key_manager = DefaultKeyManager(InMemoryKeyPairRepository(), use=KeyUse.SESSION)
     mod.configure_identity(
-        cookie_secret="unit-test-cookie-secret-0123456789abcdef",  # ruff: ignore[hardcoded-password-func-arg]
+        session_key_manager=key_manager,
         cookie_lifetime_seconds=7200,
+        session_rotation_days=15,
+        session_grace_period_days=3,
         reset_password_secret="unit-reset-verify-secret",  # ruff: ignore[hardcoded-password-func-arg]
         verification_secret="unit-verify-secret",  # ruff: ignore[hardcoded-password-func-arg]
     )
     try:
-        strategy = mod._jwt_strategy()
-        assert strategy.secret == "unit-test-cookie-secret-0123456789abcdef"  # type: ignore[attr-defined]
+        strategy = mod._session_strategy()
+        assert strategy._key_manager is key_manager  # type: ignore[attr-defined]
+        assert strategy._rotation_days == 15  # type: ignore[attr-defined]
+        assert strategy._grace_period_days == 3  # type: ignore[attr-defined]
         assert mod._cookie_lifetime_seconds == 7200
         assert mod.UserManager.reset_password_token_secret == "unit-reset-verify-secret"
         assert mod.UserManager.verification_token_secret == "unit-verify-secret"
     finally:
         mod.configure_identity(
-            cookie_secret=mod._cookie_secret,
+            session_key_manager=key_manager,
             cookie_lifetime_seconds=mod._cookie_lifetime_seconds,
+            session_rotation_days=mod._session_rotation_days,
+            session_grace_period_days=mod._session_grace_period_days,
             reset_password_secret=mod.UserManager.reset_password_token_secret,
             verification_secret=mod.UserManager.verification_token_secret,
         )
@@ -240,8 +251,8 @@ async def test_post_login_handles_awaitable_strategy_and_empty_cookie(
     await apply_schema()
     await seed_users(_IDENTITY_SEED)
 
-    async def _awaitable_strategy() -> mod.JWTStrategy:  # ruff: ignore[unused-async]
-        return mod._jwt_strategy()
+    async def _awaitable_strategy() -> mod.SessionJWTStrategy:  # ruff: ignore[unused-async]
+        return mod._session_strategy()
 
     async def _fake_backend_login(strategy: object, user: object) -> object:  # ruff: ignore[unused-async]
         return type(
@@ -431,20 +442,72 @@ def test_login_authorize_token_full_flow(
         assert userinfo["roles"] == expected_roles
 
 
-def test_login_cookie_signed_with_configured_secret() -> None:
-    """Le cookie de session est signé avec le secret configuré (surchargé par Settings)."""
-    import re
+def test_login_cookie_signed_with_dedicated_session_key(tmp_path: Path) -> None:
+    """Le cookie est RS256, signé par une clé de session distincte des clés JWKS.
 
-    secret = "custom-cookie-signing-secret-0123456789abcdefghij"
-    with TestClient(_app(identity_jwt_secret=secret)) as client:  # type: ignore[arg-type]
+    La base SQL partagée contient les deux familles (``sig`` pour les tokens,
+    ``session`` pour le cookie) : seule la seconde signe le cookie, et seule
+    la première est publiée dans ``/.well-known/jwks.json``. Le schéma a été
+    créé sans la colonne ``use`` (schéma antérieur) pour valider la migration.
+    """
+    import asyncio
+    import re
+    import sqlite3
+
+    from thepuroidc.domain.jwks import KeyUse
+    from thepuroidc.infrastructure.persistence.sql import SQLKeyPairRepository
+
+    db_path = tmp_path / "keys.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE key_pairs ("
+        "kid VARCHAR(128) PRIMARY KEY, algorithm VARCHAR(16), "
+        "private_key_pem TEXT, public_key_pem TEXT, "
+        "created_at DATETIME, is_active BOOLEAN, key_size INTEGER)"
+    )
+    conn.close()
+
+    dsn = f"sqlite:///{db_path}"
+    with TestClient(_app(key_store_type="sql", key_store_dsn=dsn)) as client:
         resp = client.post(
             "/login",
             data={"username": "alice@example.com", "password": "password", "next": "/"},
             follow_redirects=False,
         )
-    cookie = resp.headers["set-cookie"]
-    token = re.search(r"fastapiusersauth=([^;]+)", cookie).group(1)  # type: ignore[union-attr]
+        token = re.search(r"fastapiusersauth=([^;]+)", resp.headers["set-cookie"]).group(  # type: ignore[union-attr]
+            1
+        )
+
+        header = jwt.get_unverified_header(token)
+        assert header["alg"] == "RS256"
+        assert header["kid"]
+        session_kid = header["kid"]
+
+        token_jwks = client.get("/.well-known/jwks.json").json()["keys"]
+        assert token_jwks  # des clés de signature existent
+        assert all(jwk.get("kid") != session_kid for jwk in token_jwks)
+        token_public_key = jwt.algorithms.RSAAlgorithm.from_jwk(token_jwks[0])
+        with pytest.raises(jwt.PyJWTError):
+            jwt.decode(
+                token,
+                token_public_key,
+                algorithms=["RS256"],
+                options={"verify_exp": False, "verify_aud": False},
+            )
+
+    async def _read_session_key() -> object:
+        repo = SQLKeyPairRepository(dsn)
+        await repo.initialise()  # valide la migration (colonne `use` ajoutée)
+        keys = await repo.find_all()
+        session_key = next(key for key in keys if key.use is KeyUse.SESSION)
+        assert all(key.use is KeyUse.SIG for key in keys if key.kid != session_key.kid)
+        return session_key
+
+    session_key = asyncio.run(_read_session_key())
     claims = jwt.decode(
-        token, secret, algorithms=["HS256"], options={"verify_exp": False, "verify_aud": False}
+        token,
+        session_key.public_key_pem,  # type: ignore[union-attr]
+        algorithms=["RS256"],
+        options={"verify_exp": False, "verify_aud": False},
     )
     assert claims["sub"]
