@@ -2,12 +2,16 @@
 
 Implémente une *relying party* qui se connecte à un serveur ThePurOidc :
 
-1. redirection du navigateur vers ``/authorize`` avec un challenge PKCE S256,
-2. réception du ``code`` d'autorisation sur ``/callback``,
-3. échange du code au ``/token`` avec le ``code_verifier``,
-4. vérification de l'``id_token`` (signature JWKS, ``aud``, ``nonce``) et
+1. redirection du navigateur vers la page de login du serveur
+   (`/login?next=<authorize>`), avec un challenge PKCE S256,
+2. l'utilisateur s'authentifie sur le serveur (cookie de session),
+3. le serveur redirige vers ``/authorize`` avec le cookie ; le ``code``
+   d'autorisation est émis avec le ``sub`` de l'utilisateur connecté,
+4. réception du ``code`` d'autorisation sur ``/callback``,
+5. échange du code au ``/token`` avec le ``code_verifier``,
+6. vérification de l'``id_token`` (signature JWKS, ``aud``, ``nonce``) et
    affichage des claims,
-5. appel de ``/userinfo`` avec l'access token Bearer et affichage des claims
+7. appel de ``/userinfo`` avec l'access token Bearer et affichage des claims
    de l'utilisateur renvoyés par le serveur.
 
 Lancement (depuis la racine du dépôt) :
@@ -28,7 +32,7 @@ import secrets
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 import jwt as pyjwt
@@ -141,6 +145,7 @@ def _index_html(settings: Settings) -> str:
 contre le serveur <code>{html.escape(settings.issuer)}</code>.</p>
 <p>Client : <code>{html.escape(settings.client_id)}</code></p>
 <p><a class="button" href="/login">Se connecter avec ThePurOidc</a></p>
+<p><small>Compte démo : <code>alice@example.com</code> / <code>password</code></small></p>
 """
     return _page(body)
 
@@ -298,7 +303,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/login")
     async def login() -> RedirectResponse:
-        """Initialise un login PKCE et redirige le navigateur vers ``/authorize``."""
+        """Initialise un login PKCE puis redirige le navigateur vers la page de login du serveur."""
         verifier = _base64url_bytes(32)
         challenge = _s256_challenge(verifier)
         state = _base64url_bytes(32)
@@ -307,8 +312,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
             endpoints = await _discovery(client, app_settings)
-        url = _authorization_url(endpoints, app_settings, state, nonce, challenge)
-        return RedirectResponse(url=url, status_code=302)
+        authorize_url = _authorization_url(endpoints, app_settings, state, nonce, challenge)
+        server_login_url = (
+            f"{app_settings.issuer.rstrip('/')}/login?next={quote(authorize_url, safe='')}"
+        )
+        return RedirectResponse(url=server_login_url, status_code=302)
 
     @app.get("/callback")
     async def callback(

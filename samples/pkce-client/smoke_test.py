@@ -4,8 +4,10 @@ Lance le serveur thepuroidc et le client de démonstration en sous-processus,
 exécute le flux complet et vérifie chaque étape :
 
 1. la page d'accueil du client répond ;
-2. `/login` redirige vers `/authorize` avec un challenge PKCE S256 ;
-3. le login réel du serveur (`/login`, cookie de session) est validé ;
+2. `/login` redirige le navigateur vers la page de login du serveur
+   (`?next=<authorize>` avec challenge PKCE S256) ;
+3. le login réel du serveur (`/login`, cookie de session) est validé et
+   redirige vers l'URL `/authorize` construite par le client ;
 4. le serveur émet un `code` d'autorisation pour l'utilisateur connecté ;
 5. `/callback` échange le code, vérifie l'`id_token` (JWKS), appelle
    `/userinfo` avec le Bearer token et affiche les claims ;
@@ -95,23 +97,26 @@ def _run_flow() -> None:
 
         response = http.get(f"{CLIENT_URL}/login")
         assert response.status_code == 302, response.text
-        authorize_url = response.headers["location"]
+        login_page_url = response.headers["location"]
+        assert "/login" in urlparse(login_page_url).path, login_page_url
+        authorize_url = parse_qs(urlparse(login_page_url).query)["next"][0]
         assert "authorize" in urlparse(authorize_url).path, authorize_url
         state, nonce = _assert_login_redirect(authorize_url)
-        print(f"  [2/6] login OK (state={state[:8]}...)")
+        print(f"  [2/6] login OK (redirige vers la page de login du serveur, state={state[:8]}...)")
 
         response = http.post(
             f"{SERVER_URL}/login",
             data={
                 "username": "alice@example.com",
                 "password": "password",
-                "next": "/",
+                "next": authorize_url,
             },
             follow_redirects=False,
         )
         assert response.status_code == 302, response.text
         assert "fastapiusersauth" in response.headers.get("set-cookie", "")
-        print("  [3/6] login serveur OK (cookie de session posé)")
+        assert response.headers["location"] == authorize_url
+        print("  [3/6] login serveur OK (cookie posé, retour vers /authorize)")
 
         response = http.get(authorize_url)
         assert response.status_code == 302, response.text

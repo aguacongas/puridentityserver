@@ -290,12 +290,19 @@ def test_post_login_bad_credentials_redirects() -> None:
 
 
 def test_login_authorize_token_full_flow() -> None:
-    """Flow E2E : login (cookie) → /authorize → /token.
+    """Flow E2E : login (cookie) → /authorize → /token → /userinfo.
 
-    Vérifie que le ``sub`` du id_token est l'UUID d'Alice, pas le client_id.
+    Vérifie que le ``sub`` du id_token est l'UUID d'Alice, pas le client_id,
+    et que `/userinfo` renvoie le profil Alice ponté identité ⊕ user store.
     """
     verifier = "verifier-verifier"
-    with TestClient(_app()) as client:
+    demo_profile = {
+        "name": "Alice Martin",
+        "preferred_username": "alice-martin",
+        "email": "alice.martin@example.com",
+        "email_verified": True,
+    }
+    with TestClient(_app(users_seed={"web-app": demo_profile})) as client:
         login_resp = client.post(
             "/login",
             data={
@@ -314,7 +321,7 @@ def test_login_authorize_token_full_flow() -> None:
                 "response_type": "code",
                 "client_id": "web-app",
                 "redirect_uri": "https://app.example/callback",
-                "scope": "openid profile",
+                "scope": "openid profile email",
                 "nonce": "n-spiked",
                 "code_challenge": _s256_challenge(verifier),
                 "code_challenge_method": "S256",
@@ -352,7 +359,18 @@ def test_login_authorize_token_full_flow() -> None:
         )
         assert "openid" in id_claims["scope"]
         assert "profile" in id_claims["scope"]
+        assert "email" in id_claims["scope"]
 
         sub = id_claims["sub"]
         assert sub != "web-app"
         assert uuid_mod.UUID(sub)  # sub = UUID d'Alice, pas le client_id
+
+        userinfo_resp = client.get(
+            "/userinfo",
+            headers={"Authorization": f"Bearer {payload['access_token']}"},
+        )
+        assert userinfo_resp.status_code == 200
+        userinfo = userinfo_resp.json()
+        assert userinfo["sub"] == sub
+        assert userinfo["name"] == "Alice Martin"
+        assert userinfo["email"] == "alice.martin@example.com"

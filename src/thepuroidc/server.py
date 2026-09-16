@@ -96,7 +96,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def _lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
         """Prépare les stockages, alimente le registre clients + user store puis génère les clés."""
         await apply_schema()
-        await seed_demo_user()
+        alice = await seed_demo_user()
         await key_repository.initialise()
         await client_repository.initialise()
         await code_repository.initialise()
@@ -109,6 +109,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 for subject, claims in settings.users_seed.items()
             ]
         )
+        # Pont identité ⊕ user store : l'utilisateur démo connecté (UUID FastAPI
+        # Users) récupère le même profil Alice que le sujet générique `web-app`,
+        # afin que /userinfo renvoie des claims après un login navigateur réel.
+        demo_profile = settings.users_seed.get("web-app")
+        if demo_profile is not None:
+            await user_repository.save(UserClaims(subject=str(alice.id), claims=demo_profile))
         await jwks_usecase.initialise()
         try:
             yield

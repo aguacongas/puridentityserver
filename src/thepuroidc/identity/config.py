@@ -22,6 +22,7 @@ import inspect
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -130,19 +131,21 @@ async def apply_schema() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
-async def seed_demo_user() -> None:
-    """Insère ``alice@example.com / password`` si la table est vide."""
+async def seed_demo_user() -> User:
+    """Insère ``alice@example.com / password`` et la retourne (créée ou existante)."""
     from sqlalchemy import select
 
     factory = _get_session_factory()
     async with factory() as session:
         result = await session.execute(select(User).limit(1))
-        if result.scalars().first() is not None:
-            return
+        existing = result.scalars().first()
+        if existing is not None:
+            return existing
         user_db: SQLAlchemyUserDatabase[User, uuid.UUID] = SQLAlchemyUserDatabase(session, User)
-        await UserManager(user_db).create(
+        user = await UserManager(user_db).create(
             BaseUserCreate(email="alice@example.com", password="password")  # ruff: ignore[hardcoded-password-func-arg]  (démo spike)
         )
+        return user
 
 
 _LOGIN_PAGE = """<!doctype html>
@@ -194,7 +197,7 @@ def login_router() -> APIRouter:
             user_db: SQLAlchemyUserDatabase[User, uuid.UUID] = SQLAlchemyUserDatabase(session, User)
             user = await UserManager(user_db).authenticate(credentials)
             if user is None or not user.is_active:
-                return RedirectResponse(f"/login?next={next_url}", status_code=302)
+                return RedirectResponse(f"/login?next={quote(next_url, safe='')}", status_code=302)
             strategy = cookie_backend.get_strategy()
             if inspect.isawaitable(strategy):
                 strategy = await strategy
