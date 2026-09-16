@@ -160,26 +160,24 @@ class TestFactory:
 
 
 class TestSettingsProfiles:
-    """Couvre le chargement de ``THEPUROIDC_USERINFO_PROFILES``."""
+    """Couvre le chargement de ``THEPUROIDC_USERS_SEED`` (seed du user store)."""
 
     def test_reads_profiles_from_config_toml(self, monkeypatch: pytest.MonkeyPatch) -> None:
         config = Path(__file__).resolve().parents[1] / "config.toml"
         monkeypatch.setenv("THEPUROIDC_SETTINGS_FILE", str(config))
         settings = Settings(_env_file=None)
 
-        assert settings.userinfo_profiles["sample-pkce-client"]["email"] == (
-            "alice.martin@example.com"
-        )
-        assert "web-app" in settings.userinfo_profiles
+        assert settings.users_seed["sample-pkce-client"]["email"] == ("alice.martin@example.com")
+        assert "web-app" in settings.users_seed
 
     def test_reads_json_from_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(
-            "THEPUROIDC_USERINFO_PROFILES",
+            "THEPUROIDC_USERS_SEED",
             '{"web-app": {"name": "Alice", "email_verified": true}}',
         )
         settings = Settings(_env_file=None)
 
-        assert settings.userinfo_profiles == {"web-app": {"name": "Alice", "email_verified": True}}
+        assert settings.users_seed == {"web-app": {"name": "Alice", "email_verified": True}}
 
     def test_defaults_to_empty_dict(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config = tmp_path / "config.toml"
@@ -188,10 +186,10 @@ class TestSettingsProfiles:
 
         settings = Settings(_env_file=None)
 
-        assert settings.userinfo_profiles == {}
+        assert settings.users_seed == {}
 
     def test_rejects_non_dict_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("THEPUROIDC_USERINFO_PROFILES", '[{"client_id": "x"}]')
+        monkeypatch.setenv("THEPUROIDC_USERS_SEED", '[{"client_id": "x"}]')
 
         with pytest.raises(ValueError, match="objet JSON"):
             Settings(_env_file=None)

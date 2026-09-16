@@ -3,7 +3,7 @@
 Résout les claims utilisateur via le ``UserRepository`` injecté (backends
 ``memory`` ou ``sql``, choisi par ``KEY_STORE_TYPE``), alimenté au démarrage
 depuis les profils déclarés dans la configuration
-(`THEPUROIDC_USERINFO_PROFILES`).
+(`THEPUROIDC_USERS_SEED`).
 """
 
 from __future__ import annotations

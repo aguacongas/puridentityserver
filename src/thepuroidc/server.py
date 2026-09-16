@@ -97,7 +97,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await user_repository.save_all(
             [
                 UserClaims(subject=subject, claims=claims)
-                for subject, claims in settings.userinfo_profiles.items()
+                for subject, claims in settings.users_seed.items()
             ]
         )
         await jwks_usecase.initialise()
