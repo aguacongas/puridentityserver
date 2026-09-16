@@ -111,7 +111,7 @@ class Settings(BaseSettings):
     jwks_grace_period_days: int = 7
 
     # OAuth 2.0 / OIDC (RFC 6749, RFC 7636) — durées de vie par défaut du
-    # serveur. Un client peut les réduire via `access_token_lifetime_seconds`
+    # serveur. Un client peut les surcharger via `access_token_lifetime_seconds`
     # et/ou `authorization_code_lifetime_seconds` dans `clients_seed`.
     # L'`id_token` et l'`access_token` partagent la même durée de vie.
     authorization_code_ttl_seconds: int = 600

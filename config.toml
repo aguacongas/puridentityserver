@@ -24,6 +24,36 @@
 
 [settings]
 
+# serveur HTTP / OIDC :
+# - issuer : oidc.issuer retourné dans le document de découverte
+# - base_url : base utilisée pour construire les URLs publiques (découverte,
+#   redirections) ; vide = l'`issuer` ci-dessus
+# - host / port : adresse d'écoute du serveur
+# Surchargeables via `THEPUROIDC_ISSUER`, `THEPUROIDC_BASE_URL`,
+# `THEPUROIDC_HOST`, `THEPUROIDC_PORT`.
+issuer = "http://127.0.0.1:8000"
+base_url = ""
+host = "127.0.0.1"
+port = 8000
+
+# JWKS (RFC 7517) : génération et rotation des clés de signature des tokens.
+# - key_store_type : "memory" (perdues au redémarrage) ou "sql"
+# - key_store_dsn : DSN de persistance pour `key_store_type = "sql"`
+# - jwks_key_size : taille RSA (bits), ignorée pour les clés EC
+# - jwks_algorithms : algorithmes de signature publiés au JWKS
+# - jwks_rotation_days : rotation d'une clé de signature par jour J
+# - jwks_grace_period_days : clés rotées encore acceptées à la vérification
+# Surchargeables via `THEPUROIDC_KEY_STORE_TYPE`,
+# `THEPUROIDC_KEY_STORE_DSN`, `THEPUROIDC_JWKS_KEY_SIZE`,
+# `THEPUROIDC_JWKS_ALGORITHMS` (liste séparée par des virgules),
+# `THEPUROIDC_JWKS_ROTATION_DAYS`, `THEPUROIDC_JWKS_GRACE_PERIOD_DAYS`.
+key_store_type = "memory"
+key_store_dsn = "sqlite:///thepuroidc_keys.db"
+jwks_key_size = 4096
+jwks_algorithms = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512"]
+jwks_rotation_days = 90
+jwks_grace_period_days = 7
+
 # OAuth 2.0 / OIDC : durées de vie par défaut du serveur, appliquées quand le
 # client ne précise pas les siennes (`access_token_lifetime_seconds` /
 # `authorization_code_lifetime_seconds` dans `clients_seed`). L'id_token et
