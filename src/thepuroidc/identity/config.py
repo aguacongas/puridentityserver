@@ -58,6 +58,7 @@ _session_signer: RotatingTokenSigner | None = None
 _reset_signer: RotatingTokenSigner | None = None
 _verify_signer: RotatingTokenSigner | None = None
 _cookie_lifetime_seconds = 3600
+_NOT_CONFIGURED = "configure_identity() n'a pas encore été appelé"
 
 # ── base de données users (async, séparée des stores OIDC) ──────────────────
 _session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -100,7 +101,7 @@ class UserManager(BaseUserManager[User, uuid.UUID]):
         Déclenche ``on_after_request_verify`` en cas de succès.
         """
         if _verify_signer is None:
-            raise RuntimeError("configure_identity() n'a pas encore été appelé")
+            raise RuntimeError(_NOT_CONFIGURED)
         if not user.is_active:
             raise exceptions.UserInactive()
         if user.is_verified:
@@ -117,7 +118,7 @@ class UserManager(BaseUserManager[User, uuid.UUID]):
     async def verify(self, token: str, request: Request | None = None) -> User:
         """Valide un jeton de vérification (signature, ``aud``, email) et active le compte."""
         if _verify_signer is None:
-            raise RuntimeError("configure_identity() n'a pas encore été appelé")
+            raise RuntimeError(_NOT_CONFIGURED)
         data = await _verify_signer.read(token)
         if data is None:
             raise exceptions.InvalidVerifyToken()
@@ -156,7 +157,7 @@ class UserManager(BaseUserManager[User, uuid.UUID]):
         Déclenche ``on_after_forgot_password`` en cas de succès.
         """
         if _reset_signer is None:
-            raise RuntimeError("configure_identity() n'a pas encore été appelé")
+            raise RuntimeError(_NOT_CONFIGURED)
         if not user.is_active:
             raise exceptions.UserInactive()
 
@@ -173,7 +174,7 @@ class UserManager(BaseUserManager[User, uuid.UUID]):
     ) -> User:
         """Valide un jeton de réinitialisation et met à jour le mot de passe."""
         if _reset_signer is None:
-            raise RuntimeError("configure_identity() n'a pas encore été appelé")
+            raise RuntimeError(_NOT_CONFIGURED)
         data = await _reset_signer.read(token)
         if data is None:
             raise exceptions.InvalidResetPasswordToken()
@@ -251,7 +252,7 @@ def configure_identity(
 def _session_strategy(lifetime_seconds: int | None = None) -> SessionJWTStrategy[User, uuid.UUID]:
     """Construit la stratégie de session, avec la durée demandée (défaut serveur sinon)."""
     if _session_signer is None:
-        raise RuntimeError("configure_identity() n'a pas encore été appelé")
+        raise RuntimeError(_NOT_CONFIGURED)
     return SessionJWTStrategy(
         signer=_session_signer,
         lifetime_seconds=(
@@ -370,6 +371,22 @@ def _client_id_from_next(next_url: str) -> str:
     return parse_qs(query).get("client_id", [""])[0]
 
 
+async def _resolve_cookie_lifetime(
+    client_id: str,
+    next_url: str,
+    resolver: Callable[[str], Awaitable[int | None]] | None,
+    default_lifetime: int,
+) -> int:
+    """Durée du cookie pour le client du flow, sinon la durée serveur par défaut."""
+    resolved_client = client_id or _client_id_from_next(next_url)
+    lifetime = default_lifetime
+    if resolved_client and resolver is not None:
+        client_lifetime = await resolver(resolved_client)
+        if client_lifetime is not None and client_lifetime > 0:
+            lifetime = client_lifetime
+    return lifetime
+
+
 def login_router(
     resolve_session_lifetime: Callable[[str], Awaitable[int | None]] | None = None,
 ) -> APIRouter:
@@ -383,7 +400,9 @@ def login_router(
     router = APIRouter(tags=["identity"])
 
     @router.get("/login", response_class=HTMLResponse)
-    async def login_page(next_url: str = Query(default="/", alias="next")) -> str:
+    async def login_page(
+        next_url: Annotated[str, Query(alias="next")] = "/",
+    ) -> str:
         """Affiche le formulaire de connexion (client_id du flow en champ caché)."""
         client_id = _client_id_from_next(next_url)
         hidden = (
@@ -415,12 +434,9 @@ def login_router(
             if user is None or not user.is_active:
                 return RedirectResponse(f"/login?next={quote(next_url, safe='')}", status_code=302)
 
-            resolved_client = client_id or _client_id_from_next(next_url)
-            lifetime = _cookie_lifetime_seconds
-            if resolved_client and resolve_session_lifetime is not None:
-                client_lifetime = await resolve_session_lifetime(resolved_client)
-                if client_lifetime is not None and client_lifetime > 0:
-                    lifetime = client_lifetime
+            lifetime = await _resolve_cookie_lifetime(
+                client_id, next_url, resolve_session_lifetime, _cookie_lifetime_seconds
+            )
 
             strategy = _session_strategy(lifetime_seconds=lifetime)
             backend = AuthenticationBackend(

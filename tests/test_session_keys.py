@@ -179,7 +179,8 @@ async def test_session_grace_period_still_validates_old_kid() -> None:
     assert (await manager.get_key_by_kid(old.kid)) is not None  # inactive mais pas supprimée
 
     restored = await strategy.read_token(stale_token, _FakeUserManager())  # type: ignore[arg-type]
-    assert restored is not None and restored.id == _USER_ID
+    assert restored is not None
+    assert restored.id == _USER_ID
 
     beyond_grace = await manager.get_key_by_kid(old.kid)
     assert beyond_grace is not None
