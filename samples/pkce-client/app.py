@@ -6,7 +6,9 @@ Implémente une *relying party* qui se connecte à un serveur ThePurOidc :
 2. réception du ``code`` d'autorisation sur ``/callback``,
 3. échange du code au ``/token`` avec le ``code_verifier``,
 4. vérification de l'``id_token`` (signature JWKS, ``aud``, ``nonce``) et
-   affichage des claims.
+   affichage des claims,
+5. appel de ``/userinfo`` avec l'access token Bearer et affichage des claims
+   de l'utilisateur renvoyés par le serveur.
 
 Lancement (depuis la racine du dépôt) :
 
@@ -46,7 +48,7 @@ _HTML_PAGE = """<!doctype html>
 <html lang="fr">
 <head>
   <meta charset="utf-8">
-  <title>ThePurOidc — client démo (Authorization Code + PKCE)</title>
+  <title>ThePurOidc — client démo (Authorization Code + PKCE + UserInfo)</title>
   <style>
     body {{ font-family: sans-serif; margin: 2rem; max-width: 42rem; }}
     code {{ background: #f4f4f4; padding: 0.15rem 0.35rem; border-radius: 4px; }}
@@ -188,6 +190,24 @@ async def _exchange_code(
     return response.json()
 
 
+async def _fetch_userinfo(
+    client: httpx.AsyncClient,
+    endpoints: dict[str, Any],
+    access_token: str,
+) -> dict[str, Any]:
+    """Récupère les claims utilisateur via ``GET /userinfo`` (OIDC Core §5.3)."""
+    endpoint = endpoints.get("userinfo_endpoint")
+    if not endpoint:
+        raise HTTPException(status_code=502, detail="Discovery sans userinfo_endpoint")
+    response = await client.get(endpoint, headers={"Authorization": f"Bearer {access_token}"})
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Échec de l'appel à /userinfo : {response.text}",
+        )
+    return response.json()
+
+
 def _verify_id_token(
     id_token: str,
     jwks_uri: str,
@@ -215,20 +235,42 @@ def _verify_id_token(
     return claims
 
 
-def _tokens_html(claims: dict[str, Any], access_token: str, expires_in: object) -> str:
-    """Affiche les claims validés de l'``id_token`` et l'access token émis."""
+def _claims_table(title: str, description: str, claims: dict[str, Any]) -> str:
+    """Affiche une table de claims avec son en-tête."""
     rows = "".join(
         f"<tr><td><code>{html.escape(str(key))}</code></td>"
         f"<td><code>{html.escape(str(value))}</code></td></tr>"
         for key, value in sorted(claims.items())
     )
-    body = f"""
-<h1>Connecté</h1>
-<p><code>id_token</code> vérifié (signature JWKS, <code>aud</code>, <code>nonce</code>).</p>
+    description_html = f"<p>{description}</p>" if description else ""
+    return f"""
+<h2>{title}</h2>
+{description_html}
 <table>
   <tr><th>Claim</th><th>Valeur</th></tr>
   {rows}
 </table>
+"""
+
+
+def _token_html(
+    id_claims: dict[str, Any],
+    access_token: str,
+    expires_in: object,
+    userinfo: dict[str, Any],
+) -> str:
+    """Affiche les claims validés de l'``id_token`` et ceux de ``/userinfo``."""
+    body = f"""
+<h1>Connecté</h1>
+<p><code>id_token</code> vérifié (signature JWKS, <code>aud</code>, <code>nonce</code>).</p>
+{_claims_table("id_token (claims vérifiés localement)", "", id_claims)}
+{
+        _claims_table(
+            "UserInfo — endpoint /userinfo (claims filtrés par scopes)",
+            "Renvoyés par le serveur avec l'access token Bearer (RFC 6750).",
+            userinfo,
+        )
+    }
 <p><code>access_token</code> (expire dans {html.escape(str(expires_in))} s)&nbsp;:</p>
 <pre>{html.escape(access_token)}</pre>
 <p><a href="/">Retour à l'accueil</a></p>
@@ -242,8 +284,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     pending: dict[str, PendingAuth] = {}
 
     app = FastAPI(
-        title="ThePurOidc — client démo (Authorization Code + PKCE)",
-        description="Relying party de démonstration du flow authorization code + PKCE.",
+        title="ThePurOidc — client démo (Authorization Code + PKCE + UserInfo)",
+        description=(
+            "Relying party de démonstration du flow authorization code + PKCE "
+            "et de l'endpoint UserInfo."
+        ),
     )
 
     @app.get("/", response_class=HTMLResponse)
@@ -269,7 +314,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def callback(
         code: Annotated[str, Query()], state: Annotated[str, Query()]
     ) -> HTMLResponse:
-        """Échange le code reçu, vérifie l'``id_token`` et affiche le résultat."""
+        """Échange le code, vérifie l'``id_token`` et interroge ``/userinfo``."""
         auth = pending.pop(state, None)
         if auth is None:
             raise HTTPException(status_code=400, detail="État inconnu ou expiré")
@@ -279,12 +324,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             token_payload = await _exchange_code(
                 client, endpoints, app_settings, code, auth.verifier
             )
+            userinfo = await _fetch_userinfo(client, endpoints, token_payload["access_token"])
 
         claims = _verify_id_token(
             token_payload["id_token"], endpoints["jwks_uri"], endpoints, app_settings, auth.nonce
         )
         return HTMLResponse(
-            _tokens_html(claims, token_payload["access_token"], token_payload.get("expires_in"))
+            _token_html(
+                claims,
+                token_payload["access_token"],
+                token_payload.get("expires_in"),
+                userinfo,
+            )
         )
 
     return app

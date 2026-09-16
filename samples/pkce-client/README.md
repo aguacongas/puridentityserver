@@ -11,7 +11,10 @@ Le client effectue :
 2. la **réception du code** d'autorisation sur `http://127.0.0.1:5173/callback` ;
 3. l'**échange du code** au `/token` en présentant le `code_verifier` PKCE ;
 4. la **vérification de l'`id_token`** : signature via les JWKS du serveur,
-   `aud` = notre `client_id`, `iss` du discovery et `nonce` correspondant.
+   `aud` = notre `client_id`, `iss` du discovery et `nonce` correspondant ;
+5. l'**appel à `/userinfo`** avec l'access token Bearer (RFC 6750) et
+   l'affichage des claims de l'utilisateur renvoyés par le serveur
+   (filtrés selon les scopes `openid profile email` accordés au token).
 
 ## Lancement
 

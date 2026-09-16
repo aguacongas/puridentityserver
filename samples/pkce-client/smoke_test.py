@@ -6,7 +6,8 @@ exécute le flux complet et vérifie chaque étape :
 1. la page d'accueil du client répond ;
 2. `/login` redirige vers `/authorize` avec un challenge PKCE S256 ;
 3. le serveur émet un `code` d'autorisation ;
-4. `/callback` échange le code, vérifie l'`id_token` (JWKS) et affiche les claims ;
+4. `/callback` échange le code, vérifie l'`id_token` (JWKS), appelle
+   `/userinfo` avec le Bearer token et affiche les claims ;
 5. le rejeu d'un code consommé est refusé.
 
 Les sous-processus sont terminés dans tous les cas (``finally``). Un
@@ -111,7 +112,9 @@ def _run_flow() -> None:
         assert "Connecté" in response.text
         assert "id_token" in response.text
         assert "access_token" in response.text
-        print("  [4/5] callback OK (id_token vérifié)")
+        assert "UserInfo" in response.text
+        assert "alice.martin@example.com" in response.text
+        print("  [4/5] callback OK (id_token vérifié + /userinfo interrogé)")
 
         response = http.get(callback_url)
         assert response.status_code == 400, response.text
