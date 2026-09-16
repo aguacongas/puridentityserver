@@ -48,7 +48,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 | `/.well-known/jwks.json`            | Clés publiques de signature               | ✅   |
 | `/authorize`                        | Code / Implicit / Hybrid                  | ⬜   |
 | `/token`                            | Échange code, refresh, client_credentials | ⬜   |
-| `/userinfo`                         | Claims de l'utilisateur                   | ⬜   |
+| `/userinfo`                         | Claims de l'utilisateur                   | ✅   |
 | `/introspect`                       | Introspection de token (RFC 7662)         | ⬜   |
 | `/revoke`                           | Révocation de token (RFC 7009)            | ⬜   |
 | `/registration`                     | Client registration dynamique (option)    | ⬜   |
@@ -85,7 +85,8 @@ tests/             pytest unit + intégration (TestClient httpx)
    **tous les algorithmes fournis par défaut**),
    rotation par algorithme, `/.well-known/*`
 3. **Authorization Code + PKCE** (grant principal, RFC 6749 + 7636)
-4. **ID Token + UserInfo** — émission et validation JWT via PyJWT
+4. ✅ **ID Token + UserInfo** — émission et validation JWT via PyJWT,
+   endpoint `/userinfo` (Bearer, filtrage des claims par scopes accordés)
 5. **Refresh tokens** — rotation, expiration, rejeu
 6. **Implicit & Hybrid** (OIDC Core 1.0)
 7. **Logout** — RP-Initiated Logout

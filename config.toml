@@ -16,6 +16,47 @@
 
 [settings]
 
+# annuaire de démonstration des profils utilisateurs servi par /userinfo :
+# clé = subject (sub), valeur = claims exposés selon les scopes accordés au
+# jeton (openid > sub, profile > identité, email, address, phone).
+# Surchargeable en bloc via `THEPUROIDC_USERINFO_PROFILES` (JSON).
+
+[settings.userinfo_profiles.sample-pkce-client]
+name = "Alice Martin"
+family_name = "Martin"
+given_name = "Alice"
+middle_name = "Marie"
+nickname = "alice"
+preferred_username = "alice-martin"
+profile = "https://example.com/alice-martin"
+picture = "https://example.com/alice-martin.jpg"
+website = "https://alice.example.com"
+gender = "female"
+birthdate = "1990-04-12"
+zoneinfo = "Europe/Paris"
+locale = "fr-FR"
+updated_at = 1738000000
+email = "alice.martin@example.com"
+email_verified = true
+phone_number = "+33142000000"
+phone_number_verified = true
+
+[settings.userinfo_profiles.sample-pkce-client.address]
+formatted = "12 rue de la Paix, 75002 Paris, France"
+street_address = "12 rue de la Paix"
+locality = "Paris"
+postal_code = "75002"
+country = "FR"
+
+[settings.userinfo_profiles.web-app]
+name = "Alice Martin"
+family_name = "Martin"
+given_name = "Alice"
+preferred_username = "alice-martin"
+email = "alice.martin@example.com"
+email_verified = true
+updated_at = 1738000000
+
 [[settings.clients_seed]]
 client_id = "sample-pkce-client"
 redirect_uris = ["http://127.0.0.1:5173/callback"]

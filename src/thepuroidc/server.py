@@ -11,7 +11,9 @@ from thepuroidc.application.authorize import AuthorizeConfig, AuthorizeUseCase
 from thepuroidc.application.discovery import DiscoveryConfig, DiscoveryUseCase
 from thepuroidc.application.jwks import JWKSetConfig, JWKSetUseCase
 from thepuroidc.application.token import TokenConfig, TokenUseCase
+from thepuroidc.application.userinfo import UserInfoConfig, UserInfoUseCase
 from thepuroidc.domain.jwks import JWTAlgorithm
+from thepuroidc.infrastructure.claims import InMemoryClaimsProvider
 from thepuroidc.infrastructure.jwks import DefaultKeyManager
 from thepuroidc.infrastructure.persistence.factory import (
     build_authorization_code_repository,
@@ -24,6 +26,7 @@ from thepuroidc.interfaces.api.authorize import authorize_router
 from thepuroidc.interfaces.api.discovery import discovery_router
 from thepuroidc.interfaces.api.jwks import jwk_set_router
 from thepuroidc.interfaces.api.token import token_router
+from thepuroidc.interfaces.api.userinfo import userinfo_router
 
 _PACKAGE_VERSION = "0.1.0"
 
@@ -73,6 +76,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         code_repository,
         token_manager,
     )
+    userinfo_usecase = UserInfoUseCase(
+        UserInfoConfig(issuer=settings.issuer),
+        token_manager,
+        InMemoryClaimsProvider(settings.userinfo_profiles),
+    )
 
     @asynccontextmanager
     async def _lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
@@ -100,6 +108,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(jwk_set_router(jwks_usecase))
     app.include_router(authorize_router(authorize_usecase))
     app.include_router(token_router(token_usecase))
+    app.include_router(userinfo_router(userinfo_usecase))
     return app
 
 
