@@ -40,9 +40,7 @@ def _parse_client(raw: dict[str, object]) -> Client:
     scopes = frozenset(Scope(token) for token in str(raw.get("scopes", "openid")).split() if token)
     client_type = _parse_client_type(raw.get("client_type", "public"))
     lifetime_raw = raw.get("session_lifetime_seconds")
-    session_lifetime_seconds = (
-        int(str(lifetime_raw)) if lifetime_raw is not None else None
-    )
+    session_lifetime_seconds = int(str(lifetime_raw)) if lifetime_raw is not None else None
     return Client(
         client_id=client_id,
         redirect_uris=redirect_uris,
