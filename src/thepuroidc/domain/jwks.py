@@ -22,14 +22,20 @@ class KeyType(str, Enum):
 class KeyUse(str, Enum):
     """Usage de la paire de clés (RFC 7517 §4.2).
 
-    ``sig``     : signature des tokens OIDC (id_token / access_token),
-                  clé publique exposée dans le JWKS.
-    ``session`` : signature des cookies de session navigateur, jamais
-                  publiée — seule le serveur la valide.
+    ``sig``    : signature des tokens OIDC (id_token / access_token),
+                 clé publique exposée dans le JWKS.
+    ``session``: signature des cookies de session navigateur, jamais
+                 publiée — seule le serveur la valide.
+    ``reset``  : signature des jetons de réinitialisation de mot de
+                 passe (emails), jamais publiée.
+    ``verify`` : signature des jetons de vérification de compte
+                 (emails), jamais publiée.
     """
 
     SIG = "sig"
     SESSION = "session"
+    RESET = "reset"
+    VERIFY = "verify"
 
 
 class JWTAlgorithm(str, Enum):

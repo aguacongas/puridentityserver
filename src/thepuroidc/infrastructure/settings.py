@@ -39,12 +39,17 @@ def _parse_client(raw: dict[str, object]) -> Client:
         redirect_uris = frozenset()
     scopes = frozenset(Scope(token) for token in str(raw.get("scopes", "openid")).split() if token)
     client_type = _parse_client_type(raw.get("client_type", "public"))
+    lifetime_raw = raw.get("session_lifetime_seconds")
+    session_lifetime_seconds = (
+        int(str(lifetime_raw)) if lifetime_raw is not None else None
+    )
     return Client(
         client_id=client_id,
         redirect_uris=redirect_uris,
         scopes=scopes,
         client_type=client_type,
         client_secret_hash=_hash_client_secret(secret),
+        session_lifetime_seconds=session_lifetime_seconds,
     )
 
 
@@ -107,14 +112,12 @@ class Settings(BaseSettings):
     # UserInfo (OIDC Core §5.4) — seed du user store (`sub` -> claims)
     users_seed: Annotated[dict[str, dict[str, object]], NoDecode] = {}
 
-    # Identité (FastAPI Users, spike) — durée et rotation cookie + secrets de
-    # gestion de compte. Configurables via config.toml, `THEPUROIDC_IDENTITY_*`
-    # ou `.env`. Le cookie de session est signé RS256 avec une clé rotative
-    # dédiée (KeyUse.SESSION, jamais publiée) : ni secret statique, ni
-    # collision avec les clés de signature des tokens OIDC.
+    # Identité (FastAPI Users, spike) — durée par client du cookie de session.
+    # Le cookie est signé RS256 avec une clé rotative dédiée (KeyUse.SESSION,
+    # jamais publiée) : ni secret statique, ni collision avec les clés de
+    # signature des tokens OIDC. La durée effective peut être réduite par
+    # client via ``session_lifetime_seconds`` dans ``clients_seed``.
     identity_jwt_lifetime_seconds: int = 3600
-    identity_reset_password_secret: str = "spike-reset-secret"  # ruff: ignore[hardcoded-password-string]
-    identity_verification_secret: str = "spike-verify-secret"  # ruff: ignore[hardcoded-password-string]
     identity_seed_users: Annotated[dict[str, dict[str, str]], NoDecode] = {}
 
     @field_validator("jwks_algorithms", mode="before")

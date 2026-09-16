@@ -17,6 +17,7 @@ import pytest
 
 from thepuroidc.application.jwks import JWKSetConfig, JWKSetUseCase
 from thepuroidc.domain.jwks import JWTAlgorithm, KeyPair, KeyUse
+from thepuroidc.identity.rotating_signer import RotatingTokenSigner
 from thepuroidc.identity.session_strategy import SessionJWTStrategy
 from thepuroidc.infrastructure.jwks import DefaultKeyManager
 from thepuroidc.infrastructure.persistence.memory import InMemoryKeyPairRepository
@@ -46,6 +47,39 @@ def _session_manager() -> DefaultKeyManager:
     return DefaultKeyManager(InMemoryKeyPairRepository(), use=KeyUse.SESSION)
 
 
+def _session_signer(
+    manager: DefaultKeyManager,
+    *,
+    rotation_days: int = 90,
+    grace_period_days: int = 7,
+) -> RotatingTokenSigner:
+    """Le signataire rotatif de la famille session, branché sur ``manager``."""
+    return RotatingTokenSigner(
+        manager,
+        token_audience=["fastapi-users:auth"],
+        rotation_days=rotation_days,
+        grace_period_days=grace_period_days,
+    )
+
+
+def _session_strategy(
+    manager: DefaultKeyManager,
+    *,
+    rotation_days: int = 90,
+    grace_period_days: int = 7,
+    lifetime_seconds: int = 3600,
+) -> SessionJWTStrategy:
+    """Stratégie de session sur le manager donné, avec la politique de rotation."""
+    return SessionJWTStrategy(
+        signer=_session_signer(
+            manager,
+            rotation_days=rotation_days,
+            grace_period_days=grace_period_days,
+        ),
+        lifetime_seconds=lifetime_seconds,
+    )
+
+
 def _aged(key: KeyPair, *, created_at: datetime) -> KeyPair:
     """Recopie une clé en fixant ``created_at`` (pour simuler l'âge)."""
     return replace(key, created_at=created_at, is_active=True)
@@ -66,7 +100,7 @@ async def _sign(kid: str, manager: DefaultKeyManager) -> str:
 @pytest.mark.anyio
 async def test_session_strategy_roundtrip() -> None:
     """write_token → read_token : cookie RS256 signé avec kid, session restituée."""
-    strategy = SessionJWTStrategy(key_manager=_session_manager(), lifetime_seconds=3600)
+    strategy = _session_strategy(_session_manager())
     user = _FakeUser()
 
     token = await strategy.write_token(user)
@@ -82,30 +116,30 @@ async def test_session_strategy_roundtrip() -> None:
 @pytest.mark.anyio
 async def test_session_strategy_rejects_unknown_kid_and_bad_token() -> None:
     """read_token retourne None pour un kid inconnu ou un token illisible."""
-    strategy = SessionJWTStrategy(key_manager=_session_manager(), lifetime_seconds=3600)
-    manager = _FakeUserManager()
+    manager = _session_manager()
+    strategy = _session_strategy(manager)
+    user_manager = _FakeUserManager()
 
-    assert await strategy.read_token(None, manager) is None  # type: ignore[arg-type]
-    assert await strategy.read_token("not.a.jwt", manager) is None  # type: ignore[arg-type]
+    assert await strategy.read_token(None, user_manager) is None  # type: ignore[arg-type]
+    assert await strategy.read_token("not.a.jwt", user_manager) is None  # type: ignore[arg-type]
 
     other_manager = _session_manager()
     await other_manager.ensure_active_key(2048, JWTAlgorithm.RS256)
     foreign_keys = await other_manager.get_active_keys()
     foreign = await _sign(foreign_keys[0].kid, other_manager)
-    assert await strategy.read_token(foreign, manager) is None  # type: ignore[arg-type]
+    assert await strategy.read_token(foreign, user_manager) is None  # type: ignore[arg-type]
 
 
 @pytest.mark.anyio
 async def test_session_rotation_rotates_to_newest_and_forgets_expired() -> None:
     """Une clé dépassée rotation+grace est remplacée, l'ancien cookie est invalidé."""
     rotation, grace = 90, 7
-    strategy = SessionJWTStrategy(
-        key_manager=_session_manager(),
-        lifetime_seconds=3600,
+    manager = _session_manager()
+    strategy = _session_strategy(
+        manager,
         rotation_days=rotation,
         grace_period_days=grace,
     )
-    manager: DefaultKeyManager = strategy._key_manager  # type: ignore[attr-defined]
 
     old = _aged(
         await manager.generate_key_pair(2048, JWTAlgorithm.RS256),
@@ -125,13 +159,12 @@ async def test_session_rotation_rotates_to_newest_and_forgets_expired() -> None:
 async def test_session_grace_period_still_validates_old_kid() -> None:
     """Une clé inactive mais encore en grâce continue de valider les sessions."""
     rotation, grace = 90, 7
-    strategy = SessionJWTStrategy(
-        key_manager=_session_manager(),
-        lifetime_seconds=3600,
+    manager = _session_manager()
+    strategy = _session_strategy(
+        manager,
         rotation_days=rotation,
         grace_period_days=grace,
     )
-    manager: DefaultKeyManager = strategy._key_manager  # type: ignore[attr-defined]
 
     old = _aged(
         await manager.generate_key_pair(2048, JWTAlgorithm.RS256),
@@ -165,7 +198,7 @@ async def test_read_token_returns_none_for_bad_sub_and_missing_user() -> None:
     """read_token : sub non-UUID → None ; sub inconnu → None."""
     manager = _session_manager()
     await manager.ensure_active_key(2048, JWTAlgorithm.RS256)
-    strategy = SessionJWTStrategy(key_manager=manager, lifetime_seconds=3600)
+    strategy = _session_strategy(manager)
     key = (await manager.get_active_keys())[0]
     user_manager = _FakeUserManager()
 
@@ -189,24 +222,30 @@ async def test_read_token_returns_none_for_bad_sub_and_missing_user() -> None:
 
 @pytest.mark.anyio
 async def test_key_use_families_isolated_in_shared_repository() -> None:
-    """Les managers sig/session partagent le repo mais ne se voient pas."""
+    """Les managers sig/session/reset/verify partagent le repo mais ne se voient pas."""
     repository = InMemoryKeyPairRepository()
-    sig_manager = DefaultKeyManager(repository)
-    session_manager = DefaultKeyManager(repository, use=KeyUse.SESSION)
+    managers = {
+        KeyUse.SIG: DefaultKeyManager(repository),
+        KeyUse.SESSION: DefaultKeyManager(repository, use=KeyUse.SESSION),
+        KeyUse.RESET: DefaultKeyManager(repository, use=KeyUse.RESET),
+        KeyUse.VERIFY: DefaultKeyManager(repository, use=KeyUse.VERIFY),
+    }
+    for manager in managers.values():
+        await manager.ensure_active_key(2048, JWTAlgorithm.RS256)
 
-    await sig_manager.ensure_active_key(2048, JWTAlgorithm.RS256)
-    await session_manager.ensure_active_key(2048, JWTAlgorithm.RS256)
+    for use, manager in managers.items():
+        keys = await manager.get_active_keys()
+        assert len(keys) == 1
+        assert keys[0].use is use
 
-    sig_keys = await sig_manager.get_active_keys()
-    session_keys = await session_manager.get_active_keys()
-    assert len(sig_keys) == 1 and len(session_keys) == 1
-    assert sig_keys[0].kid != session_keys[0].kid
-    assert all(key.use is KeyUse.SIG for key in sig_keys)
-    assert all(key.use is KeyUse.SESSION for key in session_keys)
-
-    # aucune fuite transversale : chaque manager ignore la clé de l'autre
-    assert await sig_manager.get_key_by_kid(session_keys[0].kid) is None
-    assert await session_manager.get_key_by_kid(sig_keys[0].kid) is None
+    # aucune fuite transversale : chaque manager ignore les clés des autres familles
+    all_keys = await repository.find_all()
+    assert len(all_keys) == 4
+    for key in all_keys:
+        for use, manager in managers.items():
+            expected = key.kid if key.use is use else None
+            found = await manager.get_key_by_kid(key.kid)
+            assert (found.kid if found else None) == expected
 
 
 @pytest.mark.anyio

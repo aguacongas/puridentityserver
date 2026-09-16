@@ -13,8 +13,10 @@ perturber les globals du module pour les tests ``TestClient`` qui suivent.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
+import re
 import uuid as uuid_mod
 from collections.abc import Callable
 from pathlib import Path
@@ -33,7 +35,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import StaticPool
 
-from thepuroidc.identity.config import apply_schema, seed_users
+from thepuroidc.identity.config import UserManager, apply_schema, seed_users
 from thepuroidc.infrastructure.settings import Settings
 from thepuroidc.server import create_app
 
@@ -107,6 +109,23 @@ def _inject_test_db(
     return engine, factory
 
 
+def _ensure_identity_configured() -> None:
+    """Configure l'identité (signataires session/reset/verify) pour les tests directs."""
+    from thepuroidc.domain.jwks import KeyUse
+    from thepuroidc.identity import config as mod
+    from thepuroidc.infrastructure.jwks import DefaultKeyManager
+    from thepuroidc.infrastructure.persistence.memory import InMemoryKeyPairRepository
+
+    mod.configure_identity(
+        session_key_manager=DefaultKeyManager(InMemoryKeyPairRepository(), use=KeyUse.SESSION),
+        reset_token_key_manager=DefaultKeyManager(InMemoryKeyPairRepository(), use=KeyUse.RESET),
+        verification_token_key_manager=DefaultKeyManager(
+            InMemoryKeyPairRepository(), use=KeyUse.VERIFY
+        ),
+        cookie_lifetime_seconds=mod._cookie_lifetime_seconds,
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Tests unitaires directs (pytest.anyio) — couverture déterministe
 # ─────────────────────────────────────────────────────────────────────────────
@@ -164,37 +183,45 @@ def test_parse_id_converts_uuid_string() -> None:
 
 
 def test_configure_identity_wires_settings_values() -> None:
-    """configure_identity applique clé de session + secrets depuis la configuration."""
+    """configure_identity applique les signataires (session, reset, verify)."""
     from thepuroidc.domain.jwks import KeyUse
     from thepuroidc.identity import config as mod
     from thepuroidc.infrastructure.jwks import DefaultKeyManager
     from thepuroidc.infrastructure.persistence.memory import InMemoryKeyPairRepository
 
-    key_manager = DefaultKeyManager(InMemoryKeyPairRepository(), use=KeyUse.SESSION)
+    session_manager = DefaultKeyManager(InMemoryKeyPairRepository(), use=KeyUse.SESSION)
+    reset_manager = DefaultKeyManager(InMemoryKeyPairRepository(), use=KeyUse.RESET)
+    verify_manager = DefaultKeyManager(InMemoryKeyPairRepository(), use=KeyUse.VERIFY)
     mod.configure_identity(
-        session_key_manager=key_manager,
+        session_key_manager=session_manager,
+        reset_token_key_manager=reset_manager,
+        verification_token_key_manager=verify_manager,
         cookie_lifetime_seconds=7200,
         session_rotation_days=15,
         session_grace_period_days=3,
-        reset_password_secret="unit-reset-verify-secret",  # ruff: ignore[hardcoded-password-func-arg]
-        verification_secret="unit-verify-secret",  # ruff: ignore[hardcoded-password-func-arg]
     )
     try:
         strategy = mod._session_strategy()
-        assert strategy._key_manager is key_manager  # type: ignore[attr-defined]
-        assert strategy._rotation_days == 15  # type: ignore[attr-defined]
-        assert strategy._grace_period_days == 3  # type: ignore[attr-defined]
+        assert strategy._signer is not None  # type: ignore[union-attr]
+        assert strategy._signer._key_manager is session_manager  # type: ignore[attr-defined]
+        assert strategy._signer._rotation_days == 15  # type: ignore[attr-defined]
+        assert strategy._signer._grace_period_days == 3  # type: ignore[attr-defined]
         assert mod._cookie_lifetime_seconds == 7200
-        assert mod.UserManager.reset_password_token_secret == "unit-reset-verify-secret"
-        assert mod.UserManager.verification_token_secret == "unit-verify-secret"
+        assert mod._reset_signer is not None
+        assert mod._verify_signer is not None
+        assert mod._reset_signer._key_manager is reset_manager  # type: ignore[attr-defined]
+        assert mod._verify_signer._key_manager is verify_manager  # type: ignore[attr-defined]
+        # plus aucun secret statique : les jetons sont signés par les KeyManagers
+        assert not hasattr(mod.UserManager, "reset_password_token_secret")
+        assert not hasattr(mod.UserManager, "verification_token_secret")
     finally:
         mod.configure_identity(
-            session_key_manager=key_manager,
+            session_key_manager=session_manager,
+            reset_token_key_manager=reset_manager,
+            verification_token_key_manager=verify_manager,
             cookie_lifetime_seconds=mod._cookie_lifetime_seconds,
-            session_rotation_days=mod._session_rotation_days,
-            session_grace_period_days=mod._session_grace_period_days,
-            reset_password_secret=mod.UserManager.reset_password_token_secret,
-            verification_secret=mod.UserManager.verification_token_secret,
+            session_rotation_days=15,
+            session_grace_period_days=3,
         )
 
 
@@ -203,6 +230,7 @@ async def test_post_login_success_sets_cookie_and_redirects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """POST /login valide le redirect + cookie de session (appel direct)."""
+    _ensure_identity_configured()
     _inject_test_db(monkeypatch)
     await apply_schema()
     await seed_users(_IDENTITY_SEED)
@@ -224,6 +252,7 @@ async def test_post_login_rejects_wrong_password(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """POST /login avec un mauvais mot de passe redirige vers le formulaire."""
+    _ensure_identity_configured()
     _inject_test_db(monkeypatch)
     await apply_schema()
     await seed_users(_IDENTITY_SEED)
@@ -241,28 +270,22 @@ async def test_post_login_rejects_wrong_password(
 
 
 @pytest.mark.anyio
-async def test_post_login_handles_awaitable_strategy_and_empty_cookie(
+async def test_post_login_tolerates_empty_cookie_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """POST /login tolère une stratégie coroutine et une réponse sans cookie."""
+    """POST /login tolère une réponse backend sans cookie."""
     from thepuroidc.identity import config as mod
 
+    _ensure_identity_configured()
     _inject_test_db(monkeypatch)
     await apply_schema()
     await seed_users(_IDENTITY_SEED)
 
-    async def _awaitable_strategy() -> mod.SessionJWTStrategy:  # ruff: ignore[unused-async]
-        return mod._session_strategy()
+    async def _fake_login(_self: object, strategy: object, user: object) -> object:
+        await asyncio.sleep(0)
+        return type("Fake", (object,), {"headers": {}})()
 
-    async def _fake_backend_login(strategy: object, user: object) -> object:  # ruff: ignore[unused-async]
-        return type(
-            "Fake",
-            (),
-            {"headers": {"location": "/"}},
-        )()
-
-    monkeypatch.setattr(mod.cookie_backend, "get_strategy", _awaitable_strategy)
-    monkeypatch.setattr(mod.cookie_backend, "login", _fake_backend_login)
+    monkeypatch.setattr(mod.AuthenticationBackend, "login", _fake_login)
 
     endpoint = _post_login_endpoint()
     response = await endpoint(
@@ -274,6 +297,168 @@ async def test_post_login_handles_awaitable_strategy_and_empty_cookie(
     assert response.status_code == 302
     assert response.headers["location"] == "/target"
     assert "set-cookie" not in response.headers
+
+
+@pytest.mark.anyio
+async def test_post_login_applies_client_session_lifetime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /login applique la durée du client du flow (cookie Max-Age + exp JWT)."""
+    import re as re_mod
+
+    from thepuroidc.identity.config import login_router
+
+    _ensure_identity_configured()
+    _inject_test_db(monkeypatch)
+    await apply_schema()
+    await seed_users(_IDENTITY_SEED)
+
+    async def _resolve(client_id: str) -> int | None:
+        await asyncio.sleep(0)
+        return 600 if client_id == "web-app" else None
+
+    router = login_router(_resolve)
+    endpoint = next(
+        route.endpoint
+        for route in router.routes
+        if route.path == "/login" and "POST" in route.methods
+    )
+    response = await endpoint(
+        username="alice@example.com",
+        password="password",  # ruff: ignore[hardcoded-password-func-arg]
+        next_url="/authorize?client_id=web-app",
+        client_id="web-app",
+    )
+
+    assert response.status_code == 302
+    cookie = response.headers["set-cookie"]
+    assert "Max-Age=600" in cookie
+    token = re_mod.search(r"fastapiusersauth=([^;]+)", cookie).group(1)
+    claims = jwt.decode(token, options={"verify_signature": False})
+    assert claims["exp"] - claims["iat"] == 600
+
+
+@pytest.mark.anyio
+async def test_get_login_page_injects_hidden_client_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /login pré-remplit le champ caché ``client_id`` depuis l'URL de retour."""
+    from thepuroidc.identity.config import login_router
+
+    _inject_test_db(monkeypatch)
+    await apply_schema()
+    router = login_router()
+    get_endpoint = next(
+        route.endpoint
+        for route in router.routes
+        if route.path == "/login" and "GET" in route.methods
+    )
+
+    page = await get_endpoint(next_url="/authorize?client_id=web-app&state=s1")
+    assert 'name="client_id" value="web-app"' in page
+
+    plain = await get_endpoint(next_url="/")
+    assert 'name="client_id"' not in plain
+
+
+class _CapturingUserManager(UserManager):
+    """UserManager qui capture les jetons de gestion émis via les hooks internes."""
+
+    def __init__(self, user_db: object) -> None:
+        super().__init__(user_db)  # type: ignore[arg-type]
+        self.verify_token = ""
+        self.reset_token = ""
+
+    async def on_after_request_verify(
+        self, user: object, token: str, request: object = None
+    ) -> None:
+        self.verify_token = token
+
+    async def on_after_forgot_password(
+        self, user: object, token: str, request: object = None
+    ) -> None:
+        self.reset_token = token
+
+
+@pytest.mark.anyio
+async def test_request_verify_and_verify_roundtrip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """request_verify → verify : jeton RS256 rotatif, compte vérifié, rejeu refusé."""
+    from fastapi_users import exceptions
+    from fastapi_users.db import SQLAlchemyUserDatabase
+
+    from thepuroidc.identity import config as mod
+    from thepuroidc.identity.user import User
+
+    _ensure_identity_configured()
+    _inject_test_db(monkeypatch)
+    await apply_schema()
+    users = await seed_users(_IDENTITY_SEED)
+    alice = users["alice"]
+
+    async with mod._get_session_factory()() as session:
+        user_db: SQLAlchemyUserDatabase[User, uuid_mod.UUID] = SQLAlchemyUserDatabase(session, User)
+        manager = _CapturingUserManager(user_db)
+
+        await manager.request_verify(alice)
+        token = manager.verify_token
+        assert token
+        header = jwt.get_unverified_header(token)
+        assert header["alg"] == "RS256"
+        assert header["kid"]
+        assert (
+            jwt.decode(token, options={"verify_signature": False})["aud"] == "fastapi-users:verify"
+        )
+
+        verified = await manager.verify(token)
+        assert verified.is_verified
+        with pytest.raises(exceptions.InvalidVerifyToken):
+            await manager.verify("jeton-invalide")
+        with pytest.raises(exceptions.UserAlreadyVerified):
+            await manager.verify(token)
+
+
+@pytest.mark.anyio
+async def test_forgot_and_reset_password_roundtrip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """forgot_password → reset_password : jeton RS256 rotatif, mot de passe changé."""
+    from fastapi_users import exceptions
+    from fastapi_users.db import SQLAlchemyUserDatabase
+
+    from thepuroidc.identity import config as mod
+    from thepuroidc.identity.user import User
+
+    _ensure_identity_configured()
+    _inject_test_db(monkeypatch)
+    await apply_schema()
+    users = await seed_users(_IDENTITY_SEED)
+    alice = users["alice"]
+
+    async with mod._get_session_factory()() as session:
+        user_db: SQLAlchemyUserDatabase[User, uuid_mod.UUID] = SQLAlchemyUserDatabase(session, User)
+        manager = _CapturingUserManager(user_db)
+
+        await manager.forgot_password(alice)
+        token = manager.reset_token
+        assert token
+        header = jwt.get_unverified_header(token)
+        assert header["alg"] == "RS256"
+        assert header["kid"]
+        assert (
+            jwt.decode(token, options={"verify_signature": False})["aud"] == "fastapi-users:reset"
+        )
+
+        old_hash = alice.hashed_password
+        updated = await manager.reset_password(token, "nouveau-mdp-42!")
+        assert updated.id == alice.id
+        assert updated.hashed_password != old_hash
+        # le hachage ayant changé, le même jeton (fingerprint) n'est plus valide
+        with pytest.raises(exceptions.InvalidResetPasswordToken):
+            await manager.reset_password(token, "encore-un-mdp-42!")
+        with pytest.raises(exceptions.InvalidResetPasswordToken):
+            await manager.reset_password("jeton-invalide", "encore-un-mdp-42!")
 
 
 @pytest.mark.anyio
@@ -442,6 +627,41 @@ def test_login_authorize_token_full_flow(
         assert userinfo["roles"] == expected_roles
 
 
+def test_login_per_client_lifetime_from_seed() -> None:
+    """POST /login applique ``session_lifetime_seconds`` du client seed.
+
+    Vérifie le câblage complet : le résolveur de durée (server.py) lit la
+    durée déclarée dans ``clients_seed`` du client du flow, le cookie en a
+    le ``Max-Age`` et le JWT un ``exp`` calé dessus.
+    """
+    client_json = {**_CLIENT_JSON, "session_lifetime_seconds": 1800}
+    app = create_app(
+        Settings(
+            issuer=_ISSUER,
+            base_url=_ISSUER,
+            jwks_algorithms=("RS256",),
+            clients_seed=(client_json,),
+            identity_seed_users=_IDENTITY_SEED,
+        )
+    )
+    with TestClient(app) as client:
+        login_resp = client.post(
+            "/login",
+            data={
+                "username": "alice@example.com",
+                "password": "password",
+                "next": f"/authorize?client_id={_CLIENT_JSON['client_id']}",
+            },
+            follow_redirects=False,
+        )
+        assert login_resp.status_code == 302
+        cookie = login_resp.headers["set-cookie"]
+        assert "Max-Age=1800" in cookie
+        token = re.search(r"fastapiusersauth=([^;]+)", cookie).group(1)
+        claims = jwt.decode(token, options={"verify_signature": False})
+        assert claims["exp"] - claims["iat"] == 1800
+
+
 def test_login_cookie_signed_with_dedicated_session_key(tmp_path: Path) -> None:
     """Le cookie est RS256, signé par une clé de session distincte des clés JWKS.
 
@@ -500,7 +720,8 @@ def test_login_cookie_signed_with_dedicated_session_key(tmp_path: Path) -> None:
         await repo.initialise()  # valide la migration (colonne `use` ajoutée)
         keys = await repo.find_all()
         session_key = next(key for key in keys if key.use is KeyUse.SESSION)
-        assert all(key.use is KeyUse.SIG for key in keys if key.kid != session_key.kid)
+        # les autres familles (sig / reset / verify) sont disjointes, jamais session
+        assert all(key.use is not KeyUse.SESSION for key in keys if key.kid != session_key.kid)
         return session_key
 
     session_key = asyncio.run(_read_session_key())

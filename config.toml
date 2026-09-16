@@ -16,14 +16,14 @@
 
 [settings]
 
-# identité (FastAPI Users, spike) : durée du cookie, secrets de gestion de
-# compte et comptes de connexion démo. Surchargeables via `THEPUROIDC_IDENTITY_*`
-# (env) ou une entrée `.env`. Le cookie de session est signé RS256 avec une
-# clé rotative dédiée (`KeyUse.SESSION`) stockée au même endroit que les clés
-# de signature des tokens : aucune `identity_jwt_secret` n'est nécessaire.
+# identité (FastAPI Users, spike) : durée par défaut du cookie et comptes de
+# connexion démo. Surchargeables via `THEPUROIDC_IDENTITY_*` (env) ou une
+# entrée `.env`. Le cookie de session est signé RS256 avec une clé rotative
+# dédiée (`KeyUse.SESSION`) stockée au même endroit que les clés de signature
+# des tokens : aucun secret statique (cookies, reset, verify) n'est nécessaire.
+# La durée effective peut être réduite par client via `session_lifetime_seconds`
+# dans `[[settings.clients_seed]]`.
 identity_jwt_lifetime_seconds = 3600
-identity_reset_password_secret = "spike-reset-secret"
-identity_verification_secret = "spike-verify-secret"
 
 # seed utilisateurs (user store) : clé = subject (sub), valeur = claims
 # exposés selon les scopes accordés au jeton (openid > sub, profile >
@@ -103,3 +103,5 @@ client_id = "sample-pkce-client"
 redirect_uris = ["http://127.0.0.1:5173/callback"]
 scopes = "openid profile email"
 client_type = "public"
+# durée du cookie de session accordée à ce client (par défaut :
+# `identity_jwt_lifetime_seconds`) — laisse le défaut si absente.

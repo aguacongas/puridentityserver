@@ -48,14 +48,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     key_repository = build_key_pair_repository(settings)
     key_manager = DefaultKeyManager(key_repository)
     session_key_manager = DefaultKeyManager(key_repository, use=KeyUse.SESSION)
+    reset_key_manager = DefaultKeyManager(key_repository, use=KeyUse.RESET)
+    verify_key_manager = DefaultKeyManager(key_repository, use=KeyUse.VERIFY)
 
     configure_identity(
         session_key_manager=session_key_manager,
+        reset_token_key_manager=reset_key_manager,
+        verification_token_key_manager=verify_key_manager,
         cookie_lifetime_seconds=settings.identity_jwt_lifetime_seconds,
         session_rotation_days=settings.jwks_rotation_days,
         session_grace_period_days=settings.jwks_grace_period_days,
-        reset_password_secret=settings.identity_reset_password_secret,
-        verification_secret=settings.identity_verification_secret,
     )
     config = DiscoveryConfig(
         issuer=settings.issuer,
@@ -104,6 +106,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         UserStoreClaimsProvider(user_repository),
     )
 
+    async def _resolve_session_lifetime(client_id: str) -> int | None:
+        """Retourne la durée de session cookie configurée pour le client, si présente."""
+        client = await client_repository.find_by_id(client_id)
+        return client.session_lifetime_seconds if client is not None else None
+
     @asynccontextmanager
     async def _lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
         """Prépare les stockages, alimente le registre clients + user store puis génère les clés."""
@@ -131,7 +138,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if profile is not None:
                 await user_repository.save(UserClaims(subject=str(user.id), claims=profile))
         await jwks_usecase.initialise()
-        await session_key_manager.ensure_active_key(2048, JWTAlgorithm.RS256)
+        for manager in (
+            session_key_manager,
+            reset_key_manager,
+            verify_key_manager,
+        ):
+            await manager.ensure_active_key(2048, JWTAlgorithm.RS256)
         try:
             yield
         finally:
@@ -148,7 +160,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(discovery_router(DiscoveryUseCase(config)))
     app.include_router(jwk_set_router(jwks_usecase))
-    app.include_router(login_router())
+    app.include_router(login_router(_resolve_session_lifetime))
     app.include_router(auth_router)
     app.include_router(register_router)
     app.include_router(authorize_router(authorize_usecase))

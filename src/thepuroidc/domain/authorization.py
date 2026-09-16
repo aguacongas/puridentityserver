@@ -61,6 +61,7 @@ class Client:
     client_secret_hash: str = ""
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     is_active: bool = True
+    session_lifetime_seconds: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,4 +1,4 @@
-"""Configuration FastAPI Users — backend cookie (JWT) + routes /auth.
+"""Configuration FastAPI Users — backend cookie (JWT rotatif) + routes /auth.
 
 Fournit l'identité utilisateur du serveur OIDC :
 
@@ -9,7 +9,13 @@ Fournit l'identité utilisateur du serveur OIDC :
 - ``CurrentUserOptional``    : dependency d'utilisateur authentifié (facultatif)
 - ``apply_schema``           : crée la table ``user`` (SQLite en mémoire, spike)
 - ``seed_users``             : crée les comptes décrits par ``Settings.identity_seed_users``
-- ``configure_identity``     : injecte les secrets (config.toml / THEPUROIDC_* / .env)
+- ``configure_identity``     : injecte les KeyManagers (config.toml / THEPUROIDC_* / .env)
+
+Aucun secret statique ne signe les jetons : cookies de session
+(``KeyUse.SESSION``), jetons de réinitialisation de mot de passe
+(``KeyUse.RESET``) et de vérification de compte (``KeyUse.VERIFY``) sont
+signés RS256 par un ``RotatingTokenSigner`` dédié à chaque famille, sur la
+base d'un KeyManager rotatif distinct des clés de signature des tokens OIDC.
 
 Note spike : la base utilisateurs est en mémoire (``StaticPool``) ; en
 production elle sera remplacée par un vrai magasin (DSN dédié ou la base
@@ -19,22 +25,26 @@ partagée ``KEY_STORE_DSN``).
 from __future__ import annotations
 
 import html
-import inspect
 import uuid
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from typing import Annotated
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlparse
 
-from fastapi import APIRouter, Depends, Form, Query
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
-from fastapi_users import BaseUserManager, FastAPIUsers
+from fastapi_users import BaseUserManager, FastAPIUsers, exceptions
 from fastapi_users.authentication import AuthenticationBackend, CookieTransport
 from fastapi_users.db import SQLAlchemyUserDatabase
+from fastapi_users.manager import (
+    RESET_PASSWORD_TOKEN_AUDIENCE,
+    VERIFY_USER_TOKEN_AUDIENCE,
+)
 from fastapi_users.schemas import BaseUser, BaseUserCreate
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from thepuroidc.identity.rotating_signer import RotatingTokenSigner
 from thepuroidc.identity.session_strategy import SessionJWTStrategy
 from thepuroidc.identity.user import Base, User
 from thepuroidc.interfaces.domain.jwks import KeyManager
@@ -42,15 +52,12 @@ from thepuroidc.interfaces.domain.jwks import KeyManager
 # ── configuration d'exécution (injectée par ``configure_identity``) ─────────
 # Valeurs de repli de démonstration : la composition root (``server.py``)
 # injecte celles de ``Settings`` (config.toml, ``THEPUROIDC_*``, ``.env``).
-# Plus aucun secret statique ne signe le cookie de session — la
-# signature RS256 repose sur la clé de session (``KeyUse.SESSION``) gérée par
-# un KeyManager rotatif, distinct des clés de signature des tokens OIDC.
-_session_key_manager: KeyManager | None = None
+# Chaque famille de jetons privés (session / reset / verify) possède son
+# propre signataire rotatif, jamais publié dans le JWKS.
+_session_signer: RotatingTokenSigner | None = None
+_reset_signer: RotatingTokenSigner | None = None
+_verify_signer: RotatingTokenSigner | None = None
 _cookie_lifetime_seconds = 3600
-_session_rotation_days = 90
-_session_grace_period_days = 7
-_reset_password_secret = "spike-reset-secret"  # ruff: ignore[hardcoded-password-string]
-_verification_secret = "spike-verify-secret"  # ruff: ignore[hardcoded-password-string]
 
 # ── base de données users (async, séparée des stores OIDC) ──────────────────
 _session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -72,68 +79,184 @@ async def _manager_dependency() -> AsyncGenerator[UserManager, None]:
 
 
 class UserManager(BaseUserManager[User, uuid.UUID]):
-    """Manager d'authentification.
+    """Manager d'authentification — tokens de gestion signés en RS256 rotatif.
 
-    Les secrets de token de gestion (reset / verify) sont surchargés par
-    ``configure_identity`` à partir de la configuration du serveur.
+    Les jetons ``request_verify``/``verify`` et ``forgot_password``/
+    ``reset_password`` sont signés par des ``RotatingTokenSigner`` dédiés
+    (``KeyUse.VERIFY`` / ``KeyUse.RESET``) injectés par ``configure_identity`` :
+    plus aucun secret statique en configuration.
     """
 
-    # Repli de démonstration — remplacés par configure_identity depuis Settings.
-    reset_password_token_secret = "spike-reset-secret"  # ruff: ignore[hardcoded-password-string]
-    verification_token_secret = "spike-verify-secret"  # ruff: ignore[hardcoded-password-string]
+    reset_password_token_lifetime_seconds = 3600
+    verification_token_lifetime_seconds = 3600
 
     def parse_id(self, value: str) -> uuid.UUID:
         """Convertit le ``sub`` (string) du JWT en ``uuid.UUID`` (clé primaire)."""
         return uuid.UUID(value)
 
+    async def request_verify(self, user: User, request: Request | None = None) -> None:
+        """Émet un jeton de vérification signé avec la clé ``verify`` active.
+
+        Déclenche ``on_after_request_verify`` en cas de succès.
+        """
+        if _verify_signer is None:
+            raise RuntimeError("configure_identity() n'a pas encore été appelé")
+        if not user.is_active:
+            raise exceptions.UserInactive()
+        if user.is_verified:
+            raise exceptions.UserAlreadyVerified()
+
+        token_data = {
+            "sub": str(user.id),
+            "email": user.email,
+            "aud": VERIFY_USER_TOKEN_AUDIENCE,
+        }
+        token = await _verify_signer.write(token_data, self.verification_token_lifetime_seconds)
+        await self.on_after_request_verify(user, token, request)
+
+    async def verify(self, token: str, request: Request | None = None) -> User:
+        """Valide un jeton de vérification (signature, ``aud``, email) et active le compte."""
+        if _verify_signer is None:
+            raise RuntimeError("configure_identity() n'a pas encore été appelé")
+        data = await _verify_signer.read(token)
+        if data is None:
+            raise exceptions.InvalidVerifyToken()
+
+        try:
+            user_id = str(data["sub"])
+            email = str(data["email"])
+        except KeyError:
+            raise exceptions.InvalidVerifyToken() from None
+
+        try:
+            user = await self.get_by_email(email)
+        except exceptions.UserNotExists:
+            raise exceptions.InvalidVerifyToken() from None
+
+        try:
+            parsed_id = self.parse_id(user_id)
+        except exceptions.InvalidID:
+            raise exceptions.InvalidVerifyToken() from None
+
+        if parsed_id != user.id:
+            raise exceptions.InvalidVerifyToken()
+
+        if user.is_verified:
+            raise exceptions.UserAlreadyVerified()
+
+        verified_user = await self._update(user, {"is_verified": True})
+
+        await self.on_after_verify(verified_user, request)
+
+        return verified_user
+
+    async def forgot_password(self, user: User, request: Request | None = None) -> None:
+        """Émet un jeton de réinitialisation signé avec la clé ``reset`` active.
+
+        Déclenche ``on_after_forgot_password`` en cas de succès.
+        """
+        if _reset_signer is None:
+            raise RuntimeError("configure_identity() n'a pas encore été appelé")
+        if not user.is_active:
+            raise exceptions.UserInactive()
+
+        token_data = {
+            "sub": str(user.id),
+            "password_fgpt": self.password_helper.hash(user.hashed_password),
+            "aud": RESET_PASSWORD_TOKEN_AUDIENCE,
+        }
+        token = await _reset_signer.write(token_data, self.reset_password_token_lifetime_seconds)
+        await self.on_after_forgot_password(user, token, request)
+
+    async def reset_password(
+        self, token: str, password: str, request: Request | None = None
+    ) -> User:
+        """Valide un jeton de réinitialisation et met à jour le mot de passe."""
+        if _reset_signer is None:
+            raise RuntimeError("configure_identity() n'a pas encore été appelé")
+        data = await _reset_signer.read(token)
+        if data is None:
+            raise exceptions.InvalidResetPasswordToken()
+
+        try:
+            user_id = str(data["sub"])
+            password_fingerprint = str(data["password_fgpt"])
+        except KeyError:
+            raise exceptions.InvalidResetPasswordToken() from None
+
+        try:
+            parsed_id = self.parse_id(user_id)
+        except exceptions.InvalidID:
+            raise exceptions.InvalidResetPasswordToken() from None
+
+        user = await self.get(parsed_id)
+
+        valid_password_fingerprint, _ = self.password_helper.verify_and_update(
+            user.hashed_password, password_fingerprint
+        )
+        if not valid_password_fingerprint:
+            raise exceptions.InvalidResetPasswordToken()
+
+        if not user.is_active:
+            raise exceptions.UserInactive()
+
+        updated_user = await self._update(user, {"password": password})
+
+        await self.on_after_reset_password(user, request)
+
+        return updated_user
+
 
 def configure_identity(
     *,
     session_key_manager: KeyManager,
+    reset_token_key_manager: KeyManager,
+    verification_token_key_manager: KeyManager,
     cookie_lifetime_seconds: int,
     session_rotation_days: int = 90,
     session_grace_period_days: int = 7,
-    reset_password_secret: str,
-    verification_secret: str,
 ) -> None:
-    """Injecte la clé de session et les secrets de gestion depuis la configuration.
+    """Injecte les KeyManagers rotatifs (session, reset, verify) depuis la configuration.
 
     Appelée par la composition root avec les valeurs de ``Settings`` : la
     hiérarchie config.toml → `THEPUROIDC_*` → ``.env`` permet de remplacer
-    les valeurs de démonstration sans toucher au code. Le cookie de session
-    est signé RS256 avec la clé de session rotative (``KeyUse.SESSION``),
+    les valeurs de démonstration sans toucher au code. Chaque famille de
+    jetons privés est signée RS256 par un ``RotatingTokenSigner`` dédié,
     jamais un secret statique : seules les durées et la politique de
     rotation sont injectées ici.
     """
-    global _session_key_manager, _cookie_lifetime_seconds
-    global _session_rotation_days, _session_grace_period_days
-    global _reset_password_secret, _verification_secret
-    _session_key_manager = session_key_manager
+    global _session_signer, _reset_signer, _verify_signer
+    global _cookie_lifetime_seconds
+    _session_signer = RotatingTokenSigner(
+        session_key_manager,
+        token_audience=["fastapi-users:auth"],
+        rotation_days=session_rotation_days,
+        grace_period_days=session_grace_period_days,
+    )
+    _reset_signer = RotatingTokenSigner(
+        reset_token_key_manager,
+        token_audience=[RESET_PASSWORD_TOKEN_AUDIENCE],
+        rotation_days=session_rotation_days,
+        grace_period_days=session_grace_period_days,
+    )
+    _verify_signer = RotatingTokenSigner(
+        verification_token_key_manager,
+        token_audience=[VERIFY_USER_TOKEN_AUDIENCE],
+        rotation_days=session_rotation_days,
+        grace_period_days=session_grace_period_days,
+    )
     _cookie_lifetime_seconds = cookie_lifetime_seconds
-    _session_rotation_days = session_rotation_days
-    _session_grace_period_days = session_grace_period_days
-    _reset_password_secret = reset_password_secret
-    _verification_secret = verification_secret
-    UserManager.reset_password_token_secret = reset_password_secret
-    UserManager.verification_token_secret = verification_secret
 
 
-class UserRead(BaseUser[uuid.UUID]):
-    """Schéma de lecture d'un utilisateur (pour le routeur de registre)."""
-
-
-class UserCreate(BaseUserCreate):
-    """Schéma de création d'un utilisateur (inscription)."""
-
-
-def _session_strategy() -> SessionJWTStrategy[User, uuid.UUID]:
-    if _session_key_manager is None:
+def _session_strategy(lifetime_seconds: int | None = None) -> SessionJWTStrategy[User, uuid.UUID]:
+    """Construit la stratégie de session, avec la durée demandée (défaut serveur sinon)."""
+    if _session_signer is None:
         raise RuntimeError("configure_identity() n'a pas encore été appelé")
     return SessionJWTStrategy(
-        key_manager=_session_key_manager,
-        lifetime_seconds=_cookie_lifetime_seconds,
-        rotation_days=_session_rotation_days,
-        grace_period_days=_session_grace_period_days,
+        signer=_session_signer,
+        lifetime_seconds=(
+            lifetime_seconds if lifetime_seconds is not None else _cookie_lifetime_seconds
+        ),
     )
 
 
@@ -144,6 +267,15 @@ cookie_backend = AuthenticationBackend(
 )
 
 fastapi_users = FastAPIUsers[User, uuid.UUID](_manager_dependency, [cookie_backend])
+
+
+class UserRead(BaseUser[uuid.UUID]):
+    """Schéma de lecture d'un utilisateur (pour le routeur de registre)."""
+
+
+class UserCreate(BaseUserCreate):
+    """Schéma de création d'un utilisateur (inscription)."""
+
 
 CurrentUser = Annotated[User, Depends(fastapi_users.current_user(active=True))]
 CurrentUserOptional = Annotated[
@@ -221,7 +353,7 @@ _LOGIN_PAGE = """<!doctype html>
   <h1>Connexion à ThePurOidc</h1>
   {error}<form method="post" action="/login">
     <input type="hidden" name="next" value="{next}">
-    <label>Email <input type="email" name="username" required autofocus></label>
+    {client_hidden}<label>Email <input type="email" name="username" required autofocus></label>
     <label>Mot de passe <input type="password" name="password" required></label>
     <button type="submit">Se connecter</button>
   </form>
@@ -232,22 +364,49 @@ _LOGIN_PAGE = """<!doctype html>
 """
 
 
-def login_router() -> APIRouter:
-    """Construit le routeur ``/login`` (formulaire HTML de démonstration)."""
+def _client_id_from_next(next_url: str) -> str:
+    """Extrait ``client_id`` de la query de l'URL de retour (RFC 6749 §4.1.1)."""
+    query = urlparse(next_url).query
+    return parse_qs(query).get("client_id", [""])[0]
+
+
+def login_router(
+    resolve_session_lifetime: Callable[[str], Awaitable[int | None]] | None = None,
+) -> APIRouter:
+    """Construit le routeur ``/login`` (formulaire HTML de démonstration).
+
+    ``resolve_session_lifetime`` permet d'appliquer une durée de session
+    cookie par client (ex. ``session_lifetime_seconds`` du client) : le
+    ``client_id`` du flow est transmis dans le champ caché (lorsqu'il est
+    présent dans l'URL de retour) et reconduit par le formulaire.
+    """
     router = APIRouter(tags=["identity"])
 
     @router.get("/login", response_class=HTMLResponse)
     async def login_page(next_url: str = Query(default="/", alias="next")) -> str:
-        """Affiche le formulaire de connexion (utilisateur démo pré-rempli)."""
-        return _LOGIN_PAGE.format(error="", next=html.escape(next_url, quote=True))
+        """Affiche le formulaire de connexion (client_id du flow en champ caché)."""
+        client_id = _client_id_from_next(next_url)
+        hidden = (
+            f'<input type="hidden" name="client_id" value="{html.escape(client_id)}">'
+            if client_id
+            else ""
+        )
+        return _LOGIN_PAGE.format(
+            error="", next=html.escape(next_url, quote=True), client_hidden=hidden
+        )
 
     @router.post("/login")
     async def login(
         username: Annotated[str, Form()],
         password: Annotated[str, Form()],
         next_url: Annotated[str, Form(alias="next")] = "/",
+        client_id: Annotated[str, Form()] = "",
     ) -> RedirectResponse:
-        """Authentifie, pose le cookie de session puis redirige vers ``next``."""
+        """Authentifie, pose le cookie de session puis redirige vers ``next``.
+
+        La durée du cookie est celle du client du flow si elle est
+        configurée (sinon la durée serveur par défaut).
+        """
         credentials = OAuth2PasswordRequestForm(username=username, password=password)
         factory = _get_session_factory()
         async with factory() as session:
@@ -255,10 +414,21 @@ def login_router() -> APIRouter:
             user = await UserManager(user_db).authenticate(credentials)
             if user is None or not user.is_active:
                 return RedirectResponse(f"/login?next={quote(next_url, safe='')}", status_code=302)
-            strategy = cookie_backend.get_strategy()
-            if inspect.isawaitable(strategy):
-                strategy = await strategy
-            login_response = await cookie_backend.login(strategy, user)  # type: ignore[arg-type]
+
+            resolved_client = client_id or _client_id_from_next(next_url)
+            lifetime = _cookie_lifetime_seconds
+            if resolved_client and resolve_session_lifetime is not None:
+                client_lifetime = await resolve_session_lifetime(resolved_client)
+                if client_lifetime is not None and client_lifetime > 0:
+                    lifetime = client_lifetime
+
+            strategy = _session_strategy(lifetime_seconds=lifetime)
+            backend = AuthenticationBackend(
+                name=cookie_backend.name,
+                transport=CookieTransport(cookie_secure=False, cookie_max_age=lifetime),
+                get_strategy=lambda: strategy,
+            )
+            login_response = await backend.login(strategy, user)
             redirect = RedirectResponse(next_url or "/", status_code=302)
             cookie = login_response.headers.get("set-cookie")
             if cookie:
