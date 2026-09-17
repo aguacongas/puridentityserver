@@ -36,6 +36,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 - [PKCE] (RFC 7636) — authorization code + PKCE
 - [OAuth 2.0 Token Revocation] (RFC 7009)
 - [OAuth 2.0 Token Introspection] (RFC 7662)
+- [Device Authorization Grant] (RFC 8628) — `/device_authorization` + page `/device`
 - [OAuth 2.0 JWT Access Tokens] (RFC 9068) — extension
 - [Pushed Authorization Requests] (RFC 9126) — extension
 - [OpenID Connect RP-Initiated Logout] (OIDC spec) — `/end_session`
@@ -47,7 +48,8 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 | `/.well-known/openid-configuration` | Discovery                                 | ✅   |
 | `/.well-known/jwks.json`            | Clés publiques de signature               | ✅   |
 | `/authorize`                        | Code / Implicit / Hybrid                  | ⬜   |
-| `/token`                            | Échange code + refresh, client_credentials | ✅   |
+| `/token`                            | Échange code / refresh / client_credentials / device_code | ✅   |
+| `/device_authorization`             | Device Authorization Grant (RFC 8628)    | ✅   |
 | `/userinfo`                         | Claims de l'utilisateur                   | ✅   |
 | `/introspect`                       | Introspection de token (RFC 7662)         | ✅   |
 | `/revoke`                           | Révocation de token (RFC 7009)            | ✅   |
@@ -89,11 +91,12 @@ tests/             pytest unit + intégration (TestClient httpx)
    endpoint `/userinfo` (Bearer, filtrage des claims par scopes accordés)
 5. ✅ **Refresh tokens** — rotation, expiration, rejeu
 6. ✅ **Client Credentials** (RFC 6749 §4.4)
-7. **Implicit & Hybrid** (OIDC Core 1.0)
-8. **Logout** — RP-Initiated Logout
-9. **Introspection / Revocation** (RFC 7662 / 7009)
-10. **Client Registration** — registration dynamique
-11. **Persistence** — stockage pluggable (SQL, Mongo, etc.)
+7. ✅ **Device Authorization Grant** (RFC 8628)
+8. **Implicit & Hybrid** (OIDC Core 1.0)
+9. **Logout** — RP-Initiated Logout
+10. **Introspection / Revocation** (RFC 7662 / 7009)
+11. **Client Registration** — registration dynamique
+12. **Persistence** — stockage pluggable (SQL, Mongo, etc.)
 
 ## Développement local
 

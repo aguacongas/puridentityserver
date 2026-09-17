@@ -73,6 +73,13 @@ authorization_code_ttl_seconds = 600
 access_token_ttl_seconds = 3600
 refresh_token_ttl_seconds = 2592000
 
+# Device Authorization Grant (RFC 8628) : durée de vie du device code
+# (fenêtre d'autorisation) et intervalle minimal conseillé (en secondes).
+# Surchargeables via `PURIDENTITYSERVER_DEVICE_CODE_TTL_SECONDS` et
+# `PURIDENTITYSERVER_DEVICE_CODE_INTERVAL_SECONDS`.
+device_code_ttl_seconds = 900
+device_code_interval_seconds = 5
+
 # identité (FastAPI Users, spike) : durée par défaut du cookie et comptes de
 # connexion démo. Surchargeables via `PURIDENTITYSERVER_IDENTITY_*` (env) ou une
 # entrée `.env`. Le cookie de session est signé RS256 avec une clé rotative
@@ -187,3 +194,13 @@ redirect_uris = ["http://127.0.0.1:8000/callback"]
 scopes = "openid profile"
 client_type = "confidential"
 client_secret = "introspect-demo-secret"
+
+# client du sample Device Authorization Grant (RFC 8628) : flow sans
+# redirect_uri, adapté aux appareils à entrées limitées (TV, CLI…).
+# Le client est public (pas de secret) ; le smoke test génère une
+# configuration spécifique (port dédié) via samples/smoke_common.py.
+
+[[settings.clients_seed]]
+client_id = "sample-device-client"
+scopes = "openid profile"
+client_type = "public"

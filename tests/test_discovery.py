@@ -23,6 +23,7 @@ def test_discovery_usecase_builds_document_from_base_url() -> None:
     assert document["introspection_endpoint"] == f"{_BASE_URL}/introspect"
     assert document["revocation_endpoint"] == f"{_BASE_URL}/revoke"
     assert document["end_session_endpoint"] == f"{_BASE_URL}/end_session"
+    assert document["device_authorization_endpoint"] == f"{_BASE_URL}/device_authorization"
     assert document["id_token_signing_alg_values_supported"] == _ALL_ALGOS
 
 
@@ -47,6 +48,8 @@ def test_discovery_endpoint_returns_oidc_metadata() -> None:
     assert metadata["jwks_uri"] == f"{_BASE_URL}/.well-known/jwks.json"
     assert metadata["response_types_supported"] == ["code"]
     assert metadata["subject_types_supported"] == ["public"]
+    assert metadata["device_authorization_endpoint"] == f"{_BASE_URL}/device_authorization"
+    assert "urn:ietf:params:oauth:grant-type:device_code" in metadata["grant_types_supported"]
     assert metadata["id_token_signing_alg_values_supported"] == _ALL_ALGOS
 
 

@@ -28,6 +28,7 @@ def token_router(usecase: TokenUseCase) -> APIRouter:
         code_verifier: str = Form(default=""),
         refresh_token: str = Form(default=""),
         scope: str = Form(default=""),
+        device_code: str = Form(default=""),
     ) -> Response:
         request = TokenRequest(
             grant_type=grant_type,
@@ -38,6 +39,7 @@ def token_router(usecase: TokenUseCase) -> APIRouter:
             code_verifier=code_verifier,
             refresh_token=refresh_token,
             scope=scope,
+            device_code=device_code,
         )
         result = await usecase.execute(request)
         if isinstance(result, TokenError):

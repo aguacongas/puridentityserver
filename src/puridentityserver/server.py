@@ -8,6 +8,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from puridentityserver.application.authorize import AuthorizeConfig, AuthorizeUseCase
+from puridentityserver.application.device_authorize import (
+    DeviceAuthorizationUseCase,
+    DeviceConfig,
+)
 from puridentityserver.application.discovery import DiscoveryConfig, DiscoveryUseCase
 from puridentityserver.application.introspect import IntrospectConfig, IntrospectUseCase
 from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
@@ -29,6 +33,7 @@ from puridentityserver.infrastructure.jwks import DefaultKeyManager
 from puridentityserver.infrastructure.persistence.factory import (
     build_authorization_code_repository,
     build_client_repository,
+    build_device_authorization_repository,
     build_key_pair_repository,
     build_refresh_token_repository,
     build_revoked_token_repository,
@@ -37,6 +42,8 @@ from puridentityserver.infrastructure.persistence.factory import (
 from puridentityserver.infrastructure.settings import Settings
 from puridentityserver.infrastructure.tokens import PyJWTTokenManager
 from puridentityserver.interfaces.api.authorize import authorize_router
+from puridentityserver.interfaces.api.device_authorize import device_authorization_router
+from puridentityserver.interfaces.api.device_page import device_page_router
 from puridentityserver.interfaces.api.discovery import discovery_router
 from puridentityserver.interfaces.api.introspect import introspect_router
 from puridentityserver.interfaces.api.jwks import jwk_set_router
@@ -85,6 +92,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     user_repository = build_user_repository(settings)
     revoked_token_repository = build_revoked_token_repository(settings)
     refresh_token_repository = build_refresh_token_repository(settings)
+    device_code_repository = build_device_authorization_repository(settings)
 
     authorize_usecase = AuthorizeUseCase(
         AuthorizeConfig(
@@ -109,6 +117,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         code_repository,
         token_manager,
         refresh_token_repository,
+        device_code_repository,
+    )
+    device_usecase = DeviceAuthorizationUseCase(
+        DeviceConfig(
+            issuer=settings.issuer,
+            base_url=settings.base_url,
+            ttl_seconds=settings.device_code_ttl_seconds,
+            interval_seconds=settings.device_code_interval_seconds,
+        ),
+        client_repository,
+        device_code_repository,
     )
     userinfo_usecase = UserInfoUseCase(
         UserInfoConfig(issuer=settings.issuer),
@@ -145,6 +164,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await user_repository.initialise()
         await revoked_token_repository.initialise()
         await refresh_token_repository.initialise()
+        await device_code_repository.initialise()
         for client in settings.seed_clients:
             await client_repository.save(client)
         await user_repository.save_all(
@@ -178,6 +198,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await user_repository.close()
             await revoked_token_repository.close()
             await refresh_token_repository.close()
+            await device_code_repository.close()
 
     app = FastAPI(
         title="PurIdentityServer",
@@ -192,6 +213,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(register_router)
     app.include_router(authorize_router(authorize_usecase))
     app.include_router(token_router(token_usecase))
+    app.include_router(device_authorization_router(device_usecase))
+    app.include_router(device_page_router(device_usecase))
     app.include_router(userinfo_router(userinfo_usecase))
     app.include_router(introspect_router(introspect_usecase))
     app.include_router(revocation_router(revocation_usecase))

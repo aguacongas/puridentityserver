@@ -7,6 +7,7 @@ FastAPI, SQLAlchemy ou PyJWT. Les ports associés vivent dans
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -112,3 +113,59 @@ class RefreshToken:
     scopes: frozenset[Scope] = frozenset()
     expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     is_consumed: bool = False
+
+
+class DeviceAuthorizationStatus(str, Enum):
+    """États d'une session du Device Authorization Grant (RFC 8628 §3).
+
+    ``PENDING`` : le client a obtenu ses codes, l'utilisateur n'a pas
+    encore validé l'appareil sur la page de vérification.
+    ``APPROVED`` : l'utilisateur a autorisé l'appareil ; le poll du client
+    peut alors obtenir les jetons.
+    ``DENIED`` : l'utilisateur a refusé ; le poll retourne ``access_denied``.
+    """
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    DENIED = "denied"
+
+
+_USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def normalize_user_code(code: str) -> str:
+    """Compacte un user code saisi (minuscules, tirets, espaces tolérés).
+
+    ``"wdjb-mjht "`` et ``"WDJBMJHT"`` correspondent au même identifiant :
+    seuls les 32 caractères non ambigus de l'alphabet sont conservés.
+    """
+    return re.sub(r"[^0-9A-Z]", "", code.upper())
+
+
+def format_user_code(code: str) -> str:
+    """Rend un user code lisible par l'humain (RFC 8628 §3.2 : ``WDJB-MJHT``)."""
+    compact = normalize_user_code(code)
+    return f"{compact[:4]}-{compact[4:]}"
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceAuthorization:
+    """Session du Device Authorization Grant (RFC 8628).
+
+    Créée par ``/device_authorization``, elle lie le ``device_code`` opque
+    (stocké en empreinte ``SHA-256``) au ``user_code`` court que l'utilisateur
+    saisit sur la page de vérification. ``status`` passe de ``PENDING`` à
+    ``APPROVED`` (sujet fixé) ou ``DENIED`` selon la décision de l'utilisateur ;
+    le poll du client sur ``/token`` la consomme une fois les jetons émis.
+    ``interval`` et ``last_polled_at`` alimentent l'anti-bourrage (``slow_down``).
+    """
+
+    device_code_hash: str
+    user_code: str
+    client_id: str
+    scopes: frozenset[Scope] = frozenset()
+    subject: str = ""
+    status: DeviceAuthorizationStatus = DeviceAuthorizationStatus.PENDING
+    expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    interval: int = 5
+    last_polled_at: datetime | None = None
