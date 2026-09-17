@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import hashlib
 from collections.abc import Awaitable
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -211,13 +212,24 @@ def test_settings_client_seed_reads_defaults_from_config_toml(
     settings = Settings(_env_file=None)
 
     client = settings.seed_clients[0]
-    assert [c.client_id for c in settings.seed_clients] == ["sample-pkce-client"]
+    assert [c.client_id for c in settings.seed_clients] == [
+        "sample-pkce-client",
+        "sample-introspect-client",
+    ]
     assert client.redirect_uris == frozenset({"http://127.0.0.1:5173/callback"})
     assert client.scopes == frozenset({"openid", "profile", "email"})
     assert client.client_type == ClientType.PUBLIC
     assert client.session_lifetime_seconds is None
     assert client.access_token_lifetime_seconds is None
     assert client.authorization_code_lifetime_seconds is None
+
+    introspect = settings.seed_clients[1]
+    assert introspect.client_type == ClientType.CONFIDENTIAL
+    assert introspect.client_secret_hash == hashlib.sha256(b"introspect-demo-secret").hexdigest()
+    assert introspect.redirect_uris == frozenset(
+        {"http://127.0.0.1:8100/callback", "http://127.0.0.1:8000/callback"}
+    )
+    assert introspect.scopes == frozenset({"openid", "profile"})
 
 
 def test_settings_client_seed_parses_lifetime_fields() -> None:
