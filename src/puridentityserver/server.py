@@ -9,6 +9,7 @@ from fastapi import FastAPI
 
 from puridentityserver.application.authorize import AuthorizeConfig, AuthorizeUseCase
 from puridentityserver.application.discovery import DiscoveryConfig, DiscoveryUseCase
+from puridentityserver.application.introspect import IntrospectConfig, IntrospectUseCase
 from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
 from puridentityserver.application.token import TokenConfig, TokenUseCase
 from puridentityserver.application.userinfo import UserInfoConfig, UserInfoUseCase
@@ -34,6 +35,7 @@ from puridentityserver.infrastructure.settings import Settings
 from puridentityserver.infrastructure.tokens import PyJWTTokenManager
 from puridentityserver.interfaces.api.authorize import authorize_router
 from puridentityserver.interfaces.api.discovery import discovery_router
+from puridentityserver.interfaces.api.introspect import introspect_router
 from puridentityserver.interfaces.api.jwks import jwk_set_router
 from puridentityserver.interfaces.api.token import token_router
 from puridentityserver.interfaces.api.userinfo import userinfo_router
@@ -105,6 +107,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         token_manager,
         UserStoreClaimsProvider(user_repository),
     )
+    introspect_usecase = IntrospectUseCase(
+        IntrospectConfig(issuer=settings.issuer),
+        client_repository,
+        token_manager,
+    )
 
     async def _resolve_session_lifetime(client_id: str) -> int | None:
         """Retourne la durée de session cookie configurée pour le client, si présente."""
@@ -166,6 +173,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(authorize_router(authorize_usecase))
     app.include_router(token_router(token_usecase))
     app.include_router(userinfo_router(userinfo_usecase))
+    app.include_router(introspect_router(introspect_usecase))
     return app
 
 
