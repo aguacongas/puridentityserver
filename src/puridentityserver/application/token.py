@@ -43,6 +43,8 @@ from puridentityserver.interfaces.repositories.refresh_token_repository import (
     RefreshTokenRepository,
 )
 
+_CLIENT_UNKNOWN_ERROR = "Client inconnu ou désactivé"
+
 
 @dataclass(frozen=True, slots=True)
 class TokenConfig:
@@ -134,7 +136,7 @@ class TokenUseCase:
 
         client = await self._clients.find_by_id(request.client_id)
         if client is None or not client.is_active:
-            return self._error("invalid_client", "Client inconnu ou désactivé")
+            return self._error("invalid_client", _CLIENT_UNKNOWN_ERROR)
 
         if auth_code.redirect_uri != request.redirect_uri:
             return self._error("invalid_grant", "redirect_uri ne correspond pas")
@@ -166,7 +168,7 @@ class TokenUseCase:
 
         client = await self._clients.find_by_id(request.client_id)
         if client is None or not client.is_active:
-            return self._error("invalid_client", "Client inconnu ou désactivé")
+            return self._error("invalid_client", _CLIENT_UNKNOWN_ERROR)
 
         authenticated = self._authenticate_client(client, request)
         if authenticated is not None:
@@ -206,7 +208,7 @@ class TokenUseCase:
         """
         client = await self._clients.find_by_id(request.client_id)
         if client is None or not client.is_active:
-            return self._error("invalid_client", "Client inconnu ou désactivé")
+            return self._error("invalid_client", _CLIENT_UNKNOWN_ERROR)
         if client.client_type != ClientType.CONFIDENTIAL:
             return self._error(
                 "invalid_client", "Le grant client_credentials exige un client confidentiel"
