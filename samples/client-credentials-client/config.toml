@@ -1,0 +1,17 @@
+# Configuration du serveur pour le test manuel du grant client_credentials
+# (RFC 6749 §4.4). Chargée automatiquement par `smoke_test.py` via
+# `PURIDENTITYSERVER_SETTINGS_FILE`. Port dédié (8102) pour ne pas entrer
+# en conflit avec un serveur dev (8000), introspect (8100) ou refresh (8101).
+
+[settings]
+issuer = "http://127.0.0.1:8102"
+base_url = ""
+host = "127.0.0.1"
+port = 8102
+jwks_algorithms = ["RS256"]
+
+[[settings.clients_seed]]
+client_id = "sample-cc-client"
+scopes = "openid profile"
+client_type = "confidential"
+client_secret = "cc-demo-secret"

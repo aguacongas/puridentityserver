@@ -51,11 +51,12 @@ def _success_response(result: TokenResponse) -> Response:
     """Sérialise une réponse de succès au format JSON OAuth."""
     payload: dict[str, object] = {
         "access_token": result.access_token,
-        "id_token": result.id_token,
         "token_type": result.token_type,
         "expires_in": result.expires_in,
         "scope": result.scope,
     }
+    if result.id_token:
+        payload["id_token"] = result.id_token
     if result.refresh_token:
         payload["refresh_token"] = result.refresh_token
     return Response(content=json.dumps(payload), media_type="application/json")

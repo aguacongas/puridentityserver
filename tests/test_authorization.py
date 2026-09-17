@@ -368,7 +368,7 @@ def test_token_rejects_unsupported_grant_type() -> None:
         response = client.post(
             "/token",
             data={
-                "grant_type": "client_credentials",
+                "grant_type": "password",
                 "code": "dummy",
                 "redirect_uri": "https://app.example/callback",
                 "client_id": "web-app",
@@ -378,6 +378,26 @@ def test_token_rejects_unsupported_grant_type() -> None:
 
     assert response.status_code == 400
     assert response.json()["error"] == "unsupported_grant_type"
+
+
+def test_token_client_credentials_issues_access_token() -> None:
+    with TestClient(_app()) as client:
+        response = client.post(
+            "/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": "web-app",
+                "client_secret": "super-secret",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["access_token"]
+    assert body["token_type"] == "Bearer"
+    assert body["scope"] == "openid profile"
+    assert "id_token" not in body
+    assert "refresh_token" not in body
 
 
 def test_public_client_without_pkce_still_requires_verifier() -> None:

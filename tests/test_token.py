@@ -539,6 +539,134 @@ class TestRefreshTokenRepositories:
             build_refresh_token_repository(settings)
 
 
+class TestClientCredentialsGrant:
+    """Couvre le grant type ``client_credentials`` (RFC 6749 §4.4)."""
+
+    def test_issues_access_token_with_client_default_scopes(self) -> None:
+        uc, _, _ = _make_usecase()
+
+        result = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="client_credentials",
+                    client_id="web-app",
+                    client_secret=_CLIENT_SECRET,
+                )
+            )
+        )
+
+        assert result.access_token
+        assert result.id_token == ""
+        assert result.refresh_token == ""
+        assert result.scope == "openid"
+        claims = jwt.decode(result.access_token, options={"verify_signature": False})
+        assert claims["sub"] == "web-app"
+        assert claims["aud"] == "web-app"
+
+    def test_requested_scope_subset_is_honoured(self) -> None:
+        uc, _, _ = _make_usecase()
+
+        result = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="client_credentials",
+                    client_id="web-app",
+                    client_secret=_CLIENT_SECRET,
+                    scope="openid",
+                )
+            )
+        )
+
+        assert result.scope == "openid"
+        claims = jwt.decode(result.access_token, options={"verify_signature": False})
+        assert claims["scope"] == "openid"
+
+    def test_requested_scope_not_registered_is_rejected(self) -> None:
+        uc, _, _ = _make_usecase()
+
+        result = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="client_credentials",
+                    client_id="web-app",
+                    client_secret=_CLIENT_SECRET,
+                    scope="profile",
+                )
+            )
+        )
+
+        assert result.error == "invalid_scope"
+
+    def test_rejects_wrong_secret(self) -> None:
+        uc, _, _ = _make_usecase()
+
+        result = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="client_credentials",
+                    client_id="web-app",
+                    client_secret="mauvais-secret",
+                )
+            )
+        )
+
+        assert result.error == "invalid_client"
+
+    def test_rejects_public_client(self) -> None:
+        uc, _, _ = _make_usecase(_PUBLIC_CLIENT)
+
+        result = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="client_credentials",
+                    client_id="spa",
+                )
+            )
+        )
+
+        assert result.error == "invalid_client"
+
+    def test_rejects_unknown_client(self) -> None:
+        uc, _, _ = _make_usecase()
+
+        result = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="client_credentials",
+                    client_id="ghost",
+                    client_secret=_CLIENT_SECRET,
+                )
+            )
+        )
+
+        assert result.error == "invalid_client"
+
+    def test_ttl_uses_client_lifetime(self) -> None:
+        client = Client(
+            client_id="machine",
+            redirect_uris=frozenset(),
+            scopes=frozenset({Scope.OPENID}),
+            client_type=ClientType.CONFIDENTIAL,
+            client_secret_hash=hashlib.sha256(_CLIENT_SECRET.encode("utf-8")).hexdigest(),
+            access_token_lifetime_seconds=120,
+        )
+        uc, _, _ = _make_usecase(client)
+
+        result = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="client_credentials",
+                    client_id="machine",
+                    client_secret=_CLIENT_SECRET,
+                )
+            )
+        )
+
+        assert result.expires_in == 120
+        claims = jwt.decode(result.access_token, options={"verify_signature": False})
+        assert claims["exp"] - claims["iat"] == 120
+
+
 class TestScope:
     """Couvre la branche vide de Scope.from_space_separated."""
 

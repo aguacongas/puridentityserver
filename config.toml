@@ -10,9 +10,12 @@
 # - redirect_uris  : URI de redirection autorisées pour le flow
 # - scopes         : scopes accordés au client (séparés par des espaces)
 # - client_type    : "public" (Authorization Code + PKCE, sans secret) ou
-#                    "confidential" (échange de tokens via client_secret)
+#                    "confidential" (échange de tokens via client_secret ;
+#                    requis pour le grand client_credentials)
 # - client_secret  : secret du client (haché SHA-256 en base, jamais stocké
-#                    en clair) — facultatif pour un client "public"
+#                    en clair) — facultatif pour un client "public" ; un client
+#                    confidentiel sans redirect_uris est adapté au flow
+#                    machine à machine (client_credentials)
 # Durées de vie accordées au client (facultatives ; le défaut serveur
 # s'applique si absentes) :
 # - session_lifetime_seconds          : cookie de session (par défaut
