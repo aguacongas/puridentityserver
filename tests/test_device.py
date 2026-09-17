@@ -193,6 +193,18 @@ class TestDeviceAuthorizationUseCaseUnit:
         assert result.interval == 5
         assert result.verification_uri == f"{_ISSUER}/device"
 
+    def test_honors_client_lifetime_and_interval_overrides(self) -> None:
+        from dataclasses import replace
+
+        configured = replace(
+            _PUBLIC_CLIENT, device_code_lifetime_seconds=120, device_code_interval_seconds=1
+        )
+        uc, _, _ = _make_usecase(configured)
+        result = run(uc.execute(DeviceAuthorizationRequest(client_id=_CLIENT_ID)))
+        assert isinstance(result, DeviceAuthorizationResult)
+        assert result.expires_in == 120
+        assert result.interval == 1
+
     def test_approve_sets_subject(self) -> None:
         uc, repos, _ = _make_usecase()
         res = run(uc.execute(DeviceAuthorizationRequest(client_id=_CLIENT_ID)))

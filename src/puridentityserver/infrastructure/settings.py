@@ -57,6 +57,8 @@ def _parse_client(raw: dict[str, object]) -> Client:
             raw, "authorization_code_lifetime_seconds"
         ),
         refresh_token_lifetime_seconds=_optional_int(raw, "refresh_token_lifetime_seconds"),
+        device_code_lifetime_seconds=_optional_int(raw, "device_code_lifetime_seconds"),
+        device_code_interval_seconds=_optional_int(raw, "device_code_interval_seconds"),
     )
 
 

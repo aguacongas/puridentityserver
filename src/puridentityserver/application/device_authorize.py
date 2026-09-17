@@ -26,6 +26,7 @@ from puridentityserver.domain.authorization import (
     Scope,
     format_user_code,
     normalize_user_code,
+    resolve_lifetime_seconds,
 )
 from puridentityserver.domain.revocation import token_hash
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
@@ -121,14 +122,20 @@ class DeviceAuthorizationUseCase:
         device_code = token_urlsafe()
         user_code = self._generate_user_code()
         now = datetime.now(timezone.utc)
+        ttl = resolve_lifetime_seconds(
+            client.device_code_lifetime_seconds, self._config.ttl_seconds
+        )
+        interval = resolve_lifetime_seconds(
+            client.device_code_interval_seconds, self._config.interval_seconds
+        )
         await self._device_codes.save(
             DeviceAuthorization(
                 device_code_hash=token_hash(device_code),
                 user_code=user_code,
                 client_id=client.client_id,
                 scopes=scopes,
-                expires_at=now + timedelta(seconds=self._config.ttl_seconds),
-                interval=self._config.interval_seconds,
+                expires_at=now + timedelta(seconds=ttl),
+                interval=interval,
             )
         )
         formatted = format_user_code(user_code)
@@ -138,8 +145,8 @@ class DeviceAuthorizationUseCase:
             user_code=formatted,
             verification_uri=verification_uri,
             verification_uri_complete=f"{verification_uri}?user_code={formatted}",
-            expires_in=self._config.ttl_seconds,
-            interval=self._config.interval_seconds,
+            expires_in=ttl,
+            interval=interval,
         )
 
     async def approve(self, user_code: str, subject: str) -> DeviceDecision:

@@ -66,6 +66,8 @@ class Client:
     access_token_lifetime_seconds: int | None = None
     authorization_code_lifetime_seconds: int | None = None
     refresh_token_lifetime_seconds: int | None = None
+    device_code_lifetime_seconds: int | None = None
+    device_code_interval_seconds: int | None = None
 
 
 def resolve_lifetime_seconds(configured: int | None, default: int) -> int:

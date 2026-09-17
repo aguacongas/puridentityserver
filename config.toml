@@ -24,6 +24,10 @@
 #                                       `access_token_ttl_seconds`)
 # - authorization_code_lifetime_seconds : code d'autorisation (par défaut
 #                                         `authorization_code_ttl_seconds`)
+# - device_code_lifetime_seconds      : device code (par défaut
+#                                       `device_code_ttl_seconds`)
+# - device_code_interval_seconds      : intervalle de poll device (par défaut
+#                                       `device_code_interval_seconds`)
 
 [settings]
 
