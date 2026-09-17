@@ -60,11 +60,15 @@ jwks_grace_period_days = 7
 
 # OAuth 2.0 / OIDC : durées de vie par défaut du serveur, appliquées quand le
 # client ne précise pas les siennes (`access_token_lifetime_seconds` /
-# `authorization_code_lifetime_seconds` dans `clients_seed`). L'id_token et
-# l'access_token partagent la même durée. Surchargeables via
-# `PURIDENTITYSERVER_AUTHORIZATION_CODE_TTL_SECONDS` / `PURIDENTITYSERVER_ACCESS_TOKEN_TTL_SECONDS`.
+# `authorization_code_lifetime_seconds` / `refresh_token_lifetime_seconds`
+# dans `clients_seed`). L'id_token et l'access_token partagent la même durée.
+# Un refresh token n'est émis que si le scop `offline_access` est accordé et
+# chaque usage le consomme (rotation). Surchargeables via
+# `PURIDENTITYSERVER_AUTHORIZATION_CODE_TTL_SECONDS` /
+# `PURIDENTITYSERVER_ACCESS_TOKEN_TTL_SECONDS` / `PURIDENTITYSERVER_REFRESH_TOKEN_TTL_SECONDS`.
 authorization_code_ttl_seconds = 600
 access_token_ttl_seconds = 3600
+refresh_token_ttl_seconds = 2592000
 
 # identité (FastAPI Users, spike) : durée par défaut du cookie et comptes de
 # connexion démo. Surchargeables via `PURIDENTITYSERVER_IDENTITY_*` (env) ou une

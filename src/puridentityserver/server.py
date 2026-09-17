@@ -30,6 +30,7 @@ from puridentityserver.infrastructure.persistence.factory import (
     build_authorization_code_repository,
     build_client_repository,
     build_key_pair_repository,
+    build_refresh_token_repository,
     build_revoked_token_repository,
     build_user_repository,
 )
@@ -83,6 +84,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     code_repository = build_authorization_code_repository(settings)
     user_repository = build_user_repository(settings)
     revoked_token_repository = build_revoked_token_repository(settings)
+    refresh_token_repository = build_refresh_token_repository(settings)
 
     authorize_usecase = AuthorizeUseCase(
         AuthorizeConfig(
@@ -101,10 +103,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if settings.jwks_signing_algorithms
             else JWTAlgorithm.RS256,
             access_token_ttl_seconds=settings.access_token_ttl_seconds,
+            refresh_token_ttl_seconds=settings.refresh_token_ttl_seconds,
         ),
         client_repository,
         code_repository,
         token_manager,
+        refresh_token_repository,
     )
     userinfo_usecase = UserInfoUseCase(
         UserInfoConfig(issuer=settings.issuer),
@@ -140,6 +144,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await code_repository.initialise()
         await user_repository.initialise()
         await revoked_token_repository.initialise()
+        await refresh_token_repository.initialise()
         for client in settings.seed_clients:
             await client_repository.save(client)
         await user_repository.save_all(
@@ -172,6 +177,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await code_repository.close()
             await user_repository.close()
             await revoked_token_repository.close()
+            await refresh_token_repository.close()
 
     app = FastAPI(
         title="PurIdentityServer",

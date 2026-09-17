@@ -78,7 +78,7 @@ convention = "google"
 max-complexity = 10
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["assert", "undocumented-public-module", "undocumented-public-class", "undocumented-public-method", "undocumented-public-function", "hardcoded-password-string"]  # assert + docstrings non requis dans les tests, S105 pour valeurs de référence dans les assertions
+"tests/**" = ["assert", "undocumented-public-module", "undocumented-public-class", "undocumented-public-method", "undocumented-public-function", "hardcoded-password-string", "hardcoded-password-func-arg"]  # assert + docstrings non requis dans les tests, S105/S106 pour valeurs de référence (jetons, secrets) dans les assertions
 "scripts/**" = ["print", "suspicious-subprocess-import", "subprocess-without-shell-equals-true"]  # script de dev : print + subprocess ok
 "samples/**/smoke_test.py" = ["assert", "print", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "try-except-in-loop", "hardcoded-password-string", "hardcoded-password-func-arg"]  # smoke test : print + assert + subprocess + polling retries + valeurs de référence (token/secret client démo)
 

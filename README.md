@@ -47,7 +47,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 | `/.well-known/openid-configuration` | Discovery                                 | ✅   |
 | `/.well-known/jwks.json`            | Clés publiques de signature               | ✅   |
 | `/authorize`                        | Code / Implicit / Hybrid                  | ⬜   |
-| `/token`                            | Échange code, refresh, client_credentials | ⬜   |
+| `/token`                            | Échange code + refresh, client_credentials | ✅   |
 | `/userinfo`                         | Claims de l'utilisateur                   | ✅   |
 | `/introspect`                       | Introspection de token (RFC 7662)         | ✅   |
 | `/revoke`                           | Révocation de token (RFC 7009)            | ✅   |
@@ -84,10 +84,10 @@ tests/             pytest unit + intégration (TestClient httpx)
    (RSA `RS*`/`PS*`, EC `ES*` — liste configurable via `PURIDENTITYSERVER_JWKS_ALGORITHMS`,
    **tous les algorithmes fournis par défaut**),
    rotation par algorithme, `/.well-known/*`
-3. **Authorization Code + PKCE** (grant principal, RFC 6749 + 7636)
+3. ✅ **Authorization Code + PKCE** (grant principal, RFC 6749 + 7636)
 4. ✅ **ID Token + UserInfo** — émission et validation JWT via PyJWT,
    endpoint `/userinfo` (Bearer, filtrage des claims par scopes accordés)
-5. **Refresh tokens** — rotation, expiration, rejeu
+5. ✅ **Refresh tokens** — rotation, expiration, rejeu
 6. **Implicit & Hybrid** (OIDC Core 1.0)
 7. **Logout** — RP-Initiated Logout
 8. **Introspection / Revocation** (RFC 7662 / 7009)

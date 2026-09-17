@@ -238,7 +238,7 @@ async def test_post_login_success_sets_cookie_and_redirects(
     endpoint = _post_login_endpoint()
     response = await endpoint(
         username="alice@example.com",
-        password="password",  # ruff: ignore[hardcoded-password-func-arg]
+        password="password",
         next_url="/target",
     )
 
@@ -260,7 +260,7 @@ async def test_post_login_rejects_wrong_password(
     endpoint = _post_login_endpoint()
     response = await endpoint(
         username="alice@example.com",
-        password="wrong-password",  # ruff: ignore[hardcoded-password-func-arg]
+        password="wrong-password",
         next_url="/",
     )
 
@@ -290,7 +290,7 @@ async def test_post_login_tolerates_empty_cookie_response(
     endpoint = _post_login_endpoint()
     response = await endpoint(
         username="alice@example.com",
-        password="password",  # ruff: ignore[hardcoded-password-func-arg]
+        password="password",
         next_url="/target",
     )
 
@@ -325,7 +325,7 @@ async def test_post_login_applies_client_session_lifetime(
     )
     response = await endpoint(
         username="alice@example.com",
-        password="password",  # ruff: ignore[hardcoded-password-func-arg]
+        password="password",
         next_url="/authorize?client_id=web-app",
         client_id="web-app",
     )

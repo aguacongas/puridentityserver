@@ -1,22 +1,41 @@
 """Tests unitaires du use case TokenUseCase et du PyJWTTokenManager."""
 
 import asyncio
+import hashlib
 from collections.abc import Awaitable
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import TypeVar
 
 import jwt
 import pytest
 
 from puridentityserver.application.token import TokenConfig, TokenRequest, TokenUseCase
-from puridentityserver.domain.authorization import AuthorizationCode, Client, ClientType, Scope
+from puridentityserver.domain.authorization import (
+    AuthorizationCode,
+    Client,
+    ClientType,
+    RefreshToken,
+    Scope,
+)
 from puridentityserver.domain.jwks import JWTAlgorithm
+from puridentityserver.domain.revocation import token_hash
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
+from puridentityserver.infrastructure.persistence.factory import (
+    build_refresh_token_repository,
+)
 from puridentityserver.infrastructure.persistence.memory.clients import InMemoryClientRepository
 from puridentityserver.infrastructure.persistence.memory.codes import (
     InMemoryAuthorizationCodeRepository,
 )
 from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKeyPairRepository
+from puridentityserver.infrastructure.persistence.memory.refresh_tokens import (
+    InMemoryRefreshTokenRepository,
+)
+from puridentityserver.infrastructure.persistence.sql.refresh_tokens import (
+    SQLRefreshTokenRepository,
+)
+from puridentityserver.infrastructure.settings import Settings
 from puridentityserver.infrastructure.tokens import PyJWTTokenManager
 
 _T = TypeVar("_T")
@@ -30,7 +49,7 @@ _CONFIDENTIAL_CLIENT = Client(
     redirect_uris=frozenset({"https://app.example/callback"}),
     scopes=frozenset({Scope.OPENID}),
     client_type=ClientType.CONFIDENTIAL,
-    client_secret_hash="a" * 64,
+    client_secret_hash=hashlib.sha256(_CLIENT_SECRET.encode("utf-8")).hexdigest(),
 )
 
 _PUBLIC_CLIENT = Client(
@@ -53,23 +72,28 @@ def _future_expiry() -> datetime:
 
 def _make_usecase(
     client: Client | None = None, key_manager: DefaultKeyManager | None = None
-) -> tuple[TokenUseCase, InMemoryAuthorizationCodeRepository]:
+) -> tuple[TokenUseCase, InMemoryAuthorizationCodeRepository, InMemoryRefreshTokenRepository]:
     """Construit un TokenUseCase avec des repos en mémoire."""
     clients = InMemoryClientRepository()
     codes = InMemoryAuthorizationCodeRepository()
+    refresh_tokens = InMemoryRefreshTokenRepository()
     km = key_manager or DefaultKeyManager(InMemoryKeyPairRepository())
     token_manager = PyJWTTokenManager(km)
     resolved_client = client or _CONFIDENTIAL_CLIENT
     run(clients.save(resolved_client))
     config = TokenConfig(issuer=_ISSUER, signing_algorithm=JWTAlgorithm.RS256)
-    return TokenUseCase(config, clients, codes, token_manager), codes
+    return (
+        TokenUseCase(config, clients, codes, token_manager, refresh_tokens),
+        codes,
+        refresh_tokens,
+    )
 
 
 class TestTokenUseCaseErrors:
     """Couvre les branches d'erreur de TokenUseCase.execute."""
 
     def test_rejects_expired_code(self) -> None:
-        uc, codes = _make_usecase()
+        uc, codes, _ = _make_usecase()
         expired = AuthorizationCode(
             code="expired-code",
             client_id="web-app",
@@ -92,7 +116,7 @@ class TestTokenUseCaseErrors:
         assert "expiré" in result.error_description
 
     def test_rejects_unknown_client(self) -> None:
-        uc, codes = _make_usecase()
+        uc, codes, _ = _make_usecase()
         code = AuthorizationCode(
             code="valid-code",
             client_id="web-app",
@@ -113,7 +137,7 @@ class TestTokenUseCaseErrors:
         assert result.error == "invalid_client"
 
     def test_pkce_s256_missing_verifier(self) -> None:
-        uc, codes = _make_usecase(_PUBLIC_CLIENT)
+        uc, codes, _ = _make_usecase(_PUBLIC_CLIENT)
         code = AuthorizationCode(
             code="pkce-code",
             client_id="spa",
@@ -137,7 +161,7 @@ class TestTokenUseCaseErrors:
         assert "PKCE" in result.error_description
 
     def test_pkce_plain_success(self) -> None:
-        uc, codes = _make_usecase(_PUBLIC_CLIENT)
+        uc, codes, _ = _make_usecase(_PUBLIC_CLIENT)
         code = AuthorizationCode(
             code="plain-code",
             client_id="spa",
@@ -169,7 +193,7 @@ class TestTokenUseCaseErrors:
             client_type=ClientType.PUBLIC,
             access_token_lifetime_seconds=120,
         )
-        uc, codes = _make_usecase(client)
+        uc, codes, _ = _make_usecase(client)
         code = AuthorizationCode(
             code="ttl-code",
             client_id="spa",
@@ -195,6 +219,324 @@ class TestTokenUseCaseErrors:
         assert id_claims["exp"] - id_claims["iat"] == 120
         access_claims = jwt.decode(result.access_token, options={"verify_signature": False})
         assert access_claims["exp"] - access_claims["iat"] == 120
+
+
+class TestRefreshGrant:
+    """Couvre le grant type ``refresh_token`` (RFC 6749 §6) avec rotation."""
+
+    _STORED_SCOPES = frozenset({Scope.OPENID, Scope.PROFILE, Scope.EMAIL})
+
+    def _stored_refresh(
+        self,
+        *,
+        client_id: str = "web-app",
+        scopes: frozenset[Scope] = _STORED_SCOPES,
+        ttl_minutes: int = 30,
+        consumed: bool = False,
+    ) -> RefreshToken:
+        value = f"refresh-{client_id}"
+        expires = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
+        return RefreshToken(
+            token_hash=token_hash(value),
+            client_id=client_id,
+            subject="alice",
+            scopes=scopes,
+            expires_at=expires,
+            is_consumed=consumed,
+        )
+
+    def test_code_exchange_emits_refresh_token_with_offline_access(self) -> None:
+        uc, codes, refresh_tokens = _make_usecase()
+        code = AuthorizationCode(
+            code="offline-code",
+            client_id="web-app",
+            redirect_uri="https://app.example/callback",
+            subject="alice",
+            scopes=frozenset({Scope.OPENID, Scope.OFFLINE_ACCESS}),
+            expires_at=_future_expiry(),
+        )
+        run(codes.save(code))
+
+        result = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="authorization_code",
+                    code="offline-code",
+                    redirect_uri="https://app.example/callback",
+                    client_id="web-app",
+                    client_secret=_CLIENT_SECRET,
+                )
+            )
+        )
+
+        assert result.refresh_token
+        stored = run(refresh_tokens.find_by_token_hash(token_hash(result.refresh_token)))
+        assert stored is not None
+        assert stored.client_id == "web-app"
+        assert Scope.OFFLINE_ACCESS in stored.scopes
+
+    def test_code_exchange_omits_refresh_token_without_offline_access(self) -> None:
+        uc, codes, _ = _make_usecase()
+        code = AuthorizationCode(
+            code="plain-code",
+            client_id="web-app",
+            redirect_uri="https://app.example/callback",
+            subject="alice",
+            scopes=frozenset({Scope.OPENID}),
+            expires_at=_future_expiry(),
+        )
+        run(codes.save(code))
+
+        result = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="authorization_code",
+                    code="plain-code",
+                    redirect_uri="https://app.example/callback",
+                    client_id="web-app",
+                    client_secret=_CLIENT_SECRET,
+                )
+            )
+        )
+
+        assert result.refresh_token == ""
+
+    def test_refresh_rotates_and_returns_new_tokens(self) -> None:
+        uc, _, refresh_tokens = _make_usecase()
+        old = self._stored_refresh()
+        run(refresh_tokens.save(old))
+
+        result = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="refresh_token",
+                    refresh_token="refresh-web-app",
+                    client_id="web-app",
+                    client_secret=_CLIENT_SECRET,
+                )
+            )
+        )
+
+        assert result.access_token
+        assert result.id_token
+        assert result.refresh_token
+        assert result.refresh_token != "refresh-web-app"
+        assert result.scope == "email openid profile"
+        assert run(refresh_tokens.find_by_token_hash(old.token_hash)).is_consumed is True
+        assert run(refresh_tokens.find_by_token_hash(token_hash(result.refresh_token))) is not None
+
+    def test_refresh_rejects_reused_token(self) -> None:
+        uc, _, refresh_tokens = _make_usecase()
+        run(refresh_tokens.save(self._stored_refresh(consumed=True)))
+
+        result = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="refresh_token",
+                    refresh_token="refresh-web-app",
+                    client_id="web-app",
+                    client_secret=_CLIENT_SECRET,
+                )
+            )
+        )
+
+        assert result.error == "invalid_grant"
+        assert "rotation" in result.error_description
+
+    def test_refresh_rejects_expired_token(self) -> None:
+        uc, _, refresh_tokens = _make_usecase()
+        run(refresh_tokens.save(self._stored_refresh(ttl_minutes=-10)))
+
+        result = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="refresh_token",
+                    refresh_token="refresh-web-app",
+                    client_id="web-app",
+                    client_secret=_CLIENT_SECRET,
+                )
+            )
+        )
+
+        assert result.error == "invalid_grant"
+        assert "expiré" in result.error_description
+
+    def test_refresh_rejects_unknown_token(self) -> None:
+        uc, _, _ = _make_usecase()
+
+        result = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="refresh_token",
+                    refresh_token="inconnu",
+                    client_id="web-app",
+                    client_secret=_CLIENT_SECRET,
+                )
+            )
+        )
+
+        assert result.error == "invalid_grant"
+
+    def test_refresh_rejects_wrong_secret(self) -> None:
+        uc, _, refresh_tokens = _make_usecase()
+        run(refresh_tokens.save(self._stored_refresh()))
+
+        result = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="refresh_token",
+                    refresh_token="refresh-web-app",
+                    client_id="web-app",
+                    client_secret="mauvais",
+                )
+            )
+        )
+
+        assert result.error == "invalid_client"
+
+    def test_refresh_rejects_unknown_client(self) -> None:
+        uc, _, _ = _make_usecase()
+
+        result = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="refresh_token",
+                    refresh_token="refresh-web-app",
+                    client_id="ghost",
+                    client_secret=_CLIENT_SECRET,
+                )
+            )
+        )
+
+        assert result.error == "invalid_client"
+
+    def test_refresh_public_client_without_secret(self) -> None:
+        uc, _, refresh_tokens = _make_usecase(_PUBLIC_CLIENT)
+        run(refresh_tokens.save(self._stored_refresh(client_id="spa")))
+
+        result = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="refresh_token",
+                    refresh_token="refresh-spa",
+                    client_id="spa",
+                )
+            )
+        )
+
+        assert result.access_token
+        assert result.refresh_token
+
+    def test_refresh_narrows_scope(self) -> None:
+        uc, _, refresh_tokens = _make_usecase()
+        run(refresh_tokens.save(self._stored_refresh()))
+
+        result = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="refresh_token",
+                    refresh_token="refresh-web-app",
+                    client_id="web-app",
+                    client_secret=_CLIENT_SECRET,
+                    scope="openid email",
+                )
+            )
+        )
+
+        assert result.scope == "email openid"
+        claims = jwt.decode(result.access_token, options={"verify_signature": False})
+        assert claims["scope"] == "email openid"
+        stored = run(refresh_tokens.find_by_token_hash(token_hash(result.refresh_token)))
+        assert stored.scopes == frozenset({Scope.OPENID, Scope.EMAIL})
+
+    def test_refresh_rejects_scope_not_granted(self) -> None:
+        uc, _, refresh_tokens = _make_usecase()
+        run(refresh_tokens.save(self._stored_refresh()))
+
+        result = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="refresh_token",
+                    refresh_token="refresh-web-app",
+                    client_id="web-app",
+                    client_secret=_CLIENT_SECRET,
+                    scope="openid offline_access",
+                )
+            )
+        )
+
+        assert result.error == "invalid_scope"
+
+    def test_refresh_rejects_missing_parameter(self) -> None:
+        uc, _, _ = _make_usecase()
+
+        result = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="refresh_token",
+                    refresh_token="",
+                    client_id="web-app",
+                    client_secret=_CLIENT_SECRET,
+                )
+            )
+        )
+
+        assert result.error == "invalid_grant"
+        assert "manquant" in result.error_description
+
+
+class TestRefreshTokenRepositories:
+    """Couvre les implémentations mémoire et SQL du store de refresh tokens."""
+
+    def test_memory_round_trip_consume_and_delete(self) -> None:
+        repo = InMemoryRefreshTokenRepository()
+        token = RefreshToken(
+            token_hash="abc", client_id="web-app", scopes=frozenset({Scope.OPENID})
+        )
+
+        run(repo.save(token))
+
+        assert run(repo.find_by_token_hash("abc")) is not None
+        assert run(repo.find_by_token_hash("absent")) is None
+        run(repo.consume("abc"))
+        assert run(repo.find_by_token_hash("abc")).is_consumed is True
+        run(repo.delete("abc"))
+        assert run(repo.find_by_token_hash("abc")) is None
+
+    def test_sql_round_trip_consume_and_delete(self, tmp_path: Path) -> None:
+        repo = SQLRefreshTokenRepository(f"sqlite+aiosqlite:///{tmp_path / 'refresh.db'}")
+        run(repo.initialise())
+        token = RefreshToken(
+            token_hash="abc", client_id="web-app", scopes=frozenset({Scope.OPENID})
+        )
+
+        run(repo.save(token))
+
+        assert run(repo.find_by_token_hash("abc")) is not None
+        assert run(repo.find_by_token_hash("absent")) is None
+        run(repo.consume("abc"))
+        assert run(repo.find_by_token_hash("abc")).is_consumed is True
+        run(repo.delete("abc"))
+        assert run(repo.find_by_token_hash("abc")) is None
+        run(repo.close())
+
+    def test_factory_builds_memory(self) -> None:
+        repo = build_refresh_token_repository(Settings(storage_type="memory"))
+
+        assert isinstance(repo, InMemoryRefreshTokenRepository)
+
+    def test_factory_builds_sql(self) -> None:
+        repo = build_refresh_token_repository(
+            Settings(storage_type="sql", storage_dsn="sqlite:///memory")
+        )
+
+        assert isinstance(repo, SQLRefreshTokenRepository)
+
+    def test_factory_rejects_unknown_store_type(self) -> None:
+        settings = Settings.model_construct(storage_type="cassandra")
+
+        with pytest.raises(ValueError, match="non supporté"):
+            build_refresh_token_repository(settings)
 
 
 class TestScope:

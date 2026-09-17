@@ -56,6 +56,7 @@ def _parse_client(raw: dict[str, object]) -> Client:
         authorization_code_lifetime_seconds=_optional_int(
             raw, "authorization_code_lifetime_seconds"
         ),
+        refresh_token_lifetime_seconds=_optional_int(raw, "refresh_token_lifetime_seconds"),
     )
 
 
@@ -121,6 +122,7 @@ class Settings(BaseSettings):
     # L'`id_token` et l'`access_token` partagent la même durée de vie.
     authorization_code_ttl_seconds: int = 600
     access_token_ttl_seconds: int = 3600
+    refresh_token_ttl_seconds: int = 2592000
     clients_seed: Annotated[tuple[dict[str, object], ...], NoDecode] = ()
 
     # UserInfo (OIDC Core §5.4) — seed du user store (`sub` -> claims)

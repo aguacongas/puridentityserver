@@ -64,6 +64,7 @@ class Client:
     session_lifetime_seconds: int | None = None
     access_token_lifetime_seconds: int | None = None
     authorization_code_lifetime_seconds: int | None = None
+    refresh_token_lifetime_seconds: int | None = None
 
 
 def resolve_lifetime_seconds(configured: int | None, default: int) -> int:
@@ -91,5 +92,23 @@ class AuthorizationCode:
     code_challenge: str = ""
     code_challenge_method: str = "S256"
     nonce: str = ""
+    expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    is_consumed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class RefreshToken:
+    """Refresh token opaque (RFC 6749 §1.5, §6) — jamais stocké en clair.
+
+    Seule l'empreinte SHA-256 du jeton est persistée (``token_hash``) :
+    la valeur en clair n'existe que dans la réponse ``/token``. Le jeton
+    est lié au client, au ``subject`` et aux scopes accordés ; il est
+    rotatif — chaque usage consomme l'ancien jeton et en émet un nouveau.
+    """
+
+    token_hash: str
+    client_id: str = ""
+    subject: str = ""
+    scopes: frozenset[Scope] = frozenset()
     expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     is_consumed: bool = False
