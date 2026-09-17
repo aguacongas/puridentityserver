@@ -147,7 +147,13 @@ PURIDENTITYSERVER_ISSUER=https://id.example.com uv run uvicorn puridentityserver
   Des implémentations Redis et MongoDB peuvent être ajoutées comme extras optionnels.
 - Les endpoints `/authorize` et `/token` supportent le flux Authorization Code
   avec PKCE (S256), conformes aux RFC 6749 et 7636. Les clients publics
-  doivent utiliser PKCE. Les secrets sont hashés SHA-256 (jamais stockés en clair).
+  doivent utiliser PKCE. Le grand `client_credentials` (RFC 6749 §4.4) est
+  supporté par `/token` pour les clients **confidentiels** : le client
+  s'authentifie avec son `client_secret`, l'access token est émis au nom du
+  client (le `sub` du jeton est son `client_id` — pas d'utilisateur final,
+  donc aucun `id_token` ni `refresh_token`), et son scope est limité aux
+  scopes enregistrés pour ce client. Les secrets sont hashés SHA-256 (jamais
+  stockés en clair).
 - L'endpoint `/userinfo` valide l'access token Bearer (signature JWKS, `iss`,
   `exp`) puis renvoie les claims filtrés par les scopes accordés au jeton
   (OIDC Core 1.0 §5.4). Les claims sont résolus par un `ClaimsProvider`

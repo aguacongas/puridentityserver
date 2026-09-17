@@ -211,7 +211,12 @@ def test_settings_client_seed_reads_defaults_from_config_toml(
     settings = Settings(_env_file=None)
 
     client = settings.seed_clients[0]
-    assert [c.client_id for c in settings.seed_clients] == ["sample-pkce-client"]
+    assert [c.client_id for c in settings.seed_clients] == [
+        "sample-pkce-client",
+        "sample-refresh-client",
+        "sample-cc-client",
+        "sample-introspect-client",
+    ]
     assert client.redirect_uris == frozenset({"http://127.0.0.1:5173/callback"})
     assert client.scopes == frozenset({"openid", "profile", "email"})
     assert client.client_type == ClientType.PUBLIC

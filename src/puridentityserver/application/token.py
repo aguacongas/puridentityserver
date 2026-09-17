@@ -1,6 +1,6 @@
 """Cas d'utilisation : endpoint de jetons (RFC 6749, RFC 7636, RFC 6749 §6).
 
-Traite deux grant types :
+Traite trois grant types :
 
 - ``authorization_code`` (RFC 6749 §4.1.3 + RFC 7636) : échange le code
   d'autorisation reçu sur ``/authorize`` ; le client confidentiel doit
@@ -10,6 +10,9 @@ Traite deux grant types :
   d'un refresh token opaque. Le jeton est **rotatif** : chaque usage
   consomme l'ancien (rejeté s'il est réutilisé) et en émet un nouveau.
   Le scope demandé doit rester un sous-ensemble de celui accordé.
+- ``client_credentials`` (RFC 6749 §4.4) : le client lui-même devient le
+  ``subject`` du jeton (pas d'utilisateur final). Réservé aux clients
+  confidentiels ; aucun ``id_token`` ni ``refresh_token`` n'est émis.
 """
 
 from __future__ import annotations
@@ -39,6 +42,8 @@ from puridentityserver.interfaces.repositories.client_repository import ClientRe
 from puridentityserver.interfaces.repositories.refresh_token_repository import (
     RefreshTokenRepository,
 )
+
+_CLIENT_UNKNOWN_ERROR = "Client inconnu ou désactivé"
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +120,8 @@ class TokenUseCase:
             return await self._exchange_code(request)
         if request.grant_type == "refresh_token":
             return await self._refresh(request)
+        if request.grant_type == "client_credentials":
+            return await self._client_credentials(request)
         return self._error("unsupported_grant_type")
 
     async def _exchange_code(self, request: TokenRequest) -> TokenResponse | TokenError:
@@ -129,7 +136,7 @@ class TokenUseCase:
 
         client = await self._clients.find_by_id(request.client_id)
         if client is None or not client.is_active:
-            return self._error("invalid_client", "Client inconnu ou désactivé")
+            return self._error("invalid_client", _CLIENT_UNKNOWN_ERROR)
 
         if auth_code.redirect_uri != request.redirect_uri:
             return self._error("invalid_grant", "redirect_uri ne correspond pas")
@@ -161,7 +168,7 @@ class TokenUseCase:
 
         client = await self._clients.find_by_id(request.client_id)
         if client is None or not client.is_active:
-            return self._error("invalid_client", "Client inconnu ou désactivé")
+            return self._error("invalid_client", _CLIENT_UNKNOWN_ERROR)
 
         authenticated = self._authenticate_client(client, request)
         if authenticated is not None:
@@ -189,6 +196,38 @@ class TokenUseCase:
             client, stored.subject, scopes, nonce="", now=now
         )
         return self._success(id_token, access_token, token_ttl, scopes, refresh_token)
+
+    async def _client_credentials(self, request: TokenRequest) -> TokenResponse | TokenError:
+        """Émet un access token au nom du client lui-même (RFC 6749 §4.4).
+
+        Le client est à la fois présentateur et ``subject`` du jeton :
+        aucun utilisateur final, donc ni ``id_token`` ni ``refresh_token``.
+        Seuls les clients confidentiels (authentifiés par ``client_secret``)
+        peuvent utiliser ce grant ; le scope demandé reste limité à celui
+        enregistré pour le client.
+        """
+        client = await self._clients.find_by_id(request.client_id)
+        if client is None or not client.is_active:
+            return self._error("invalid_client", _CLIENT_UNKNOWN_ERROR)
+        if client.client_type != ClientType.CONFIDENTIAL:
+            return self._error(
+                "invalid_client", "Le grant client_credentials exige un client confidentiel"
+            )
+        if not verify_client_secret(client, request.client_secret):
+            return self._error("invalid_client", "Secret client invalide")
+
+        scopes = client.scopes
+        if request.scope:
+            requested = Scope.from_space_separated(request.scope)
+            if requested - client.scopes:
+                return self._error("invalid_scope", "Portée jamais enregistrée pour le client")
+            scopes = requested
+
+        now = datetime.now(timezone.utc)
+        access_token, token_ttl = await self._issue_access_token(
+            client, subject=client.client_id, scopes=scopes, now=now
+        )
+        return self._success("", access_token, token_ttl, scopes)
 
     def _authenticate_client(self, client: Client, request: TokenRequest) -> TokenError | None:
         """Vérifie l'authentification du client ; retourne l'erreur éventuelle."""
@@ -236,6 +275,32 @@ class TokenUseCase:
         )
         return id_token, access_token, token_ttl
 
+    async def _issue_access_token(
+        self,
+        client: Client,
+        *,
+        subject: str,
+        scopes: frozenset[Scope],
+        now: datetime,
+    ) -> tuple[str, int]:
+        """Émet et retourne un ``access_token`` et sa TTL effective."""
+        token_ttl = resolve_lifetime_seconds(
+            client.access_token_lifetime_seconds, self._config.access_token_ttl_seconds
+        )
+        expires_at = now + timedelta(seconds=token_ttl)
+        issued_at = int(now.timestamp())
+        expires_epoch = int(expires_at.timestamp())
+        access_token = await self._token_manager.create_access_token(
+            algorithm=self._config.signing_algorithm,
+            issuer=self._config.issuer,
+            subject=subject,
+            audience=client.client_id,
+            expires_at=expires_epoch,
+            issued_at=issued_at,
+            scopes=scopes,
+        )
+        return access_token, token_ttl
+
     async def _issue_refresh_token(
         self,
         client: Client,
@@ -267,7 +332,7 @@ class TokenUseCase:
         scopes: frozenset[Scope],
         refresh_token: str = "",
     ) -> TokenResponse:
-        """Construit une réponse de succès (avec ou sans refresh token)."""
+        """Construit une réponse de succès (avec ou sans id_token/refresh token)."""
         return TokenResponse(
             access_token=access_token,
             id_token=id_token,
