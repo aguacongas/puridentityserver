@@ -10,17 +10,19 @@ from urllib.parse import parse_qs, urlparse
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from thepuroidc.application.authorize import (
+from puridentityserver.application.authorize import (
     AuthorizeConfig,
     AuthorizeRedirect,
     AuthorizeRequest,
     AuthorizeUseCase,
 )
-from thepuroidc.domain.authorization import Client, Scope
-from thepuroidc.infrastructure.persistence.clients_memory import InMemoryClientRepository
-from thepuroidc.infrastructure.persistence.codes_memory import InMemoryAuthorizationCodeRepository
-from thepuroidc.infrastructure.settings import Settings
-from thepuroidc.server import create_app
+from puridentityserver.domain.authorization import Client, Scope
+from puridentityserver.infrastructure.persistence.clients_memory import InMemoryClientRepository
+from puridentityserver.infrastructure.persistence.codes_memory import (
+    InMemoryAuthorizationCodeRepository,
+)
+from puridentityserver.infrastructure.settings import Settings
+from puridentityserver.server import create_app
 
 _T = TypeVar("_T")
 

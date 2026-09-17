@@ -2,9 +2,9 @@
 
 from fastapi.testclient import TestClient
 
-from thepuroidc.application.discovery import DiscoveryConfig, DiscoveryUseCase
-from thepuroidc.infrastructure.settings import Settings
-from thepuroidc.server import create_app
+from puridentityserver.application.discovery import DiscoveryConfig, DiscoveryUseCase
+from puridentityserver.infrastructure.settings import Settings
+from puridentityserver.server import create_app
 
 _ISSUER = "https://id.example"
 _BASE_URL = "https://id.example"

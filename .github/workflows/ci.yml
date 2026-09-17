@@ -37,7 +37,7 @@ jobs:
         run: uv run --no-sync --no-build --locked ruff format --check .
 
       - name: Type check (mypy strict)
-        run: uv run --no-sync --no-build --locked mypy src/thepuroidc
+        run: uv run --no-sync --no-build --locked mypy src/puridentityserver
 
       - name: Tests + couverture
         run: uv run --no-sync --no-build --locked pytest --cov-report=xml:coverage/coverage.xml

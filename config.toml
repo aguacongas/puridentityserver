@@ -1,9 +1,9 @@
-# Configuration par défaut du serveur ThePurOidc (chargée à la racine du dépôt).
+# Configuration par défaut du serveur PurIdentityServer (chargée à la racine du dépôt).
 #
 # Les valeurs ci-dessous sont des défauts de démonstration : elles sont
-# surchargées par les variables d'environnement `THEPUROIDC_*`. Pour
+# surchargées par les variables d'environnement `PURIDENTITYSERVER_*`. Pour
 # personnaliser, copiez ce fichier et pointez le serveur dessus via
-# `THEPUROIDC_SETTINGS_FILE`.
+# `PURIDENTITYSERVER_SETTINGS_FILE`.
 
 # seeds clients enregistrés au démarrage du serveur :
 # - client_id      : identifiant du client
@@ -29,8 +29,8 @@
 # - base_url : base utilisée pour construire les URLs publiques (découverte,
 #   redirections) ; vide = l'`issuer` ci-dessus
 # - host / port : adresse d'écoute du serveur
-# Surchargeables via `THEPUROIDC_ISSUER`, `THEPUROIDC_BASE_URL`,
-# `THEPUROIDC_HOST`, `THEPUROIDC_PORT`.
+# Surchargeables via `PURIDENTITYSERVER_ISSUER`, `PURIDENTITYSERVER_BASE_URL`,
+# `PURIDENTITYSERVER_HOST`, `PURIDENTITYSERVER_PORT`.
 issuer = "http://127.0.0.1:8000"
 base_url = ""
 host = "127.0.0.1"
@@ -43,12 +43,12 @@ port = 8000
 # - jwks_algorithms : algorithmes de signature publiés au JWKS
 # - jwks_rotation_days : rotation d'une clé de signature par jour J
 # - jwks_grace_period_days : clés rotées encore acceptées à la vérification
-# Surchargeables via `THEPUROIDC_KEY_STORE_TYPE`,
-# `THEPUROIDC_KEY_STORE_DSN`, `THEPUROIDC_JWKS_KEY_SIZE`,
-# `THEPUROIDC_JWKS_ALGORITHMS` (liste séparée par des virgules),
-# `THEPUROIDC_JWKS_ROTATION_DAYS`, `THEPUROIDC_JWKS_GRACE_PERIOD_DAYS`.
+# Surchargeables via `PURIDENTITYSERVER_KEY_STORE_TYPE`,
+# `PURIDENTITYSERVER_KEY_STORE_DSN`, `PURIDENTITYSERVER_JWKS_KEY_SIZE`,
+# `PURIDENTITYSERVER_JWKS_ALGORITHMS` (liste séparée par des virgules),
+# `PURIDENTITYSERVER_JWKS_ROTATION_DAYS`, `PURIDENTITYSERVER_JWKS_GRACE_PERIOD_DAYS`.
 key_store_type = "memory"
-key_store_dsn = "sqlite:///thepuroidc_keys.db"
+key_store_dsn = "sqlite:///puridentityserver_keys.db"
 jwks_key_size = 4096
 jwks_algorithms = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512"]
 jwks_rotation_days = 90
@@ -58,12 +58,12 @@ jwks_grace_period_days = 7
 # client ne précise pas les siennes (`access_token_lifetime_seconds` /
 # `authorization_code_lifetime_seconds` dans `clients_seed`). L'id_token et
 # l'access_token partagent la même durée. Surchargeables via
-# `THEPUROIDC_AUTHORIZATION_CODE_TTL_SECONDS` / `THEPUROIDC_ACCESS_TOKEN_TTL_SECONDS`.
+# `PURIDENTITYSERVER_AUTHORIZATION_CODE_TTL_SECONDS` / `PURIDENTITYSERVER_ACCESS_TOKEN_TTL_SECONDS`.
 authorization_code_ttl_seconds = 600
 access_token_ttl_seconds = 3600
 
 # identité (FastAPI Users, spike) : durée par défaut du cookie et comptes de
-# connexion démo. Surchargeables via `THEPUROIDC_IDENTITY_*` (env) ou une
+# connexion démo. Surchargeables via `PURIDENTITYSERVER_IDENTITY_*` (env) ou une
 # entrée `.env`. Le cookie de session est signé RS256 avec une clé rotative
 # dédiée (`KeyUse.SESSION`) stockée au même endroit que les clés de signature
 # des tokens : aucun secret statique (cookies, reset, verify) n'est nécessaire.
@@ -76,7 +76,7 @@ identity_jwt_lifetime_seconds = 3600
 # identité, email, address, phone). Sujets = utilisateurs, jamais des
 # clients ; les clés "alice" / "bob" sont recopiées par le pont identité
 # sous l'UUID FastAPI Users correspondant au même email (`DEMO_USERS`).
-# Surchargeable en bloc via `THEPUROIDC_USERS_SEED` (JSON).
+# Surchargeable en bloc via `PURIDENTITYSERVER_USERS_SEED` (JSON).
 
 [settings.users_seed.alice]
 name = "Alice Martin"
@@ -134,7 +134,7 @@ country = "FR"
 
 # comptes de connexion (email + password) pour le login navigateur. La clé
 # (subject) réutilise celle de `users_seed` pour le pont identité ⊕ user store.
-# Surchargeables en bloc via `THEPUROIDC_IDENTITY_SEED_USERS` (JSON).
+# Surchargeables en bloc via `PURIDENTITYSERVER_IDENTITY_SEED_USERS` (JSON).
 
 [settings.identity_seed_users.alice]
 email = "alice@example.com"

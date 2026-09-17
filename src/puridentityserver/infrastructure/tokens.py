@@ -1,0 +1,143 @@
+"""Émission des jetons id_token / access_token via PyJWT.
+
+Implémentation concrète du port ``TokenManager`` : elle s'appuie sur un
+``KeyManager`` injecté pour choisir la clé de signature active et signe
+le jeton avec le ``kid`` correspondant (JWS compact, RFC 7519).
+"""
+
+from __future__ import annotations
+
+from typing import cast
+
+import jwt as pyjwt
+from cryptography.hazmat.primitives.serialization import (
+    load_pem_private_key,
+    load_pem_public_key,
+)
+
+from puridentityserver.domain.authorization import Scope
+from puridentityserver.domain.jwks import JWTAlgorithm, KeyPair
+from puridentityserver.interfaces.domain.jwks import KeyManager
+
+
+class PyJWTTokenManager:
+    """Crée et valide des jetons JWT à l'aide de la clé de l'algorithme demandé."""
+
+    def __init__(self, key_manager: KeyManager) -> None:
+        """Injection du gestionnaire de clés (fournit la clé de signature)."""
+        self._key_manager = key_manager
+
+    async def create_id_token(
+        self,
+        *,
+        algorithm: JWTAlgorithm,
+        issuer: str,
+        subject: str,
+        audience: str,
+        nonce: str,
+        expires_at: int,
+        issued_at: int,
+        scopes: frozenset[Scope],
+    ) -> str:
+        """Construit l''id_token'' : identité ``sub`` + audience ``client_id``."""
+        payload: dict[str, object] = {
+            "iss": issuer,
+            "sub": subject,
+            "aud": audience,
+            "nonce": nonce,
+            "exp": expires_at,
+            "iat": issued_at,
+            "scope": " ".join(sorted(scope.value for scope in scopes)),
+        }
+        return await self._sign(algorithm, payload)
+
+    async def create_access_token(
+        self,
+        *,
+        algorithm: JWTAlgorithm,
+        issuer: str,
+        subject: str,
+        audience: str,
+        expires_at: int,
+        issued_at: int,
+        scopes: frozenset[Scope],
+    ) -> str:
+        """Construit l'access_token : identité ``sub`` + scopes accordés."""
+        payload: dict[str, object] = {
+            "iss": issuer,
+            "sub": subject,
+            "aud": audience,
+            "exp": expires_at,
+            "iat": issued_at,
+            "scope": " ".join(sorted(scope.value for scope in scopes)),
+        }
+        return await self._sign(algorithm, payload)
+
+    async def validate_access_token(
+        self,
+        *,
+        token: str,
+        issuer: str,
+    ) -> dict[str, object] | None:
+        """Valide la signature (JWKS), l'issuer et l'expiration d'un access_token."""
+        try:
+            # Le header (alg/kid) sert uniquement à choisir la clé de vérification ;
+            # la signature et les claims sont ensuite intégralement validés par pyjwt.decode
+            # ci-dessous, de sorte qu'aucune donnée non vérifiée n'est jamais utilisée.
+            header = pyjwt.get_unverified_header(token)  # NOSONAR(S5659)
+            algorithm = JWTAlgorithm(header["alg"])
+        except (pyjwt.PyJWTError, KeyError, ValueError):
+            return None
+
+        key = await self._key_for(header.get("kid"), algorithm)
+        if key is None:
+            return None
+
+        public_key = load_pem_public_key(key.public_key_pem.encode("ascii"))
+        try:
+            return cast(
+                dict[str, object],
+                pyjwt.decode(
+                    token,
+                    public_key,
+                    algorithms=[algorithm.value],
+                    issuer=issuer,
+                    options={"verify_aud": False},
+                ),
+            )
+        except pyjwt.PyJWTError:
+            return None
+
+    async def _key_for(self, kid: object | None, algorithm: JWTAlgorithm) -> KeyPair | None:
+        """Retourne la clé active de l'algorithme correspondant au ``kid``."""
+        for key in await self._key_manager.get_active_keys():
+            if key.algorithm is not algorithm:
+                continue
+            if kid is None or key.kid == kid:
+                return key
+        return None
+
+    async def _sign(self, algorithm: JWTAlgorithm, payload: dict[str, object]) -> str:
+        """Signe le payload avec la première clé active de l'algorithme."""
+        key_pair = await self._first_active_key(algorithm)
+        private_key = load_pem_private_key(key_pair.private_key_pem.encode("ascii"), None)
+        return cast(
+            str,
+            pyjwt.encode(
+                payload,
+                private_key,
+                algorithm=algorithm.value,
+                headers={"kid": key_pair.kid},
+            ),
+        )
+
+    async def _first_active_key(self, algorithm: JWTAlgorithm) -> KeyPair:
+        """Retourne la première clé active de l'algorithme, en génère si besoin."""
+        for key in await self._key_manager.get_active_keys():
+            if key.algorithm is algorithm:
+                return key
+        await self._key_manager.ensure_active_key(4096, algorithm)
+        for key in await self._key_manager.get_active_keys():
+            if key.algorithm is algorithm:
+                return key
+        raise RuntimeError(f"Aucune clé active disponible pour l'algorithme {algorithm.value}")

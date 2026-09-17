@@ -9,23 +9,25 @@ from typing import TypeVar
 
 import pytest
 
-from thepuroidc.domain.authorization import AuthorizationCode, Client, ClientType, Scope
-from thepuroidc.infrastructure.persistence.clients_memory import InMemoryClientRepository
-from thepuroidc.infrastructure.persistence.clients_sql import ClientRow, SQLClientRepository
-from thepuroidc.infrastructure.persistence.clients_sql import _from_row as _from_client_row
-from thepuroidc.infrastructure.persistence.codes_memory import InMemoryAuthorizationCodeRepository
-from thepuroidc.infrastructure.persistence.codes_sql import (
+from puridentityserver.domain.authorization import AuthorizationCode, Client, ClientType, Scope
+from puridentityserver.infrastructure.persistence.clients_memory import InMemoryClientRepository
+from puridentityserver.infrastructure.persistence.clients_sql import ClientRow, SQLClientRepository
+from puridentityserver.infrastructure.persistence.clients_sql import _from_row as _from_client_row
+from puridentityserver.infrastructure.persistence.codes_memory import (
+    InMemoryAuthorizationCodeRepository,
+)
+from puridentityserver.infrastructure.persistence.codes_sql import (
     AuthorizationCodeRow,
     SQLAuthorizationCodeRepository,
 )
-from thepuroidc.infrastructure.persistence.codes_sql import (
+from puridentityserver.infrastructure.persistence.codes_sql import (
     _from_row as _from_code_row,
 )
-from thepuroidc.infrastructure.persistence.factory import (
+from puridentityserver.infrastructure.persistence.factory import (
     build_authorization_code_repository,
     build_client_repository,
 )
-from thepuroidc.infrastructure.settings import Settings
+from puridentityserver.infrastructure.settings import Settings
 
 _CLIENT = Client(
     client_id="web-app",

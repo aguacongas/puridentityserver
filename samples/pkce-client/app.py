@@ -1,6 +1,6 @@
 """Client de démonstration : Authorization Code + PKCE (RFC 6749, RFC 7636).
 
-Implémente une *relying party* qui se connecte à un serveur ThePurOidc :
+Implémente une *relying party* qui se connecte à un serveur PurIdentityServer :
 
 1. redirection du navigateur vers la page de login du serveur
    (`/login?next=<authorize>`), avec un challenge PKCE S256,
@@ -19,7 +19,7 @@ Lancement (depuis la racine du dépôt) :
     uv run python samples/pkce-client/app.py
 
 Le client (http://127.0.0.1:5173) est pré-enregistré par défaut sur le
-serveur ThePurOidc ; rien d'autre à configurer pour un démarrage local.
+serveur PurIdentityServer ; rien d'autre à configurer pour un démarrage local.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ _HTML_PAGE = """<!doctype html>
 <html lang="fr">
 <head>
   <meta charset="utf-8">
-  <title>ThePurOidc — client démo (Authorization Code + PKCE + UserInfo)</title>
+  <title>PurIdentityServer — client démo (Authorization Code + PKCE + UserInfo)</title>
   <style>
     body {{ font-family: sans-serif; margin: 2rem; max-width: 42rem; }}
     code {{ background: #f4f4f4; padding: 0.15rem 0.35rem; border-radius: 4px; }}
@@ -140,11 +140,11 @@ def _page(body: str) -> str:
 def _index_html(settings: Settings) -> str:
     """Page d'accueil : invite à se connecter via le flow Authorization Code."""
     body = f"""
-<h1>ThePurOidc — client démo</h1>
+<h1>PurIdentityServer — client démo</h1>
 <p>Se connecter avec le flow <strong>Authorization Code + PKCE</strong>
 contre le serveur <code>{html.escape(settings.issuer)}</code>.</p>
 <p>Client : <code>{html.escape(settings.client_id)}</code></p>
-<p><a class="button" href="/login">Se connecter avec ThePurOidc</a></p>
+<p><a class="button" href="/login">Se connecter avec PurIdentityServer</a></p>
 <p><small>Comptes démo : <code>alice@example.com</code> / <code>password</code> (admin)
     &nbsp;·&nbsp; <code>bob@example.com</code> / <code>password</code> (user)</small></p>
 """
@@ -290,7 +290,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     pending: dict[str, PendingAuth] = {}
 
     app = FastAPI(
-        title="ThePurOidc — client démo (Authorization Code + PKCE + UserInfo)",
+        title="PurIdentityServer — client démo (Authorization Code + PKCE + UserInfo)",
         description=(
             "Relying party de démonstration du flow authorization code + PKCE "
             "et de l'endpoint UserInfo."
