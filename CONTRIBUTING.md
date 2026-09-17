@@ -1,4 +1,4 @@
-# Règles de codage — ThePurOidc
+# Règles de codage — PurIdentityServer
 
 Ce guide énonce les règles de codage Python du projet. **L'arbitre machine est le
 `pyproject.toml`** (config `ruff`, `mypy`, `pytest`) : en cas de doute, ce qui passe
@@ -45,7 +45,7 @@ pytest                       # tests + couverture (min 80 %)
   dans le **`config.toml`** de la racine (table `[settings]`), pas dans `src/`. Le code ne
   déclare qu'un défaut *neutre* — l'option absente — et reçoit la configuration par injection
   (`Settings`, composition root).
-- Tout nouveau paramètre (`THEPUROIDC_*`) est exposé dans `Settings`
+- Tout nouveau paramètre (`PURIDENTITYSERVER_*`) est exposé dans `Settings`
   (`infrastructure/settings.py`), documenté dans `docs/configuration.md` et, si ses défauts
   de démonstration comptent pour l'exécution locale, déclaré dans `config.toml`.
 
@@ -78,7 +78,7 @@ Chaque feature n'est **done** que si elle respecte l'ensemble :
 - [ ] **SonarCloud** — aucune nouvelle issue sur le diff de la PR
 - [ ] **Documentation à jour dans la même PR** :
   - [ ] `README.md` — table des endpoints, plan d'implémentation, mention de la feature
-  - [ ] `docs/configuration.md` — nouveaux paramètres `THEPUROIDC_*` (par feature)
+  - [ ] `docs/configuration.md` — nouveaux paramètres `PURIDENTITYSERVER_*` (par feature)
   - [ ] `docs/installation.md` — si le déploiement/lancement change
   - [ ] Disposer/vérifier les liens `#spec` de la feature
 
@@ -103,7 +103,7 @@ extérieur.
 
 Concrètement :
 
-- `src/thepuroidc/` — code de l'application (FastAPI).
+- `src/puridentityserver/` — code de l'application (FastAPI).
 - `tests/` — tests unitaires et d'intégration (TestClient httpx).
 - **Composition root** unique (`server.py`) : c'est le seul endroit qui assemble
   infrastructure + adaptateurs + usecases (injection de dépendances).

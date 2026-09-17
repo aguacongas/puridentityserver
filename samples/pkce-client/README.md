@@ -1,7 +1,7 @@
 # Client démo : Authorization Code + PKCE
 
 Application FastAPI de démonstration : une *relying party* qui se connecte à
-un serveur ThePurOidc via le flow **Authorization Code** (RFC 6749) avec
+un serveur PurIdentityServer via le flow **Authorization Code** (RFC 6749) avec
 **PKCE** (RFC 7636).
 
 Le client effectue :
@@ -10,7 +10,7 @@ Le client effectue :
    (`/login?next=<authorize>`), en ayant préparé un `code_challenge` S256
    (et un `state` + `nonce`) ;
 2. l'**authentification sur le serveur** : l'utilisateur saisit ses
-   identifiants sur la page de login ThePurOidc et obtient un cookie de
+   identifiants sur la page de login PurIdentityServer et obtient un cookie de
    session ;
 3. la **redirection vers `/authorize`** (émis avec le cookie de session) ;
    le serveur délivre le `code` d'autorisation au `sub` de l'utilisateur
@@ -35,10 +35,10 @@ et restitués dans la réponse de `/userinfo`.
 
 Prérequis : `uv` et une version récente de Python.
 
-1. Démarrer le serveur ThePurOidc (depuis la racine du dépôt) :
+1. Démarrer le serveur PurIdentityServer (depuis la racine du dépôt) :
 
    ```bash
-   uv run python -m thepuroidc
+   uv run python -m puridentityserver
    ```
 
    Le serveur enregistre par défaut le client de démo

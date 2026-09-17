@@ -1,6 +1,6 @@
 # Configuration du serveur
 
-La configuration se fait par **variables d'environnement** (préfixe `THEPUROIDC_`), par
+La configuration se fait par **variables d'environnement** (préfixe `PURIDENTITYSERVER_`), par
 fichier **`.env`** placé à la racine du projet (chargé automatiquement au démarrage),
 ou par le fichier **`config.toml`** du dépôt qui fournit des **défauts de démonstration**
 (l'environnement reste prioritaire sur le fichier).
@@ -10,28 +10,28 @@ Elle est lue au démarrage par [pydantic-settings](https://docs.pydantic.dev/lat
 
 | Variable | Défaut | Description |
 | --- | --- | --- |
-| `THEPUROIDC_ISSUER` | `http://127.0.0.1:8000` | Identifiant public de l'émetteur : l'URL où le serveur est joignable. Doit être stable et, en production, en **HTTPS**. |
-| `THEPUROIDC_BASE_URL` | *(issuer)* | Base utilisée pour construire les URL des endpoints publiées dans le document de discovery (`/authorize`, `/token`, `/userinfo`, `/.well-known/jwks.json`, …). Par défaut : l'issuer. |
-| `THEPUROIDC_HOST` | `127.0.0.1` | Interface réseau sur laquelle écoute le serveur Uvicorn. |
-| `THEPUROIDC_PORT` | `8000` | Port d'écoute. |
-| `THEPUROIDC_KEY_STORE_TYPE` | `memory` | Type de stockage des clés de signature et du user store (`memory` pour le développement local, `sql` pour la production). |
-| `THEPUROIDC_KEY_STORE_DSN` | `sqlite:///thepuroidc_keys.db` | Chaîne de connexion SQLAlchemy du stockage persistant (clés, codes, clients, utilisateurs — utilisée lorsque `KEY_STORE_TYPE=sql`). |
-| `THEPUROIDC_JWKS_KEY_SIZE` | `4096` | Taille des clés RSA générées (bits) pour la signature des jetons. |
-| `THEPUROIDC_JWKS_ALGORITHMS` | *(tous)* | Liste (séparée par des virgules) des algorithmes de signature fournis. Supporte `RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`, `ES256`, `ES384`, `ES512`. |
-| `THEPUROIDC_JWKS_ROTATION_DAYS` | `90` | Âge à partir duquel une clé de signature est retirée du JWKS et remplacée. |
-| `THEPUROIDC_JWKS_GRACE_PERIOD_DAYS` | `7` | Délai après la rotation avant suppression définitive de l'ancienne clé. |
-| `THEPUROIDC_AUTHORIZATION_CODE_TTL_SECONDS` | `600` | Durée de vie du code d'autorisation (secondes) — défaut serveur, surchargée par client via `authorization_code_lifetime_seconds` (voir `THEPUROIDC_CLIENTS_SEED`). |
-| `THEPUROIDC_ACCESS_TOKEN_TTL_SECONDS` | `3600` | Durée de vie de l'access token émis (secondes) — défaut serveur, surchargée par client via `access_token_lifetime_seconds` (voir `THEPUROIDC_CLIENTS_SEED`). L'`id_token` partage la même durée. |
-| `THEPUROIDC_SETTINGS_FILE` | `config.toml` | Chemin du fichier TOML des défauts du projet (table `[settings]`), notamment les clients seed et les profils utilisateurs. |
-| `THEPUROIDC_CLIENTS_SEED` | *(config.toml)* | Liste JSON de clients seed au démarrage (format `[{"client_id":"...","client_secret":"...","redirect_uris":["..."],"scopes":"openid","client_type":"public","session_lifetime_seconds":1800,"access_token_lifetime_seconds":120,"authorization_code_lifetime_seconds":30}]`). Champs de durée **facultatifs**, le défaut serveur s'applique si absents : `session_lifetime_seconds` (cookie de session, défaut `identity_jwt_lifetime_seconds`), `access_token_lifetime_seconds` (id_token + access_token, défaut `access_token_ttl_seconds`) et `authorization_code_lifetime_seconds` (code d'autorisation, défaut `authorization_code_ttl_seconds`). |
-| `THEPUROIDC_USERS_SEED` | *(config.toml)* | Seed du user store servi par `/userinfo` (déversé dans le store au démarrage, comme `clients_seed`) : objet JSON mappant un `subject` (`sub`) à ses claims (format `{"alice": {"name": "...", "email": "...", "roles": ["admin"]}}`). Les clés `alice` / `bob` sont des sujets utilisateurs que le pont identité recopie sous l'UUID FastAPI Users correspondant (même email que `THEPUROIDC_IDENTITY_SEED_USERS`). Par défaut, `config.toml` fournit les profils démo `alice` (admin) et `bob` (user). |
-| `THEPUROIDC_IDENTITY_SEED_USERS` | *(config.toml)* | Comptes de connexion du login navigateur (FastAPI Users) : objet JSON mappant un `subject` à ses identifiants (format `{"alice": {"email": "alice@example.com", "password": "..."}}`). Le serveur les crée (mot de passe haché) au démarrage via `seed_users`. Par défaut `config.toml` fournit `alice` et `bob`. |
-| `THEPUROIDC_IDENTITY_JWT_LIFETIME_SECONDS` | `3600` | Durée de vie par défaut du cookie de session (surchargée par `session_lifetime_seconds` du client du flow, voir `THEPUROIDC_CLIENTS_SEED`). |
+| `PURIDENTITYSERVER_ISSUER` | `http://127.0.0.1:8000` | Identifiant public de l'émetteur : l'URL où le serveur est joignable. Doit être stable et, en production, en **HTTPS**. |
+| `PURIDENTITYSERVER_BASE_URL` | *(issuer)* | Base utilisée pour construire les URL des endpoints publiées dans le document de discovery (`/authorize`, `/token`, `/userinfo`, `/.well-known/jwks.json`, …). Par défaut : l'issuer. |
+| `PURIDENTITYSERVER_HOST` | `127.0.0.1` | Interface réseau sur laquelle écoute le serveur Uvicorn. |
+| `PURIDENTITYSERVER_PORT` | `8000` | Port d'écoute. |
+| `PURIDENTITYSERVER_KEY_STORE_TYPE` | `memory` | Type de stockage des clés de signature et du user store (`memory` pour le développement local, `sql` pour la production). |
+| `PURIDENTITYSERVER_KEY_STORE_DSN` | `sqlite:///puridentityserver_keys.db` | Chaîne de connexion SQLAlchemy du stockage persistant (clés, codes, clients, utilisateurs — utilisée lorsque `KEY_STORE_TYPE=sql`). |
+| `PURIDENTITYSERVER_JWKS_KEY_SIZE` | `4096` | Taille des clés RSA générées (bits) pour la signature des jetons. |
+| `PURIDENTITYSERVER_JWKS_ALGORITHMS` | *(tous)* | Liste (séparée par des virgules) des algorithmes de signature fournis. Supporte `RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`, `ES256`, `ES384`, `ES512`. |
+| `PURIDENTITYSERVER_JWKS_ROTATION_DAYS` | `90` | Âge à partir duquel une clé de signature est retirée du JWKS et remplacée. |
+| `PURIDENTITYSERVER_JWKS_GRACE_PERIOD_DAYS` | `7` | Délai après la rotation avant suppression définitive de l'ancienne clé. |
+| `PURIDENTITYSERVER_AUTHORIZATION_CODE_TTL_SECONDS` | `600` | Durée de vie du code d'autorisation (secondes) — défaut serveur, surchargée par client via `authorization_code_lifetime_seconds` (voir `PURIDENTITYSERVER_CLIENTS_SEED`). |
+| `PURIDENTITYSERVER_ACCESS_TOKEN_TTL_SECONDS` | `3600` | Durée de vie de l'access token émis (secondes) — défaut serveur, surchargée par client via `access_token_lifetime_seconds` (voir `PURIDENTITYSERVER_CLIENTS_SEED`). L'`id_token` partage la même durée. |
+| `PURIDENTITYSERVER_SETTINGS_FILE` | `config.toml` | Chemin du fichier TOML des défauts du projet (table `[settings]`), notamment les clients seed et les profils utilisateurs. |
+| `PURIDENTITYSERVER_CLIENTS_SEED` | *(config.toml)* | Liste JSON de clients seed au démarrage (format `[{"client_id":"...","client_secret":"...","redirect_uris":["..."],"scopes":"openid","client_type":"public","session_lifetime_seconds":1800,"access_token_lifetime_seconds":120,"authorization_code_lifetime_seconds":30}]`). Champs de durée **facultatifs**, le défaut serveur s'applique si absents : `session_lifetime_seconds` (cookie de session, défaut `identity_jwt_lifetime_seconds`), `access_token_lifetime_seconds` (id_token + access_token, défaut `access_token_ttl_seconds`) et `authorization_code_lifetime_seconds` (code d'autorisation, défaut `authorization_code_ttl_seconds`). |
+| `PURIDENTITYSERVER_USERS_SEED` | *(config.toml)* | Seed du user store servi par `/userinfo` (déversé dans le store au démarrage, comme `clients_seed`) : objet JSON mappant un `subject` (`sub`) à ses claims (format `{"alice": {"name": "...", "email": "...", "roles": ["admin"]}}`). Les clés `alice` / `bob` sont des sujets utilisateurs que le pont identité recopie sous l'UUID FastAPI Users correspondant (même email que `PURIDENTITYSERVER_IDENTITY_SEED_USERS`). Par défaut, `config.toml` fournit les profils démo `alice` (admin) et `bob` (user). |
+| `PURIDENTITYSERVER_IDENTITY_SEED_USERS` | *(config.toml)* | Comptes de connexion du login navigateur (FastAPI Users) : objet JSON mappant un `subject` à ses identifiants (format `{"alice": {"email": "alice@example.com", "password": "..."}}`). Le serveur les crée (mot de passe haché) au démarrage via `seed_users`. Par défaut `config.toml` fournit `alice` et `bob`. |
+| `PURIDENTITYSERVER_IDENTITY_JWT_LIFETIME_SECONDS` | `3600` | Durée de vie par défaut du cookie de session (surchargée par `session_lifetime_seconds` du client du flow, voir `PURIDENTITYSERVER_CLIENTS_SEED`). |
 
 Cookie de session : signé RS256 avec une clé dédiée (`KeyUse.SESSION`,
 stockée au même endroit que les clés de signature, mais **jamais publiée**
-dans le JWKS). Sa rotation est calée sur `THEPUROIDC_JWKS_ROTATION_DAYS` et
-`THEPUROIDC_JWKS_GRACE_PERIOD_DAYS` : une session reste valide tant que sa
+dans le JWKS). Sa rotation est calée sur `PURIDENTITYSERVER_JWKS_ROTATION_DAYS` et
+`PURIDENTITYSERVER_JWKS_GRACE_PERIOD_DAYS` : une session reste valide tant que sa
 clé n'a pas dépassé la période de grâce, puis force un nouveau login.
 
 Tokens de gestion de compte (réinitialisation de mot de passe, vérification
@@ -71,7 +71,7 @@ réécrit automatiquement vers le dialecte asynchrone (ex. `sqlite:///keys.db` �
 - Au démarrage, une clé est générée **par algorithme configuré** et exposée sur
   `/.well-known/jwks.json` (format JWK, champs `kty`, `kid`, `use`, `alg`, plus `n`/`e`
   pour RSA, `crv`/`x`/`y` pour EC).
-- `THEPUROIDC_JWKS_ALGORITHMS` permet de choisir les algorithmes fournis.
+- `PURIDENTITYSERVER_JWKS_ALGORITHMS` permet de choisir les algorithmes fournis.
 - La rotation est déclenchée à chaque lecture du JWKS : les clés plus vieilles que
   `rotation_days` sont retirées, les clés hors `grace_period_days` sont supprimées,
   et une nouvelle clé est générée si nécessaire.
@@ -83,7 +83,7 @@ de démonstration**. Sa table `[settings]` est chargée automatiquement sous les
 défauts, avec la hiérarchie de priorité suivante :
 
 ```text
-arguments d'init > variables d'environnement (THEPUROIDC_*) > config.toml > défauts du code
+arguments d'init > variables d'environnement (PURIDENTITYSERVER_*) > config.toml > défauts du code
 ```
 
 Le fichier contient actuellement :
@@ -98,13 +98,13 @@ Le fichier contient actuellement :
 
 - Pour personnaliser ou ajouter des clients sans toucher au code, deux options :
 
-  - surcharger le chemin via `THEPUROIDC_SETTINGS_FILE` (ex. copier
+  - surcharger le chemin via `PURIDENTITYSERVER_SETTINGS_FILE` (ex. copier
     `config.toml` vers `config.local.toml`, l'éditer, puis
-    `THEPUROIDC_SETTINGS_FILE=config.local.toml uv run python -m thepuroidc`) ;
+    `PURIDENTITYSERVER_SETTINGS_FILE=config.local.toml uv run python -m puridentityserver`) ;
   - passer la liste complète par l'environnement :
-    `THEPUROIDC_CLIENTS_SEED='[{"client_id": "my-app", ...}]'` (remplace `config.toml`).
+    `PURIDENTITYSERVER_CLIENTS_SEED='[{"client_id": "my-app", ...}]'` (remplace `config.toml`).
 
-> Note : `THEPUROIDC_CLIENTS_SEED` et `THEPUROIDC_USERS_SEED` **remplacent**
+> Note : `PURIDENTITYSERVER_CLIENTS_SEED` et `PURIDENTITYSERVER_USERS_SEED` **remplacent**
 > les valeurs par défaut, ils ne les fusionnent pas. Déclarez l'ensemble complet.
 
 ## Exemples
@@ -112,21 +112,21 @@ Le fichier contient actuellement :
 ### Lancement local simple (en mémoire)
 
 ```sh
-THEPUROIDC_ISSUER=http://127.0.0.1:8000 uv run python -m thepuroidc
+PURIDENTITYSERVER_ISSUER=http://127.0.0.1:8000 uv run python -m puridentityserver
 ```
 
 ### Stockage SQL pour la production
 
 ```sh
-THEPUROIDC_ISSUER=https://id.example.com
-THEPUROIDC_KEY_STORE_TYPE=sql
-THEPUROIDC_KEY_STORE_DSN=postgresql+asyncpg://thepuroidc:secret@db-host/thepuroidc
+PURIDENTITYSERVER_ISSUER=https://id.example.com
+PURIDENTITYSERVER_KEY_STORE_TYPE=sql
+PURIDENTITYSERVER_KEY_STORE_DSN=postgresql+asyncpg://puridentityserver:secret@db-host/puridentityserver
 ```
 
 ### Derrière un reverse proxy TLS
 
 ```sh
-THEPUROIDC_ISSUER=https://id.example.com uv run uvicorn thepuroidc.server:app --host 127.0.0.1 --port 8000
+PURIDENTITYSERVER_ISSUER=https://id.example.com uv run uvicorn puridentityserver.server:app --host 127.0.0.1 --port 8000
 ```
 
 ## Notes d'implémentation
@@ -136,7 +136,7 @@ THEPUROIDC_ISSUER=https://id.example.com uv run uvicorn thepuroidc.server:app --
   `is_active` (booléen) pour gérer la rotation.
 - Les contrats (ports) de gestion des clés (`KeyManager`), de persistance
   (`KeyPairRepository`, `ClientRepository`, `AuthorizationCodeRepository`,
-  `UserRepository`) sont des Protocol vivant dans `thepuroidc/interfaces/` ; chaque
+  `UserRepository`) sont des Protocol vivant dans `puridentityserver/interfaces/` ; chaque
   store est décliné en deux implémentations — `memory` (dictionnaire process-local)
   et `sql` (SQLAlchemy 2.0 asynchrone) — choisies via `KEY_STORE_TYPE`.
   Des implémentations Redis et MongoDB peuvent être ajoutées comme extras optionnels.
@@ -149,6 +149,6 @@ THEPUROIDC_ISSUER=https://id.example.com uv run uvicorn thepuroidc.server:app --
   (`interfaces/domain/userinfo.py`) dont l'implémentation livrée
   (`infrastructure/claims.py`) délègue au **user store** (`UserRepository`),
   alimenté au démarrage depuis le seed déclaré dans la configuration
-  (`THEPUROIDC_USERS_SEED`).
+  (`PURIDENTITYSERVER_USERS_SEED`).
 - Toutes les opérations sont asynchrones (`async/await`), compatibles avec l'event loop
   de FastAPI.

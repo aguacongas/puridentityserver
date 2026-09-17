@@ -12,7 +12,7 @@ from collections.abc import Sequence
 _STEPS: dict[str, Sequence[str]] = {
     "lint": ["uv", "run", "ruff", "check", "."],
     "format": ["uv", "run", "ruff", "format", "--check", "."],
-    "type": ["uv", "run", "mypy", "src/thepuroidc"],
+    "type": ["uv", "run", "mypy", "src/puridentityserver"],
     "test": ["uv", "run", "pytest"],
 }
 

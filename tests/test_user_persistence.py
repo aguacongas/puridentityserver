@@ -7,11 +7,11 @@ from typing import TypeVar
 
 import pytest
 
-from thepuroidc.domain.userinfo import UserClaims
-from thepuroidc.infrastructure.persistence.factory import build_user_repository
-from thepuroidc.infrastructure.persistence.users_memory import InMemoryUserRepository
-from thepuroidc.infrastructure.persistence.users_sql import SQLUserRepository
-from thepuroidc.infrastructure.settings import Settings
+from puridentityserver.domain.userinfo import UserClaims
+from puridentityserver.infrastructure.persistence.factory import build_user_repository
+from puridentityserver.infrastructure.persistence.users_memory import InMemoryUserRepository
+from puridentityserver.infrastructure.persistence.users_sql import SQLUserRepository
+from puridentityserver.infrastructure.settings import Settings
 
 _T = TypeVar("_T")
 
@@ -160,11 +160,11 @@ class TestFactory:
 
 
 class TestSettingsProfiles:
-    """Couvre le chargement de ``THEPUROIDC_USERS_SEED`` (seed du user store)."""
+    """Couvre le chargement de ``PURIDENTITYSERVER_USERS_SEED`` (seed du user store)."""
 
     def test_reads_profiles_from_config_toml(self, monkeypatch: pytest.MonkeyPatch) -> None:
         config = Path(__file__).resolve().parents[1] / "config.toml"
-        monkeypatch.setenv("THEPUROIDC_SETTINGS_FILE", str(config))
+        monkeypatch.setenv("PURIDENTITYSERVER_SETTINGS_FILE", str(config))
         settings = Settings(_env_file=None)
 
         assert settings.users_seed["alice"]["email"] == "alice.martin@example.com"
@@ -176,7 +176,7 @@ class TestSettingsProfiles:
 
     def test_reads_json_from_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(
-            "THEPUROIDC_USERS_SEED",
+            "PURIDENTITYSERVER_USERS_SEED",
             '{"alice": {"name": "Alice", "roles": ["admin"]}}',
         )
         settings = Settings(_env_file=None)
@@ -186,7 +186,7 @@ class TestSettingsProfiles:
     def test_defaults_to_empty_dict(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config = tmp_path / "config.toml"
         config.write_text("[settings]\nissuer = 'http://127.0.0.1:8000'\n", encoding="utf-8")
-        monkeypatch.setenv("THEPUROIDC_SETTINGS_FILE", str(config))
+        monkeypatch.setenv("PURIDENTITYSERVER_SETTINGS_FILE", str(config))
 
         settings = Settings(_env_file=None)
 
@@ -194,7 +194,7 @@ class TestSettingsProfiles:
 
     def test_reads_identity_seed_from_config_toml(self, monkeypatch: pytest.MonkeyPatch) -> None:
         config = Path(__file__).resolve().parents[1] / "config.toml"
-        monkeypatch.setenv("THEPUROIDC_SETTINGS_FILE", str(config))
+        monkeypatch.setenv("PURIDENTITYSERVER_SETTINGS_FILE", str(config))
         settings = Settings(_env_file=None)
 
         assert settings.identity_seed_users["alice"]["email"] == "alice@example.com"
@@ -208,7 +208,7 @@ class TestSettingsProfiles:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv(
-            "THEPUROIDC_IDENTITY_SEED_USERS",
+            "PURIDENTITYSERVER_IDENTITY_SEED_USERS",
             '{"alice": {"email": "a@example.com", "password": "p"}}',
         )
         settings = Settings(_env_file=None)
@@ -220,7 +220,7 @@ class TestSettingsProfiles:
     def test_overrides_identity_settings_via_environment(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("THEPUROIDC_IDENTITY_JWT_LIFETIME_SECONDS", "7200")
+        monkeypatch.setenv("PURIDENTITYSERVER_IDENTITY_JWT_LIFETIME_SECONDS", "7200")
         settings = Settings(_env_file=None)
 
         assert settings.identity_jwt_lifetime_seconds == 7200
@@ -230,14 +230,14 @@ class TestSettingsProfiles:
     ) -> None:
         config = tmp_path / "config.toml"
         config.write_text("[settings]\nissuer = 'http://127.0.0.1:8000'\n", encoding="utf-8")
-        monkeypatch.setenv("THEPUROIDC_SETTINGS_FILE", str(config))
+        monkeypatch.setenv("PURIDENTITYSERVER_SETTINGS_FILE", str(config))
 
         settings = Settings(_env_file=None)
 
         assert settings.users_seed == {}
 
     def test_rejects_non_dict_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("THEPUROIDC_USERS_SEED", '[{"client_id": "x"}]')
+        monkeypatch.setenv("PURIDENTITYSERVER_USERS_SEED", '[{"client_id": "x"}]')
 
         with pytest.raises(ValueError, match="objet JSON"):
             Settings(_env_file=None)

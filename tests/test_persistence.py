@@ -9,14 +9,18 @@ from typing import TypeVar
 
 import pytest
 
-from thepuroidc.application.jwks import JWKSetConfig, JWKSetUseCase
-from thepuroidc.domain.jwks import JWTAlgorithm
-from thepuroidc.infrastructure.jwks import DefaultKeyManager
-from thepuroidc.infrastructure.persistence.base import async_dsn
-from thepuroidc.infrastructure.persistence.factory import build_key_pair_repository
-from thepuroidc.infrastructure.persistence.memory import InMemoryKeyPairRepository
-from thepuroidc.infrastructure.persistence.sql import KeyPairRow, SQLKeyPairRepository, _from_row
-from thepuroidc.infrastructure.settings import Settings
+from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
+from puridentityserver.domain.jwks import JWTAlgorithm
+from puridentityserver.infrastructure.jwks import DefaultKeyManager
+from puridentityserver.infrastructure.persistence.base import async_dsn
+from puridentityserver.infrastructure.persistence.factory import build_key_pair_repository
+from puridentityserver.infrastructure.persistence.memory import InMemoryKeyPairRepository
+from puridentityserver.infrastructure.persistence.sql import (
+    KeyPairRow,
+    SQLKeyPairRepository,
+    _from_row,
+)
+from puridentityserver.infrastructure.settings import Settings
 
 _KEY_SIZE = 2048
 

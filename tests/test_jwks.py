@@ -11,14 +11,14 @@ from typing import TypeVar
 import pytest
 from fastapi.testclient import TestClient
 
-from thepuroidc.application.jwks import JWKSetConfig, JWKSetUseCase
-from thepuroidc.domain.authorization import ClientType
-from thepuroidc.domain.jwks import JWTAlgorithm, KeyPair
-from thepuroidc.infrastructure.jwks import DefaultKeyManager
-from thepuroidc.infrastructure.persistence.memory import InMemoryKeyPairRepository
-from thepuroidc.infrastructure.settings import Settings
-from thepuroidc.interfaces.schemas.jwks import JWKKeyResponse
-from thepuroidc.server import create_app
+from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
+from puridentityserver.domain.authorization import ClientType
+from puridentityserver.domain.jwks import JWTAlgorithm, KeyPair
+from puridentityserver.infrastructure.jwks import DefaultKeyManager
+from puridentityserver.infrastructure.persistence.memory import InMemoryKeyPairRepository
+from puridentityserver.infrastructure.settings import Settings
+from puridentityserver.interfaces.schemas.jwks import JWKKeyResponse
+from puridentityserver.server import create_app
 
 _ISSUER = "https://id.example"
 _KEY_SIZE = 2048
@@ -72,7 +72,7 @@ def test_settings_default_to_all_supported_algorithms() -> None:
 
 
 def test_settings_read_algorithm_list_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("THEPUROIDC_JWKS_ALGORITHMS", "RS256,ES256")
+    monkeypatch.setenv("PURIDENTITYSERVER_JWKS_ALGORITHMS", "RS256,ES256")
     settings = Settings(_env_file=None)
 
     assert settings.jwks_algorithms == ("RS256", "ES256")
@@ -195,7 +195,7 @@ def test_settings_client_seed_reads_json_from_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(
-        "THEPUROIDC_CLIENTS_SEED",
+        "PURIDENTITYSERVER_CLIENTS_SEED",
         '[{"client_id": "env-app", "redirect_uris": ["https://e.example/cb"]}]',
     )
     settings = Settings(_env_file=None)
@@ -207,7 +207,7 @@ def test_settings_client_seed_reads_defaults_from_config_toml(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = Path(__file__).resolve().parents[1] / "config.toml"
-    monkeypatch.setenv("THEPUROIDC_SETTINGS_FILE", str(config))
+    monkeypatch.setenv("PURIDENTITYSERVER_SETTINGS_FILE", str(config))
     settings = Settings(_env_file=None)
 
     client = settings.seed_clients[0]
@@ -240,7 +240,7 @@ def test_settings_client_seed_parses_lifetime_fields() -> None:
 
 
 def test_settings_client_seed_rejects_non_list_json(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("THEPUROIDC_CLIENTS_SEED", '{"client_id": "env-app"}')
+    monkeypatch.setenv("PURIDENTITYSERVER_CLIENTS_SEED", '{"client_id": "env-app"}')
     with pytest.raises(ValueError, match="doit être une liste JSON"):
         Settings(_env_file=None)
 

@@ -1,6 +1,6 @@
 """Smoke test du flow Authorization Code + PKCE (sample `pkce-client`).
 
-Lance le serveur thepuroidc et le client de démonstration en sous-processus,
+Lance le serveur puridentityserver et le client de démonstration en sous-processus,
 exécute le flux complet et vérifie chaque étape :
 
 1. la page d'accueil du client répond ;
@@ -159,13 +159,13 @@ def main() -> None:
     started_at = time.monotonic()
     env = os.environ.copy()
     try:
-        print("Démarrage du serveur thepuroidc...")
+        print("Démarrage du serveur puridentityserver...")
         _server_proc = subprocess.Popen(
             [
                 sys.executable,
                 "-m",
                 "uvicorn",
-                "thepuroidc.server:app",
+                "puridentityserver.server:app",
                 "--host",
                 HOST,
                 "--port",

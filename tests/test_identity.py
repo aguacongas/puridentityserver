@@ -35,9 +35,9 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import StaticPool
 
-from thepuroidc.identity.config import UserManager, apply_schema, seed_users
-from thepuroidc.infrastructure.settings import Settings
-from thepuroidc.server import create_app
+from puridentityserver.identity.config import UserManager, apply_schema, seed_users
+from puridentityserver.infrastructure.settings import Settings
+from puridentityserver.server import create_app
 
 _ISSUER = "https://id.example"
 
@@ -79,7 +79,7 @@ def _redirect_query(redirect_url: str) -> dict[str, list[str]]:
 
 def _post_login_endpoint() -> Callable[..., Any]:
     """Retourne la fonction de route ``POST /login`` du routeur identity."""
-    from thepuroidc.identity.config import login_router
+    from puridentityserver.identity.config import login_router
 
     router = login_router()
     for route in router.routes:
@@ -96,7 +96,7 @@ def _inject_test_db(
     Le ``monkeypatch`` restaure automatiquement les valeurs originales à
     la fin du test, laissant les tests ``TestClient`` intacts.
     """
-    from thepuroidc.identity import config as mod
+    from puridentityserver.identity import config as mod
 
     engine = create_async_engine(
         "sqlite+aiosqlite://",
@@ -111,10 +111,10 @@ def _inject_test_db(
 
 def _ensure_identity_configured() -> None:
     """Configure l'identité (signataires session/reset/verify) pour les tests directs."""
-    from thepuroidc.domain.jwks import KeyUse
-    from thepuroidc.identity import config as mod
-    from thepuroidc.infrastructure.jwks import DefaultKeyManager
-    from thepuroidc.infrastructure.persistence.memory import InMemoryKeyPairRepository
+    from puridentityserver.domain.jwks import KeyUse
+    from puridentityserver.identity import config as mod
+    from puridentityserver.infrastructure.jwks import DefaultKeyManager
+    from puridentityserver.infrastructure.persistence.memory import InMemoryKeyPairRepository
 
     mod.configure_identity(
         session_key_manager=DefaultKeyManager(InMemoryKeyPairRepository(), use=KeyUse.SESSION),
@@ -136,8 +136,8 @@ async def test_apply_schema_raises_when_engine_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """apply_schema() lève RuntimeError si _engine reste None après init."""
-    from thepuroidc.identity import config as mod
-    from thepuroidc.identity.config import init_users_db
+    from puridentityserver.identity import config as mod
+    from puridentityserver.identity.config import init_users_db
 
     monkeypatch.setattr(mod, "_session_factory", None)
     monkeypatch.setattr(mod, "_engine", None)
@@ -151,7 +151,7 @@ def test_get_session_factory_raises_before_init(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Appel à _get_session_factory() avant init_users_db() → RuntimeError."""
-    from thepuroidc.identity import config as mod
+    from puridentityserver.identity import config as mod
 
     monkeypatch.setattr(mod, "_session_factory", None)
     with pytest.raises(RuntimeError, match="init_users_db"):
@@ -175,7 +175,7 @@ async def test_seed_users_insert_then_return_idempotent(
 
 def test_parse_id_converts_uuid_string() -> None:
     """parse_id() convertit le ``sub`` du JWT en ``uuid.UUID``."""
-    from thepuroidc.identity.config import UserManager
+    from puridentityserver.identity.config import UserManager
 
     manager = UserManager.__new__(UserManager)
     value = "12345678-1234-5678-1234-567812345678"
@@ -184,10 +184,10 @@ def test_parse_id_converts_uuid_string() -> None:
 
 def test_configure_identity_wires_settings_values() -> None:
     """configure_identity applique les signataires (session, reset, verify)."""
-    from thepuroidc.domain.jwks import KeyUse
-    from thepuroidc.identity import config as mod
-    from thepuroidc.infrastructure.jwks import DefaultKeyManager
-    from thepuroidc.infrastructure.persistence.memory import InMemoryKeyPairRepository
+    from puridentityserver.domain.jwks import KeyUse
+    from puridentityserver.identity import config as mod
+    from puridentityserver.infrastructure.jwks import DefaultKeyManager
+    from puridentityserver.infrastructure.persistence.memory import InMemoryKeyPairRepository
 
     session_manager = DefaultKeyManager(InMemoryKeyPairRepository(), use=KeyUse.SESSION)
     reset_manager = DefaultKeyManager(InMemoryKeyPairRepository(), use=KeyUse.RESET)
@@ -274,7 +274,7 @@ async def test_post_login_tolerates_empty_cookie_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """POST /login tolère une réponse backend sans cookie."""
-    from thepuroidc.identity import config as mod
+    from puridentityserver.identity import config as mod
 
     _ensure_identity_configured()
     _inject_test_db(monkeypatch)
@@ -306,7 +306,7 @@ async def test_post_login_applies_client_session_lifetime(
     """POST /login applique la durée du client du flow (cookie Max-Age + exp JWT)."""
     import re as re_mod
 
-    from thepuroidc.identity.config import login_router
+    from puridentityserver.identity.config import login_router
 
     _ensure_identity_configured()
     _inject_test_db(monkeypatch)
@@ -343,7 +343,7 @@ async def test_get_login_page_injects_hidden_client_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """GET /login pré-remplit le champ caché ``client_id`` depuis l'URL de retour."""
-    from thepuroidc.identity.config import login_router
+    from puridentityserver.identity.config import login_router
 
     _inject_test_db(monkeypatch)
     await apply_schema()
@@ -388,8 +388,8 @@ async def test_request_verify_and_verify_roundtrip(
     from fastapi_users import exceptions
     from fastapi_users.db import SQLAlchemyUserDatabase
 
-    from thepuroidc.identity import config as mod
-    from thepuroidc.identity.user import User
+    from puridentityserver.identity import config as mod
+    from puridentityserver.identity.user import User
 
     _ensure_identity_configured()
     _inject_test_db(monkeypatch)
@@ -427,8 +427,8 @@ async def test_forgot_and_reset_password_roundtrip(
     from fastapi_users import exceptions
     from fastapi_users.db import SQLAlchemyUserDatabase
 
-    from thepuroidc.identity import config as mod
-    from thepuroidc.identity.user import User
+    from puridentityserver.identity import config as mod
+    from puridentityserver.identity.user import User
 
     _ensure_identity_configured()
     _inject_test_db(monkeypatch)
@@ -468,7 +468,7 @@ async def test_get_login_page_escapes_next_url(
     """GET /login rend le formulaire HTML avec ``next`` échappé (XSS safe)."""
     _inject_test_db(monkeypatch)
     await apply_schema()
-    from thepuroidc.identity.config import login_router
+    from puridentityserver.identity.config import login_router
 
     router = login_router()
     for route in router.routes:
@@ -479,7 +479,7 @@ async def test_get_login_page_escapes_next_url(
         raise AssertionError("GET /login introuvable")
 
     assert isinstance(page, str)  # le endpoint renvoie le HTML brut (enveloppé par HTMLResponse)
-    assert "Connexion à ThePurOidc" in page
+    assert "Connexion à PurIdentityServer" in page
     assert 'name="username"' in page
     assert 'value="&quot;&gt;&lt;script&gt;"' in page
     assert (
@@ -501,7 +501,7 @@ def test_login_page_get_renders_form() -> None:
         response = client.get("/login")
 
     assert response.status_code == 200
-    assert "Connexion à ThePurOidc" in response.text
+    assert "Connexion à PurIdentityServer" in response.text
     assert 'name="username"' in response.text
     assert 'name="password"' in response.text
     assert 'name="next"' in response.text
@@ -674,8 +674,8 @@ def test_login_cookie_signed_with_dedicated_session_key(tmp_path: Path) -> None:
     import re
     import sqlite3
 
-    from thepuroidc.domain.jwks import KeyUse
-    from thepuroidc.infrastructure.persistence.sql import SQLKeyPairRepository
+    from puridentityserver.domain.jwks import KeyUse
+    from puridentityserver.infrastructure.persistence.sql import SQLKeyPairRepository
 
     db_path = tmp_path / "keys.db"
     conn = sqlite3.connect(db_path)

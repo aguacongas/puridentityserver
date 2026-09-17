@@ -11,23 +11,23 @@ import jwt as pyjwt
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from thepuroidc.application.userinfo import (
+from puridentityserver.application.userinfo import (
     UserInfoConfig,
     UserInfoError,
     UserInfoRequest,
     UserInfoResponse,
     UserInfoUseCase,
 )
-from thepuroidc.domain.authorization import Scope
-from thepuroidc.domain.jwks import JWTAlgorithm
-from thepuroidc.domain.userinfo import UserClaims
-from thepuroidc.infrastructure.claims import UserStoreClaimsProvider
-from thepuroidc.infrastructure.jwks import DefaultKeyManager
-from thepuroidc.infrastructure.persistence.memory import InMemoryKeyPairRepository
-from thepuroidc.infrastructure.persistence.users_memory import InMemoryUserRepository
-from thepuroidc.infrastructure.settings import Settings
-from thepuroidc.infrastructure.tokens import PyJWTTokenManager
-from thepuroidc.server import create_app
+from puridentityserver.domain.authorization import Scope
+from puridentityserver.domain.jwks import JWTAlgorithm
+from puridentityserver.domain.userinfo import UserClaims
+from puridentityserver.infrastructure.claims import UserStoreClaimsProvider
+from puridentityserver.infrastructure.jwks import DefaultKeyManager
+from puridentityserver.infrastructure.persistence.memory import InMemoryKeyPairRepository
+from puridentityserver.infrastructure.persistence.users_memory import InMemoryUserRepository
+from puridentityserver.infrastructure.settings import Settings
+from puridentityserver.infrastructure.tokens import PyJWTTokenManager
+from puridentityserver.server import create_app
 
 _T = TypeVar("_T")
 
