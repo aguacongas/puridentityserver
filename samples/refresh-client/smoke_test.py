@@ -2,10 +2,10 @@
 
 Smoke test du sample ``refresh-client``.
 
-Lance un serveur PurIdentityServer en sous-processus avec la
-configuration dédiée ``samples/refresh-client/config.toml`` (port 8101,
-client public ``sample-refresh-client`` avec le scop ``offline_access``),
-puis joue le scénario :
+Lance un serveur PurIdentityServer en sous-processus avec une
+configuration **spécifique à ce test** (générée par ``smoke_common.py`` :
+port 8101, client public ``sample-refresh-client`` avec le scop
+``offline_access``), puis joue le scénario :
 
 1. le discovery annonce ``grant_types_supported`` incluant ``refresh_token`` ;
 2. ``/authorize`` émet un code d'autorisation (PKCE S256, client public) ;
@@ -29,27 +29,32 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import os
-import socket
-import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-SETTINGS_FILE = Path(__file__).resolve().with_name("config.toml")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-HOST = "127.0.0.1"
+from smoke_common import HOST, run_server, watchdog
+
 SERVER_PORT = 8101
 SERVER_URL = f"http://{HOST}:{SERVER_PORT}"
 
 CLIENT_ID = "sample-refresh-client"
 REDIRECT_URI = "http://127.0.0.1:5174/callback"
 _SCOPE = "openid profile email offline_access"
+
+_CLIENTS = (
+    {
+        "client_id": CLIENT_ID,
+        "redirect_uris": [REDIRECT_URI],
+        "scopes": _SCOPE,
+        "client_type": "public",
+    },
+)
 
 _VERIFIER = "smoke-refresh-verifier-0123456789abcdefghijklmnopqrstuvwxyz"
 _CHALLENGE = (
@@ -59,28 +64,7 @@ _CHALLENGE = (
 )
 
 _HTTP_TIMEOUT = 10
-_WAIT_PORT_TIMEOUT = 15
 _DEADLINE = 60
-
-_server_proc: subprocess.Popen[bytes] | None = None
-
-
-def _port_in_use(port: int) -> bool:
-    """Indique si un processus écoute déjà sur ``port``."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        return sock.connect_ex((HOST, port)) == 0
-
-
-def _wait_port(port: int, timeout: float = _WAIT_PORT_TIMEOUT) -> None:
-    """Attend que le port ``port`` accepte des connexions, ou expire."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection((HOST, port), timeout=0.5):
-                return
-        except OSError:
-            time.sleep(0.2)
-    raise TimeoutError(f"Port {port} non prêt après {timeout}s")
 
 
 def _authorize(http: httpx.Client) -> str:
@@ -173,65 +157,16 @@ def _run_scenario() -> None:
         assert response.json()["access_token"] != second["access_token"]
         assert response.json()["scope"] == "email openid"
         print("  [7/7] refresh avec scope restreint (openid email) OK")
-    print("\n=== SCÉNARIO OK ===")
+    print()
 
 
 def main() -> None:
-    """Lance le serveur de test, joue le scénario, puis le termine."""
-    global _server_proc
-
-    watchdog = threading.Timer(_DEADLINE, _watchdog_exit)
-    watchdog.daemon = True
-    watchdog.start()
-
-    if _port_in_use(SERVER_PORT):
-        raise SystemExit(
-            f"Port {SERVER_PORT} occupé : arrêtez le serveur sur le port {SERVER_PORT} "
-            "avant de lancer ce test."
-        )
-
+    """Lance le serveur de test (config spécifique), puis le termine."""
     started_at = time.monotonic()
-    env = os.environ.copy()
-    for key in list(env):
-        if key.startswith("PURIDENTITYSERVER_") and key != "PURIDENTITYSERVER_SETTINGS_FILE":
-            env.pop(key)
-    env["PURIDENTITYSERVER_SETTINGS_FILE"] = str(SETTINGS_FILE)
-    try:
-        print(f"Démarrage du serveur puridentityserver (config {SETTINGS_FILE.name})...")
-        _server_proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "uvicorn",
-                "puridentityserver.server:app",
-                "--host",
-                HOST,
-                "--port",
-                str(SERVER_PORT),
-                "--log-level",
-                "warning",
-            ],
-            cwd=REPO_ROOT,
-            env=env,
-        )
-        _wait_port(SERVER_PORT)
+    with watchdog(_DEADLINE), run_server(port=SERVER_PORT, clients=_CLIENTS):
         print(f"\nScénario de rotation du refresh token (deadline={_DEADLINE}s)...")
         _run_scenario()
-        print(f"\n=== SCÉNARIO OK en {time.monotonic() - started_at:.1f}s ===")
-    finally:
-        watchdog.cancel()
-        try:
-            if _server_proc is not None:
-                _server_proc.kill()
-                _server_proc.wait(timeout=2)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-
-
-def _watchdog_exit() -> None:
-    """Force une sortie en cas de blocage du scénario au-delà de `_DEADLINE`."""
-    print(f"\nÉCHEC : test bloqué au-delà de {_DEADLINE}s", file=sys.stderr)
-    os._exit(2)
+        print(f"=== SCÉNARIO OK en {time.monotonic() - started_at:.1f}s ===")
 
 
 if __name__ == "__main__":

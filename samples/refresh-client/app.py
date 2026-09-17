@@ -18,8 +18,8 @@ PurIdentityServer puis renouvelle ses jetons hors ligne :
 7. nouvel appui sur « Rafraîchir » avec un jeton déjà consommé : le
    serveur répond ``400 invalid_grant`` (un jeton n'est jamais réutilisable).
 
-Lancement à la racine du dépôt (avec le serveur dédié du sample sur le
-port 8101, voir README.md) :
+Lancement (à la racine du dépôt, serveur PurIdentityServer déjà démarré
+sur le port ``8000`` par défaut) :
 
     uv run python samples/refresh-client/app.py
 """
@@ -86,7 +86,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="OIDC_", extra="ignore")
 
-    issuer: str = "http://127.0.0.1:8101"
+    issuer: str = "http://127.0.0.1:8000"
     client_id: str = "sample-refresh-client"
     redirect_uri: str = "http://127.0.0.1:5174/callback"
     host: str = "127.0.0.1"

@@ -1,18 +1,12 @@
-# Configuration du serveur pour le test manuel du refresh token (RFC 6749 §6).
+# Réglages du client de démonstration Authorization Code + PKCE (refresh_app).
 #
-# Chargée automatiquement par `smoke_test.py` via
-# `PURIDENTITYSERVER_SETTINGS_FILE`. Port dédié (8101) pour ne pas
-# entrer en conflit avec un serveur dev (8000) ou introspect (8100).
+# Ce fichier est chargé automatiquement au démarrage de l'application
+# (``app.py``). Les variables d'environnement ``OIDC_*`` restent prioritaires.
+# Pour surcharger le fichier : ``OIDC_SETTINGS_FILE=config.local.toml``
 
 [settings]
-issuer = "http://127.0.0.1:8101"
-base_url = ""
-host = "127.0.0.1"
-port = 8101
-jwks_algorithms = ["RS256"]
-
-[[settings.clients_seed]]
+issuer = "http://127.0.0.1:8000"
 client_id = "sample-refresh-client"
-redirect_uris = ["http://127.0.0.1:5174/callback"]
-scopes = "openid profile email offline_access"
-client_type = "public"
+redirect_uri = "http://127.0.0.1:5174/callback"
+host = "127.0.0.1"
+port = 5174

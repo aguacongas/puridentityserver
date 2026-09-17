@@ -2,8 +2,9 @@
 
 Script de démonstration/test manuel des endpoints **`POST /introspect`** et
 **`POST /revoke`** de PurIdentityServer. Il lance un serveur en
-sous-processus avec une configuration dédiée (port `8100`, client
-confidentiel `sample-introspect-client`) puis joue le scénario complet.
+sous-processus avec une configuration **spécifique à ce test** (générée par
+`sample_common.py` : port `8100`, client confidentiel
+`sample-introspect-client`) puis joue le scénario complet.
 
 Le scénario vérifie :
 
@@ -32,7 +33,7 @@ uv run python samples/introspect-client/smoke_test.py
 Sortie attendue :
 
 ```text
-Démarrage du serveur puridentityserver (config config.toml)...
+Démarrage du serveur puridentityserver (config générée par le test)...
   [1/11] discovery OK ...
   [2/11] code d'autorisation émis (...)
   [3/11] échange code → access_token OK
@@ -50,17 +51,36 @@ Démarrage du serveur puridentityserver (config config.toml)...
 
 ## Configuration
 
-Le serveur de test lit [`config.toml`](config.toml) (via
-`PURIDENTITYSERVER_SETTINGS_FILE`) : port dédié `8100`, clés de signature
-limitées à `RS256` (démarrage rapide) et un client confidentiel unique :
+Le smoke test génère sa configuration (port dédié `8100`, clés de signature
+limitées à `RS256` pour un démarrage rapide, client confidentiel unique)
+via [`smoke_common.py`](../smoke_common.py). Aucun fichier de
+configuration n'est committé par sample — le client `sample-introspect-client`
+est **déjà enregistré dans la configuration par défaut du serveur**
+([`config.toml`](../../config.toml) à la racine).
 
-| Clé                    | Valeur                                |
-| ---------------------- | ------------------------------------- |
-| `issuer`               | `http://127.0.0.1:8100`               |
-| `client_id`            | `sample-introspect-client`            |
-| `client_secret`        | `introspect-demo-secret`              |
-| `scope`                | `openid profile`                      |
+| Clé             | Valeur                                 |
+| --------------- | -------------------------------------- |
+| `client_id`     | `sample-introspect-client`             |
+| `client_secret` | `introspect-demo-secret`               |
+| `client_type`   | `confidential`                         |
+| `scope`         | `openid profile`                       |
 
-Pour tester manuellement sur un serveur déjà lancé sur le port `8000`,
-remplacez `SERVER_URL` (et déclarez le client seed confidentiel
-`sample-introspect-client` dans la configuration du serveur).
+Pour tester manuellement sur le serveur par défaut (port `8000`) :
+
+```bash
+# terminal 1 — serveur de développement, tous les clients des samples enregistrés
+uv run python -m puridentityserver
+
+# terminal 2 — appels d'introspection / révocation (exemples)
+curl -s -d "token=<ACCESS_TOKEN>" \
+  -d "client_id=sample-introspect-client" \
+  -d "client_secret=introspect-demo-secret" \
+  http://127.0.0.1:8000/introspect
+curl -s -d "token=<ACCESS_TOKEN>" \
+  -d "client_id=sample-introspect-client" \
+  -d "client_secret=introspect-demo-secret" \
+  http://127.0.0.1:8000/revoke
+```
+
+(`<ACCESS_TOKEN>` : un jeton émis sur le port `8000`, par exemple via le flow
+du sample `pkce-client`.)

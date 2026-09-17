@@ -160,3 +160,30 @@ client_id = "sample-pkce-client"
 redirect_uris = ["http://127.0.0.1:5173/callback"]
 scopes = "openid profile email"
 client_type = "public"
+
+# clients des samples (démo / tests manuels) :
+# - sample-refresh-client : échange code + rotation du refresh token (RFC 6749 §6)
+# - sample-cc-client      : grant client_credentials, machine à machine (RFC 6749 §4.4)
+# - sample-introspect-client : introspection / révocation (RFC 7662 / 7009)
+# → les smokes tests de ces samples PASSERT une configuration spécifique (port
+#   dédié + ce client) via un fichier temporaire ; ici ils sont aussi enregistrés
+#   pour pouvoir lancer le serveur par défaut et tester manuellement les samples.
+
+[[settings.clients_seed]]
+client_id = "sample-refresh-client"
+redirect_uris = ["http://127.0.0.1:5174/callback"]
+scopes = "openid profile email offline_access"
+client_type = "public"
+
+[[settings.clients_seed]]
+client_id = "sample-cc-client"
+scopes = "openid profile"
+client_type = "confidential"
+client_secret = "cc-demo-secret"
+
+[[settings.clients_seed]]
+client_id = "sample-introspect-client"
+redirect_uris = ["http://127.0.0.1:8000/callback"]
+scopes = "openid profile"
+client_type = "confidential"
+client_secret = "introspect-demo-secret"

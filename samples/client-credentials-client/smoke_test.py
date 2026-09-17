@@ -2,9 +2,9 @@
 
 Smoke test du sample ``client-credentials-client``.
 
-Lance un serveur PurIdentityServer en sous-processus avec la
-configuration dédiée ``samples/client-credentials-client/config.toml``
-(port 8102, client confidentiel ``sample-cc-client``, scopes
+Lance un serveur PurIdentityServer en sous-processus avec une
+configuration **spécifique à ce test** (générée par ``smoke_common.py`` :
+port 8102, client confidentiel ``sample-cc-client``, scopes
 ``openid profile``), puis joue le scénario :
 
 1. le discovery annonce ``grant_types_supported`` incluant ``client_credentials`` ;
@@ -26,20 +26,16 @@ Usage (depuis n'importe où dans le dépôt) :
 
 from __future__ import annotations
 
-import os
-import socket
-import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 
 import httpx
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-SETTINGS_FILE = Path(__file__).resolve().with_name("config.toml")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-HOST = "127.0.0.1"
+from smoke_common import HOST, run_server, watchdog
+
 SERVER_PORT = 8102
 SERVER_URL = f"http://{HOST}:{SERVER_PORT}"
 
@@ -47,29 +43,17 @@ CLIENT_ID = "sample-cc-client"
 CLIENT_SECRET = "cc-demo-secret"
 _SCOPE = "openid profile"
 
+_CLIENTS = (
+    {
+        "client_id": CLIENT_ID,
+        "scopes": _SCOPE,
+        "client_type": "confidential",
+        "client_secret": CLIENT_SECRET,
+    },
+)
+
 _HTTP_TIMEOUT = 10
-_WAIT_PORT_TIMEOUT = 15
 _DEADLINE = 60
-
-_server_proc: subprocess.Popen[bytes] | None = None
-
-
-def _port_in_use(port: int) -> bool:
-    """Indique si un processus écoute déjà sur ``port``."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        return sock.connect_ex((HOST, port)) == 0
-
-
-def _wait_port(port: int, timeout: float = _WAIT_PORT_TIMEOUT) -> None:
-    """Attend que le port ``port`` accepte des connexions, ou expire."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection((HOST, port), timeout=0.5):
-                return
-        except OSError:
-            time.sleep(0.2)
-    raise TimeoutError(f"Port {port} non prêt après {timeout}s")
 
 
 def _token(
@@ -105,7 +89,7 @@ def _run_scenario() -> None:
         assert first["scope"] == "openid profile"
         assert "id_token" not in first
         print(
-            "  [2/7] client_credentials -> access_token seul "
+            f"  [2/7] client_credentials -> access_token seul "
             f"(scope={first['scope']}, expires_in={first['expires_in']}) OK"
         )
 
@@ -137,61 +121,12 @@ def _run_scenario() -> None:
 
 
 def main() -> None:
-    """Lance le serveur de test, joue le scénario, puis le termine."""
-    global _server_proc
-
-    watchdog = threading.Timer(_DEADLINE, _watchdog_exit)
-    watchdog.daemon = True
-    watchdog.start()
-
-    if _port_in_use(SERVER_PORT):
-        raise SystemExit(
-            f"Port {SERVER_PORT} occupé : arrêtez le serveur sur le port {SERVER_PORT} "
-            "avant de lancer ce test."
-        )
-
+    """Lance le serveur de test (config spécifique), puis le termine."""
     started_at = time.monotonic()
-    env = os.environ.copy()
-    for key in list(env):
-        if key.startswith("PURIDENTITYSERVER_") and key != "PURIDENTITYSERVER_SETTINGS_FILE":
-            env.pop(key)
-    env["PURIDENTITYSERVER_SETTINGS_FILE"] = str(SETTINGS_FILE)
-    try:
-        print(f"Démarrage du serveur puridentityserver (config {SETTINGS_FILE.name})...")
-        _server_proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "uvicorn",
-                "puridentityserver.server:app",
-                "--host",
-                HOST,
-                "--port",
-                str(SERVER_PORT),
-                "--log-level",
-                "warning",
-            ],
-            cwd=REPO_ROOT,
-            env=env,
-        )
-        _wait_port(SERVER_PORT)
+    with watchdog(_DEADLINE), run_server(port=SERVER_PORT, clients=_CLIENTS):
         print(f"\nScénario client_credentials (deadline={_DEADLINE}s)...")
         _run_scenario()
-        print(f"\n=== SCÉNARIO OK en {time.monotonic() - started_at:.1f}s ===")
-    finally:
-        watchdog.cancel()
-        try:
-            if _server_proc is not None:
-                _server_proc.kill()
-                _server_proc.wait(timeout=2)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-
-
-def _watchdog_exit() -> None:
-    """Force une sortie en cas de blocage du scénario au-delà de `_DEADLINE`."""
-    print(f"\nÉCHEC : test bloqué au-delà de {_DEADLINE}s", file=sys.stderr)
-    os._exit(2)
+        print(f"=== SCÉNARIO OK en {time.monotonic() - started_at:.1f}s ===")
 
 
 if __name__ == "__main__":

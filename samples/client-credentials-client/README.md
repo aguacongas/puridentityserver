@@ -2,8 +2,9 @@
 
 Script de démonstration/test manuel du **grant type `client_credentials`**
 de PurIdentityServer. Il lance un serveur en sous-processus avec une
-configuration dédiée (port `8102`, client confidentiel `sample-cc-client`,
-scopes `openid profile`) puis joue le scénario complet.
+configuration **spécifique à ce test** (générée par `smoke_common.py` :
+port `8102`, client confidentiel `sample-cc-client`, scopes
+`openid profile`) puis joue le scénario complet.
 
 Ce flow est purement *machine à machine* : le client s'authentifie avec
 son `client_secret`, le `sub` de l'access token est le `client_id`
@@ -29,7 +30,7 @@ uv run python samples/client-credentials-client/smoke_test.py
 Sortie attendue :
 
 ```text
-Démarrage du serveur puridentityserver (config config.toml)...
+Démarrage du serveur puridentityserver (config générée par le test)...
   [1/7] discovery OK ...
   [2/7] client_credentials -> access_token seul ...
   [3/7] scope restreint (openid) OK
@@ -44,9 +45,8 @@ Démarrage du serveur puridentityserver (config config.toml)...
 ## Client de démonstration
 
 ```bash
-# terminal 1 — serveur PurIdentityServer (config du sample)
-PURIDENTITYSERVER_SETTINGS_FILE=samples/client-credentials-client/config.toml \
-  uv run python -m uvicorn puridentityserver.server:app --port 8102
+# terminal 1 — serveur PurIdentityServer (port par défaut 8000)
+uv run python -m puridentityserver
 
 # terminal 2 — requête machine à machine
 uv run python samples/client-credentials-client/client.py
@@ -58,20 +58,20 @@ affiche ses claims (décodés, non vérifiés — simple démonstration) :
 
 ## Configuration
 
-Le serveur de test lit [`config.toml`](config.toml) (via
-`PURIDENTITYSERVER_SETTINGS_FILE`) : port dédié `8102`, clés de signature
-limitées à `RS256` (démarrage rapide) et un client confidentiel unique.
-`redirect_uris` est omis : un client machine n'a pas d'URI de
-redirection.
+Le smoke test génère sa configuration (port dédié `8102`, clés de signature
+limitées à `RS256` pour un démarrage rapide, client confidentiel unique)
+via [`smoke_common.py`](../smoke_common.py). Aucun fichier de configuration
+n'est committé par sample — le client `sample-cc-client` est **déjà
+enregistré dans la configuration par défaut du serveur**
+([`config.toml`](../../config.toml) à la racine).
 
 | Clé           | Valeur                                   |
 | ------------- | ---------------------------------------- |
-| `issuer`      | `http://127.0.0.1:8102`                  |
 | `client_id`   | `sample-cc-client`                       |
 | `client_secret` | `cc-demo-secret`                       |
 | `client_type` | `confidential` (obligatoire)             |
 | `scope`       | `openid profile`                         |
 
-Pour tester manuellement sur un serveur déjà lancé sur le port `8000`,
-remplacez `CC_ISSUER` (et déclarez le client confidentiel
-`sample-cc-client` dans la configuration du serveur).
+`client.py` cible par défaut `http://127.0.0.1:8000` ; pour tester contre un
+autre serveur, surchargez `CC_ISSUER` (et `CC_CLIENT_ID`/
+`CC_CLIENT_SECRET`/`CC_SCOPE` si besoin).

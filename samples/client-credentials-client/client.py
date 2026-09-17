@@ -5,8 +5,8 @@ son ``client_secret`` au endpoint ``/token`` et reçoit un access token
 émis **en son nom propre** (le ``sub`` du jeton est le ``client_id`` :
 pas d'utilisateur final, donc aucun ``id_token``).
 
-Usage (depuis la racine du dépôt, avec le serveur dédié sur le port
-8102 — voir README.md) :
+Usage (depuis la racine du dépôt, serveur PurIdentityServer déjà démarré
+sur le port ``8000`` par défaut — voir README.md) :
 
     uv run python samples/client-credentials-client/client.py
 """
@@ -23,7 +23,7 @@ import jwt as pyjwt
 
 _HTTP_TIMEOUT = 10
 
-_ISSUER = os.environ.get("CC_ISSUER", "http://127.0.0.1:8102")
+_ISSUER = os.environ.get("CC_ISSUER", "http://127.0.0.1:8000")
 _CLIENT_ID = os.environ.get("CC_CLIENT_ID", "sample-cc-client")
 _CLIENT_SECRET = os.environ.get("CC_CLIENT_SECRET", "cc-demo-secret")
 _SCOPE = os.environ.get("CC_SCOPE", "openid profile")

@@ -2,8 +2,9 @@
 
 Script de démonstration/test manuel du **grant type `refresh_token`** de
 PurIdentityServer. Il lance un serveur en sous-processus avec une
-configuration dédiée (port `8101`, client public `sample-refresh-client`
-avec le scop `offline_access`) puis joue le scénario complet.
+configuration **spécifique à ce test** (générée par `smoke_common.py` :
+port `8101`, client public `sample-refresh-client` avec le scop
+`offline_access`) puis joue le scénario complet.
 
 Le scénario vérifie :
 
@@ -26,7 +27,7 @@ uv run python samples/refresh-client/smoke_test.py
 Sortie attendue :
 
 ```text
-Démarrage du serveur puridentityserver (config config.toml)...
+Démarrage du serveur puridentityserver (config générée par le test)...
   [1/7] discovery OK ...
   [2/7] code d'autorisation émis (...)
   [3/7] échange code -> access_token + refresh_token OK
@@ -41,12 +42,13 @@ Démarrage du serveur puridentityserver (config config.toml)...
 ## Test manuel avec l'application web
 
 L'application de démonstration [`app.py`](app.py) illustre le cycle
-complet dans un navigateur (serveur dédié sur le port `8101`) :
+complet dans un navigateur. Le client `sample-refresh-client` est
+**déjà enregistré dans la configuration par défaut du serveur**
+([`config.toml`](../../config.toml) à la racine) :
 
 ```bash
-# terminal 1 — serveur PurIdentityServer (config du sample)
-PURIDENTITYSERVER_SETTINGS_FILE=samples/refresh-client/config.toml \
-  uv run python -m uvicorn puridentityserver.server:app --port 8101
+# terminal 1 — serveur PurIdentityServer (port par défaut 8000)
+uv run python -m puridentityserver
 
 # terminal 2 — client de démonstration http://127.0.0.1:5174
 uv run python samples/refresh-client/app.py
@@ -59,18 +61,19 @@ troisième clic échoue avec `400 invalid_grant` (rejeu interdit).
 
 ## Configuration
 
-Le serveur de test lit [`config.toml`](config.toml) (via
-`PURIDENTITYSERVER_SETTINGS_FILE`) : port dédié `8101`, clés de signature
-limitées à `RS256` (démarrage rapide) et un client public unique :
+Le smoke test génère sa configuration (port dédié `8101`, clés de signature
+limitées à `RS256` pour un démarrage rapide, client public unique) via
+[`smoke_common.py`](../smoke_common.py). Aucun fichier
+de configuration n'est committé par sample.
 
 | Clé           | Valeur                                       |
 | ------------- | -------------------------------------------- |
-| `issuer`      | `http://127.0.0.1:8101`                      |
 | `client_id`   | `sample-refresh-client`                      |
 | `client_type` | `public` (aucun secret, PKCE obligatoire)    |
 | `scope`       | `openid profile email offline_access`        |
 | `redirect`    | `http://127.0.0.1:5174/callback`             |
 
-Pour tester manuellement sur un serveur déjà lancé sur le port `8000`,
-remplacez `SERVER_URL` (et déclarez le client public
-`sample-refresh-client` dans la configuration du serveur).
+Le fichier [`config.toml`](config.toml) du sample ne contient que les
+réglages **client** de l'application `app.py` (comme `pkce-client`) :
+issuer `http://127.0.0.1:8000`, port d'écoute `5174`. Surchargeable via
+`OIDC_SETTINGS_FILE`.
