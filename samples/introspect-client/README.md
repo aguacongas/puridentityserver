@@ -52,6 +52,7 @@ limitées à `RS256` (démarrage rapide) et un client confidentiel unique :
 | `client_secret`        | `introspect-demo-secret`              |
 | `scope`                | `openid profile`                      |
 
-Pour tester manuellement sur un serveur déjà lancé sur le port `8000`,
-remplacez `SERVER_URL` (et alignez le client seed confidentiel dans la
-configuration du serveur).
+Pour tester **manuellement contre un serveur par défaut** déjà lancé sur le port
+`8000` (issuer `http://127.0.0.1:8000`), le root `config.toml` seed le même client
+confidentiel `sample-introspect-client` (`introspect-demo-secret`) : il suffit de
+pointer `SERVER_URL` de `smoke_test.py` vers `http://127.0.0.1:8000`.
