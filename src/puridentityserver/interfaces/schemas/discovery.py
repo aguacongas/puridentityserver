@@ -19,6 +19,7 @@ class DiscoveryDocument(BaseModel):
     revocation_endpoint: str | None = None
     end_session_endpoint: str | None = None
     registration_endpoint: str | None = None
+    device_authorization_endpoint: str | None = None
     scopes_supported: list[str] = Field(
         default_factory=lambda: [
             "openid",
@@ -32,7 +33,12 @@ class DiscoveryDocument(BaseModel):
     response_types_supported: list[str] = Field(default_factory=lambda: ["code"])
     response_modes_supported: list[str] = Field(default_factory=lambda: ["query", "fragment"])
     grant_types_supported: list[str] = Field(
-        default_factory=lambda: ["authorization_code", "refresh_token", "client_credentials"]
+        default_factory=lambda: [
+            "authorization_code",
+            "refresh_token",
+            "client_credentials",
+            "urn:ietf:params:oauth:grant-type:device_code",
+        ]
     )
     subject_types_supported: list[str] = Field(default_factory=lambda: ["public"])
     id_token_signing_alg_values_supported: list[str] = Field(

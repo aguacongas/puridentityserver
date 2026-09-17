@@ -1,6 +1,6 @@
-"""Cas d'utilisation : endpoint de jetons (RFC 6749, RFC 7636, RFC 6749 §6).
+"""Cas d'utilisation : endpoint de jetons (RFC 6749, RFC 7636, RFC 8628).
 
-Traite trois grant types :
+Traite quatre grant types :
 
 - ``authorization_code`` (RFC 6749 §4.1.3 + RFC 7636) : échange le code
   d'autorisation reçu sur ``/authorize`` ; le client confidentiel doit
@@ -13,21 +13,31 @@ Traite trois grant types :
 - ``client_credentials`` (RFC 6749 §4.4) : le client lui-même devient le
   ``subject`` du jeton (pas d'utilisateur final). Réservé aux clients
   confidentiels ; aucun ``id_token`` ni ``refresh_token`` n'est émis.
+- ``urn:ietf:params:oauth:grant-type:device_code`` (RFC 8628 §3.4) :
+  poll du client après autorisation de l'appareil. Tant que l'utilisateur
+  n'a pas validé, la réponse est ``authorization_pending`` (ou
+  ``slow_down`` si le client pole trop vite) ; une fois approuvée, la
+  session est consommée et l'access token (id/refresh selon les scopes)
+  est émis pour le ``subject`` de l'utilisateur.
 """
 
 from __future__ import annotations
 
 import base64
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
 
-from puridentityserver.application.client_auth import verify_client_secret
+from puridentityserver.application.client_auth import (
+    CLIENT_UNKNOWN_ERROR,
+    verify_client_secret,
+)
 from puridentityserver.domain.authorization import (
     AuthorizationCode,
     Client,
     ClientType,
+    DeviceAuthorizationStatus,
     RefreshToken,
     Scope,
     resolve_lifetime_seconds,
@@ -39,11 +49,12 @@ from puridentityserver.interfaces.repositories.authorization_code_repository imp
     AuthorizationCodeRepository,
 )
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
+from puridentityserver.interfaces.repositories.device_authorization_repository import (
+    DeviceAuthorizationRepository,
+)
 from puridentityserver.interfaces.repositories.refresh_token_repository import (
     RefreshTokenRepository,
 )
-
-_CLIENT_UNKNOWN_ERROR = "Client inconnu ou désactivé"
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +78,7 @@ class TokenRequest:
     client_secret: str = ""
     code_verifier: str = ""
     refresh_token: str = ""
+    device_code: str = ""
     scope: str = ""
 
 
@@ -106,6 +118,7 @@ class TokenUseCase:
         code_repository: AuthorizationCodeRepository,
         token_manager: TokenManager,
         refresh_tokens: RefreshTokenRepository,
+        device_codes: DeviceAuthorizationRepository | None = None,
     ) -> None:
         """Injection de la configuration, des repositories et de l'émetteur de jetons."""
         self._config = config
@@ -113,6 +126,7 @@ class TokenUseCase:
         self._codes = code_repository
         self._token_manager = token_manager
         self._refresh_tokens = refresh_tokens
+        self._device_codes = device_codes
 
     async def execute(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Traite le grant type demandé et retourne les jetons ou une erreur."""
@@ -122,6 +136,8 @@ class TokenUseCase:
             return await self._refresh(request)
         if request.grant_type == "client_credentials":
             return await self._client_credentials(request)
+        if request.grant_type == "urn:ietf:params:oauth:grant-type:device_code":
+            return await self._device_code(request)
         return self._error("unsupported_grant_type")
 
     async def _exchange_code(self, request: TokenRequest) -> TokenResponse | TokenError:
@@ -136,7 +152,7 @@ class TokenUseCase:
 
         client = await self._clients.find_by_id(request.client_id)
         if client is None or not client.is_active:
-            return self._error("invalid_client", _CLIENT_UNKNOWN_ERROR)
+            return self._error("invalid_client", CLIENT_UNKNOWN_ERROR)
 
         if auth_code.redirect_uri != request.redirect_uri:
             return self._error("invalid_grant", "redirect_uri ne correspond pas")
@@ -168,7 +184,7 @@ class TokenUseCase:
 
         client = await self._clients.find_by_id(request.client_id)
         if client is None or not client.is_active:
-            return self._error("invalid_client", _CLIENT_UNKNOWN_ERROR)
+            return self._error("invalid_client", CLIENT_UNKNOWN_ERROR)
 
         authenticated = self._authenticate_client(client, request)
         if authenticated is not None:
@@ -208,7 +224,7 @@ class TokenUseCase:
         """
         client = await self._clients.find_by_id(request.client_id)
         if client is None or not client.is_active:
-            return self._error("invalid_client", _CLIENT_UNKNOWN_ERROR)
+            return self._error("invalid_client", CLIENT_UNKNOWN_ERROR)
         if client.client_type != ClientType.CONFIDENTIAL:
             return self._error(
                 "invalid_client", "Le grant client_credentials exige un client confidentiel"
@@ -228,6 +244,66 @@ class TokenUseCase:
             client, subject=client.client_id, scopes=scopes, now=now
         )
         return self._success("", access_token, token_ttl, scopes)
+
+    async def _device_code(  # ruff: ignore[complex-structure] — le poll gère 6 états (RFC 8628 §3.4)
+        self, request: TokenRequest
+    ) -> TokenResponse | TokenError:
+        """Poll l'état de la session appareil et émet les jetons une fois approuvée.
+
+        Tant que l'utilisateur n'a pas validé l'appareil sur la page de
+        vérification, la réponse est ``authorization_pending`` (RFC 8628
+        §3.4). Un poll plus rapide que l'``interval`` retourne
+        ``slow_down`` et augmente l'intervalle. Une fois ``APPROVED``, la
+        session est consommée et les jetons sont émis pour le ``subject``
+        de l'utilisateur ; ``DENIED`` et l'expiration produisent
+        respectivement ``access_denied`` et ``expired_token``.
+        """
+        if self._device_codes is None:
+            return self._error("unsupported_grant_type")
+        if not request.device_code:
+            return self._error("invalid_grant", "Paramètre device_code manquant")
+
+        client = await self._clients.find_by_id(request.client_id)
+        if client is None or not client.is_active:
+            return self._error("invalid_client", CLIENT_UNKNOWN_ERROR)
+
+        authenticated = self._authenticate_client(client, request)
+        if authenticated is not None:
+            return authenticated
+
+        stored = await self._device_codes.find_by_device_code_hash(token_hash(request.device_code))
+        if stored is None or stored.client_id != request.client_id:
+            return self._error("invalid_grant", "Device code invalide ou d'un autre client")
+        if stored.expires_at < datetime.now(timezone.utc):
+            await self._device_codes.delete(stored.device_code_hash)
+            return self._error("expired_token", "Device code expiré")
+
+        if stored.status == DeviceAuthorizationStatus.DENIED:
+            return self._error("access_denied", "Appareil refusé par l'utilisateur")
+
+        now = datetime.now(timezone.utc)
+        if stored.status == DeviceAuthorizationStatus.APPROVED:
+            await self._device_codes.delete(stored.device_code_hash)
+            refresh_token = ""
+            if Scope.OFFLINE_ACCESS in stored.scopes:
+                refresh_token = await self._issue_refresh_token(
+                    client, stored.subject, stored.scopes, now
+                )
+            id_token, access_token, token_ttl = await self._issue_tokens(
+                client, stored.subject, stored.scopes, nonce="", now=now
+            )
+            return self._success(id_token, access_token, token_ttl, stored.scopes, refresh_token)
+
+        if (
+            stored.last_polled_at is not None
+            and (now - stored.last_polled_at).total_seconds() < stored.interval
+        ):
+            await self._device_codes.save(
+                replace(stored, interval=stored.interval + 5, last_polled_at=now)
+            )
+            return self._error("slow_down", "Polling trop rapide : augmentez l'intervalle")
+        await self._device_codes.save(replace(stored, last_polled_at=now))
+        return self._error("authorization_pending", "En attente de l'autorisation de l'utilisateur")
 
     def _authenticate_client(self, client: Client, request: TokenRequest) -> TokenError | None:
         """Vérifie l'authentification du client ; retourne l'erreur éventuelle."""

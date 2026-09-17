@@ -57,6 +57,8 @@ def _parse_client(raw: dict[str, object]) -> Client:
             raw, "authorization_code_lifetime_seconds"
         ),
         refresh_token_lifetime_seconds=_optional_int(raw, "refresh_token_lifetime_seconds"),
+        device_code_lifetime_seconds=_optional_int(raw, "device_code_lifetime_seconds"),
+        device_code_interval_seconds=_optional_int(raw, "device_code_interval_seconds"),
     )
 
 
@@ -123,6 +125,12 @@ class Settings(BaseSettings):
     authorization_code_ttl_seconds: int = 600
     access_token_ttl_seconds: int = 3600
     refresh_token_ttl_seconds: int = 2592000
+
+    # Device Authorization Grant (RFC 8628) — durée de vie du device code
+    # (fenêtre pendant laquelle l'utilisateur peut autoriser l'appareil) et
+    # intervalle minimal conseillé entre deux polls du client sur /token.
+    device_code_ttl_seconds: int = 900
+    device_code_interval_seconds: int = 5
     clients_seed: Annotated[tuple[dict[str, object], ...], NoDecode] = ()
 
     # UserInfo (OIDC Core §5.4) — seed du user store (`sub` -> claims)

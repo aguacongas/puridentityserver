@@ -36,6 +36,8 @@ class ClientRow(PersistenceBase):
     session_lifetime_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     access_token_lifetime_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     authorization_code_lifetime_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    device_code_lifetime_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    device_code_interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class SQLClientRepository:
@@ -93,6 +95,8 @@ def _to_row(client: Client) -> ClientRow:
         session_lifetime_seconds=client.session_lifetime_seconds,
         access_token_lifetime_seconds=client.access_token_lifetime_seconds,
         authorization_code_lifetime_seconds=client.authorization_code_lifetime_seconds,
+        device_code_lifetime_seconds=client.device_code_lifetime_seconds,
+        device_code_interval_seconds=client.device_code_interval_seconds,
     )
 
 
@@ -112,4 +116,6 @@ def _from_row(row: ClientRow) -> Client:
         session_lifetime_seconds=row.session_lifetime_seconds,
         access_token_lifetime_seconds=row.access_token_lifetime_seconds,
         authorization_code_lifetime_seconds=row.authorization_code_lifetime_seconds,
+        device_code_lifetime_seconds=row.device_code_lifetime_seconds,
+        device_code_interval_seconds=row.device_code_interval_seconds,
     )

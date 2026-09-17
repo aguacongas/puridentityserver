@@ -14,6 +14,8 @@ import hmac
 from puridentityserver.domain.authorization import Client, ClientType
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 
+CLIENT_UNKNOWN_ERROR = "Client inconnu ou désactivé"
+
 
 def verify_client_secret(client: Client, secret: str) -> bool:
     """Vérifie l'empreinte SHA-256 du secret fourni (comparaison constante)."""

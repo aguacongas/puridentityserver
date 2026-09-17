@@ -28,6 +28,9 @@ from puridentityserver.infrastructure.persistence.memory.clients import InMemory
 from puridentityserver.infrastructure.persistence.memory.codes import (
     InMemoryAuthorizationCodeRepository,
 )
+from puridentityserver.infrastructure.persistence.memory.device_authorizations import (
+    InMemoryDeviceAuthorizationRepository,
+)
 from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKeyPairRepository
 from puridentityserver.infrastructure.persistence.memory.refresh_tokens import (
     InMemoryRefreshTokenRepository,
@@ -77,13 +80,14 @@ def _make_usecase(
     clients = InMemoryClientRepository()
     codes = InMemoryAuthorizationCodeRepository()
     refresh_tokens = InMemoryRefreshTokenRepository()
+    device_codes = InMemoryDeviceAuthorizationRepository()
     km = key_manager or DefaultKeyManager(InMemoryKeyPairRepository())
     token_manager = PyJWTTokenManager(km)
     resolved_client = client or _CONFIDENTIAL_CLIENT
     run(clients.save(resolved_client))
     config = TokenConfig(issuer=_ISSUER, signing_algorithm=JWTAlgorithm.RS256)
     return (
-        TokenUseCase(config, clients, codes, token_manager, refresh_tokens),
+        TokenUseCase(config, clients, codes, token_manager, refresh_tokens, device_codes),
         codes,
         refresh_tokens,
     )

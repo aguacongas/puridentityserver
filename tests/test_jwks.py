@@ -216,6 +216,7 @@ def test_settings_client_seed_reads_defaults_from_config_toml(
         "sample-refresh-client",
         "sample-cc-client",
         "sample-introspect-client",
+        "sample-device-client",
     ]
     assert client.redirect_uris == frozenset({"http://127.0.0.1:5173/callback"})
     assert client.scopes == frozenset({"openid", "profile", "email"})

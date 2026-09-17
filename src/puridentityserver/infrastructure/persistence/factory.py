@@ -2,7 +2,8 @@
 
 Le choix du backend (``memory`` ou ``sql``) est commun à l'ensemble des
 stores (clés, clients, codes, utilisateurs, jetons révoqués, refresh
-tokens) : il est dérivé de ``storage_type`` / ``storage_dsn``. Chaque
+tokens, sessions d'appareil) : il est dérivé de ``storage_type`` /
+``storage_dsn``. Chaque
 fabrique retourne le port correspondant, ce qui permet à la composition
 root d'injecter des implémentations différentes sans toucher aux
 usecases.
@@ -15,6 +16,9 @@ from puridentityserver.interfaces.repositories.authorization_code_repository imp
     AuthorizationCodeRepository,
 )
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
+from puridentityserver.interfaces.repositories.device_authorization_repository import (
+    DeviceAuthorizationRepository,
+)
 from puridentityserver.interfaces.repositories.key_pair_repository import KeyPairRepository
 from puridentityserver.interfaces.repositories.refresh_token_repository import (
     RefreshTokenRepository,
@@ -118,4 +122,21 @@ def build_refresh_token_repository(settings: Settings) -> RefreshTokenRepository
         )
 
         return SQLRefreshTokenRepository(settings.storage_dsn)
+    raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")
+
+
+def build_device_authorization_repository(settings: Settings) -> DeviceAuthorizationRepository:
+    """Retourne le repository de sessions appareil selon ``storage_type``."""
+    if settings.storage_type == "memory":
+        from puridentityserver.infrastructure.persistence.memory.device_authorizations import (
+            InMemoryDeviceAuthorizationRepository,
+        )
+
+        return InMemoryDeviceAuthorizationRepository()
+    if settings.storage_type == "sql":
+        from puridentityserver.infrastructure.persistence.sql.device_authorizations import (
+            SQLDeviceAuthorizationRepository,
+        )
+
+        return SQLDeviceAuthorizationRepository(settings.storage_dsn)
     raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")

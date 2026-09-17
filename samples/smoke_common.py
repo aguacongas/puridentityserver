@@ -24,7 +24,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -53,8 +53,13 @@ def wait_port(port: int, timeout: float = _WAIT_PORT_TIMEOUT) -> None:
     raise TimeoutError(f"Port {port} non prêt après {timeout}s")
 
 
-def render_server_config(*, port: int, clients: tuple[dict[str, object], ...]) -> str:
-    """Rend le TOML d'un serveur minimal déclarant ``clients`` sur ``port``."""
+def render_server_config(
+    *,
+    port: int,
+    clients: tuple[dict[str, object], ...],
+    users: Mapping[str, Mapping[str, str]] | None = None,
+) -> str:
+    """Rend le TOML d'un serveur minimal déclarant ``clients`` (+``users``) sur ``port``."""
     head = (
         "[settings]\n"
         f'issuer = "http://{HOST}:{port}"\n'
@@ -73,7 +78,12 @@ def render_server_config(*, port: int, clients: tuple[dict[str, object], ...]) -
             else:
                 lines.append(f"{key} = {json.dumps(value)}")
         blocks.append("\n".join(lines))
-    return head + "\n".join(blocks) + "\n"
+    for subject, credentials in (users or {}).items():
+        lines = [f"[settings.identity_seed_users.{subject}]"]
+        for key, value in credentials.items():
+            lines.append(f"{key} = {json.dumps(value)}")
+        blocks.append("\n".join(lines))
+    return head + "\n\n".join(blocks) + "\n"
 
 
 @contextmanager
@@ -94,19 +104,27 @@ def _watchdog_exit() -> None:
 
 
 @contextmanager
-def run_server(*, port: int, clients: tuple[dict[str, object], ...]) -> Iterator[str]:
+def run_server(
+    *,
+    port: int,
+    clients: tuple[dict[str, object], ...],
+    users: Mapping[str, Mapping[str, str]] | None = None,
+) -> Iterator[str]:
     """Lance un serveur dédié pour la configuration spécifique de ce test.
 
-    Génère la configuration (issuer = ``port``, clients seed ``clients``)
-    dans un fichier temporaire, démarre le serveur uvicorn sur ``port`` puis
-    fournit l'URL de base jusqu'à la sortie du bloc (sous-processus terminé).
+    Génère la configuration (issuer = ``port``, clients seed ``clients``,
+    comptes de connexion ``users``) dans un fichier temporaire, démarre le
+    serveur uvicorn sur ``port`` puis fournit l'URL de base jusqu'à la sortie
+    du bloc (sous-processus terminé).
     """
     if port_in_use(port):
         raise SystemExit(f"Port {port} occupé : arrêtez le serveur qui écoute sur {port}.")
 
     with tempfile.TemporaryDirectory() as tmp:
         settings_file = Path(tmp) / "config.toml"
-        settings_file.write_text(render_server_config(port=port, clients=clients), encoding="utf-8")
+        settings_file.write_text(
+            render_server_config(port=port, clients=clients, users=users), encoding="utf-8"
+        )
         proc: subprocess.Popen[bytes] | None = None
         try:
             print("Démarrage du serveur puridentityserver (config générée par le test)...")
