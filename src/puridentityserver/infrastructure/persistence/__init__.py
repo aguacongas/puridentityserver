@@ -1,1 +1,1 @@
-"""Stockage persistant des paires de clés (RFC 7517)."""
+"""Implémentations de persistance — backends mémoire (``memory``) et SQL (``sql``)."""

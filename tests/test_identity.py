@@ -114,7 +114,7 @@ def _ensure_identity_configured() -> None:
     from puridentityserver.domain.jwks import KeyUse
     from puridentityserver.identity import config as mod
     from puridentityserver.infrastructure.jwks import DefaultKeyManager
-    from puridentityserver.infrastructure.persistence.memory import InMemoryKeyPairRepository
+    from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKeyPairRepository
 
     mod.configure_identity(
         session_key_manager=DefaultKeyManager(InMemoryKeyPairRepository(), use=KeyUse.SESSION),
@@ -187,7 +187,7 @@ def test_configure_identity_wires_settings_values() -> None:
     from puridentityserver.domain.jwks import KeyUse
     from puridentityserver.identity import config as mod
     from puridentityserver.infrastructure.jwks import DefaultKeyManager
-    from puridentityserver.infrastructure.persistence.memory import InMemoryKeyPairRepository
+    from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKeyPairRepository
 
     session_manager = DefaultKeyManager(InMemoryKeyPairRepository(), use=KeyUse.SESSION)
     reset_manager = DefaultKeyManager(InMemoryKeyPairRepository(), use=KeyUse.RESET)
@@ -675,7 +675,7 @@ def test_login_cookie_signed_with_dedicated_session_key(tmp_path: Path) -> None:
     import sqlite3
 
     from puridentityserver.domain.jwks import KeyUse
-    from puridentityserver.infrastructure.persistence.sql import SQLKeyPairRepository
+    from puridentityserver.infrastructure.persistence.sql.keys import SQLKeyPairRepository
 
     db_path = tmp_path / "keys.db"
     conn = sqlite3.connect(db_path)

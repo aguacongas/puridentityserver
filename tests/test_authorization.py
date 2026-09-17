@@ -17,8 +17,8 @@ from puridentityserver.application.authorize import (
     AuthorizeUseCase,
 )
 from puridentityserver.domain.authorization import Client, Scope
-from puridentityserver.infrastructure.persistence.clients_memory import InMemoryClientRepository
-from puridentityserver.infrastructure.persistence.codes_memory import (
+from puridentityserver.infrastructure.persistence.memory.clients import InMemoryClientRepository
+from puridentityserver.infrastructure.persistence.memory.codes import (
     InMemoryAuthorizationCodeRepository,
 )
 from puridentityserver.infrastructure.settings import Settings

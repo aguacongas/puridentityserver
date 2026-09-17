@@ -20,7 +20,7 @@ from puridentityserver.domain.jwks import JWTAlgorithm, KeyPair, KeyUse
 from puridentityserver.identity.rotating_signer import RotatingTokenSigner
 from puridentityserver.identity.session_strategy import SessionJWTStrategy
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
-from puridentityserver.infrastructure.persistence.memory import InMemoryKeyPairRepository
+from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKeyPairRepository
 
 _USER_ID = uuid.UUID("10101010-1111-2222-3333-444455556666")
 

@@ -13,7 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 from sqlalchemy.orm import Mapped, mapped_column
 
 from puridentityserver.domain.jwks import JWTAlgorithm, KeyPair, KeyUse
-from puridentityserver.infrastructure.persistence.base import (
+
+from .base import (
     PersistenceBase,
     async_dsn,
     migrate_add_missing_columns,

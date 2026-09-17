@@ -12,10 +12,10 @@ import pytest
 from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
 from puridentityserver.domain.jwks import JWTAlgorithm
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
-from puridentityserver.infrastructure.persistence.base import async_dsn
 from puridentityserver.infrastructure.persistence.factory import build_key_pair_repository
-from puridentityserver.infrastructure.persistence.memory import InMemoryKeyPairRepository
-from puridentityserver.infrastructure.persistence.sql import (
+from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKeyPairRepository
+from puridentityserver.infrastructure.persistence.sql.base import async_dsn
+from puridentityserver.infrastructure.persistence.sql.keys import (
     KeyPairRow,
     SQLKeyPairRepository,
     _from_row,

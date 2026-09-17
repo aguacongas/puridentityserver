@@ -11,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 from sqlalchemy.orm import Mapped, mapped_column
 
 from puridentityserver.domain.userinfo import UserClaims
-from puridentityserver.infrastructure.persistence.base import PersistenceBase, async_dsn
+
+from .base import PersistenceBase, async_dsn
 
 
 class UserRow(PersistenceBase):

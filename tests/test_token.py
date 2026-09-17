@@ -12,11 +12,11 @@ from puridentityserver.application.token import TokenConfig, TokenRequest, Token
 from puridentityserver.domain.authorization import AuthorizationCode, Client, ClientType, Scope
 from puridentityserver.domain.jwks import JWTAlgorithm
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
-from puridentityserver.infrastructure.persistence.clients_memory import InMemoryClientRepository
-from puridentityserver.infrastructure.persistence.codes_memory import (
+from puridentityserver.infrastructure.persistence.memory.clients import InMemoryClientRepository
+from puridentityserver.infrastructure.persistence.memory.codes import (
     InMemoryAuthorizationCodeRepository,
 )
-from puridentityserver.infrastructure.persistence.memory import InMemoryKeyPairRepository
+from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKeyPairRepository
 from puridentityserver.infrastructure.tokens import PyJWTTokenManager
 
 _T = TypeVar("_T")
