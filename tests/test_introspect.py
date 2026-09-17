@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 from collections.abc import Awaitable
+from datetime import datetime, timedelta, timezone
 from typing import TypeVar
 
 from fastapi import FastAPI
@@ -17,9 +18,13 @@ from puridentityserver.application.introspect import (
 )
 from puridentityserver.domain.authorization import Client, ClientType, Scope
 from puridentityserver.domain.jwks import JWTAlgorithm
+from puridentityserver.domain.revocation import RevokedToken, token_hash
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
 from puridentityserver.infrastructure.persistence.memory.clients import InMemoryClientRepository
 from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKeyPairRepository
+from puridentityserver.infrastructure.persistence.memory.revoked_tokens import (
+    InMemoryRevokedTokenRepository,
+)
 from puridentityserver.infrastructure.settings import Settings
 from puridentityserver.infrastructure.tokens import PyJWTTokenManager
 from puridentityserver.server import create_app
@@ -72,7 +77,9 @@ def _make_usecase(
     km = key_manager or DefaultKeyManager(InMemoryKeyPairRepository())
     token_manager = PyJWTTokenManager(km)
     run(clients.save(client or _CONFIDENTIAL_CLIENT))
-    usecase = IntrospectUseCase(IntrospectConfig(issuer=_ISSUER), clients, token_manager)
+    usecase = IntrospectUseCase(
+        IntrospectConfig(issuer=_ISSUER), clients, token_manager, InMemoryRevokedTokenRepository()
+    )
     return usecase, token_manager
 
 
@@ -201,6 +208,22 @@ class TestIntrospectUseCase:
         token = _access_token(signer)
 
         uc, _ = _make_usecase()
+        result = _introspect(uc, token)
+
+        assert isinstance(result, IntrospectResponse)
+        assert result.active is False
+
+    def test_returns_inactive_for_revoked_token(self) -> None:
+        blacklist = InMemoryRevokedTokenRepository()
+        km = DefaultKeyManager(InMemoryKeyPairRepository())
+        tm = PyJWTTokenManager(km)
+        token = _access_token(tm)
+        expires = datetime.now(timezone.utc) + timedelta(minutes=10)
+        run(blacklist.save(RevokedToken(token_hash=token_hash(token), expires_at=expires)))
+        clients = InMemoryClientRepository()
+        run(clients.save(_CONFIDENTIAL_CLIENT))
+        uc = IntrospectUseCase(IntrospectConfig(issuer=_ISSUER), clients, tm, blacklist)
+
         result = _introspect(uc, token)
 
         assert isinstance(result, IntrospectResponse)

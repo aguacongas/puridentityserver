@@ -20,10 +20,14 @@ from puridentityserver.application.userinfo import (
 )
 from puridentityserver.domain.authorization import Scope
 from puridentityserver.domain.jwks import JWTAlgorithm
+from puridentityserver.domain.revocation import RevokedToken, token_hash
 from puridentityserver.domain.userinfo import UserClaims
 from puridentityserver.infrastructure.claims import UserStoreClaimsProvider
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
 from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKeyPairRepository
+from puridentityserver.infrastructure.persistence.memory.revoked_tokens import (
+    InMemoryRevokedTokenRepository,
+)
 from puridentityserver.infrastructure.persistence.memory.users import InMemoryUserRepository
 from puridentityserver.infrastructure.settings import Settings
 from puridentityserver.infrastructure.tokens import PyJWTTokenManager
@@ -177,11 +181,13 @@ class TestUserInfoUseCase:
         tm: PyJWTTokenManager,
         token: str,
         profiles: dict[str, dict[str, object]] | None = None,
+        blacklist: InMemoryRevokedTokenRepository | None = None,
     ) -> UserInfoResponse | UserInfoError:
         usecase = UserInfoUseCase(
             UserInfoConfig(issuer=_ISSUER),
             tm,
             self._claims_provider(profiles),
+            blacklist or InMemoryRevokedTokenRepository(),
         )
         return run(usecase.execute(UserInfoRequest(access_token=token)))
 
@@ -286,9 +292,23 @@ class TestUserInfoUseCase:
             UserInfoConfig(issuer=_ISSUER),
             _NoSubTokenManager(),  # type: ignore[arg-type]
             self._claims_provider(),
+            InMemoryRevokedTokenRepository(),
         )
         value = "useless-token"
         result = run(usecase.execute(UserInfoRequest(access_token=value)))
+
+        assert result.error == "invalid_token"
+
+    def test_returns_invalid_token_for_revoked_token(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        tm = _make_token_manager()
+        token = _access_token(tm)
+        blacklist = InMemoryRevokedTokenRepository()
+        expires = datetime.now(timezone.utc) + timedelta(minutes=10)
+        run(blacklist.save(RevokedToken(token_hash=token_hash(token), expires_at=expires)))
+
+        result = self._result(tm, token, blacklist=blacklist)
 
         assert result.error == "invalid_token"
 

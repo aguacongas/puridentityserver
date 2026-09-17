@@ -9,13 +9,15 @@ serveur (RFC 7662 §2) ; l'appelant non autorisé est rejeté (RFC 7662
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 from dataclasses import dataclass, field
 
-from puridentityserver.domain.authorization import ClientType
+from puridentityserver.application.client_auth import authenticate_confidential_client
+from puridentityserver.domain.revocation import token_hash
 from puridentityserver.interfaces.domain.tokens import TokenManager
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
+from puridentityserver.interfaces.repositories.revoked_token_repository import (
+    RevokedTokenRepository,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,11 +68,13 @@ class IntrospectUseCase:
         config: IntrospectConfig,
         client_repository: ClientRepository,
         token_manager: TokenManager,
+        revoked_token_repository: RevokedTokenRepository,
     ) -> None:
         """Injection de la configuration, du registre clients et du validateur de jetons."""
         self._config = config
         self._clients = client_repository
         self._token_manager = token_manager
+        self._blacklist = revoked_token_repository
 
     async def execute(self, request: IntrospectRequest) -> IntrospectResponse | IntrospectError:
         """Traite la requête : ``active`` (200) ou erreur d'authentification."""
@@ -81,7 +85,9 @@ class IntrospectUseCase:
                 status_code=400,
             )
 
-        if not await self._authenticate_client(request):
+        if not await authenticate_confidential_client(
+            self._clients, request.client_id, request.client_secret
+        ):
             return IntrospectError(
                 error="invalid_client",
                 error_description="Client d'introspection inconnu, désactivé ou secret invalide",
@@ -92,17 +98,9 @@ class IntrospectUseCase:
         )
         if claims is None:
             return IntrospectResponse(active=False)
+        if await self._blacklist.is_revoked(token_hash(request.token)):
+            return IntrospectResponse(active=False)
         return IntrospectResponse(active=True, claims=self._select_claims(claims))
-
-    async def _authenticate_client(self, request: IntrospectRequest) -> bool:
-        """Seuls les clients confidentiels actifs peuvent appeler ``/introspect``."""
-        client = await self._clients.find_by_id(request.client_id)
-        if client is None or not client.is_active:
-            return False
-        if client.client_type is not ClientType.CONFIDENTIAL:
-            return False
-        computed = hashlib.sha256(request.client_secret.encode("utf-8")).hexdigest()
-        return hmac.compare_digest(computed, client.client_secret_hash)
 
     @staticmethod
     def _select_claims(claims: dict[str, object]) -> dict[str, object]:

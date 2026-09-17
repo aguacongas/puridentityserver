@@ -1,7 +1,7 @@
 """Fabrique des repositories persistance — choisit l'implémentation selon la config.
 
 Le choix du backend (``memory`` ou ``sql``) est commun à l'ensemble des
-stores (clés, clients, codes, utilisateurs) : il est dérivé de
+stores (clés, clients, codes, utilisateurs, jetons révoqués) : il est dérivé de
 ``storage_type`` / ``storage_dsn``. Chaque fabrique retourne le port
 correspondant, ce qui permet à la composition root d'injecter des
 implémentations différentes sans toucher aux usecases.
@@ -15,6 +15,9 @@ from puridentityserver.interfaces.repositories.authorization_code_repository imp
 )
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 from puridentityserver.interfaces.repositories.key_pair_repository import KeyPairRepository
+from puridentityserver.interfaces.repositories.revoked_token_repository import (
+    RevokedTokenRepository,
+)
 from puridentityserver.interfaces.repositories.user_repository import UserRepository
 
 
@@ -77,4 +80,21 @@ def build_user_repository(settings: Settings) -> UserRepository:
         from puridentityserver.infrastructure.persistence.sql.users import SQLUserRepository
 
         return SQLUserRepository(settings.storage_dsn)
+    raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")
+
+
+def build_revoked_token_repository(settings: Settings) -> RevokedTokenRepository:
+    """Retourne le denylist de jetons révoqués correspondant à ``storage_type``."""
+    if settings.storage_type == "memory":
+        from puridentityserver.infrastructure.persistence.memory.revoked_tokens import (
+            InMemoryRevokedTokenRepository,
+        )
+
+        return InMemoryRevokedTokenRepository()
+    if settings.storage_type == "sql":
+        from puridentityserver.infrastructure.persistence.sql.revoked_tokens import (
+            SQLRevokedTokenRepository,
+        )
+
+        return SQLRevokedTokenRepository(settings.storage_dsn)
     raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")
