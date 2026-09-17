@@ -79,7 +79,16 @@ class DefaultKeyManager:
 
     async def generate_key_pair(self, key_size: int, algorithm: JWTAlgorithm) -> KeyPair:
         """Génère une paire de clés pour l'algorithme et la persiste."""
-        key_pair: KeyPair = replace(_generate_key_pair(key_size, algorithm), use=self._use)
+        generated = _generate_key_pair(key_size, algorithm)
+        key_pair = KeyPair(
+            algorithm=generated.algorithm,
+            use=self._use,
+            kid=generated.kid,
+            private_key_pem=generated.private_key_pem,
+            public_key_pem=generated.public_key_pem,
+            created_at=generated.created_at,
+            is_active=generated.is_active,
+        )
         await self._repository.save(key_pair)
         return key_pair
 
