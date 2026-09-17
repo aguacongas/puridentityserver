@@ -50,7 +50,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 | `/token`                            | Échange code, refresh, client_credentials | ⬜   |
 | `/userinfo`                         | Claims de l'utilisateur                   | ✅   |
 | `/introspect`                       | Introspection de token (RFC 7662)         | ✅   |
-| `/revoke`                           | Révocation de token (RFC 7009)            | ⬜   |
+| `/revoke`                           | Révocation de token (RFC 7009)            | ✅   |
 | `/registration`                     | Client registration dynamique (option)    | ⬜   |
 | `/end_session`                      | RP-Initiated Logout                       | ⬜   |
 

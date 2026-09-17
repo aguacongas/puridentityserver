@@ -10,8 +10,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from puridentityserver.domain.authorization import Scope
+from puridentityserver.domain.revocation import token_hash
 from puridentityserver.interfaces.domain.tokens import TokenManager
 from puridentityserver.interfaces.domain.userinfo import ClaimsProvider
+from puridentityserver.interfaces.repositories.revoked_token_repository import (
+    RevokedTokenRepository,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,11 +61,13 @@ class UserInfoUseCase:
         config: UserInfoConfig,
         token_manager: TokenManager,
         claims_provider: ClaimsProvider,
+        revoked_token_repository: RevokedTokenRepository,
     ) -> None:
-        """Injection de la configuration, du validateur de jetons et du fournisseur de claims."""
+        """Injection de la configuration, du validateur, du fournisseur et du denylist."""
         self._config = config
         self._token_manager = token_manager
         self._claims_provider = claims_provider
+        self._blacklist = revoked_token_repository
 
     async def execute(self, request: UserInfoRequest) -> UserInfoResponse | UserInfoError:
         """Traite la requête et retourne les claims filtrés ou une erreur."""
@@ -73,6 +79,9 @@ class UserInfoUseCase:
                 error="invalid_token",
                 error_description="Access token invalide, expiré ou de l'émetteur inattendu",
             )
+
+        if await self._blacklist.is_revoked(token_hash(request.access_token)):
+            return UserInfoError(error="invalid_token", error_description="Access token révoqué")
 
         subject = claims.get("sub")
         if subject is None:

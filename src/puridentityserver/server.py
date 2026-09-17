@@ -11,6 +11,7 @@ from puridentityserver.application.authorize import AuthorizeConfig, AuthorizeUs
 from puridentityserver.application.discovery import DiscoveryConfig, DiscoveryUseCase
 from puridentityserver.application.introspect import IntrospectConfig, IntrospectUseCase
 from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
+from puridentityserver.application.revocation import RevocationConfig, RevocationUseCase
 from puridentityserver.application.token import TokenConfig, TokenUseCase
 from puridentityserver.application.userinfo import UserInfoConfig, UserInfoUseCase
 from puridentityserver.domain.jwks import JWTAlgorithm, KeyUse
@@ -29,6 +30,7 @@ from puridentityserver.infrastructure.persistence.factory import (
     build_authorization_code_repository,
     build_client_repository,
     build_key_pair_repository,
+    build_revoked_token_repository,
     build_user_repository,
 )
 from puridentityserver.infrastructure.settings import Settings
@@ -37,6 +39,7 @@ from puridentityserver.interfaces.api.authorize import authorize_router
 from puridentityserver.interfaces.api.discovery import discovery_router
 from puridentityserver.interfaces.api.introspect import introspect_router
 from puridentityserver.interfaces.api.jwks import jwk_set_router
+from puridentityserver.interfaces.api.revocation import revocation_router
 from puridentityserver.interfaces.api.token import token_router
 from puridentityserver.interfaces.api.userinfo import userinfo_router
 
@@ -79,6 +82,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     client_repository = build_client_repository(settings)
     code_repository = build_authorization_code_repository(settings)
     user_repository = build_user_repository(settings)
+    revoked_token_repository = build_revoked_token_repository(settings)
 
     authorize_usecase = AuthorizeUseCase(
         AuthorizeConfig(
@@ -106,11 +110,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         UserInfoConfig(issuer=settings.issuer),
         token_manager,
         UserStoreClaimsProvider(user_repository),
+        revoked_token_repository,
     )
     introspect_usecase = IntrospectUseCase(
         IntrospectConfig(issuer=settings.issuer),
         client_repository,
         token_manager,
+        revoked_token_repository,
+    )
+    revocation_usecase = RevocationUseCase(
+        RevocationConfig(issuer=settings.issuer),
+        client_repository,
+        token_manager,
+        revoked_token_repository,
     )
 
     async def _resolve_session_lifetime(client_id: str) -> int | None:
@@ -127,6 +139,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await client_repository.initialise()
         await code_repository.initialise()
         await user_repository.initialise()
+        await revoked_token_repository.initialise()
         for client in settings.seed_clients:
             await client_repository.save(client)
         await user_repository.save_all(
@@ -158,6 +171,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await client_repository.close()
             await code_repository.close()
             await user_repository.close()
+            await revoked_token_repository.close()
 
     app = FastAPI(
         title="PurIdentityServer",
@@ -174,6 +188,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(token_router(token_usecase))
     app.include_router(userinfo_router(userinfo_usecase))
     app.include_router(introspect_router(introspect_usecase))
+    app.include_router(revocation_router(revocation_usecase))
     return app
 
 

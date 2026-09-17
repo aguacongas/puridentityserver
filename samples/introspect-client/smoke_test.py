@@ -1,4 +1,4 @@
-"""Test manuel de l'endpoint d'introspection (RFC 7662).
+"""Test manuel des endpoints d'introspection (RFC 7662) et de révocation (RFC 7009).
 
 Smoke test du sample ``introspect-client``.
 
@@ -6,13 +6,17 @@ Lance un serveur PurIdentityServer en sous-processus avec la
 configuration dédiée ``samples/introspect-client/config.toml`` (port 8100,
 client confidentiel ``sample-introspect-client``), puis joue le scénario :
 
-1. le discovery annonce ``introspection_endpoint`` ;
+1. le discovery annonce ``introspection_endpoint`` et ``revocation_endpoint`` ;
 2. ``/authorize`` émet un code d'autorisation (appel anonyme) ;
 3. ``/token`` l'échange contre un access_token (client confidentiel) ;
 4. ``/introspect`` sur le token valide -> ``active: true`` + métadonnées ;
 5. ``/introspect`` sur un token inconnu -> ``active: false`` (HTTP 200) ;
 6. ``/introspect`` avec un secret client erroné -> ``401 invalid_client`` ;
-7. ``/introspect`` avec un token vide -> ``400 invalid_request``.
+7. ``/introspect`` avec un token vide -> ``400 invalid_request`` ;
+8. ``/revoke`` sur le token valide -> HTTP 200, corps vide ;
+9. ``/introspect`` sur le token révoqué -> ``active: false`` ;
+10. ``/revoke`` sur un token inconnu -> HTTP 200, corps vide ;
+11. ``/revoke`` avec un secret client erroné -> ``401 invalid_client``.
 
 Le sous-processus est terminé dans tous les cas (``finally``) et un
 garde-fou borne la durée totale.
@@ -79,12 +83,24 @@ def _introspect(http: httpx.Client, *, token: str, secret: str = CLIENT_SECRET) 
     )
 
 
+def _revoke(http: httpx.Client, *, token: str, secret: str = CLIENT_SECRET) -> httpx.Response:
+    """Appelle ``/revoke`` avec les identifiants du client confidentiel."""
+    return http.post(
+        f"{SERVER_URL}/revoke",
+        data={"token": token, "client_id": CLIENT_ID, "client_secret": secret},
+    )
+
+
 def _run_scenario() -> None:
-    """Joue le scénario d'introspection de bout en bout."""
+    """Joue le scénario d'introspection et de révocation de bout en bout."""
     with httpx.Client(follow_redirects=False, timeout=_HTTP_TIMEOUT) as http:
         metadata = http.get(f"{SERVER_URL}/.well-known/openid-configuration").json()
         assert metadata["introspection_endpoint"] == f"{SERVER_URL}/introspect"
-        print(f"  [1/7] discovery OK (introspection_endpoint={metadata['introspection_endpoint']})")
+        assert metadata["revocation_endpoint"] == f"{SERVER_URL}/revoke"
+        print(
+            f"  [1/11] discovery OK (introspection_endpoint={metadata['introspection_endpoint']}, "
+            f"revocation_endpoint={metadata['revocation_endpoint']})"
+        )
 
         response = http.get(
             f"{SERVER_URL}/authorize",
@@ -97,7 +113,7 @@ def _run_scenario() -> None:
         )
         assert response.status_code == 302, response.text
         code = parse_qs(urlparse(response.headers["location"]).query)["code"][0]
-        print(f"  [2/7] code d'autorisation émis ({code[:8]}...)")
+        print(f"  [2/11] code d'autorisation émis ({code[:8]}...)")
 
         response = http.post(
             f"{SERVER_URL}/token",
@@ -112,7 +128,7 @@ def _run_scenario() -> None:
         assert response.status_code == 200, response.text
         access_token = response.json()["access_token"]
         assert response.json()["token_type"] == "Bearer"
-        print("  [3/7] échange code -> access_token OK")
+        print("  [3/11] échange code -> access_token OK")
 
         response = _introspect(http, token=access_token)
         assert response.status_code == 200, response.text
@@ -124,24 +140,44 @@ def _run_scenario() -> None:
         assert "sub" in body
         assert body["exp"] > body["iat"]
         print(
-            "  [4/7] introspection token valide OK "
+            "  [4/11] introspection token valide OK "
             f"(sub={body['sub']!r}, exp-iat={body['exp'] - body['iat']}s)"
         )
 
         response = _introspect(http, token="token-inconnu")
         assert response.status_code == 200, response.text
         assert response.json() == {"active": False}
-        print("  [5/7] introspection token inconnu -> active=false OK")
+        print("  [5/11] introspection token inconnu -> active=false OK")
 
         response = _introspect(http, token=access_token, secret="mauvais-secret")
         assert response.status_code == 401, response.text
         assert response.json()["error"] == "invalid_client"
-        print("  [6/7] secret client erroné -> 401 invalid_client OK")
+        print("  [6/11] secret client erroné -> 401 invalid_client OK")
 
         response = _introspect(http, token="")
         assert response.status_code == 400, response.text
         assert response.json()["error"] == "invalid_request"
-        print("  [7/7] token vide -> 400 invalid_request OK")
+        print("  [7/11] token vide -> 400 invalid_request OK")
+
+        response = _revoke(http, token=access_token)
+        assert response.status_code == 200, response.text
+        assert response.content == b""
+        print("  [8/11] révocation du token valide -> HTTP 200 corps vide OK")
+
+        response = _introspect(http, token=access_token)
+        assert response.status_code == 200, response.text
+        assert response.json() == {"active": False}
+        print("  [9/11] introspection token révoqué -> active=false OK")
+
+        response = _revoke(http, token="token-inconnu")
+        assert response.status_code == 200, response.text
+        assert response.content == b""
+        print("  [10/11] révocation token inconnu -> HTTP 200 corps vide OK")
+
+        response = _revoke(http, token=access_token, secret="mauvais-secret")
+        assert response.status_code == 401, response.text
+        assert response.json()["error"] == "invalid_client"
+        print("  [11/11] secret client erroné -> 401 invalid_client OK")
     print("\n=== SCÉNARIO OK ===")
 
 
@@ -184,7 +220,7 @@ def main() -> None:
             env=env,
         )
         _wait_port(SERVER_PORT)
-        print(f"\nScénario d'introspection (deadline={_DEADLINE}s)...")
+        print(f"\nScénario d'introspection et de révocation (deadline={_DEADLINE}s)...")
         _run_scenario()
         print(f"\n=== SCÉNARIO OK en {time.monotonic() - started_at:.1f}s ===")
     finally:

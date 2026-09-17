@@ -1,13 +1,13 @@
-# Test manuel : introspection de jeton (RFC 7662)
+# Test manuel : introspection et révocation de jeton (RFC 7662 / RFC 7009)
 
-Script de démonstration/test manuel de l'endpoint **`POST /introspect`**
-de PurIdentityServer. Il lance un serveur en sous-processus avec une
-configuration dédiée (port `8100`, client confidentiel
-`sample-introspect-client`) puis joue le scénario complet.
+Script de démonstration/test manuel des endpoints **`POST /introspect`** et
+**`POST /revoke`** de PurIdentityServer. Il lance un serveur en
+sous-processus avec une configuration dédiée (port `8100`, client
+confidentiel `sample-introspect-client`) puis joue le scénario complet.
 
 Le scénario vérifie :
 
-1. le discovery annonce `introspection_endpoint` ;
+1. le discovery annonce `introspection_endpoint` et `revocation_endpoint` ;
 2. `/authorize` émet un code d'autorisation (appel anonyme) ;
 3. `/token` l'échange contre un access_token (présentation du secret
    client, aucun PKCE nécessaire pour un client confidentiel) ;
@@ -16,7 +16,12 @@ Le scénario vérifie :
 5. `/introspect` sur un token inconnu → `active: false` (HTTP 200,
    jamais d'erreur serveur sur un token invalide) ;
 6. `/introspect` avec un secret client erroné → `401 invalid_client` ;
-7. `/introspect` avec un token vide → `400 invalid_request`.
+7. `/introspect` avec un token vide → `400 invalid_request` ;
+8. `/revoke` sur le token valide → HTTP 200, corps vide ;
+9. `/introspect` sur le token révoqué → `active: false` (le denylist
+   est consulté par l'introspection) ;
+10. `/revoke` sur un token inconnu → HTTP 200, corps vide (RFC 7009 §2.2) ;
+11. `/revoke` avec un secret client erroné → `401 invalid_client`.
 
 ## Lancement
 
@@ -28,13 +33,17 @@ Sortie attendue :
 
 ```text
 Démarrage du serveur puridentityserver (config config.toml)...
-  [1/7] discovery OK ...
-  [2/7] code d'autorisation émis (...)
-  [3/7] échange code → access_token OK
-  [4/7] introspection token valide OK ...
-  [5/7] introspection token inconnu → active=false OK
-  [6/7] secret client erroné → 401 invalid_client OK
-  [7/7] token vide → 400 invalid_request OK
+  [1/11] discovery OK ...
+  [2/11] code d'autorisation émis (...)
+  [3/11] échange code → access_token OK
+  [4/11] introspection token valide OK ...
+  [5/11] introspection token inconnu → active=false OK
+  [6/11] secret client erroné → 401 invalid_client OK
+  [7/11] token vide → 400 invalid_request OK
+  [8/11] révocation du token valide → HTTP 200 corps vide OK
+  [9/11] introspection token révoqué → active=false OK
+  [10/11] révocation token inconnu → HTTP 200 corps vide OK
+  [11/11] secret client erroné → 401 invalid_client OK
 
 === SCÉNARIO OK en X.Xs ===
 ```
