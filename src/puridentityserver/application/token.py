@@ -134,7 +134,7 @@ class TokenUseCase:
         if auth_code.redirect_uri != request.redirect_uri:
             return self._error("invalid_grant", "redirect_uri ne correspond pas")
 
-        authenticated = await self._authenticate_client(client, request)
+        authenticated = self._authenticate_client(client, request)
         if authenticated is not None:
             return authenticated
         if client.client_type == ClientType.PUBLIC and not auth_code.code_challenge:
@@ -163,7 +163,7 @@ class TokenUseCase:
         if client is None or not client.is_active:
             return self._error("invalid_client", "Client inconnu ou désactivé")
 
-        authenticated = await self._authenticate_client(client, request)
+        authenticated = self._authenticate_client(client, request)
         if authenticated is not None:
             return authenticated
 
@@ -178,7 +178,7 @@ class TokenUseCase:
         scopes = stored.scopes
         if request.scope:
             requested = Scope.from_space_separated(request.scope)
-            if not requested <= stored.scopes:
+            if requested - stored.scopes:
                 return self._error("invalid_scope", "Portée demandée jamais accordée au jeton")
             scopes = requested
 
@@ -190,9 +190,7 @@ class TokenUseCase:
         )
         return self._success(id_token, access_token, token_ttl, scopes, refresh_token)
 
-    async def _authenticate_client(
-        self, client: Client, request: TokenRequest
-    ) -> TokenError | None:
+    def _authenticate_client(self, client: Client, request: TokenRequest) -> TokenError | None:
         """Vérifie l'authentification du client ; retourne l'erreur éventuelle."""
         if client.client_type == ClientType.CONFIDENTIAL and not verify_client_secret(
             client, request.client_secret
