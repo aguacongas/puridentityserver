@@ -79,7 +79,7 @@ def device_page_router(usecase: DeviceAuthorizationUseCase) -> APIRouter:
         summary="Page de vérification de l'appareil",
     )
     async def device_prompt(
-        user_code: str = Query(default=""),
+        user_code: Annotated[str, Query()] = "",
     ) -> str:
         escaped_code = html.escape(user_code)
         return _PAGE_TEMPLATE.format(
