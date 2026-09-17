@@ -19,7 +19,7 @@ base d'un KeyManager rotatif distinct des clés de signature des tokens OIDC.
 
 Note spike : la base utilisateurs est en mémoire (``StaticPool``) ; en
 production elle sera remplacée par un vrai magasin (DSN dédié ou la base
-partagée ``KEY_STORE_DSN``).
+partagée ``STORAGE_DSN``).
 """
 
 from __future__ import annotations

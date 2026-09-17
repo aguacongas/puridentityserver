@@ -203,40 +203,40 @@ def test_sql_code_repo_migrates_table_created_before_subject(tmp_path: Path) -> 
 
 
 def test_client_factory_builds_memory() -> None:
-    repo = build_client_repository(Settings(key_store_type="memory"))
+    repo = build_client_repository(Settings(storage_type="memory"))
 
     assert isinstance(repo, InMemoryClientRepository)
 
 
 def test_client_factory_builds_sql() -> None:
-    repo = build_client_repository(Settings(key_store_type="sql", key_store_dsn="sqlite:///memory"))
+    repo = build_client_repository(Settings(storage_type="sql", storage_dsn="sqlite:///memory"))
 
     assert isinstance(repo, SQLClientRepository)
 
 
 def test_client_factory_rejects_unknown_store_type() -> None:
-    settings = Settings.model_construct(key_store_type="cassandra")
+    settings = Settings.model_construct(storage_type="cassandra")
 
     with pytest.raises(ValueError, match="non supporté"):
         build_client_repository(settings)
 
 
 def test_code_factory_builds_memory() -> None:
-    repo = build_authorization_code_repository(Settings(key_store_type="memory"))
+    repo = build_authorization_code_repository(Settings(storage_type="memory"))
 
     assert isinstance(repo, InMemoryAuthorizationCodeRepository)
 
 
 def test_code_factory_builds_sql() -> None:
     repo = build_authorization_code_repository(
-        Settings(key_store_type="sql", key_store_dsn="sqlite:///memory")
+        Settings(storage_type="sql", storage_dsn="sqlite:///memory")
     )
 
     assert isinstance(repo, SQLAuthorizationCodeRepository)
 
 
 def test_code_factory_rejects_unknown_store_type() -> None:
-    settings = Settings.model_construct(key_store_type="cassandra")
+    settings = Settings.model_construct(storage_type="cassandra")
 
     with pytest.raises(ValueError, match="non supporté"):
         build_authorization_code_repository(settings)

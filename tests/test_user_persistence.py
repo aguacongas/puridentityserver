@@ -138,22 +138,22 @@ class TestSQLUserRepository:
 
 
 class TestFactory:
-    """Couvre le choix du user store selon ``key_store_type``."""
+    """Couvre le choix du user store selon ``storage_type``."""
 
     def test_builds_memory_repository(self) -> None:
-        repository = build_user_repository(Settings(key_store_type="memory"))
+        repository = build_user_repository(Settings(storage_type="memory"))
 
         assert isinstance(repository, InMemoryUserRepository)
 
     def test_builds_sql_repository(self) -> None:
         repository = build_user_repository(
-            Settings(key_store_type="sql", key_store_dsn="sqlite:///memory")
+            Settings(storage_type="sql", storage_dsn="sqlite:///memory")
         )
 
         assert isinstance(repository, SQLUserRepository)
 
     def test_rejects_unknown_store_type(self) -> None:
-        settings = Settings.model_construct(key_store_type="cassandra")
+        settings = Settings.model_construct(storage_type="cassandra")
 
         with pytest.raises(ValueError, match="non supporté"):
             build_user_repository(settings)

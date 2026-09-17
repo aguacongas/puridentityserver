@@ -36,19 +36,23 @@ base_url = ""
 host = "127.0.0.1"
 port = 8000
 
+# Stockage de l'état persistant du serveur : clés de signature, clients,
+# codes d'autorisation et utilisateurs.
+# - storage_type : "memory" (perdu au redémarrage) ou "sql"
+# - storage_dsn : DSN de persistance pour `storage_type = "sql"`
+# Surchargeables via `PURIDENTITYSERVER_STORAGE_TYPE`,
+# `PURIDENTITYSERVER_STORAGE_DSN`.
+
 # JWKS (RFC 7517) : génération et rotation des clés de signature des tokens.
-# - key_store_type : "memory" (perdues au redémarrage) ou "sql"
-# - key_store_dsn : DSN de persistance pour `key_store_type = "sql"`
 # - jwks_key_size : taille RSA (bits), ignorée pour les clés EC
 # - jwks_algorithms : algorithmes de signature publiés au JWKS
 # - jwks_rotation_days : rotation d'une clé de signature par jour J
 # - jwks_grace_period_days : clés rotées encore acceptées à la vérification
-# Surchargeables via `PURIDENTITYSERVER_KEY_STORE_TYPE`,
-# `PURIDENTITYSERVER_KEY_STORE_DSN`, `PURIDENTITYSERVER_JWKS_KEY_SIZE`,
+# Surchargeables via `PURIDENTITYSERVER_JWKS_KEY_SIZE`,
 # `PURIDENTITYSERVER_JWKS_ALGORITHMS` (liste séparée par des virgules),
 # `PURIDENTITYSERVER_JWKS_ROTATION_DAYS`, `PURIDENTITYSERVER_JWKS_GRACE_PERIOD_DAYS`.
-key_store_type = "memory"
-key_store_dsn = "sqlite:///puridentityserver_keys.db"
+storage_type = "memory"
+storage_dsn = "sqlite:///puridentityserver.db"
 jwks_key_size = 4096
 jwks_algorithms = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512"]
 jwks_rotation_days = 90

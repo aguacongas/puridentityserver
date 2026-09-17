@@ -53,21 +53,21 @@ def test_async_dsn_rewrites_dialect() -> None:
 
 
 def test_factory_builds_memory_repository() -> None:
-    repository = build_key_pair_repository(Settings(key_store_type="memory"))
+    repository = build_key_pair_repository(Settings(storage_type="memory"))
 
     assert isinstance(repository, InMemoryKeyPairRepository)
 
 
 def test_factory_builds_sql_repository() -> None:
     repository = build_key_pair_repository(
-        Settings(key_store_type="sql", key_store_dsn="sqlite:///memory")
+        Settings(storage_type="sql", storage_dsn="sqlite:///memory")
     )
 
     assert isinstance(repository, SQLKeyPairRepository)
 
 
 def test_factory_rejects_unknown_store_type() -> None:
-    settings = Settings.model_construct(key_store_type="cassandra")
+    settings = Settings.model_construct(storage_type="cassandra")
 
     with pytest.raises(ValueError, match="non supporté"):
         build_key_pair_repository(settings)

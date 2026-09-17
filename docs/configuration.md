@@ -14,8 +14,8 @@ Elle est lue au démarrage par [pydantic-settings](https://docs.pydantic.dev/lat
 | `PURIDENTITYSERVER_BASE_URL` | *(issuer)* | Base utilisée pour construire les URL des endpoints publiées dans le document de discovery (`/authorize`, `/token`, `/userinfo`, `/.well-known/jwks.json`, …). Par défaut : l'issuer. |
 | `PURIDENTITYSERVER_HOST` | `127.0.0.1` | Interface réseau sur laquelle écoute le serveur Uvicorn. |
 | `PURIDENTITYSERVER_PORT` | `8000` | Port d'écoute. |
-| `PURIDENTITYSERVER_KEY_STORE_TYPE` | `memory` | Type de stockage des clés de signature et du user store (`memory` pour le développement local, `sql` pour la production). |
-| `PURIDENTITYSERVER_KEY_STORE_DSN` | `sqlite:///puridentityserver_keys.db` | Chaîne de connexion SQLAlchemy du stockage persistant (clés, codes, clients, utilisateurs — utilisée lorsque `KEY_STORE_TYPE=sql`). |
+| `PURIDENTITYSERVER_STORAGE_TYPE` | `memory` | Type de stockage de l'état persistant du serveur (clés de signature, clients, codes d'autorisation, utilisateurs). `memory` pour le développement local, `sql` pour la production. |
+| `PURIDENTITYSERVER_STORAGE_DSN` | `sqlite:///puridentityserver.db` | Chaîne de connexion SQLAlchemy du stockage persistant — utilisée lorsque `STORAGE_TYPE=sql`. |
 | `PURIDENTITYSERVER_JWKS_KEY_SIZE` | `4096` | Taille des clés RSA générées (bits) pour la signature des jetons. |
 | `PURIDENTITYSERVER_JWKS_ALGORITHMS` | *(tous)* | Liste (séparée par des virgules) des algorithmes de signature fournis. Supporte `RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`, `ES256`, `ES384`, `ES512`. |
 | `PURIDENTITYSERVER_JWKS_ROTATION_DAYS` | `90` | Âge à partir duquel une clé de signature est retirée du JWKS et remplacée. |
@@ -50,21 +50,21 @@ gestion de compte : plus de `identity_jwt_secret`, de
 - **`base_url`** est uniquement la racine de construction des URL des endpoints exposées
   dans `/.well-known/openid-configuration`. Par défaut les deux sont identiques.
 
-### Stockage des clés et multi-instance
+### Stockage et multi-instance
 
-La variable `KEY_STORE_TYPE` définit comment l'état persistant du serveur est stocké :
+La variable `STORAGE_TYPE` définit comment l'état persistant du serveur est stocké :
 clés de signature, codes d'autorisation, clients seed et **profils utilisateurs**
 (user store servis par `/userinfo`). C'est le paramètre qui permet de
 **loadbalancer** plusieurs instances du serveur et de reprendre après un redémarrage.
 
-| `KEY_STORE_TYPE` | Comportement | Usage |
+| `STORAGE_TYPE` | Comportement | Usage |
 | --- | --- | --- |
 | `memory` | Stockage en mémoire (Process-local, sans persistance) | Développement local, tests unitaires |
 | `sql` | Stockage SQL via SQLAlchemy (SQLite, PostgreSQL, MySQL) | Production, load balancing multi-instance |
 
-**Chargement de la DSN** : quand le type est `sql`, le DSN `KEY_STORE_DSN` est
-réécrit automatiquement vers le dialecte asynchrone (ex. `sqlite:///keys.db` →
-`sqlite+aiosqlite:///keys.db`).
+**Chargement de la DSN** : quand le type est `sql`, le DSN `STORAGE_DSN` est
+réécrit automatiquement vers le dialecte asynchrone (ex. `sqlite:///puridentityserver.db` →
+`sqlite+aiosqlite:///puridentityserver.db`).
 
 ### Clés RSA et ECDSA (JWKS)
 
@@ -88,6 +88,9 @@ arguments d'init > variables d'environnement (PURIDENTITYSERVER_*) > config.toml
 
 Le fichier contient actuellement :
 
+- le **backend de stockage** (`storage_type` / `storage_dsn`) ainsi que les
+  réglages serveur (`issuer`, `host`, `port`) et JWKS (`jwks_key_size`,
+  `jwks_algorithms`, `jwks_rotation_days`, `jwks_grace_period_days`) ;
 - les **durées de vie par défaut** des codes d'autorisation et des jetons émis
   (`authorization_code_ttl_seconds`, `access_token_ttl_seconds`) ;
 - le **client de démo du flow Authorization Code + PKCE** (`sample-pkce-client`, client
@@ -119,8 +122,8 @@ PURIDENTITYSERVER_ISSUER=http://127.0.0.1:8000 uv run python -m puridentityserve
 
 ```sh
 PURIDENTITYSERVER_ISSUER=https://id.example.com
-PURIDENTITYSERVER_KEY_STORE_TYPE=sql
-PURIDENTITYSERVER_KEY_STORE_DSN=postgresql+asyncpg://puridentityserver:secret@db-host/puridentityserver
+PURIDENTITYSERVER_STORAGE_TYPE=sql
+PURIDENTITYSERVER_STORAGE_DSN=postgresql+asyncpg://puridentityserver:secret@db-host/puridentityserver
 ```
 
 ### Derrière un reverse proxy TLS
@@ -138,7 +141,7 @@ PURIDENTITYSERVER_ISSUER=https://id.example.com uv run uvicorn puridentityserver
   (`KeyPairRepository`, `ClientRepository`, `AuthorizationCodeRepository`,
   `UserRepository`) sont des Protocol vivant dans `puridentityserver/interfaces/` ; chaque
   store est décliné en deux implémentations — `memory` (dictionnaire process-local)
-  et `sql` (SQLAlchemy 2.0 asynchrone) — choisies via `KEY_STORE_TYPE`.
+  et `sql` (SQLAlchemy 2.0 asynchrone) — choisies via `STORAGE_TYPE`.
   Des implémentations Redis et MongoDB peuvent être ajoutées comme extras optionnels.
 - Les endpoints `/authorize` et `/token` supportent le flux Authorization Code
   avec PKCE (S256), conformes aux RFC 6749 et 7636. Les clients publics
