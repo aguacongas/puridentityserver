@@ -9,7 +9,6 @@ from fastapi import APIRouter, Form, Response
 from puridentityserver.application.revocation import (
     RevocationError,
     RevocationRequest,
-    RevocationSuccess,
     RevocationUseCase,
 )
 
@@ -32,12 +31,12 @@ def revocation_router(usecase: RevocationUseCase) -> APIRouter:
         result = await usecase.execute(request)
         if isinstance(result, RevocationError):
             return _error_response(result)
-        return _success_response(result)
+        return _success_response()
 
     return router
 
 
-def _success_response(result: RevocationSuccess) -> Response:
+def _success_response() -> Response:
     """Réponse de succès RFC 7009 §2.2 : HTTP 200 et corps vide.
 
     Le corps reste vide même pour un jeton inconnu ou invalide : la
