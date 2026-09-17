@@ -39,16 +39,21 @@ class PyJWTTokenManager:
         issued_at: int,
         scopes: frozenset[Scope],
     ) -> str:
-        """Construit l''id_token'' : identité ``sub`` + audience ``client_id``."""
+        """Construit l'``id_token`` : identité ``sub`` + audience ``client_id``.
+
+        Le claim ``nonce`` ne figure que s'il est renseigné : un id_token de
+        refresh ne doit pas porter de nonce (OIDC Core 1.0 §12.2).
+        """
         payload: dict[str, object] = {
             "iss": issuer,
             "sub": subject,
             "aud": audience,
-            "nonce": nonce,
             "exp": expires_at,
             "iat": issued_at,
             "scope": " ".join(sorted(scope.value for scope in scopes)),
         }
+        if nonce:
+            payload["nonce"] = nonce
         return await self._sign(algorithm, payload)
 
     async def create_access_token(

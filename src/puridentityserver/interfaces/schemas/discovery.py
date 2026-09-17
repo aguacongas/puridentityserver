@@ -31,7 +31,9 @@ class DiscoveryDocument(BaseModel):
     )
     response_types_supported: list[str] = Field(default_factory=lambda: ["code"])
     response_modes_supported: list[str] = Field(default_factory=lambda: ["query", "fragment"])
-    grant_types_supported: list[str] = Field(default_factory=lambda: ["authorization_code"])
+    grant_types_supported: list[str] = Field(
+        default_factory=lambda: ["authorization_code", "refresh_token"]
+    )
     subject_types_supported: list[str] = Field(default_factory=lambda: ["public"])
     id_token_signing_alg_values_supported: list[str] = Field(
         default_factory=lambda: [algorithm.value for algorithm in ALL_SIGNING_ALGORITHMS]
