@@ -21,11 +21,13 @@ from puridentityserver.interfaces.repositories.user_repository import UserReposi
 def build_key_pair_repository(settings: Settings) -> KeyPairRepository:
     """Retourne le repository de clés correspondant à ``key_store_type``."""
     if settings.key_store_type == "memory":
-        from puridentityserver.infrastructure.persistence.memory import InMemoryKeyPairRepository
+        from puridentityserver.infrastructure.persistence.memory.keys import (
+            InMemoryKeyPairRepository,
+        )
 
         return InMemoryKeyPairRepository()
     if settings.key_store_type == "sql":
-        from puridentityserver.infrastructure.persistence.sql import SQLKeyPairRepository
+        from puridentityserver.infrastructure.persistence.sql.keys import SQLKeyPairRepository
 
         return SQLKeyPairRepository(settings.key_store_dsn)
     raise ValueError(f"Type de stockage de clés non supporté : {settings.key_store_type}")
@@ -34,13 +36,13 @@ def build_key_pair_repository(settings: Settings) -> KeyPairRepository:
 def build_client_repository(settings: Settings) -> ClientRepository:
     """Retourne le repository de clients correspondant à ``key_store_type``."""
     if settings.key_store_type == "memory":
-        from puridentityserver.infrastructure.persistence.clients_memory import (
+        from puridentityserver.infrastructure.persistence.memory.clients import (
             InMemoryClientRepository,
         )
 
         return InMemoryClientRepository()
     if settings.key_store_type == "sql":
-        from puridentityserver.infrastructure.persistence.clients_sql import SQLClientRepository
+        from puridentityserver.infrastructure.persistence.sql.clients import SQLClientRepository
 
         return SQLClientRepository(settings.key_store_dsn)
     raise ValueError(f"Type de stockage de clients non supporté : {settings.key_store_type}")
@@ -49,13 +51,13 @@ def build_client_repository(settings: Settings) -> ClientRepository:
 def build_authorization_code_repository(settings: Settings) -> AuthorizationCodeRepository:
     """Retourne le repository de codes correspondant à ``key_store_type``."""
     if settings.key_store_type == "memory":
-        from puridentityserver.infrastructure.persistence.codes_memory import (
+        from puridentityserver.infrastructure.persistence.memory.codes import (
             InMemoryAuthorizationCodeRepository,
         )
 
         return InMemoryAuthorizationCodeRepository()
     if settings.key_store_type == "sql":
-        from puridentityserver.infrastructure.persistence.codes_sql import (
+        from puridentityserver.infrastructure.persistence.sql.codes import (
             SQLAuthorizationCodeRepository,
         )
 
@@ -66,13 +68,13 @@ def build_authorization_code_repository(settings: Settings) -> AuthorizationCode
 def build_user_repository(settings: Settings) -> UserRepository:
     """Retourne le repository utilisateurs correspondant à ``key_store_type``."""
     if settings.key_store_type == "memory":
-        from puridentityserver.infrastructure.persistence.users_memory import (
+        from puridentityserver.infrastructure.persistence.memory.users import (
             InMemoryUserRepository,
         )
 
         return InMemoryUserRepository()
     if settings.key_store_type == "sql":
-        from puridentityserver.infrastructure.persistence.users_sql import SQLUserRepository
+        from puridentityserver.infrastructure.persistence.sql.users import SQLUserRepository
 
         return SQLUserRepository(settings.key_store_dsn)
     raise ValueError(f"Type de stockage utilisateurs non supporté : {settings.key_store_type}")

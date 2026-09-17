@@ -15,7 +15,7 @@ from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
 from puridentityserver.domain.authorization import ClientType
 from puridentityserver.domain.jwks import JWTAlgorithm, KeyPair
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
-from puridentityserver.infrastructure.persistence.memory import InMemoryKeyPairRepository
+from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKeyPairRepository
 from puridentityserver.infrastructure.settings import Settings
 from puridentityserver.interfaces.schemas.jwks import JWKKeyResponse
 from puridentityserver.server import create_app

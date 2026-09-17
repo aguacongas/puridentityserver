@@ -23,8 +23,8 @@ from puridentityserver.domain.jwks import JWTAlgorithm
 from puridentityserver.domain.userinfo import UserClaims
 from puridentityserver.infrastructure.claims import UserStoreClaimsProvider
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
-from puridentityserver.infrastructure.persistence.memory import InMemoryKeyPairRepository
-from puridentityserver.infrastructure.persistence.users_memory import InMemoryUserRepository
+from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKeyPairRepository
+from puridentityserver.infrastructure.persistence.memory.users import InMemoryUserRepository
 from puridentityserver.infrastructure.settings import Settings
 from puridentityserver.infrastructure.tokens import PyJWTTokenManager
 from puridentityserver.server import create_app

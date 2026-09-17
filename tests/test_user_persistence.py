@@ -9,8 +9,8 @@ import pytest
 
 from puridentityserver.domain.userinfo import UserClaims
 from puridentityserver.infrastructure.persistence.factory import build_user_repository
-from puridentityserver.infrastructure.persistence.users_memory import InMemoryUserRepository
-from puridentityserver.infrastructure.persistence.users_sql import SQLUserRepository
+from puridentityserver.infrastructure.persistence.memory.users import InMemoryUserRepository
+from puridentityserver.infrastructure.persistence.sql.users import SQLUserRepository
 from puridentityserver.infrastructure.settings import Settings
 
 _T = TypeVar("_T")
