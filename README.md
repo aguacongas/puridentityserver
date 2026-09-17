@@ -88,7 +88,7 @@ tests/             pytest unit + intégration (TestClient httpx)
 4. ✅ **ID Token + UserInfo** — émission et validation JWT via PyJWT,
    endpoint `/userinfo` (Bearer, filtrage des claims par scopes accordés)
 5. ✅ **Refresh tokens** — rotation, expiration, rejeu
-6. 🔜 **Client Credentials** (RFC 6749 §4.4) — confirmer/signaler le branchage
+6. ✅ **Client Credentials** (RFC 6749 §4.4)
 7. **Implicit & Hybrid** (OIDC Core 1.0)
 8. **Logout** — RP-Initiated Logout
 9. **Introspection / Revocation** (RFC 7662 / 7009)
