@@ -18,7 +18,7 @@ from pydantic_settings import (
 from puridentityserver.domain.authorization import Client, ClientType, Scope
 from puridentityserver.domain.jwks import ALL_SIGNING_ALGORITHMS, JWTAlgorithm
 
-_KEY_STORE_TYPES = ("memory", "sql")
+_STORAGE_TYPES = ("memory", "sql")
 
 _SETTINGS_FILE_ENV = "PURIDENTITYSERVER_SETTINGS_FILE"
 
@@ -102,9 +102,12 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
 
+    # Stockage de l'état persistant du serveur (clés de signature, clients,
+    # codes d'autorisation, utilisateurs) : "memory" (monoprocess) ou "sql".
+    storage_type: str = "memory"
+    storage_dsn: str = "sqlite:///puridentityserver.db"
+
     # JWKS (RFC 7517)
-    key_store_type: str = "memory"
-    key_store_dsn: str = "sqlite:///puridentityserver_keys.db"
     jwks_key_size: int = 4096
     jwks_algorithms: Annotated[tuple[str, ...], NoDecode] = tuple(
         algorithm.value for algorithm in ALL_SIGNING_ALGORITHMS
@@ -178,12 +181,12 @@ class Settings(BaseSettings):
             return parsed
         return value
 
-    @field_validator("key_store_type")
+    @field_validator("storage_type")
     @classmethod
-    def _validate_key_store_type(cls, value: str) -> str:
-        """Garantit que le type de stockage de clés est supporté."""
-        if value not in _KEY_STORE_TYPES:
-            raise ValueError(f"Type de stockage de clés non supporté : {value}")
+    def _validate_storage_type(cls, value: str) -> str:
+        """Garantit que le type de stockage est supporté."""
+        if value not in _STORAGE_TYPES:
+            raise ValueError(f"Type de stockage non supporté : {value}")
         return value
 
     @field_validator("jwks_algorithms")

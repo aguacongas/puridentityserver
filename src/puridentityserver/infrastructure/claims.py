@@ -1,7 +1,7 @@
 """Implémentation du port ``ClaimsProvider`` adossée au user store.
 
 Résout les claims utilisateur via le ``UserRepository`` injecté (backends
-``memory`` ou ``sql``, choisi par ``KEY_STORE_TYPE``), alimenté au démarrage
+``memory`` ou ``sql``, choisi par ``STORAGE_TYPE``), alimenté au démarrage
 depuis les profils déclarés dans la configuration
 (`PURIDENTITYSERVER_USERS_SEED`).
 """

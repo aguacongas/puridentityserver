@@ -172,9 +172,9 @@ def test_settings_reject_unsupported_algorithm() -> None:
         Settings(jwks_algorithms=("RS256", "HS256"))
 
 
-def test_settings_reject_unsupported_key_store_type() -> None:
+def test_settings_reject_unsupported_storage_type() -> None:
     with pytest.raises(ValueError):
-        Settings(key_store_type="cassandra")
+        Settings(storage_type="cassandra")
 
 
 def test_settings_client_seed_with_scalar_redirect_uris() -> None:

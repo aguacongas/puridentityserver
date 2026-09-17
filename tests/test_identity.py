@@ -688,7 +688,7 @@ def test_login_cookie_signed_with_dedicated_session_key(tmp_path: Path) -> None:
     conn.close()
 
     dsn = f"sqlite:///{db_path}"
-    with TestClient(_app(key_store_type="sql", key_store_dsn=dsn)) as client:
+    with TestClient(_app(storage_type="sql", storage_dsn=dsn)) as client:
         resp = client.post(
             "/login",
             data={"username": "alice@example.com", "password": "password", "next": "/"},
