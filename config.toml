@@ -153,13 +153,3 @@ client_id = "sample-pkce-client"
 redirect_uris = ["http://127.0.0.1:5173/callback"]
 scopes = "openid profile email"
 client_type = "public"
-
-[[settings.clients_seed]]
-# client confidentiel pour tenter `/introspect` (RFC 7662) à la main
-# contre un serveur par défaut : le resource server s'authentifie avec
-# `client_secret` (voir samples/introspect-client).
-client_id = "sample-introspect-client"
-redirect_uris = ["http://127.0.0.1:8100/callback", "http://127.0.0.1:8000/callback"]
-scopes = "openid profile"
-client_type = "confidential"
-client_secret = "introspect-demo-secret"

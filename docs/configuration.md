@@ -95,10 +95,6 @@ Le fichier contient actuellement :
   (`authorization_code_ttl_seconds`, `access_token_ttl_seconds`) ;
 - le **client de démo du flow Authorization Code + PKCE** (`sample-pkce-client`, client
   *public*, callback `http://127.0.0.1:5173/callback`, scopes `openid profile email`) ;
-- le **client confidentiel de démo de l'introspection** (`sample-introspect-client`, secret
-  journalier `introspect-demo-secret`, callbacks `http://127.0.0.1:8100/callback` et
-  `http://127.0.0.1:8000/callback`, scopes `openid profile` — voir
-  `samples/introspect-client`) ;
 - le **seed utilisateurs de démonstration** servi par `/userinfo` (clés
   `sample-pkce-client` et `web-app`, claims `name`, `email`, `address`, … filtrés selon les
   scopes accordés au token, voir OIDC Core 1.0 §5.4).
