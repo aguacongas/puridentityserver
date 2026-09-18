@@ -13,6 +13,9 @@
 #                               autre valeur est rejetée ; si cette liste est
 #                               absente, aucune redirection de sortie n'est possible
 # - scopes         : scopes accordés au client (séparés par des espaces)
+# - web_origins    : origines supplémentaires autorisées en CORS (OAuth 2.0
+#                    for Browser-Based Apps), au-delà de celles déduites des
+#                    `redirect_uris` — ex. l'alias `localhost` d'un SPA
 # - client_type    : "public" (Authorization Code + PKCE, sans secret) ou
 #                    "confidential" (échange de tokens via client_secret ;
 #                    requis pour le grand client_credentials)
@@ -47,11 +50,13 @@ base_url = ""
 host = "127.0.0.1"
 port = 8000
 
-# Origines autorisées à appeler les endpoints depuis un navigateur (CORS —
-# client public SPA du sample `spa-client`, servi sur le port 5173).
-# Surchargeable via `PURIDENTITYSERVER_CORS_ORIGINS` (liste séparée par des
-# virgules). Vide = middleware désactivé (aucune origine autorisée).
-cors_origins = ["http://127.0.0.1:5173", "http://localhost:5173"]
+# Origines autorisées à appeler les endpoints depuis un navigateur (CORS) :
+# déduites automatiquement des `redirect_uris` et des `web_origins` des
+# clients actifs (enregistrés ou seedés). Aucune liste statique : un client
+# enregistré dynamiquement (RFC 7591) est couvert sans reconfiguration.
+# La métadonnée `web_origins` (OAuth 2.0 for Browser-Based Apps) déclare des
+# origines supplémentaires — ex. l'alias `localhost` d'une SPA servie sur
+# `127.0.0.1`.
 
 # Stockage de l'état persistant du serveur : clés de signature, clients,
 # codes d'autorisation et utilisateurs.
@@ -225,6 +230,8 @@ client_type = "public"
 # - par-client              : client PAR (RFC 9126) avec `par_required = true` —
 #                             /authorize direct rejeté, le flow doit passer par
 #                             POST /par puis /authorize?client_id+request_uri
+# - spa-client              : SPA statique sans callback (tous les flows OIDC),
+#                             redirection à la racine http://127.0.0.1:5177/
 # → les smokes tests de ces samples PASSERT une configuration spécifique (port
 #   dédié + ce client) via un fichier temporaire ; ici ils sont aussi enregistrés
 #   pour pouvoir lancer le serveur par défaut et tester manuellement les samples.
@@ -284,3 +291,11 @@ redirect_uris = ["http://127.0.0.1:8105/callback"]
 scopes = "openid profile email"
 client_type = "public"
 par_required = true
+
+[[settings.clients_seed]]
+client_id = "sample-spa-client"
+redirect_uris = ["http://127.0.0.1:5177/"]
+post_logout_redirect_uris = ["http://127.0.0.1:5177/"]
+web_origins = ["http://localhost:5177"]
+scopes = "openid profile email offline_access"
+client_type = "public"

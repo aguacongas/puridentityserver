@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PurIdentityServer — démo SPA (tous les flows)</title>
+  <style>
+    :root {
+      --bg: #f6f8fa;
+      --panel: #ffffff;
+      --border: #d0d7de;
+      --accent: #116d8e;
+      --accent-dark: #0b5168;
+      --text: #1f2328;
+      --muted: #57606a;
+      --error: #b00020;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header {
+      background: var(--accent);
+      color: #fff;
+      padding: 1rem 1.5rem;
+    }
+    header h1 { margin: 0; font-size: 1.25rem; }
+    header p { margin: 0.25rem 0 0; font-size: 0.85rem; opacity: 0.9; }
+    main { max-width: 980px; margin: 1.5rem auto; padding: 0 1.5rem; }
+    #flows {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 0.75rem;
+    }
+    button {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+      font-size: 0.95rem;
+      text-align: left;
+      cursor: pointer;
+      font-weight: 600;
+      color: var(--text);
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    button:hover { border-color: var(--accent); box-shadow: 0 1px 4px rgb(0 0 0 / 12%); }
+    button small {
+      display: block;
+      font-weight: 400;
+      color: var(--muted);
+      margin-top: 0.25rem;
+      font-size: 0.8rem;
+    }
+    section { margin-top: 1.5rem; }
+    section h2 { font-size: 1rem; margin: 0 0 0.5rem; }
+    #status {
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 0.8rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem;
+      min-height: 4rem;
+      max-height: 24rem;
+      overflow: auto;
+    }
+    #status .error { color: var(--error); }
+    #status .ok { color: #116d8e; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+      gap: 1rem;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+    }
+    .card h3 { margin: 0 0 0.5rem; font-size: 0.9rem; }
+    .card pre {
+      font-size: 0.75rem;
+      overflow: auto;
+      max-height: 14rem;
+      background: var(--bg);
+      border-radius: 6px;
+      padding: 0.5rem;
+      margin: 0;
+    }
+    table { border-collapse: collapse; width: 100%; font-size: 0.8rem; }
+    th, td { border: 1px solid var(--border); padding: 0.35rem 0.5rem; text-align: left; vertical-align: top; }
+    th { background: var(--bg); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>PurIdentityServer — démo SPA</h1>
+    <p id="endpoints">Découverte du serveur en cours…</p>
+  </header>
+  <main>
+    <div id="flows"></div>
+
+    <section>
+      <h2>Journal</h2>
+      <div id="status">Cliquez sur un flow pour l'exécuter.</div>
+    </section>
+
+    <section>
+      <h2>Résultats</h2>
+      <div id="results" class="grid"></div>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

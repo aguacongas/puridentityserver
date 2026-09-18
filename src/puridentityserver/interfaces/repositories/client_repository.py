@@ -34,6 +34,16 @@ class ClientRepository(Protocol):
         """Supprime le client identifié par ``client_id`` (idempotent)."""
         ...
 
+    async def is_cors_origin_allowed(self, origin: str) -> bool:
+        """Indique si l'``origin`` est autorisée en CORS par un client actif.
+
+        Les origines autorisées sont déduites des ``redirect_uris`` des
+        clients et complétées par leurs ``web_origins`` (OAuth 2.0 for
+        Browser-Based Apps) : un client enregistré dynamiquement (RFC 7591)
+        est donc couvert sans reconfiguration du serveur.
+        """
+        ...
+
     async def initialise(self) -> None:
         """Prépare le stockage (crée le schéma si nécessaire)."""
         ...

@@ -31,6 +31,7 @@ class ClientRow(PersistenceBase):
     post_logout_redirect_uris: Mapped[list[str]] = mapped_column(
         JSON, default=list, server_default=text("'[]'")
     )
+    web_origins: Mapped[list[str]] = mapped_column(JSON, default=list, server_default=text("'[]'"))
     scopes: Mapped[list[str]] = mapped_column(JSON)
     client_type: Mapped[str] = mapped_column(String(16))
     client_secret_hash: Mapped[str] = mapped_column(String(64), default="")
@@ -94,6 +95,12 @@ class SQLClientRepository:
             await session.delete(row)
             await session.commit()
 
+    async def is_cors_origin_allowed(self, origin: str) -> bool:
+        """Vrai si un client actif autorise cette origine en CORS."""
+        async with self._session_factory() as session:
+            rows = (await session.execute(select(ClientRow))).scalars().all()
+        return any(row.is_active and origin in _cors_origins(row) for row in rows)
+
 
 def _to_row(client: Client) -> ClientRow:
     """Convertit un Client domaine en ligne de persistance."""
@@ -101,6 +108,7 @@ def _to_row(client: Client) -> ClientRow:
         client_id=client.client_id,
         redirect_uris=sorted(client.redirect_uris),
         post_logout_redirect_uris=sorted(client.post_logout_redirect_uris),
+        web_origins=sorted(client.web_origins),
         scopes=sorted(scope.value for scope in client.scopes),
         client_type=client.client_type.value,
         client_secret_hash=client.client_secret_hash,
@@ -115,6 +123,21 @@ def _to_row(client: Client) -> ClientRow:
     )
 
 
+def _cors_origins(row: ClientRow) -> frozenset[str]:
+    """Origines CORS d'une ligne persistée (``redirect_uris`` + ``web_origins``).
+
+    Délègue au domaine la normalisation (ports par défaut élidés,
+    origines déduites des ``redirect_uris`` complétées des
+    ``web_origins`` déclarées).
+    """
+    client = Client(
+        client_id=row.client_id,
+        redirect_uris=frozenset(row.redirect_uris),
+        web_origins=frozenset(row.web_origins or ()),
+    )
+    return client.cors_allowed_origins()
+
+
 def _from_row(row: ClientRow) -> Client:
     """Reconstruit un Client domaine depuis une ligne persistée."""
     created_at = row.created_at
@@ -124,6 +147,7 @@ def _from_row(row: ClientRow) -> Client:
         client_id=row.client_id,
         redirect_uris=frozenset(row.redirect_uris),
         post_logout_redirect_uris=frozenset(row.post_logout_redirect_uris or ()),
+        web_origins=frozenset(row.web_origins or ()),
         scopes=frozenset(Scope(value) for value in row.scopes),
         client_type=ClientType(row.client_type),
         client_secret_hash=row.client_secret_hash,

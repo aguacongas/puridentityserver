@@ -44,6 +44,14 @@ class InMemoryClientRepository:
         async with self._lock:
             self._clients.pop(client_id, None)
 
+    async def is_cors_origin_allowed(self, origin: str) -> bool:
+        """Vrai si un client actif autorise cette origine en CORS."""
+        async with self._lock:
+            return any(
+                client.is_active and origin in client.cors_allowed_origins()
+                for client in self._clients.values()
+            )
+
     async def initialise(self) -> None:
         """Rien à préparer : le magasin existe dès la construction."""
 

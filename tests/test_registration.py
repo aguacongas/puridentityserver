@@ -46,6 +46,7 @@ _CONFIG = RegistrationConfig(
 _REGISTRATION = {
     "redirect_uris": ["https://app.example/callback"],
     "post_logout_redirect_uris": ["https://app.example/post-logout"],
+    "web_origins": ["https://app.example", "https://cdn.example/"],
     "scope": "openid profile email",
 }
 
@@ -104,6 +105,7 @@ class TestRegister:
         assert result.scope == "email openid profile"
         assert result.redirect_uris == ["https://app.example/callback"]
         assert result.post_logout_redirect_uris == ["https://app.example/post-logout"]
+        assert result.web_origins == ["https://app.example", "https://cdn.example"]
         assert result.registration_client_uri == f"{_ISSUER}/register/{result.client_id}"
         assert result.require_pushed_authorization_requests is False
         stored = run(usecase._clients.find_by_id(result.client_id))
@@ -112,6 +114,7 @@ class TestRegister:
         assert stored.registration_access_token_hash == hash_secret(
             result.registration_access_token
         )
+        assert stored.web_origins == frozenset({"https://app.example", "https://cdn.example"})
 
     def test_registers_par_required_client(self) -> None:
         usecase = _usecase()
@@ -130,6 +133,48 @@ class TestRegister:
         stored = run(usecase._clients.find_by_id(result.client_id))
         assert stored is not None
         assert stored.par_required is True
+
+    def test_registered_web_origins_are_cors_allowed(self) -> None:
+        usecase = _usecase()
+        _registered(usecase)
+
+        assert run(usecase._clients.is_cors_origin_allowed("https://app.example")) is True
+        assert run(usecase._clients.is_cors_origin_allowed("https://cdn.example")) is True
+        assert run(usecase._clients.is_cors_origin_allowed("https://evil.example")) is False
+
+    def test_rejects_invalid_web_origins(self) -> None:
+        usecase = _usecase()
+
+        for bad in (
+            ["https://app.example/path"],
+            ["ftp://cdn.example"],
+            ["not-an-origin"],
+        ):
+            result = run(
+                usecase.register(
+                    RegisterRequest(
+                        {**_REGISTRATION, "web_origins": bad},
+                        initial_access_token=_INITIAL_TOKEN,
+                    )
+                )
+            )
+            assert isinstance(result, RegistrationError)
+            assert result.error == "invalid_redirect_uri"
+
+    def test_rejects_malformed_web_origins_field(self) -> None:
+        usecase = _usecase()
+
+        result = run(
+            usecase.register(
+                RegisterRequest(
+                    {**_REGISTRATION, "web_origins": "https://app.example"},
+                    initial_access_token=_INITIAL_TOKEN,
+                )
+            )
+        )
+
+        assert isinstance(result, RegistrationError)
+        assert result.error == "invalid_client_metadata"
 
     def test_rejects_non_boolean_par_requirement(self) -> None:
         usecase = _usecase()
@@ -331,6 +376,7 @@ class TestRead:
         assert isinstance(result, ClientRegistration)
         assert result.client_id == registered.client_id
         assert result.redirect_uris == ["https://app.example/callback"]
+        assert result.web_origins == ["https://app.example", "https://cdn.example"]
         assert result.client_secret == ""
         assert result.registration_access_token == ""
 
@@ -359,7 +405,11 @@ class TestUpdate:
     def test_replaces_metadata(self) -> None:
         usecase = _usecase()
         registered = _registered(usecase)
-        new_metadata = {"redirect_uris": ["https://new.example/cb"], "scope": "openid"}
+        new_metadata = {
+            "redirect_uris": ["https://new.example/cb"],
+            "web_origins": ["https://other.example"],
+            "scope": "openid",
+        }
 
         result = run(
             usecase.update(
@@ -373,6 +423,7 @@ class TestUpdate:
 
         assert isinstance(result, ClientRegistration)
         assert result.redirect_uris == ["https://new.example/cb"]
+        assert result.web_origins == ["https://other.example"]
         assert result.scope == "openid"
         assert result.client_secret == ""
         read = run(
