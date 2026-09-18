@@ -30,6 +30,10 @@ class ClientRepository(Protocol):
         """Retourne tous les clients enregistrés."""
         ...
 
+    async def delete(self, client_id: str) -> None:
+        """Supprime le client identifié par ``client_id`` (idempotent)."""
+        ...
+
     async def initialise(self) -> None:
         """Prépare le stockage (crée le schéma si nécessaire)."""
         ...

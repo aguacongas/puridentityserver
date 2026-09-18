@@ -30,6 +30,9 @@ Elle est lue au démarrage par [pydantic-settings](https://docs.pydantic.dev/lat
 | `PURIDENTITYSERVER_USERS_SEED` | *(config.toml)* | Seed du user store servi par `/userinfo` (déversé dans le store au démarrage, comme `clients_seed`) : objet JSON mappant un `subject` (`sub`) à ses claims (format `{"alice": {"name": "...", "email": "...", "roles": ["admin"]}}`). Les clés `alice` / `bob` sont des sujets utilisateurs que le pont identité recopie sous l'UUID FastAPI Users correspondant (même email que `PURIDENTITYSERVER_IDENTITY_SEED_USERS`). Par défaut, `config.toml` fournit les profils démo `alice` (admin) et `bob` (user). |
 | `PURIDENTITYSERVER_IDENTITY_SEED_USERS` | *(config.toml)* | Comptes de connexion du login navigateur (FastAPI Users) : objet JSON mappant un `subject` à ses identifiants (format `{"alice": {"email": "alice@example.com", "password": "..."}}`). Le serveur les crée (mot de passe haché) au démarrage via `seed_users`. Par défaut `config.toml` fournit `alice` et `bob`. |
 | `PURIDENTITYSERVER_IDENTITY_JWT_LIFETIME_SECONDS` | `3600` | Durée de vie par défaut du cookie de session (surchargée par `session_lifetime_seconds` du client du flow, voir `PURIDENTITYSERVER_CLIENTS_SEED`). |
+| `PURIDENTITYSERVER_REGISTRATION_ENABLED` | `false` | Active la Dynamic Client Registration (RFC 7591 + 7592) : endpoint `POST /register` (création de client) et `GET/PUT/DELETE /register/{client_id}` (gestion via le registration access token, RFC 7592). Active aussi la publication de `registration_endpoint` dans le document de discovery. |
+| `PURIDENTITYSERVER_REGISTRATION_REQUIRES_INITIAL_ACCESS_TOKEN` | `true` | Quand vrai, la création d'un client (`POST /register`) exige un initial access token dans l'en-tête `Authorization: Bearer <token>` ; le jeton doit figurer dans `PURIDENTITYSERVER_REGISTRATION_INITIAL_ACCESS_TOKENS` (comparaison par hash SHA-256, jamais en clair). Mettre à `false` pour un mode ouvert — réservé au développement. |
+| `PURIDENTITYSERVER_REGISTRATION_INITIAL_ACCESS_TOKENS` | *(config.toml)* | Liste (séparée par des virgules en environnement) des initial access tokens autorisés à créer des clients. Chaque jeton est stocké uniquement sous forme d'empreinte SHA-256. Exemple : `PURIDENTITYSERVER_REGISTRATION_INITIAL_ACCESS_TOKENS="dev-registrar-token,staging-registrar"`. |
 
 Cookie de session : signé RS256 avec une clé dédiée (`KeyUse.SESSION`,
 stockée au même endroit que les clés de signature, mais **jamais publiée**
@@ -98,6 +101,9 @@ Le fichier contient actuellement :
   (`authorization_code_ttl_seconds`, `access_token_ttl_seconds`,
   `refresh_token_ttl_seconds`) et du **device flow** (`device_code_ttl_seconds`,
   `device_code_interval_seconds`) ;
+- la **Dynamic Client Registration** (`registration_enabled`,
+  `registration_requires_initial_access_token`,
+  `registration_initial_access_tokens` — RFC 7591 + 7592, endpoint `/register`) ;
 - le **client de démo du flow Authorization Code + PKCE** (`sample-pkce-client`, client
   *public*, callback `http://127.0.0.1:5173/callback`, scopes `openid profile email`) ;
 - le **seed utilisateurs de démonstration** servi par `/userinfo` (clés

@@ -39,6 +39,11 @@ class InMemoryClientRepository:
         async with self._lock:
             return list(self._clients.values())
 
+    async def delete(self, client_id: str) -> None:
+        """Supprime le client identifié par ``client_id`` (idempotent)."""
+        async with self._lock:
+            self._clients.pop(client_id, None)
+
     async def initialise(self) -> None:
         """Rien à préparer : le magasin existe dès la construction."""
 

@@ -50,9 +50,12 @@ class ClientType(str, Enum):
 class Client:
     """Client OAuth 2.0 / OIDC enregistré auprès du fournisseur.
 
-    ``client_secret_hash`` conserve l'empreinte SHA-256 du secret (jamais
-    le secret en clair). Les ``redirect_uris``, ``post_logout_redirect_uris``
-    et ``scopes`` sont limités à ce que le serveur accepte pour ce client.
+    ``client_secret_hash`` et ``registration_access_token_hash`` conservent
+    des empreintes SHA-256 (jamais les valeurs en clair). Les
+    ``redirect_uris``, ``post_logout_redirect_uris`` et ``scopes`` sont
+    limités à ce que le serveur accepte pour ce client. L'empreinte du
+    registration access token (RFC 7592) permet au client de gérer sa
+    configuration enregistrée (lecture, mise à jour, suppression).
     """
 
     client_id: str
@@ -61,6 +64,7 @@ class Client:
     scopes: frozenset[Scope] = frozenset((Scope.OPENID,))
     client_type: ClientType = ClientType.PUBLIC
     client_secret_hash: str = ""
+    registration_access_token_hash: str = ""
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     is_active: bool = True
     session_lifetime_seconds: int | None = None

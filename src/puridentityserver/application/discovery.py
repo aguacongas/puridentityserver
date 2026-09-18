@@ -11,6 +11,7 @@ class DiscoveryConfig:
 
     issuer: str
     base_url: str = ""
+    registration_enabled: bool = False
     signing_algorithms: tuple[str, ...] = tuple(
         algorithm.value for algorithm in ALL_SIGNING_ALGORITHMS
     )
@@ -26,7 +27,7 @@ class DiscoveryUseCase:
     def execute(self) -> dict[str, object]:
         """Construit les métadonnées OIDC Discovery (§3 OIDC Discovery 1.0)."""
         base = self._resolve_base_url()
-        return {
+        metadata: dict[str, object] = {
             "issuer": self._config.issuer,
             "authorization_endpoint": f"{base}/authorize",
             "token_endpoint": f"{base}/token",
@@ -38,6 +39,9 @@ class DiscoveryUseCase:
             "device_authorization_endpoint": f"{base}/device_authorization",
             "id_token_signing_alg_values_supported": list(self._config.signing_algorithms),
         }
+        if self._config.registration_enabled:
+            metadata["registration_endpoint"] = f"{base}/register"
+        return metadata
 
     def _resolve_base_url(self) -> str:
         return (self._config.base_url or self._config.issuer).rstrip("/")

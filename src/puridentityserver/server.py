@@ -16,6 +16,7 @@ from puridentityserver.application.discovery import DiscoveryConfig, DiscoveryUs
 from puridentityserver.application.introspect import IntrospectConfig, IntrospectUseCase
 from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
 from puridentityserver.application.logout import LogoutConfig, LogoutUseCase
+from puridentityserver.application.registration import RegistrationConfig, RegistrationUseCase
 from puridentityserver.application.revocation import RevocationConfig, RevocationUseCase
 from puridentityserver.application.token import TokenConfig, TokenUseCase
 from puridentityserver.application.userinfo import UserInfoConfig, UserInfoUseCase
@@ -49,6 +50,7 @@ from puridentityserver.interfaces.api.discovery import discovery_router
 from puridentityserver.interfaces.api.introspect import introspect_router
 from puridentityserver.interfaces.api.jwks import jwk_set_router
 from puridentityserver.interfaces.api.logout import logout_router
+from puridentityserver.interfaces.api.registration import registration_router
 from puridentityserver.interfaces.api.revocation import revocation_router
 from puridentityserver.interfaces.api.token import token_router
 from puridentityserver.interfaces.api.userinfo import userinfo_router
@@ -77,6 +79,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     config = DiscoveryConfig(
         issuer=settings.issuer,
         base_url=settings.base_url,
+        registration_enabled=settings.registration_enabled,
         signing_algorithms=settings.jwks_algorithms,
     )
 
@@ -157,6 +160,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         client_repository,
         token_manager,
     )
+    registration_usecase = RegistrationUseCase(
+        RegistrationConfig(
+            issuer=settings.issuer,
+            base_url=settings.base_url,
+            requires_initial_access_token=settings.registration_requires_initial_access_token,
+            initial_access_token_hashes=settings.registration_initial_access_token_hashes,
+        ),
+        client_repository,
+    )
 
     async def _resolve_session_lifetime(client_id: str) -> int | None:
         """Retourne la durée de session cookie configurée pour le client, si présente."""
@@ -220,7 +232,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(jwk_set_router(jwks_usecase))
     app.include_router(login_router(_resolve_session_lifetime))
     app.include_router(auth_router)
-    app.include_router(register_router)
+    app.include_router(register_router, prefix="/auth")
     app.include_router(authorize_router(authorize_usecase))
     app.include_router(token_router(token_usecase))
     app.include_router(device_authorization_router(device_usecase))
@@ -229,6 +241,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(introspect_router(introspect_usecase))
     app.include_router(revocation_router(revocation_usecase))
     app.include_router(logout_router(logout_usecase))
+    if settings.registration_enabled:
+        app.include_router(registration_router(registration_usecase))
     return app
 
 
