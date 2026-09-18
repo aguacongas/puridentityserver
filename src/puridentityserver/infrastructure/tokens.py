@@ -38,11 +38,15 @@ class PyJWTTokenManager:
         expires_at: int,
         issued_at: int,
         scopes: frozenset[Scope],
+        at_hash: str = "",
+        c_hash: str = "",
     ) -> str:
         """Construit l'``id_token`` : identité ``sub`` + audience ``client_id``.
 
         Le claim ``nonce`` ne figure que s'il est renseigné : un id_token de
-        refresh ne doit pas porter de nonce (OIDC Core 1.0 §12.2).
+        refresh ne doit pas porter de nonce (OIDC Core 1.0 §12.2). Les
+        empreintes ``at_hash`` / ``c_hash`` (liens implicit/hybrid) ne sont
+        ajoutées que lorsqu'elles sont fournies (OIDC Core 1.0 §3.3.2.11).
         """
         payload: dict[str, object] = {
             "iss": issuer,
@@ -54,6 +58,10 @@ class PyJWTTokenManager:
         }
         if nonce:
             payload["nonce"] = nonce
+        if at_hash:
+            payload["at_hash"] = at_hash
+        if c_hash:
+            payload["c_hash"] = c_hash
         return await self._sign(algorithm, payload)
 
     async def create_access_token(

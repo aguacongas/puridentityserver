@@ -27,8 +27,14 @@ class TokenManager(Protocol):
         expires_at: int,
         issued_at: int,
         scopes: frozenset[Scope],
+        at_hash: str = "",
+        c_hash: str = "",
     ) -> str:
-        """Crée un id_token signé JWS (JWT) pour le client ``audience``."""
+        """Crée un id_token signé JWS (JWT) pour le client ``audience``.
+
+        ``at_hash`` (implicit/hybrid) lie l'id_token à l'access token,
+        ``c_hash`` (hybrid) au code d'autorisation (OIDC Core 1.0 §3.3.2.11).
+        """
         ...
 
     async def create_access_token(

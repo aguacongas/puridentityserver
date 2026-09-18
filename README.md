@@ -47,7 +47,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 | ----------------------------------- | ----------------------------------------- | ---- |
 | `/.well-known/openid-configuration` | Discovery                                 | ✅   |
 | `/.well-known/jwks.json`            | Clés publiques de signature               | ✅   |
-| `/authorize`                        | Code / Implicit / Hybrid                  | ⬜   |
+| `/authorize`                        | Code / Implicit / Hybrid                  | ✅   |
 | `/token`                            | Échange code / refresh / client_credentials / device_code | ✅   |
 | `/device_authorization`             | Device Authorization Grant (RFC 8628)    | ✅   |
 | `/userinfo`                         | Claims de l'utilisateur                   | ✅   |
@@ -92,7 +92,7 @@ tests/             pytest unit + intégration (TestClient httpx)
 5. ✅ **Refresh tokens** — rotation, expiration, rejeu
 6. ✅ **Client Credentials** (RFC 6749 §4.4)
 7. ✅ **Device Authorization Grant** (RFC 8628)
-8. **Implicit & Hybrid** (OIDC Core 1.0)
+8. ✅ **Implicit & Hybrid** (OIDC Core 1.0)
 9. **Logout** — RP-Initiated Logout
 10. **Introspection / Revocation** (RFC 7662 / 7009)
 11. **Client Registration** — registration dynamique

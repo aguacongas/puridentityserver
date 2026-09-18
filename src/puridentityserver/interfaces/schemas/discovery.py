@@ -30,7 +30,17 @@ class DiscoveryDocument(BaseModel):
             "offline_access",
         ]
     )
-    response_types_supported: list[str] = Field(default_factory=lambda: ["code"])
+    response_types_supported: list[str] = Field(
+        default_factory=lambda: [
+            "code",
+            "id_token",
+            "token",
+            "id_token token",
+            "code id_token",
+            "code token",
+            "code id_token token",
+        ]
+    )
     response_modes_supported: list[str] = Field(default_factory=lambda: ["query", "fragment"])
     grant_types_supported: list[str] = Field(
         default_factory=lambda: [

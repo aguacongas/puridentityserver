@@ -97,12 +97,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     authorize_usecase = AuthorizeUseCase(
         AuthorizeConfig(
             code_ttl_seconds=settings.authorization_code_ttl_seconds,
-            signing_algorithm=settings.jwks_signing_algorithms[0].value
+            access_token_ttl_seconds=settings.access_token_ttl_seconds,
+            signing_algorithm=settings.jwks_signing_algorithms[0]
             if settings.jwks_signing_algorithms
-            else "RS256",
+            else JWTAlgorithm.RS256,
+            issuer=settings.issuer,
         ),
         client_repository,
         code_repository,
+        token_manager,
     )
     token_usecase = TokenUseCase(
         TokenConfig(

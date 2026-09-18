@@ -213,6 +213,8 @@ def test_settings_client_seed_reads_defaults_from_config_toml(
     client = settings.seed_clients[0]
     assert [c.client_id for c in settings.seed_clients] == [
         "sample-pkce-client",
+        "sample-implicit-client",
+        "sample-hybrid-client",
         "sample-refresh-client",
         "sample-cc-client",
         "sample-introspect-client",
