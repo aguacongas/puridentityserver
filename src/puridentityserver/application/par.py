@@ -21,7 +21,7 @@ from puridentityserver.application.authorize import (
     validate_authorization_request,
 )
 from puridentityserver.application.client_auth import CLIENT_UNKNOWN_ERROR, verify_client_secret
-from puridentityserver.domain.authorization import ClientType, PushedAuthorization
+from puridentityserver.domain.authorization import Client, ClientType, PushedAuthorization
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 from puridentityserver.interfaces.repositories.pushed_authorization_repository import (
     PushedAuthorizationRepository,
@@ -71,6 +71,36 @@ class PushedAuthorizationUseCase:
         self._clients = client_repository
         self._pushed = pushed_repository
 
+    async def _authenticate_client(self, client_id: str, client_secret: str) -> Client | PushError:
+        """Authentifie le client du push ; retourne ``PushError`` ``invalid_client`` sinon.
+
+        * ``client_secret`` présent → client confidentiel attendu, sinon
+          ``invalid_client`` (401).
+        * ``client_secret`` absent → client public, ``client_id`` seul suffit.
+        """
+        client = await self._clients.find_by_id(client_id)
+        if client is None or not client.is_active:
+            return PushError(
+                error="invalid_client",
+                error_description=CLIENT_UNKNOWN_ERROR,
+                status_code=401,
+            )
+        if not client_secret:
+            return client
+        if client.client_type is not ClientType.CONFIDENTIAL:
+            return PushError(
+                error="invalid_client",
+                error_description="client_secret fourni mais le client n'est pas confidentiel",
+                status_code=401,
+            )
+        if not verify_client_secret(client, client_secret):
+            return PushError(
+                error="invalid_client",
+                error_description="client_secret invalide",
+                status_code=401,
+            )
+        return client
+
     async def push(self, params: dict[str, str]) -> PushResult | PushError:
         """Authentifie le client et persiste la requête poussée.
 
@@ -80,11 +110,8 @@ class PushedAuthorizationUseCase:
         ``request_uri``, s'il est fourni, est rejeté conformément à la
         RFC 9126 §2 (interdiction d'inclure ``request_uri`` dans le push).
 
-        * ``client_secret`` présent → client confidentiel attendu, sinon
-          ``invalid_client`` (401).
-        * ``client_secret`` absent → client public, ``client_id`` seul suffit.
-        * Paramètres invalides → propagation de l'erreur du validateur
-          standard (``invalid_request``, ``invalid_scope``…).
+        Paramètres invalides → propagation de l'erreur du validateur
+        standard (``invalid_request``, ``invalid_scope``…).
         """
         client_id = params.get("client_id", "")
         client_secret = params.get("client_secret", "")
@@ -98,34 +125,9 @@ class PushedAuthorizationUseCase:
                 status_code=400,
             )
 
-        if client_secret:
-            client = await self._clients.find_by_id(client_id)
-            if client is None or not client.is_active:
-                return PushError(
-                    error="invalid_client",
-                    error_description=CLIENT_UNKNOWN_ERROR,
-                    status_code=401,
-                )
-            if client.client_type is not ClientType.CONFIDENTIAL:
-                return PushError(
-                    error="invalid_client",
-                    error_description="client_secret fourni mais le client n'est pas confidentiel",
-                    status_code=401,
-                )
-            if not verify_client_secret(client, client_secret):
-                return PushError(
-                    error="invalid_client",
-                    error_description="client_secret invalide",
-                    status_code=401,
-                )
-        else:
-            client = await self._clients.find_by_id(client_id)
-            if client is None or not client.is_active:
-                return PushError(
-                    error="invalid_client",
-                    error_description=CLIENT_UNKNOWN_ERROR,
-                    status_code=401,
-                )
+        authenticated = await self._authenticate_client(client_id, client_secret)
+        if isinstance(authenticated, PushError):
+            return authenticated
 
         authorize_request = AuthorizeRequest(
             response_type=params.get("response_type", ""),

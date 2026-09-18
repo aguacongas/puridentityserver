@@ -33,7 +33,17 @@ def authorize_router(
     """
     router = APIRouter(tags=["authorize"])
 
-    @router.get("/authorize", summary="Endpoint d'autorisation OAuth 2.0")
+    @router.get(
+        "/authorize",
+        summary="Endpoint d'autorisation OAuth 2.0",
+        responses={
+            400: {
+                "description": "Erreur OAuth 2.0 (invalid_request, invalid_client, "
+                "obligation PAR par client…)."
+            },
+            422: {"description": "Paramètres requis manquants."},
+        },
+    )
     async def authorize(
         request: Request,
         response_type: str = Query(default=""),

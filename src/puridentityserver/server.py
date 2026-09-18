@@ -57,8 +57,29 @@ from puridentityserver.interfaces.api.registration import registration_router
 from puridentityserver.interfaces.api.revocation import revocation_router
 from puridentityserver.interfaces.api.token import token_router
 from puridentityserver.interfaces.api.userinfo import userinfo_router
+from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 
 _PACKAGE_VERSION = "0.1.0"
+
+
+def _mount_authorization_routers(
+    app: FastAPI,
+    *,
+    authorize_usecase: AuthorizeUseCase,
+    par_usecase: PushedAuthorizationUseCase,
+    client_repository: ClientRepository,
+    par_enabled: bool,
+) -> None:
+    """Monte ``/authorize`` (+ ``/par`` quand la Pushed Authorization Request est activée)."""
+    app.include_router(
+        authorize_router(
+            authorize_usecase,
+            par_usecase=par_usecase if par_enabled else None,
+            client_repository=client_repository,
+        )
+    )
+    if par_enabled:
+        app.include_router(par_router(par_usecase))
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -245,15 +266,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(login_router(_resolve_session_lifetime))
     app.include_router(auth_router)
     app.include_router(register_router, prefix="/auth")
-    app.include_router(
-        authorize_router(
-            authorize_usecase,
-            par_usecase=par_usecase if settings.par_enabled else None,
-            client_repository=client_repository,
-        )
+    _mount_authorization_routers(
+        app,
+        authorize_usecase=authorize_usecase,
+        par_usecase=par_usecase,
+        client_repository=client_repository,
+        par_enabled=settings.par_enabled,
     )
-    if settings.par_enabled:
-        app.include_router(par_router(par_usecase))
     app.include_router(token_router(token_usecase))
     app.include_router(device_authorization_router(device_usecase))
     app.include_router(device_page_router(device_usecase))
