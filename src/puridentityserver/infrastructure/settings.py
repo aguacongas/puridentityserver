@@ -65,6 +65,7 @@ def _parse_client(raw: dict[str, object]) -> Client:
         refresh_token_lifetime_seconds=_optional_int(raw, "refresh_token_lifetime_seconds"),
         device_code_lifetime_seconds=_optional_int(raw, "device_code_lifetime_seconds"),
         device_code_interval_seconds=_optional_int(raw, "device_code_interval_seconds"),
+        par_required=bool(raw.get("par_required")),
     )
 
 
@@ -152,6 +153,14 @@ class Settings(BaseSettings):
     registration_requires_initial_access_token: bool = True
     registration_initial_access_tokens: Annotated[tuple[str, ...], NoDecode] = ()
 
+    # Pushed Authorization Request (RFC 9126) — endpoint /par.
+    # `par_enabled` expose POST /par. Le `request_uri` retourné est à usage
+    # unique et expire au bout de `par_ttl_seconds` (5 ≤ durée ≤ 600, durée
+    # recommandée 90) : plus courte que `authorization_code_ttl_seconds`, la
+    # fenêtre limite le stockage des demandes poussées.
+    par_enabled: bool = True
+    par_ttl_seconds: int = 90
+
     # Identité (FastAPI Users, spike) — durée par défaut du cookie de session.
     # Le cookie est signé RS256 avec une clé rotative dédiée (KeyUse.SESSION,
     # jamais publiée) : ni secret statique, ni collision avec les clés de
@@ -221,6 +230,14 @@ class Settings(BaseSettings):
         """Garantit que le type de stockage est supporté."""
         if value not in _STORAGE_TYPES:
             raise ValueError(f"Type de stockage non supporté : {value}")
+        return value
+
+    @field_validator("par_ttl_seconds")
+    @classmethod
+    def _validate_par_ttl(cls, value: int) -> int:
+        """Garantit une durée de vie du request_uri dans la fenêtre 5-600 s (RFC 9126 §2)."""
+        if not 5 <= value <= 600:
+            raise ValueError("par_ttl_seconds doit être compris entre 5 et 600 secondes")
         return value
 
     @field_validator("jwks_algorithms")

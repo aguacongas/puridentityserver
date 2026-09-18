@@ -20,6 +20,9 @@ from puridentityserver.interfaces.repositories.device_authorization_repository i
     DeviceAuthorizationRepository,
 )
 from puridentityserver.interfaces.repositories.key_pair_repository import KeyPairRepository
+from puridentityserver.interfaces.repositories.pushed_authorization_repository import (
+    PushedAuthorizationRepository,
+)
 from puridentityserver.interfaces.repositories.refresh_token_repository import (
     RefreshTokenRepository,
 )
@@ -139,4 +142,21 @@ def build_device_authorization_repository(settings: Settings) -> DeviceAuthoriza
         )
 
         return SQLDeviceAuthorizationRepository(settings.storage_dsn)
+    raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")
+
+
+def build_pushed_authorization_repository(settings: Settings) -> PushedAuthorizationRepository:
+    """Retourne le repository de requêtes poussées PAR selon ``storage_type``."""
+    if settings.storage_type == "memory":
+        from puridentityserver.infrastructure.persistence.memory.pushed_authorizations import (
+            InMemoryPushedAuthorizationRepository,
+        )
+
+        return InMemoryPushedAuthorizationRepository()
+    if settings.storage_type == "sql":
+        from puridentityserver.infrastructure.persistence.sql.pushed_authorizations import (
+            SQLPushedAuthorizationRepository,
+        )
+
+        return SQLPushedAuthorizationRepository(settings.storage_dsn)
     raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")

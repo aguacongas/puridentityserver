@@ -115,6 +115,16 @@ registration_enabled = true
 registration_requires_initial_access_token = true
 registration_initial_access_tokens = ["dev-registrar-token"]
 
+# Pushed Authorization Request (RFC 9126) : endpoint /par.
+# - par_enabled : active POST /par et publie l'endpoint au discovery
+#   (`pushed_authorization_request_endpoint`). Le request_uri retourné est à
+#   usage unique, lié au client, expire au bout de `par_ttl_seconds`.
+# - par_ttl_seconds : durée de vie du request_uri (5-600 s, défaut 90 s).
+# Surchargeables via `PURIDENTITYSERVER_PAR_ENABLED` et
+# `PURIDENTITYSERVER_PAR_TTL_SECONDS`.
+par_enabled = true
+par_ttl_seconds = 90
+
 # seed utilisateurs (user store) : clé = subject (sub), valeur = claims
 # exposés selon les scopes accordés au jeton (openid > sub, profile >
 # identité, email, address, phone). Sujets = utilisateurs, jamais des
@@ -206,6 +216,9 @@ client_type = "public"
 # - registration-client     : aucun client seed — le client est créé dynamiquement
 #                             via /register (RFC 7591/7592, voir
 #                             `registration_initial_access_tokens` ci-dessus)
+# - par-client              : client PAR (RFC 9126) avec `par_required = true` —
+#                             /authorize direct rejeté, le flow doit passer par
+#                             POST /par puis /authorize?client_id+request_uri
 # → les smokes tests de ces samples PASSERT une configuration spécifique (port
 #   dédié + ce client) via un fichier temporaire ; ici ils sont aussi enregistrés
 #   pour pouvoir lancer le serveur par défaut et tester manuellement les samples.
@@ -253,3 +266,15 @@ client_secret = "introspect-demo-secret"
 client_id = "sample-device-client"
 scopes = "openid profile"
 client_type = "public"
+
+# client du sample Pushed Authorization Request (RFC 9126) : flow back-channel
+# (POST /par) avec par_required = true — /authorize direct rejeté.
+# Le smoke test génère une configuration spécifique (port dédié) via
+# samples/smoke_common.py.
+
+[[settings.clients_seed]]
+client_id = "sample-par-client"
+redirect_uris = ["http://127.0.0.1:8105/callback"]
+scopes = "openid profile email"
+client_type = "public"
+par_required = true

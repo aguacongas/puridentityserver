@@ -56,6 +56,9 @@ class Client:
     limités à ce que le serveur accepte pour ce client. L'empreinte du
     registration access token (RFC 7592) permet au client de gérer sa
     configuration enregistrée (lecture, mise à jour, suppression).
+    ``par_required`` (RFC 9126 §6.1) force ce client à pousser ses
+    demandes via ``/par`` : l'endpoint d'autorisation rejette alors toute
+    demande directe sans ``request_uri``.
     """
 
     client_id: str
@@ -73,6 +76,7 @@ class Client:
     refresh_token_lifetime_seconds: int | None = None
     device_code_lifetime_seconds: int | None = None
     device_code_interval_seconds: int | None = None
+    par_required: bool = False
 
 
 def resolve_lifetime_seconds(configured: int | None, default: int) -> int:
@@ -176,3 +180,22 @@ class DeviceAuthorization:
     expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     interval: int = 5
     last_polled_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PushedAuthorization:
+    """Requête d'autorisation poussée au serveur (RFC 9126).
+
+    Créée par ``POST /par``, elle lie le ``request_uri`` opque (supposé
+    invérifiable, ``urn:ietf:params:oauth:request_uri:<value>``) aux paramètres
+    de la demande d'autorisation (``params``, chaînes sérialisées). Le
+    ``request_uri`` est à usage unique et lié au client qui l'a poussé ;
+    ``is_consumed`` et ``expires_at`` le rendent impossible à réutiliser ou à
+    rejouer après expiration.
+    """
+
+    request_uri: str
+    client_id: str = ""
+    params: dict[str, str] = field(default_factory=dict)
+    expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    is_consumed: bool = False

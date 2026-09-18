@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 
 from puridentityserver.application.authorize import (
@@ -13,45 +13,168 @@ from puridentityserver.application.authorize import (
     AuthorizeRequest,
     AuthorizeUseCase,
 )
+from puridentityserver.application.par import PushedAuthorizationUseCase, PushError
 from puridentityserver.domain.authorization import ResponseMode
 from puridentityserver.identity.config import CurrentUserOptional
+from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 
 
-def authorize_router(usecase: AuthorizeUseCase) -> APIRouter:
-    """Construit le routeur FastAPI exposant ``GET /authorize``."""
+def authorize_router(
+    usecase: AuthorizeUseCase,
+    par_usecase: PushedAuthorizationUseCase | None = None,
+    client_repository: ClientRepository | None = None,
+) -> APIRouter:
+    """Construit le routeur FastAPI exposant ``GET /authorize``.
+
+    ``par_usecase`` active la résolution de ``request_uri`` (RFC 9126 §6.2) ;
+    ``None`` (PAR désactivé) rejette toute référence poussée.
+    ``client_repository`` permet d'appliquer l'obligation PAR par client
+    (``par_required``, RFC 9126 §6.1).
+    """
     router = APIRouter(tags=["authorize"])
 
     @router.get("/authorize", summary="Endpoint d'autorisation OAuth 2.0")
     async def authorize(
-        response_type: str = Query(...),
-        client_id: str = Query(...),
-        redirect_uri: str = Query(...),
-        scope: str = Query(...),
+        request: Request,
+        response_type: str = Query(default=""),
+        client_id: str = Query(default=""),
+        redirect_uri: str = Query(default=""),
+        scope: str = Query(default=""),
         state: str = Query(default=""),
         nonce: str = Query(default=""),
         code_challenge: str = Query(default=""),
         code_challenge_method: str = Query(default="S256"),
         response_mode: str = Query(default=""),
+        request_uri: str = Query(default=""),
         user: CurrentUserOptional = None,
     ) -> RedirectResponse:
-        auth_request = AuthorizeRequest(
-            response_type=response_type,
-            client_id=client_id,
-            redirect_uri=redirect_uri,
-            scope=scope,
-            subject=str(user.id) if user is not None else "",
-            state=state,
-            nonce=nonce,
-            code_challenge=code_challenge,
-            code_challenge_method=code_challenge_method,
-            response_mode=response_mode,
-        )
+        if request_uri:
+            auth_request = await _resolve_pushed_request(
+                request, client_id, request_uri, par_usecase
+            )
+        else:
+            missing = [
+                name
+                for name, value in (
+                    ("response_type", response_type),
+                    ("client_id", client_id),
+                    ("redirect_uri", redirect_uri),
+                    ("scope", scope),
+                )
+                if not value
+            ]
+            if missing:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Paramètres requis manquants : {', '.join(missing)}",
+                )
+            await _enforce_par_requirement(client_id, client_repository)
+            auth_request = AuthorizeRequest(
+                response_type=response_type,
+                client_id=client_id,
+                redirect_uri=redirect_uri,
+                scope=scope,
+                state=state,
+                nonce=nonce,
+                code_challenge=code_challenge,
+                code_challenge_method=code_challenge_method,
+                response_mode=response_mode,
+            )
+
+        if user is not None:
+            auth_request = AuthorizeRequest(
+                response_type=auth_request.response_type,
+                client_id=auth_request.client_id,
+                redirect_uri=auth_request.redirect_uri,
+                scope=auth_request.scope,
+                subject=str(user.id),
+                state=auth_request.state,
+                nonce=auth_request.nonce,
+                code_challenge=auth_request.code_challenge,
+                code_challenge_method=auth_request.code_challenge_method,
+                response_mode=auth_request.response_mode,
+            )
         result = await usecase.execute(auth_request)
         if isinstance(result, AuthorizeRedirect):
             return RedirectResponse(result.redirect_uri, status_code=302)
         return _error_redirect(result)
 
     return router
+
+
+async def _resolve_pushed_request(
+    request: Request,
+    client_id: str,
+    request_uri: str,
+    par_usecase: PushedAuthorizationUseCase | None,
+) -> AuthorizeRequest:
+    """Résout une référence poussée (RFC 9126 §6.2).
+
+    La query string brute de ``/authorize`` ne doit contenir que ``client_id``
+    et ``request_uri`` : le serveur ignore les paramètres déjà poussés et
+    rejette tout paramètre supplémentaire. Les erreurs de résolution
+    (référence inconnue, expirée, consommée, client incohérent ; PAR
+    désactivé) répondent en JSON ``invalid_request``.
+    """
+    if par_usecase is None:
+        raise _push_error(
+            PushError(
+                error="invalid_request",
+                error_description="Pushed Authorization Request désactivé",
+                status_code=400,
+            )
+        )
+
+    allowed = {"client_id", "request_uri"}
+    unexpected = [
+        name for name in parse_qs(request.url.query, keep_blank_values=True) if name not in allowed
+    ]
+    if unexpected:
+        raise _push_error(
+            PushError(
+                error="invalid_request",
+                error_description="Les paramètres supplémentaires sont interdits "
+                "avec request_uri (RFC 9126 §6.2)",
+                status_code=400,
+            )
+        )
+
+    resolved = await par_usecase.resolve(request_uri=request_uri, client_id=client_id)
+    if isinstance(resolved, PushError):
+        raise _push_error(resolved)
+    return resolved
+
+
+def _push_error(error: PushError) -> HTTPException:
+    """Construit l'exception HTTP JSON structurée d'une erreur PAR."""
+    return HTTPException(
+        status_code=error.status_code,
+        detail={"error": error.error, "error_description": error.error_description},
+    )
+
+
+async def _enforce_par_requirement(
+    client_id: str, client_repository: ClientRepository | None
+) -> None:
+    """Refuse une demande directe à /authorize si le client exige PAR (RFC 9126 §6.1).
+
+    Un client marqué ``par_required`` doit pousser ses paramètres via
+    ``POST /par`` puis présenter le ``request_uri`` à l'endpoint
+    d'autorisation ; toute demande non poussée est rejetée en
+    ``invalid_request``.
+    """
+    if client_repository is None:
+        return
+    client = await client_repository.find_by_id(client_id)
+    if client is not None and client.par_required:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "error_description": "Ce client exige l'utilisation de Pushed "
+                "Authorization Request (RFC 9126 §6.1)",
+            },
+        )
 
 
 def _error_redirect(result: AuthorizeError) -> RedirectResponse:

@@ -109,6 +109,106 @@ class AuthorizeError:
 AuthorizeResult = AuthorizeRedirect | AuthorizeError
 
 
+@dataclass(frozen=True, slots=True)
+class ValidatedAuthorization:
+    """Demande d'autorisation validée : client résolu + paramètres normalisés."""
+
+    client: Client
+    response_types: frozenset[str]
+    has_tokens: bool
+    wants_code: bool
+    wants_id_token: bool
+    wants_token: bool
+    response_mode: ResponseMode
+
+
+async def validate_authorization_request(
+    request: AuthorizeRequest,
+    client_repository: ClientRepository,
+) -> ValidatedAuthorization | AuthorizeError:
+    """Valide une demande d'autorisation (OIDC Core 1.0 §3.1.2.1).
+
+    Partagée entre l'endpoint ``/authorize`` et le endpoint PAR
+    (RFC 9126 §2.1) : le ``response_type`` doit être supporté, le client
+    connu et actif, la ``redirect_uri`` enregistrée, le scope ``openid``
+    requis, et PKCE / ``nonce`` contrôlés. Retourne le bundle validé
+    (client + mode de réponse) ou l'erreur à renvoyer au client.
+    """
+    response_types = frozenset(request.response_type.split())
+    has_tokens = bool(response_types & frozenset(("id_token", "token")))
+    error_mode = _error_response_mode(request.response_mode, has_tokens)
+
+    if not response_types or response_types not in _VALID_RESPONSE_TYPES:
+        return _authorize_error(
+            "unsupported_response_type",
+            request,
+            response_mode=error_mode,
+        )
+
+    wants_code = "code" in response_types
+    wants_id_token = "id_token" in response_types
+    wants_token = "token" in response_types
+    response_mode = _resolve_response_mode(request.response_mode, has_tokens)
+    if response_mode is None:
+        return _authorize_error(
+            "invalid_request",
+            request,
+            description="'query' est interdit quand des jetons sont retournés "
+            "(OIDC Core 1.0 §3.1.2.1)",
+            response_mode=error_mode,
+        )
+
+    client = await client_repository.find_by_id(request.client_id)
+    if client is None or not client.is_active:
+        return _authorize_error(
+            "invalid_client",
+            request,
+            response_mode=response_mode,
+        )
+
+    if request.redirect_uri not in client.redirect_uris:
+        return _authorize_error(
+            "invalid_redirect_uri",
+            request,
+            response_mode=response_mode,
+        )
+
+    scopes = Scope.from_space_separated(request.scope)
+    if Scope.OPENID not in scopes:
+        return _authorize_error(
+            "invalid_scope",
+            request,
+            description="Le scope 'openid' est requis",
+            response_mode=response_mode,
+        )
+
+    if request.code_challenge and request.code_challenge_method not in ("S256", "plain"):
+        return _authorize_error(
+            "invalid_request",
+            request,
+            description="code_challenge_method doit être 'S256' ou 'plain'",
+            response_mode=response_mode,
+        )
+
+    if wants_id_token and not request.nonce:
+        return _authorize_error(
+            "invalid_request",
+            request,
+            description="nonce requis (OIDC Core 1.0 §3.2.2.10)",
+            response_mode=response_mode,
+        )
+
+    return ValidatedAuthorization(
+        client=client,
+        response_types=response_types,
+        has_tokens=has_tokens,
+        wants_code=wants_code,
+        wants_id_token=wants_id_token,
+        wants_token=wants_token,
+        response_mode=response_mode,
+    )
+
+
 class AuthorizeUseCase:
     """Valide la demande d'autorisation puis émet code et/ou jetons.
 
@@ -134,88 +234,26 @@ class AuthorizeUseCase:
 
     async def execute(self, request: AuthorizeRequest) -> AuthorizeResult:
         """Traite la demande d'autorisation et retourne le redirect ou l'erreur."""
-        response_types = frozenset(request.response_type.split())
-        has_tokens = bool(response_types & frozenset(("id_token", "token")))
-        error_mode = self._error_mode(request.response_mode, has_tokens)
-
-        if not response_types or response_types not in _VALID_RESPONSE_TYPES:
-            return self._error(
-                "unsupported_response_type",
-                request.state,
-                redirect_uri=request.redirect_uri,
-                response_mode=error_mode,
-            )
-
-        wants_code = "code" in response_types
-        wants_id_token = "id_token" in response_types
-        wants_token = "token" in response_types
-        response_mode = self._resolve_mode(request.response_mode, has_tokens)
-        if response_mode is None:
-            return self._error(
-                "invalid_request",
-                request.state,
-                redirect_uri=request.redirect_uri,
-                description="'query' est interdit quand des jetons sont retournés "
-                "(OIDC Core 1.0 §3.1.2.1)",
-                response_mode=error_mode,
-            )
-        error_mode = response_mode
-
-        client = await self._clients.find_by_id(request.client_id)
-        if client is None or not client.is_active:
-            return self._error(
-                "invalid_client",
-                request.state,
-                redirect_uri=request.redirect_uri,
-                response_mode=error_mode,
-            )
-
-        if request.redirect_uri not in client.redirect_uris:
-            return self._error(
-                "invalid_redirect_uri",
-                request.state,
-                redirect_uri=request.redirect_uri,
-                response_mode=error_mode,
-            )
+        validated = await validate_authorization_request(request, self._clients)
+        if isinstance(validated, AuthorizeError):
+            return validated
 
         scopes = Scope.from_space_separated(request.scope)
-        if Scope.OPENID not in scopes:
-            return self._error(
-                "invalid_scope",
-                request.state,
-                redirect_uri=request.redirect_uri,
-                description="Le scope 'openid' est requis",
-                response_mode=error_mode,
-            )
-
-        if request.code_challenge and request.code_challenge_method not in ("S256", "plain"):
-            return self._error(
-                "invalid_request",
-                request.state,
-                redirect_uri=request.redirect_uri,
-                description="code_challenge_method doit être 'S256' ou 'plain'",
-                response_mode=error_mode,
-            )
-
-        if wants_id_token and not request.nonce:
-            return self._error(
-                "invalid_request",
-                request.state,
-                redirect_uri=request.redirect_uri,
-                description="nonce requis (OIDC Core 1.0 §3.2.2.10)",
-                response_mode=error_mode,
-            )
-
         code = ""
-        if wants_code:
-            code = await self._issue_code(request, scopes, client)
+        if validated.wants_code:
+            code = await self._issue_code(request, scopes, validated.client)
 
         id_token = ""
         access_token = ""
         expires_in = 0
-        if wants_id_token or wants_token:
+        if validated.wants_id_token or validated.wants_token:
             id_token, access_token, expires_in = await self._issue_tokens(
-                request, scopes, client, code, wants_id_token, wants_token
+                request,
+                scopes,
+                validated.client,
+                code,
+                validated.wants_id_token,
+                validated.wants_token,
             )
 
         params = self._build_success_params(
@@ -223,14 +261,16 @@ class AuthorizeUseCase:
             id_token=id_token,
             access_token=access_token,
             expires_in=expires_in,
-            scopes=scopes if wants_token else frozenset(),
+            scopes=scopes if validated.wants_token else frozenset(),
             state=request.state,
         )
         return AuthorizeRedirect(
-            redirect_uri=self._build_redirect_uri(request.redirect_uri, response_mode, params),
+            redirect_uri=self._build_redirect_uri(
+                request.redirect_uri, validated.response_mode, params
+            ),
             code=code,
             state=request.state,
-            response_mode=response_mode,
+            response_mode=validated.response_mode,
             id_token=id_token,
             access_token=access_token,
             expires_in=expires_in,
@@ -337,46 +377,47 @@ class AuthorizeUseCase:
         separator = "#" if response_mode is ResponseMode.FRAGMENT else "?"
         return f"{redirect_uri.rstrip('/')}{separator}{'&'.join(params)}"
 
-    def _resolve_mode(self, requested: str, has_tokens: bool) -> ResponseMode | None:
-        """Détermine le mode de réponse ; ``None`` signale une combinaison interdite.
 
-        Le fragment s'impose dès qu'un jeton est retourné : la query string
-        exposerait le jeton (historique, Referer). Un ``response_mode=query``
-        explicite combiné à des jetons est donc refusé (RFC 6749 §4.2.2,
-        OIDC Core 1.0 §3.1.2.1).
-        """
-        if requested == ResponseMode.FRAGMENT.value:
-            return ResponseMode.FRAGMENT
-        if requested == ResponseMode.QUERY.value:
-            return None if has_tokens else ResponseMode.QUERY
-        return ResponseMode.FRAGMENT if has_tokens else ResponseMode.QUERY
+def _resolve_response_mode(requested: str, has_tokens: bool) -> ResponseMode | None:
+    """Détermine le mode de réponse ; ``None`` signale une combinaison interdite.
 
-    def _error_mode(self, requested: str, has_tokens: bool) -> ResponseMode:
-        """Mode d'encodage des réponses d'erreur (RFC 6749 §4.2.2.1, OIDC §3.2.2.6).
+    Le fragment s'impose dès qu'un jeton est retourné : la query string
+    exposerait le jeton (historique, Referer). Un ``response_mode=query``
+    explicite combiné à des jetons est donc refusé (RFC 6749 §4.2.2,
+    OIDC Core 1.0 §3.1.2.1).
+    """
+    if requested == ResponseMode.FRAGMENT.value:
+        return ResponseMode.FRAGMENT
+    if requested == ResponseMode.QUERY.value:
+        return None if has_tokens else ResponseMode.QUERY
+    return ResponseMode.FRAGMENT if has_tokens else ResponseMode.QUERY
 
-        Les erreurs des flows retournant des jetons vont dans le fragment ; les
-        autres dans la query string. Une combinaison ``query`` + jetons (interdite)
-        retombe aussi sur le fragment.
-        """
-        resolved = self._resolve_mode(requested, has_tokens)
-        return resolved if resolved is not None else ResponseMode.FRAGMENT
 
-    def _error(
-        self,
-        error: str,
-        state: str,
-        description: str = "",
-        redirect_uri: str = "",
-        response_mode: ResponseMode = ResponseMode.QUERY,
-    ) -> AuthorizeError:
-        """Construit une réponse d'erreur OAuth (RFC 6749 §4.1.2.1, §4.2.2.1)."""
-        return AuthorizeError(
-            error=error,
-            error_description=description,
-            redirect_uri=redirect_uri,
-            state=state,
-            response_mode=response_mode,
-        )
+def _error_response_mode(requested: str, has_tokens: bool) -> ResponseMode:
+    """Mode d'encodage des réponses d'erreur (RFC 6749 §4.2.2.1, OIDC §3.2.2.6).
+
+    Les erreurs des flows retournant des jetons vont dans le fragment ; les
+    autres dans la query string. Une combinaison ``query`` + jetons (interdite)
+    retombe aussi sur le fragment.
+    """
+    resolved = _resolve_response_mode(requested, has_tokens)
+    return resolved if resolved is not None else ResponseMode.FRAGMENT
+
+
+def _authorize_error(
+    error: str,
+    request: AuthorizeRequest,
+    description: str = "",
+    response_mode: ResponseMode = ResponseMode.QUERY,
+) -> AuthorizeError:
+    """Construit une réponse d'erreur OAuth (RFC 6749 §4.1.2.1, §4.2.2.1)."""
+    return AuthorizeError(
+        error=error,
+        error_description=description,
+        redirect_uri=request.redirect_uri,
+        state=request.state,
+        response_mode=response_mode,
+    )
 
 
 def _hash_artefact(value: str, algorithm: JWTAlgorithm) -> str:

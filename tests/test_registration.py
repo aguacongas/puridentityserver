@@ -105,12 +105,46 @@ class TestRegister:
         assert result.redirect_uris == ["https://app.example/callback"]
         assert result.post_logout_redirect_uris == ["https://app.example/post-logout"]
         assert result.registration_client_uri == f"{_ISSUER}/register/{result.client_id}"
+        assert result.require_pushed_authorization_requests is False
         stored = run(usecase._clients.find_by_id(result.client_id))
         assert stored is not None
         assert stored.client_secret_hash == hash_secret(result.client_secret)
         assert stored.registration_access_token_hash == hash_secret(
             result.registration_access_token
         )
+
+    def test_registers_par_required_client(self) -> None:
+        usecase = _usecase()
+
+        result = run(
+            usecase.register(
+                RegisterRequest(
+                    {**_REGISTRATION, "require_pushed_authorization_requests": True},
+                    initial_access_token=_INITIAL_TOKEN,
+                )
+            )
+        )
+
+        assert isinstance(result, ClientRegistration)
+        assert result.require_pushed_authorization_requests is True
+        stored = run(usecase._clients.find_by_id(result.client_id))
+        assert stored is not None
+        assert stored.par_required is True
+
+    def test_rejects_non_boolean_par_requirement(self) -> None:
+        usecase = _usecase()
+
+        result = run(
+            usecase.register(
+                RegisterRequest(
+                    {**_REGISTRATION, "require_pushed_authorization_requests": "yes"},
+                    initial_access_token=_INITIAL_TOKEN,
+                )
+            )
+        )
+
+        assert isinstance(result, RegistrationError)
+        assert result.error == "invalid_client_metadata"
 
     def test_register_issues_secret_only_once(self) -> None:
         usecase = _usecase()

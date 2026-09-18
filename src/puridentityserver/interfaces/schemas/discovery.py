@@ -20,6 +20,7 @@ class DiscoveryDocument(BaseModel):
     end_session_endpoint: str | None = None
     registration_endpoint: str | None = None
     device_authorization_endpoint: str | None = None
+    pushed_authorization_request_endpoint: str | None = None
     scopes_supported: list[str] = Field(
         default_factory=lambda: [
             "openid",
