@@ -112,6 +112,11 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
 
+    # CORS — origines autorisées à appeler les endpoints depuis le navigateur
+    # (client public Authorization Code + PKCE servi depuis un autre port, ex.
+    # le samples/spa-client). Vide = middleware désactivé.
+    cors_origins: Annotated[tuple[str, ...], NoDecode] = ()
+
     # Stockage de l'état persistant du serveur (clés de signature, clients,
     # codes d'autorisation, utilisateurs) : "memory" (monoprocess) ou "sql".
     storage_type: str = "memory"
@@ -183,6 +188,14 @@ class Settings(BaseSettings):
         """Transforme `PURIDENTITYSERVER_REGISTRATION_INITIAL_ACCESS_TOKENS` en tuple."""
         if isinstance(value, str):
             return tuple(part.strip() for part in value.split(",") if part.strip())
+        return value
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_cors_origins(cls, value: object) -> object:
+        """Transforme `PURIDENTITYSERVER_CORS_ORIGINS` (virgules) en tuple d'origines."""
+        if isinstance(value, str):
+            return tuple(part.strip().rstrip("/") for part in value.split(",") if part.strip())
         return value
 
     @field_validator("clients_seed", mode="before")

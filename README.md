@@ -41,6 +41,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 - [Pushed Authorization Requests] (RFC 9126) — extension
 - [OpenID Connect RP-Initiated Logout] (OIDC spec) — `/end_session`
 - [OAuth 2.0 Dynamic Client Registration] (RFC 7591) + [Client Management] (RFC 7592) — `/register`
+- CORS — origines configurées via `PURIDENTITYSERVER_CORS_ORIGINS` (SPA public en Authorization Code + PKCE)
 
 ## Endpoints prévus
 

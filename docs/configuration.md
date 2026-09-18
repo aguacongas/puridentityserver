@@ -14,6 +14,7 @@ Elle est lue au démarrage par [pydantic-settings](https://docs.pydantic.dev/lat
 | `PURIDENTITYSERVER_BASE_URL` | *(issuer)* | Base utilisée pour construire les URL des endpoints publiées dans le document de discovery (`/authorize`, `/token`, `/userinfo`, `/.well-known/jwks.json`, …). Par défaut : l'issuer. |
 | `PURIDENTITYSERVER_HOST` | `127.0.0.1` | Interface réseau sur laquelle écoute le serveur Uvicorn. |
 | `PURIDENTITYSERVER_PORT` | `8000` | Port d'écoute. |
+| `PURIDENTITYSERVER_CORS_ORIGINS` | *(vide)* | Origines autorisées à appeler les endpoints depuis un navigateur (liste séparée par des virgules, ex. une SPA servie sur un autre port). Vide = middleware CORS désactivé (aucun cross-origin). |
 | `PURIDENTITYSERVER_STORAGE_TYPE` | `memory` | Type de stockage de l'état persistant du serveur (clés de signature, clients, codes d'autorisation, utilisateurs). `memory` pour le développement local, `sql` pour la production. |
 | `PURIDENTITYSERVER_STORAGE_DSN` | `sqlite:///puridentityserver.db` | Chaîne de connexion SQLAlchemy du stockage persistant — utilisée lorsque `STORAGE_TYPE=sql`. |
 | `PURIDENTITYSERVER_JWKS_KEY_SIZE` | `4096` | Taille des clés RSA générées (bits) pour la signature des jetons. |
@@ -70,6 +71,16 @@ plusieurs instances du serveur et de reprendre après un redémarrage.
 | --- | --- | --- |
 | `memory` | Stockage en mémoire (Process-local, sans persistance) | Développement local, tests unitaires |
 | `sql` | Stockage SQL via SQLAlchemy (SQLite, PostgreSQL, MySQL) | Production, load balancing multi-instance |
+
+**CORS (SPA)** : pour qu'un client public JavaScript (Authorization Code +
+PKCE, ex. `samples/spa-client`) puisse appeler `/authorize`, `/token`,
+`/par`, `/device_authorization`, `/introspect`, `/revoke` et `/userinfo`
+depuis le navigateur, déclarer son origine dans `CORS_ORIGINS` (ex.
+`PURIDENTITYSERVER_CORS_ORIGINS="http://127.0.0.1:5173"`). Le middleware est
+inactif tant que la liste est vide ; aucune origine n'est alors autorisée et
+les en-têtes `Access-Control-*` ne sont pas émis. Les cookies de session
+navigateur ne sont **pas** partagés (cross-origin, `allow_credentials=false`),
+conformément au modèle public sans secret.
 
 **Chargement de la DSN** : quand le type est `sql`, le DSN `STORAGE_DSN` est
 réécrit automatiquement vers le dialecte asynchrone
