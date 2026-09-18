@@ -35,7 +35,12 @@ Le client effectue :
    `id_token` et l'`access_token` final, eux-mêmes vérifiés ;
 7. l'**appel à `/userinfo`** avec l'access token final (RFC 6750) et
    l'affichage des claims de l'utilisateur (filtrés selon les scopes
-   `openid profile email` accordés au token).
+   `openid profile email` accordés au token) ;
+8. la **déconnexion RP-Initiated Logout** (`/logout`, OIDC Core 1.0 §5) :
+   redirection vers `end_session_endpoint` avec `id_token_hint` (l'id_token
+   issu du `/token`), l'URI de sortie enregistrée et un `state` ; le serveur
+   efface le cookie de session puis renvoie le navigateur vers `/post-logout`
+   (state rejoué) où la session locale du client est purgée.
 
 Comptes de démonstration fournis par le serveur (créés automatiquement au
 démarrage) :
@@ -74,8 +79,10 @@ Prérequis : `uv` et une version récente de Python.
 Un test de bout en bout lance le serveur + ce client, joue le flow complet
 et vérifie chaque étape (redirection, remise du code + des jetons dans le
 *fragment*, vérification de l'`id_token` avec `at_hash`/`c_hash`, échange du
-code au `/token` avec PKCE, rejet du rejeu). Les sous-processus sont
-nettoyés à la fin, avec un garde-fou temporel de 30 s.
+code au `/token` avec PKCE, rejet du rejeu) **puis le RP-Initiated Logout**
+(session du serveur effacée, redirection vers `/post-logout`, `state` rejoué,
+session locale purgée). Les sous-processus sont nettoyés à la fin, avec un
+garde-fou temporel de 30 s.
 
 ```bash
 uv run python samples/hybrid-client/smoke_test.py

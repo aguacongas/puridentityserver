@@ -14,7 +14,11 @@ sous-processus, exécute le flux complet et vérifie chaque étape :
 5. le client reçoit le fragment (`/collect`), vérifie l'``id_token``
    (JWKS, ``aud``, ``nonce``, ``at_hash``, ``c_hash``), échange le code au
    ``/token`` avec le ``code_verifier`` PKCE puis interroge ``/userinfo`` ;
-6. le rejeu du même ``state`` est refusé.
+6. le rejeu du même ``state`` est refusé ;
+7. ``/logout`` déclenche le RP-Initiated Logout : ``id_token_hint`` + URI
+   de sortie enregistrée + ``state`` vers ``/end_session``, qui efface le
+   cookie et redirige vers ``/post-logout`` (state rejoué) ;
+8. la session locale du client est purgée (plus de bouton de déconnexion).
 
 Les sous-processus sont terminés dans tous les cas (``finally``). Un
 garde-fou borne la durée totale afin de ne jamais bloquer.
@@ -104,11 +108,11 @@ def _assert_fragment_redirect(location: str, state: str) -> dict[str, str]:
 
 
 def _run_flow() -> None:
-    """Exécute les six étapes du flow Hybrid de bout en bout."""
+    """Exécute les huit étapes du flow Hybrid de bout en bout (login + logout)."""
     with httpx.Client(follow_redirects=False, timeout=_HTTP_TIMEOUT) as http:
         response = http.get(f"{CLIENT_URL}/")
         assert response.status_code == 200, response.text
-        print(f"  [1/6] accueil OK (status={response.status_code})")
+        print(f"  [1/8] accueil OK (status={response.status_code})")
 
         response = http.get(f"{CLIENT_URL}/login")
         assert response.status_code == 302, response.text
@@ -117,7 +121,7 @@ def _run_flow() -> None:
         authorize_url = parse_qs(urlparse(login_page_url).query)["next"][0]
         assert "authorize" in urlparse(authorize_url).path, authorize_url
         state, nonce = _assert_login_redirect(authorize_url)
-        print(f"  [2/6] login OK (redirige vers la page de login du serveur, state={state[:8]}...)")
+        print(f"  [2/8] login OK (redirige vers la page de login du serveur, state={state[:8]}...)")
 
         response = http.post(
             f"{SERVER_URL}/login",
@@ -131,12 +135,12 @@ def _run_flow() -> None:
         assert response.status_code == 302, response.text
         assert "fastapiusersauth" in response.headers.get("set-cookie", "")
         assert response.headers["location"] == authorize_url
-        print("  [3/6] login serveur OK (cookie posé, retour vers /authorize)")
+        print("  [3/8] login serveur OK (cookie posé, retour vers /authorize)")
 
         response = http.get(authorize_url)
         assert response.status_code == 302, response.text
         fragment = _assert_fragment_redirect(response.headers["location"], state)
-        print("  [4/6] authorize OK (code + id_token + access_token remis dans le fragment)")
+        print("  [4/8] authorize OK (code + id_token + access_token remis dans le fragment)")
 
         response = http.post(f"{CLIENT_URL}/collect", data=fragment)
         assert response.status_code == 200, response.text
@@ -148,13 +152,46 @@ def _run_flow() -> None:
         assert "UserInfo" in response.text
         assert "alice.martin@example.com" in response.text
         print(
-            f"  [5/6] collect OK (id_token vérifié + at_hash/c_hash contrôlés + "
+            f"  [5/8] collect OK (id_token vérifié + at_hash/c_hash contrôlés + "
             f"code échangé au /token, nonce={nonce[:8]}...)"
         )
 
         response = http.post(f"{CLIENT_URL}/collect", data=fragment)
         assert response.status_code == 400, response.text
-        print("  [6/6] rejeu du state refusé OK")
+        print("  [6/8] rejeu du state refusé OK")
+
+        response = http.get(f"{CLIENT_URL}/logout")
+        assert response.status_code == 302, response.text
+        end_session_url = response.headers["location"]
+        assert "/end_session" in urlparse(end_session_url).path, end_session_url
+        logout_params = parse_qs(urlparse(end_session_url).query)
+        assert "id_token_hint" in logout_params
+        assert logout_params["post_logout_redirect_uri"] == ["http://127.0.0.1:5176/post-logout"]
+        logout_state = logout_params["state"][0]
+        print(f"  [7/8] logout OK (redirige vers /end_session, state={logout_state[:8]}...)")
+
+        response = http.get(end_session_url)
+        assert response.status_code == 302, response.text
+        assert response.headers["location"].startswith("http://127.0.0.1:5176/post-logout"), (
+            response.headers["location"]
+        )
+        assert parse_qs(urlparse(response.headers["location"]).query)["state"] == [logout_state]
+        set_cookie = response.headers.get("set-cookie", "")
+        assert "fastapiusersauth" in set_cookie
+        assert "Max-Age=0" in set_cookie
+        post_logout_url = response.headers["location"]
+        print("  [8/8] end_session OK (cookie effacé, redirection vers /post-logout)")
+
+        response = http.get(post_logout_url)
+        assert response.status_code == 200, response.text
+        assert "Déconnecté" in response.text
+        assert logout_state in response.text
+        print("  post-logout OK (page de sortie + state rejoué)")
+
+        response = http.get(f"{CLIENT_URL}/")
+        assert response.status_code == 200, response.text
+        assert "Se déconnecter" not in response.text
+        print("  session locale purgée (accueil sans bouton de déconnexion)")
     print("\n=== FLOW OK ===")
 
 

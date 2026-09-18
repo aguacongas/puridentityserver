@@ -51,12 +51,13 @@ class Client:
     """Client OAuth 2.0 / OIDC enregistré auprès du fournisseur.
 
     ``client_secret_hash`` conserve l'empreinte SHA-256 du secret (jamais
-    le secret en clair). Les ``redirect_uris`` et ``scopes`` sont limités
-    à ce que le serveur accepte pour ce client.
+    le secret en clair). Les ``redirect_uris``, ``post_logout_redirect_uris``
+    et ``scopes`` sont limités à ce que le serveur accepte pour ce client.
     """
 
     client_id: str
     redirect_uris: frozenset[str] = frozenset()
+    post_logout_redirect_uris: frozenset[str] = frozenset()
     scopes: frozenset[Scope] = frozenset((Scope.OPENID,))
     client_type: ClientType = ClientType.PUBLIC
     client_secret_hash: str = ""

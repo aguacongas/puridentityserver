@@ -43,11 +43,17 @@ def _parse_client(raw: dict[str, object]) -> Client:
         redirect_uris = frozenset(str(uri) for uri in redirect_raw)
     else:
         redirect_uris = frozenset()
+    logout_redirect_raw = raw.get("post_logout_redirect_uris", ())
+    if isinstance(logout_redirect_raw, (list, tuple)):
+        post_logout_redirect_uris = frozenset(str(uri) for uri in logout_redirect_raw)
+    else:
+        post_logout_redirect_uris = frozenset()
     scopes = frozenset(Scope(token) for token in str(raw.get("scopes", "openid")).split() if token)
     client_type = _parse_client_type(raw.get("client_type", "public"))
     return Client(
         client_id=client_id,
         redirect_uris=redirect_uris,
+        post_logout_redirect_uris=post_logout_redirect_uris,
         scopes=scopes,
         client_type=client_type,
         client_secret_hash=_hash_client_secret(secret),

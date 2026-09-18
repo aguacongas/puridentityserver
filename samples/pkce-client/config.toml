@@ -8,5 +8,6 @@
 issuer = "http://127.0.0.1:8000"
 client_id = "sample-pkce-client"
 redirect_uri = "http://127.0.0.1:5173/callback"
+post_logout_redirect_uri = "http://127.0.0.1:5173/post-logout"
 host = "127.0.0.1"
 port = 5173
