@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from secrets import token_urlsafe
 from urllib.parse import urlsplit
 
@@ -220,13 +220,22 @@ class RegistrationUseCase:
             return metadata
 
         rotation = self._updated_secret(client, metadata)
-        updated: Client = replace(
-            client,
+        updated = Client(
+            client_id=client.client_id,
             redirect_uris=metadata.redirect_uris,
             post_logout_redirect_uris=metadata.post_logout_redirect_uris,
             scopes=metadata.scopes,
             client_type=metadata.client_type,
             client_secret_hash=rotation.secret_hash,
+            registration_access_token_hash=client.registration_access_token_hash,
+            created_at=client.created_at,
+            is_active=client.is_active,
+            session_lifetime_seconds=client.session_lifetime_seconds,
+            access_token_lifetime_seconds=client.access_token_lifetime_seconds,
+            authorization_code_lifetime_seconds=client.authorization_code_lifetime_seconds,
+            refresh_token_lifetime_seconds=client.refresh_token_lifetime_seconds,
+            device_code_lifetime_seconds=client.device_code_lifetime_seconds,
+            device_code_interval_seconds=client.device_code_interval_seconds,
         )
         await self._clients.save(updated)
         return self._response(updated, client_secret=rotation.issued_secret)
