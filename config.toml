@@ -173,12 +173,28 @@ scopes = "openid profile email"
 client_type = "public"
 
 # clients des samples (démo / tests manuels) :
-# - sample-refresh-client : échange code + rotation du refresh token (RFC 6749 §6)
-# - sample-cc-client      : grant client_credentials, machine à machine (RFC 6749 §4.4)
+# - sample-implicit-client  : flow Implicit (RFC 6749 §4.2 / OIDC §3.2),
+#                             jetons remis dans le fragment, nonce obligatoire
+# - sample-hybrid-client    : flow Hybrid (OIDC §3.3), code + jetons en fragment
+#                             puis échange du code au /token avec PKCE
+# - sample-refresh-client   : échange code + rotation du refresh token (RFC 6749 §6)
+# - sample-cc-client        : grant client_credentials, machine à machine (RFC 6749 §4.4)
 # - sample-introspect-client : introspection / révocation (RFC 7662 / 7009)
 # → les smokes tests de ces samples PASSERT une configuration spécifique (port
 #   dédié + ce client) via un fichier temporaire ; ici ils sont aussi enregistrés
 #   pour pouvoir lancer le serveur par défaut et tester manuellement les samples.
+
+[[settings.clients_seed]]
+client_id = "sample-implicit-client"
+redirect_uris = ["http://127.0.0.1:5175/callback"]
+scopes = "openid profile email"
+client_type = "public"
+
+[[settings.clients_seed]]
+client_id = "sample-hybrid-client"
+redirect_uris = ["http://127.0.0.1:5176/callback"]
+scopes = "openid profile email"
+client_type = "public"
 
 [[settings.clients_seed]]
 client_id = "sample-refresh-client"

@@ -1,0 +1,10 @@
+# Réglages du client de démonstration Hybrid flow (OIDC Core 1.0 §3.3).
+# Chaque clé est surchargeable via l'environnement préfixé `OIDC_`
+# (voir README.md) ou via le fichier passé dans `OIDC_SETTINGS_FILE`.
+
+[settings]
+issuer = "http://127.0.0.1:8000"
+client_id = "sample-hybrid-client"
+redirect_uri = "http://127.0.0.1:5176/callback"
+host = "127.0.0.1"
+port = 5176

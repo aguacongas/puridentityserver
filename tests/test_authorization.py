@@ -189,7 +189,7 @@ def test_authorize_rejects_unsupported_response_type() -> None:
         response = client.get(
             "/authorize",
             params={
-                "response_type": "token",
+                "response_type": "foo",
                 "client_id": "web-app",
                 "redirect_uri": "https://app.example/callback",
                 "scope": "openid",
@@ -478,12 +478,30 @@ def run(awaitable: Awaitable[_T]) -> _T:
     return asyncio.run(awaitable)
 
 
+class _NoopTokenManager:
+    """Émetteur de jetons factice : jamais sollicité pour le code flow."""
+
+    async def create_id_token(self, **_kwargs: object) -> str:
+        return ""
+
+    async def create_access_token(self, **_kwargs: object) -> str:
+        return ""
+
+    async def validate_access_token(self, **_kwargs: object) -> dict[str, object] | None:
+        return None
+
+
 def _authorize_code_ttl(client: Client, server_ttl: int = 600) -> float:
     """Durée de vie effective d'un code émis pour ``client`` (en secondes)."""
     clients = InMemoryClientRepository()
     codes = InMemoryAuthorizationCodeRepository()
     run(clients.save(client))
-    usecase = AuthorizeUseCase(AuthorizeConfig(code_ttl_seconds=server_ttl), clients, codes)
+    usecase = AuthorizeUseCase(
+        AuthorizeConfig(code_ttl_seconds=server_ttl),
+        clients,
+        codes,
+        _NoopTokenManager(),
+    )
     result = run(
         usecase.execute(
             AuthorizeRequest(

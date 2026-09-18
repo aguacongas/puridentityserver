@@ -46,7 +46,15 @@ def test_discovery_endpoint_returns_oidc_metadata() -> None:
     assert metadata["authorization_endpoint"] == f"{_BASE_URL}/authorize"
     assert metadata["token_endpoint"] == f"{_BASE_URL}/token"
     assert metadata["jwks_uri"] == f"{_BASE_URL}/.well-known/jwks.json"
-    assert metadata["response_types_supported"] == ["code"]
+    assert metadata["response_types_supported"] == [
+        "code",
+        "id_token",
+        "token",
+        "id_token token",
+        "code id_token",
+        "code token",
+        "code id_token token",
+    ]
     assert metadata["subject_types_supported"] == ["public"]
     assert metadata["device_authorization_endpoint"] == f"{_BASE_URL}/device_authorization"
     assert "urn:ietf:params:oauth:grant-type:device_code" in metadata["grant_types_supported"]

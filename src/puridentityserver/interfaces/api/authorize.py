@@ -1,6 +1,8 @@
-"""Routes FastAPI de l'endpoint d'autorisation (RFC 6749 §4.1)."""
+"""Routes FastAPI de l'endpoint d'autorisation (RFC 6749 §4.1, OIDC Core 1.0 §3)."""
 
 from __future__ import annotations
+
+from urllib.parse import quote
 
 from fastapi import APIRouter, Query
 from fastapi.responses import RedirectResponse
@@ -11,6 +13,7 @@ from puridentityserver.application.authorize import (
     AuthorizeRequest,
     AuthorizeUseCase,
 )
+from puridentityserver.domain.authorization import ResponseMode
 from puridentityserver.identity.config import CurrentUserOptional
 
 
@@ -28,6 +31,7 @@ def authorize_router(usecase: AuthorizeUseCase) -> APIRouter:
         nonce: str = Query(default=""),
         code_challenge: str = Query(default=""),
         code_challenge_method: str = Query(default="S256"),
+        response_mode: str = Query(default=""),
         user: CurrentUserOptional = None,
     ) -> RedirectResponse:
         auth_request = AuthorizeRequest(
@@ -40,6 +44,7 @@ def authorize_router(usecase: AuthorizeUseCase) -> APIRouter:
             nonce=nonce,
             code_challenge=code_challenge,
             code_challenge_method=code_challenge_method,
+            response_mode=response_mode,
         )
         result = await usecase.execute(auth_request)
         if isinstance(result, AuthorizeRedirect):
@@ -50,11 +55,18 @@ def authorize_router(usecase: AuthorizeUseCase) -> APIRouter:
 
 
 def _error_redirect(result: AuthorizeError) -> RedirectResponse:
-    """Construit le redirect d'erreur vers ``redirect_uri``."""
+    """Construit le redirect d'erreur vers ``redirect_uri``.
+
+    Les erreurs des flows retournant des jetons (implicit/hybrid) sont
+    placées dans le fragment de l'URL (RFC 6749 §4.2.2.1), les autres dans
+    la query string (RFC 6749 §4.1.2.1).
+    """
     parts = [f"error={result.error}"]
     if result.error_description:
-        parts.append(f"error_description={result.error_description}")
+        parts.append(f"error_description={quote(result.error_description, safe='')}")
     if result.state:
         parts.append(f"state={result.state}")
-    location = f"{result.redirect_uri}?{'&'.join(parts)}"
+    params = "&".join(parts)
+    separator = "#" if result.response_mode is ResponseMode.FRAGMENT else "?"
+    location = f"{result.redirect_uri}{separator}{params}"
     return RedirectResponse(location, status_code=302)
