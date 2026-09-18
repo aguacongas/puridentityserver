@@ -93,26 +93,9 @@ class LogoutUseCase:
         - ``LogoutResult`` sinon, avec l'URI de sortie validée le cas
           échéant et le ``state`` à rejouer.
         """
-        client: Client | None = None
-        subject = ""
-
-        if request.id_token_hint:
-            claims = await self._token_manager.validate_id_token(
-                token=request.id_token_hint,
-                issuer=self._config.issuer,
-            )
-            if claims is None:
-                return LogoutError("invalid_request", "id_token_hint invalide")
-            audience = claims.get("aud")
-            client_id = audience if isinstance(audience, str) else ""
-            candidate = await self._client_repository.find_by_id(client_id)
-            if candidate is None or not candidate.is_active:
-                return LogoutError(
-                    "invalid_request", "id_token_hint d'un client inconnu ou inactif"
-                )
-            client = candidate
-            subject_value = claims.get("sub")
-            subject = str(subject_value) if subject_value is not None else ""
+        client, subject, error = await self._resolve_hint(request.id_token_hint)
+        if error is not None:
+            return error
 
         if request.post_logout_redirect_uri:
             if client is None:
@@ -128,6 +111,36 @@ class LogoutUseCase:
             subject=subject,
             client_id=client.client_id if client is not None else "",
         )
+
+    async def _resolve_hint(
+        self, id_token_hint: str
+    ) -> tuple[Client | None, str, LogoutError | None]:
+        """Valide l'``id_token_hint`` et résout le client + le ``sub`` associé.
+
+        Retourne ``(client, subject, error)`` : ``error`` est non nul si le
+        hint est présent mais invalide (signature/émetteur) ou ne résout
+        vers aucun client actif.
+        """
+        if not id_token_hint:
+            return None, "", None
+        claims = await self._token_manager.validate_id_token(
+            token=id_token_hint,
+            issuer=self._config.issuer,
+        )
+        if claims is None:
+            return None, "", LogoutError("invalid_request", "id_token_hint invalide")
+        audience = claims.get("aud")
+        client_id = audience if isinstance(audience, str) else ""
+        candidate = await self._client_repository.find_by_id(client_id)
+        if candidate is None or not candidate.is_active:
+            return (
+                None,
+                "",
+                LogoutError("invalid_request", "id_token_hint d'un client inconnu ou inactif"),
+            )
+        subject_value = claims.get("sub")
+        subject = str(subject_value) if subject_value is not None else ""
+        return candidate, subject, None
 
     async def _client_for_post_logout_uri(self, uri: str) -> Client | None:
         """Retrouve le client ayant enregistré l'URI de sortie (sans hint).
