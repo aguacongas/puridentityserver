@@ -220,7 +220,7 @@ class RegistrationUseCase:
             return metadata
 
         rotation = self._updated_secret(client, metadata)
-        updated = replace(
+        updated: Client = replace(
             client,
             redirect_uris=metadata.redirect_uris,
             post_logout_redirect_uris=metadata.post_logout_redirect_uris,
