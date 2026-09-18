@@ -64,6 +64,7 @@ class RegistrationMetadata:
     client_type: ClientType = ClientType.CONFIDENTIAL
     token_endpoint_auth_method: str = _AUTH_METHOD_DEFAULT
     requested_secret: str | None = None
+    par_required: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +122,7 @@ class ClientRegistration:
     client_secret: str = ""
     registration_access_token: str = ""
     registration_client_uri: str = ""
+    require_pushed_authorization_requests: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,6 +186,7 @@ class RegistrationUseCase:
             client_type=metadata.client_type,
             client_secret_hash=secret_hash,
             registration_access_token_hash=hash_secret(registration_token),
+            par_required=metadata.par_required,
         )
         await self._clients.save(client)
         return self._response(
@@ -236,6 +239,7 @@ class RegistrationUseCase:
             refresh_token_lifetime_seconds=client.refresh_token_lifetime_seconds,
             device_code_lifetime_seconds=client.device_code_lifetime_seconds,
             device_code_interval_seconds=client.device_code_interval_seconds,
+            par_required=metadata.par_required,
         )
         await self._clients.save(updated)
         return self._response(updated, client_secret=rotation.issued_secret)
@@ -323,6 +327,7 @@ class RegistrationUseCase:
             client_secret=client_secret,
             registration_access_token=registration_access_token,
             registration_client_uri=f"{self._base_url()}/register/{client.client_id}",
+            require_pushed_authorization_requests=client.par_required,
         )
 
     def _base_url(self) -> str:
@@ -357,6 +362,9 @@ def _parse_metadata(raw: object) -> RegistrationMetadata | RegistrationError:
     requested_secret = _parse_requested_secret(raw)
     if isinstance(requested_secret, RegistrationError):
         return requested_secret
+    par_required = _parse_par_required(raw)
+    if isinstance(par_required, RegistrationError):
+        return par_required
 
     client_type = ClientType.PUBLIC if auth_method == "none" else ClientType.CONFIDENTIAL
     return RegistrationMetadata(
@@ -366,6 +374,7 @@ def _parse_metadata(raw: object) -> RegistrationMetadata | RegistrationError:
         client_type=client_type,
         token_endpoint_auth_method=auth_method,
         requested_secret=requested_secret,
+        par_required=par_required,
     )
 
 
@@ -451,5 +460,18 @@ def _parse_requested_secret(raw: dict[str, object]) -> str | RegistrationError |
         return RegistrationError(
             "invalid_client_metadata",
             f"client_secret doit comporter au moins {_MIN_SECRET_LENGTH} caractères",
+        )
+    return value
+
+
+def _parse_par_required(raw: dict[str, object]) -> bool | RegistrationError:
+    """Lit ``require_pushed_authorization_requests`` (RFC 9126 §5.2, par défaut false)."""
+    value = raw.get("require_pushed_authorization_requests")
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        return RegistrationError(
+            "invalid_client_metadata",
+            "require_pushed_authorization_requests doit être un booléen",
         )
     return value

@@ -16,6 +16,7 @@ from puridentityserver.application.discovery import DiscoveryConfig, DiscoveryUs
 from puridentityserver.application.introspect import IntrospectConfig, IntrospectUseCase
 from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
 from puridentityserver.application.logout import LogoutConfig, LogoutUseCase
+from puridentityserver.application.par import PushedAuthorizationConfig, PushedAuthorizationUseCase
 from puridentityserver.application.registration import RegistrationConfig, RegistrationUseCase
 from puridentityserver.application.revocation import RevocationConfig, RevocationUseCase
 from puridentityserver.application.token import TokenConfig, TokenUseCase
@@ -37,6 +38,7 @@ from puridentityserver.infrastructure.persistence.factory import (
     build_client_repository,
     build_device_authorization_repository,
     build_key_pair_repository,
+    build_pushed_authorization_repository,
     build_refresh_token_repository,
     build_revoked_token_repository,
     build_user_repository,
@@ -50,12 +52,34 @@ from puridentityserver.interfaces.api.discovery import discovery_router
 from puridentityserver.interfaces.api.introspect import introspect_router
 from puridentityserver.interfaces.api.jwks import jwk_set_router
 from puridentityserver.interfaces.api.logout import logout_router
+from puridentityserver.interfaces.api.par import par_router
 from puridentityserver.interfaces.api.registration import registration_router
 from puridentityserver.interfaces.api.revocation import revocation_router
 from puridentityserver.interfaces.api.token import token_router
 from puridentityserver.interfaces.api.userinfo import userinfo_router
+from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 
 _PACKAGE_VERSION = "0.1.0"
+
+
+def _mount_authorization_routers(
+    app: FastAPI,
+    *,
+    authorize_usecase: AuthorizeUseCase,
+    par_usecase: PushedAuthorizationUseCase,
+    client_repository: ClientRepository,
+    par_enabled: bool,
+) -> None:
+    """Monte ``/authorize`` (+ ``/par`` quand la Pushed Authorization Request est activée)."""
+    app.include_router(
+        authorize_router(
+            authorize_usecase,
+            par_usecase=par_usecase if par_enabled else None,
+            client_repository=client_repository,
+        )
+    )
+    if par_enabled:
+        app.include_router(par_router(par_usecase))
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -80,6 +104,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         issuer=settings.issuer,
         base_url=settings.base_url,
         registration_enabled=settings.registration_enabled,
+        par_enabled=settings.par_enabled,
         signing_algorithms=settings.jwks_algorithms,
     )
 
@@ -98,6 +123,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     revoked_token_repository = build_revoked_token_repository(settings)
     refresh_token_repository = build_refresh_token_repository(settings)
     device_code_repository = build_device_authorization_repository(settings)
+    pushed_code_repository = build_pushed_authorization_repository(settings)
 
     authorize_usecase = AuthorizeUseCase(
         AuthorizeConfig(
@@ -169,6 +195,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ),
         client_repository,
     )
+    par_usecase = PushedAuthorizationUseCase(
+        PushedAuthorizationConfig(ttl_seconds=settings.par_ttl_seconds),
+        client_repository,
+        pushed_code_repository,
+    )
 
     async def _resolve_session_lifetime(client_id: str) -> int | None:
         """Retourne la durée de session cookie configurée pour le client, si présente."""
@@ -187,6 +218,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await revoked_token_repository.initialise()
         await refresh_token_repository.initialise()
         await device_code_repository.initialise()
+        await pushed_code_repository.initialise()
         for client in settings.seed_clients:
             await client_repository.save(client)
         await user_repository.save_all(
@@ -221,6 +253,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await revoked_token_repository.close()
             await refresh_token_repository.close()
             await device_code_repository.close()
+            await pushed_code_repository.close()
 
     app = FastAPI(
         title="PurIdentityServer",
@@ -233,7 +266,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(login_router(_resolve_session_lifetime))
     app.include_router(auth_router)
     app.include_router(register_router, prefix="/auth")
-    app.include_router(authorize_router(authorize_usecase))
+    _mount_authorization_routers(
+        app,
+        authorize_usecase=authorize_usecase,
+        par_usecase=par_usecase,
+        client_repository=client_repository,
+        par_enabled=settings.par_enabled,
+    )
     app.include_router(token_router(token_usecase))
     app.include_router(device_authorization_router(device_usecase))
     app.include_router(device_page_router(device_usecase))

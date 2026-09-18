@@ -219,6 +219,7 @@ def test_settings_client_seed_reads_defaults_from_config_toml(
         "sample-cc-client",
         "sample-introspect-client",
         "sample-device-client",
+        "sample-par-client",
     ]
     assert client.redirect_uris == frozenset({"http://127.0.0.1:5173/callback"})
     assert client.scopes == frozenset({"openid", "profile", "email"})
@@ -226,6 +227,8 @@ def test_settings_client_seed_reads_defaults_from_config_toml(
     assert client.session_lifetime_seconds is None
     assert client.access_token_lifetime_seconds is None
     assert client.authorization_code_lifetime_seconds is None
+    assert client.par_required is False
+    assert settings.seed_clients[7].par_required is True
 
 
 def test_settings_client_seed_parses_lifetime_fields() -> None:

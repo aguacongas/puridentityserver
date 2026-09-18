@@ -51,10 +51,11 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 | `/authorize`                        | Code / Implicit / Hybrid                  | ✅   |
 | `/token`                            | Échange code / refresh / client_credentials / device_code | ✅   |
 | `/device_authorization`             | Device Authorization Grant (RFC 8628)    | ✅   |
+| `/par`                              | Pushed Authorization Request (RFC 9126)  | ✅   |
 | `/userinfo`                         | Claims de l'utilisateur                   | ✅   |
 | `/introspect`                       | Introspection de token (RFC 7662)         | ✅   |
 | `/revoke`                           | Révocation de token (RFC 7009)            | ✅   |
-| `/registration`                     | Client registration dynamique (RFC 7591/7592) | ✅   |
+| `/register`                         | Client registration dynamique (RFC 7591/7592) | ✅   |
 | `/end_session`                      | RP-Initiated Logout                       | ✅   |
 
 ## Documentation
@@ -106,7 +107,20 @@ tests/             pytest unit + intégration (TestClient httpx)
     auth methods `client_secret_basic`/`client_secret_post`/`none`, redirect
     URIs absolues http(s) sans fragment, scopes connus ; `registration_endpoint`
     publié au discovery quand activé.
-12. **Persistence** — stockage pluggable (SQL, Mongo, etc.)
+12. ✅ **Pushed Authorization Request** (RFC 9126) : `POST /par` — le client
+    pousse les paramètres d'autorisation (form-urlencoded, authentification
+    comme à `/token`) et reçoit un `request_uri` opaque à usage unique
+    (`urn:ietf:params:oauth:request_uri:<réference>`, TTL 5-600 s), résolu à
+    `/authorize` via `request_uri` (+ `client_id` uniquement — tout paramètre
+    supplémentaire est rejeté). Le `request_uri` ne peut être utilisé qu'une
+    fois et est détruit après usage ; les paramètres passent par le même
+    validateur que le flow standard ; `pushed_authorization_request_endpoint`
+    publié au discovery quand activé (`par_enabled`). L'exigence PAR est
+    réglable **par client** (`par_required` dans `clients_seed` /
+    `require_pushed_authorization_requests` à la registration, RFC 9126
+    §5.2 §6.1) : un tel client voit toute demande directe à `/authorize`
+    rejetée en `invalid_request`.
+13. **Persistence** — stockage pluggable (SQL, Mongo, etc.)
 
 ## Développement local
 

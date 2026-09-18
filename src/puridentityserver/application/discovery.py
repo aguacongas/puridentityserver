@@ -12,6 +12,7 @@ class DiscoveryConfig:
     issuer: str
     base_url: str = ""
     registration_enabled: bool = False
+    par_enabled: bool = True
     signing_algorithms: tuple[str, ...] = tuple(
         algorithm.value for algorithm in ALL_SIGNING_ALGORITHMS
     )
@@ -41,6 +42,8 @@ class DiscoveryUseCase:
         }
         if self._config.registration_enabled:
             metadata["registration_endpoint"] = f"{base}/register"
+        if self._config.par_enabled:
+            metadata["pushed_authorization_request_endpoint"] = f"{base}/par"
         return metadata
 
     def _resolve_base_url(self) -> str:
