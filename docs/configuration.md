@@ -61,9 +61,10 @@ gestion de compte : plus de `identity_jwt_secret`, de
 ### Stockage et multi-instance
 
 La variable `STORAGE_TYPE` définit comment l'état persistant du serveur est stocké :
-clés de signature, codes d'autorisation, clients seed et **profils utilisateurs**
-(user store servis par `/userinfo`). C'est le paramètre qui permet de
-**loadbalancer** plusieurs instances du serveur et de reprendre après un redémarrage.
+clés de signature, clients, codes d'autorisation, device codes, requêtes PAR
+poussées, refresh tokens, jetons révoqués et profils utilisateurs (user store
+servis par `/userinfo`). C'est le paramètre qui permet de **loadbalancer**
+plusieurs instances du serveur et de reprendre après un redémarrage.
 
 | `STORAGE_TYPE` | Comportement | Usage |
 | --- | --- | --- |
@@ -71,8 +72,25 @@ clés de signature, codes d'autorisation, clients seed et **profils utilisateurs
 | `sql` | Stockage SQL via SQLAlchemy (SQLite, PostgreSQL, MySQL) | Production, load balancing multi-instance |
 
 **Chargement de la DSN** : quand le type est `sql`, le DSN `STORAGE_DSN` est
-réécrit automatiquement vers le dialecte asynchrone (ex. `sqlite:///puridentityserver.db` →
-`sqlite+aiosqlite:///puridentityserver.db`).
+réécrit automatiquement vers le dialecte asynchrone
+(`sqlite:///puridentityserver.db` → `sqlite+aiosqlite:///puridentityserver.db`,
+`postgresql://…` → `postgresql+asyncpg://…`, `mysql://…` → `mysql+aiomysql://…`) ;
+le driver correspondant doit être installé (`uv sync --extra sql` fournit
+`aiosqlite` et `asyncpg`). Le schéma est créé automatiquement au démarrage
+(`create_all`, 8 tables : `key_pairs`, `clients`, `authorization_codes`,
+`device_authorizations`, `pushed_authorizations`, `refresh_tokens`,
+`revoked_tokens`, `users`) et les colonnes ajoutées par une version plus
+récente du serveur sont migrées en place (`ALTER TABLE ADD COLUMN`, sans perte
+de données).
+
+### Persistance SQL — exemple de démarrage
+
+```sh
+uv sync --extra sql
+PURIDENTITYSERVER_STORAGE_TYPE=sql \
+PURIDENTITYSERVER_STORAGE_DSN=postgresql://puridentityserver:secret@db-host/puridentityserver \
+uv run uvicorn puridentityserver.server:app --host 127.0.0.1 --port 8000
+```
 
 ### Clés RSA et ECDSA (JWKS)
 

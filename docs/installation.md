@@ -67,8 +67,40 @@ Points clés :
   que la spec exige de publier). Il servira de base aux URL des endpoints.
 - L'issuer doit être stable dans le temps : changer d'URL publique invalide les
   `id_token` et access tokens émis précédemment.
-- Le stockage est **en mémoire** pour l'instant : un seul processus. Pour plusieurs
-  workers de process, attendre la persistance externe (prévue) ou lancer un seul worker.
+- Le stockage est **en mémoire** par défaut (`storage_type = "memory"`) : l'état
+  (clés de signature, clients, codes, jetons…) est perdu au redémarrage et
+  local à chaque processus. Pour la production, passer à un **backend SQL**
+  partagé (voir ci-dessous) afin de supporter plusieurs workers / instances
+  loadbalancées et de reprendre après un redémarrage.
+
+### 5.b Persistance SQL (production multi-instance)
+
+Installer les dépendances SQL puis choisir le backend :
+
+```sh
+uv sync --extra sql
+```
+
+```sh
+# SQLite (fichier local, simple / monoprocess)
+export PURIDENTITYSERVER_STORAGE_TYPE=sql
+export PURIDENTITYSERVER_STORAGE_DSN=sqlite:///puridentityserver.db
+
+# PostgreSQL (recommandé pour le multi-instance)
+export PURIDENTITYSERVER_STORAGE_TYPE=sql
+export PURIDENTITYSERVER_STORAGE_DSN=postgresql://puridentityserver:secret@db-host/puridentityserver
+
+# MySQL
+export PURIDENTITYSERVER_STORAGE_TYPE=sql
+export PURIDENTITYSERVER_STORAGE_DSN=mysql://puridentityserver:secret@db-host/puridentityserver
+```
+
+Le DSN est réécrit automatiquement vers le dialecte **asynchrone**
+(`sqlite`→`aiosqlite`, `postgresql`→`asyncpg`, `mysql`→`aiomysql`) ;
+attendre le driver correspondant (fourni par `--extra sql` pour SQLite et
+PostgreSQL). Le schéma est créé au démarrage (`create_all`) ; les colonnes
+ajoutées par une version plus récente sont migrées par `ALTER TABLE ADD
+COLUMN` sans toucher aux données.
 
 Exemple minimal derrière nginx :
 
