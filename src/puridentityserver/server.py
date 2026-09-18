@@ -6,6 +6,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from puridentityserver.application.authorize import AuthorizeConfig, AuthorizeUseCase
 from puridentityserver.application.device_authorize import (
@@ -261,6 +262,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         description="Serveur OpenID Connect conforme aux specs OIDC Core 1.0.",
         lifespan=_lifespan,
     )
+    if settings.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(settings.cors_origins),
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "DELETE"],
+            allow_headers=["Authorization", "Content-Type"],
+            expose_headers=["Location", "WWW-Authenticate"],
+        )
     app.include_router(discovery_router(DiscoveryUseCase(config)))
     app.include_router(jwk_set_router(jwks_usecase))
     app.include_router(login_router(_resolve_session_lifetime))

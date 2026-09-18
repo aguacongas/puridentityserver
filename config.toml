@@ -47,6 +47,12 @@ base_url = ""
 host = "127.0.0.1"
 port = 8000
 
+# Origines autorisées à appeler les endpoints depuis un navigateur (CORS —
+# client public SPA du sample `spa-client`, servi sur le port 5173).
+# Surchargeable via `PURIDENTITYSERVER_CORS_ORIGINS` (liste séparée par des
+# virgules). Vide = middleware désactivé (aucune origine autorisée).
+cors_origins = ["http://127.0.0.1:5173", "http://localhost:5173"]
+
 # Stockage de l'état persistant du serveur : clés de signature, clients,
 # codes d'autorisation et utilisateurs.
 # - storage_type : "memory" (perdu au redémarrage) ou "sql"
