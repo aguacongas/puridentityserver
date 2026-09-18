@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from secrets import token_urlsafe
 from urllib.parse import urlsplit
 
-from puridentityserver.domain.authorization import Client, ClientType, Scope
+from puridentityserver.domain.authorization import Client, ClientType, Scope, origin_of_uri
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 
 _ALLOWED_GRANT_TYPES = frozenset({"authorization_code"})
@@ -60,6 +60,7 @@ class RegistrationMetadata:
 
     redirect_uris: frozenset[str] = frozenset()
     post_logout_redirect_uris: frozenset[str] = frozenset()
+    web_origins: frozenset[str] = frozenset()
     scopes: frozenset[Scope] = frozenset((Scope.OPENID,))
     client_type: ClientType = ClientType.CONFIDENTIAL
     token_endpoint_auth_method: str = _AUTH_METHOD_DEFAULT
@@ -119,6 +120,7 @@ class ClientRegistration:
     scope: str = "openid"
     redirect_uris: list[str] = field(default_factory=list)
     post_logout_redirect_uris: list[str] = field(default_factory=list)
+    web_origins: list[str] = field(default_factory=list)
     client_secret: str = ""
     registration_access_token: str = ""
     registration_client_uri: str = ""
@@ -182,6 +184,7 @@ class RegistrationUseCase:
             client_id=client_id,
             redirect_uris=metadata.redirect_uris,
             post_logout_redirect_uris=metadata.post_logout_redirect_uris,
+            web_origins=metadata.web_origins,
             scopes=metadata.scopes,
             client_type=metadata.client_type,
             client_secret_hash=secret_hash,
@@ -227,6 +230,7 @@ class RegistrationUseCase:
             client_id=client.client_id,
             redirect_uris=metadata.redirect_uris,
             post_logout_redirect_uris=metadata.post_logout_redirect_uris,
+            web_origins=metadata.web_origins,
             scopes=metadata.scopes,
             client_type=metadata.client_type,
             client_secret_hash=rotation.secret_hash,
@@ -324,6 +328,7 @@ class RegistrationUseCase:
             scope=" ".join(sorted(scope.value for scope in client.scopes)),
             redirect_uris=sorted(client.redirect_uris),
             post_logout_redirect_uris=sorted(client.post_logout_redirect_uris),
+            web_origins=sorted(client.web_origins),
             client_secret=client_secret,
             registration_access_token=registration_access_token,
             registration_client_uri=f"{self._base_url()}/register/{client.client_id}",
@@ -347,6 +352,36 @@ def _parse_metadata(raw: object) -> RegistrationMetadata | RegistrationError:
     post_logout_uris = _parse_uri_list(raw, "post_logout_redirect_uris")
     if isinstance(post_logout_uris, RegistrationError):
         return post_logout_uris
+    web_origins = _parse_web_origins(raw)
+    if isinstance(web_origins, RegistrationError):
+        return web_origins
+    extras = _parse_metadata_extras(raw)
+    if isinstance(extras, RegistrationError):
+        return extras
+    scopes, auth_method, requested_secret, par_required = extras
+
+    client_type = ClientType.PUBLIC if auth_method == "none" else ClientType.CONFIDENTIAL
+    return RegistrationMetadata(
+        redirect_uris=redirect_uris,
+        post_logout_redirect_uris=post_logout_uris,
+        web_origins=web_origins,
+        scopes=scopes,
+        client_type=client_type,
+        token_endpoint_auth_method=auth_method,
+        requested_secret=requested_secret,
+        par_required=par_required,
+    )
+
+
+def _parse_metadata_extras(
+    raw: dict[str, object],
+) -> tuple[frozenset[Scope], str, str | None, bool] | RegistrationError:
+    """Valide scopes, méthode d'authentification et exigences du client (RFC 7591 §2).
+
+    ``grant_types`` et ``response_types`` sont bornés au périmètre maîtrisé
+    du registre (``authorization_code``/``code``) : seule leur validité est
+    vérifiée, la valeur étant imposée par le serveur.
+    """
     scopes = _parse_scopes(raw)
     if isinstance(scopes, RegistrationError):
         return scopes
@@ -365,17 +400,7 @@ def _parse_metadata(raw: object) -> RegistrationMetadata | RegistrationError:
     par_required = _parse_par_required(raw)
     if isinstance(par_required, RegistrationError):
         return par_required
-
-    client_type = ClientType.PUBLIC if auth_method == "none" else ClientType.CONFIDENTIAL
-    return RegistrationMetadata(
-        redirect_uris=redirect_uris,
-        post_logout_redirect_uris=post_logout_uris,
-        scopes=scopes,
-        client_type=client_type,
-        token_endpoint_auth_method=auth_method,
-        requested_secret=requested_secret,
-        par_required=par_required,
-    )
+    return scopes, auth_method, requested_secret, par_required
 
 
 def _parse_uri_list(
@@ -401,6 +426,37 @@ def _is_redirect_uri(uri: str) -> bool:
     """Vérifie qu'une URI est absolue, http(s), sans fragment (RFC 7591 §2)."""
     parsed = urlsplit(uri)
     return parsed.scheme in ({"http", "https"}) and bool(parsed.netloc) and parsed.fragment == ""
+
+
+def _parse_web_origins(raw: dict[str, object]) -> frozenset[str] | RegistrationError:
+    """Lit ``web_origins`` (RFC 7591 §2.1, OAuth 2.0 for Browser-Based Apps).
+
+    Chaque origine doit être un schéma http(s) + autorité (path optionnel
+    vide ou ``/``, sans query ni fragment) ; les origines sont normalisées
+    (ports par défaut élidés) avant stockage.
+    """
+    value = raw.get("web_origins")
+    if value is None:
+        return frozenset()
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return RegistrationError(
+            "invalid_client_metadata", "web_origins doit être une liste de chaînes"
+        )
+    for origin in value:
+        if not _is_web_origin(origin):
+            return RegistrationError(
+                "invalid_redirect_uri", f"web_origins contient une origine invalide : {origin}"
+            )
+    origins = [origin_of_uri(o) for o in value]
+    return frozenset(origin for origin in origins if origin is not None)
+
+
+def _is_web_origin(uri: str) -> bool:
+    """Vérifie qu'une valeur désigne bien une origine web (pas un chemin, ni query/fragment)."""
+    parsed = urlsplit(uri)
+    if parsed.scheme not in ({"http", "https"}) or not parsed.netloc:
+        return False
+    return parsed.path in ("", "/") and parsed.query == "" and parsed.fragment == ""
 
 
 def _parse_scopes(raw: dict[str, object]) -> frozenset[Scope] | RegistrationError:

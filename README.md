@@ -41,7 +41,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 - [Pushed Authorization Requests] (RFC 9126) — extension
 - [OpenID Connect RP-Initiated Logout] (OIDC spec) — `/end_session`
 - [OAuth 2.0 Dynamic Client Registration] (RFC 7591) + [Client Management] (RFC 7592) — `/register`
-- CORS — origines configurées via `PURIDENTITYSERVER_CORS_ORIGINS` (SPA public en Authorization Code + PKCE)
+- CORS — origines autorisées **déduites des URIs des clients actifs** (`redirect_uris` + `web_origins`, OAuth 2.0 for Browser-Based Apps), pour les SPA publics en Authorization Code + PKCE
 
 ## Endpoints prévus
 
@@ -130,6 +130,12 @@ tests/             pytest unit + intégration (TestClient httpx)
     résolu automatiquement, migrations légères `ALTER TABLE ADD COLUMN` au
     démarrage). Le backend `sql` autorise le load balancing multi-instance
     et la reprise après redémarrage.
+14. ✅ **Démo SPA interactive** — `samples/spa-client/` : page statique sans
+    framework qui exerce tous les flows depuis le navigateur (Authorization
+    Code + PKCE, Implicit, Hybrid, PAR, Device, Client Credentials, Refresh,
+    Introspection, Révocation, Logout) avec callback géré dans la page, CORS
+    **dérivé des URIs des clients** (`redirect_uris` + `web_origins` du
+    client `sample-spa-client`).
 
 ## Développement local
 

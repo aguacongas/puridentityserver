@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 
@@ -59,11 +60,18 @@ class Client:
     ``par_required`` (RFC 9126 §6.1) force ce client à pousser ses
     demandes via ``/par`` : l'endpoint d'autorisation rejette alors toute
     demande directe sans ``request_uri``.
+
+    ``web_origins`` déclare explicitement des origines internet autorisées
+    à appeler les endpoints du serveur depuis le navigateur (CORS) au-delà
+    de celles déduites des ``redirect_uris`` (OAuth 2.0 for Browser-Based
+    Apps — la métadonnée ``web_origins`` du registration est prise en
+    charge au RFC 7591).
     """
 
     client_id: str
     redirect_uris: frozenset[str] = frozenset()
     post_logout_redirect_uris: frozenset[str] = frozenset()
+    web_origins: frozenset[str] = frozenset()
     scopes: frozenset[Scope] = frozenset((Scope.OPENID,))
     client_type: ClientType = ClientType.PUBLIC
     client_secret_hash: str = ""
@@ -77,6 +85,35 @@ class Client:
     device_code_lifetime_seconds: int | None = None
     device_code_interval_seconds: int | None = None
     par_required: bool = False
+
+    def cors_allowed_origins(self) -> frozenset[str]:
+        """Origines autorisées en CORS pour ce client (déduites + déclarées).
+
+        Chaque ``redirect_uri`` contribue son origine (schéma+autorité,
+        ports par défaut normalisés) ; ``web_origins`` les complète
+        explicitement (ex. un alias ``localhost`` du même SPA).
+        """
+        origins = {origin_of_uri(uri) for uri in self.redirect_uris}
+        origins |= {origin_of_uri(uri) for uri in self.web_origins}
+        return frozenset(origin for origin in origins if origin is not None)
+
+
+def origin_of_uri(uri: str) -> str | None:
+    """Normalise une URL en origine (schéma+autorité, OAuth BCP §8).
+
+    ``"https://app.example:443/callback"`` → ``"https://app.example"``
+    (ports par défaut élidés, comparables à l'en-tête ``Origin`` émis par
+    les navigateurs) ; retourne ``None`` si l'URL n'est pas http(s).
+    """
+    parsed = urlsplit(uri)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+    default_port = 80 if parsed.scheme == "http" else 443
+    if parsed.hostname is not None and parsed.port is not None and parsed.port != default_port:
+        netloc = f"{parsed.hostname}:{parsed.port}"
+    else:
+        netloc = parsed.hostname or ""
+    return f"{parsed.scheme}://{netloc}"
 
 
 def resolve_lifetime_seconds(configured: int | None, default: int) -> int:

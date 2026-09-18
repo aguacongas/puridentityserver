@@ -15,7 +15,7 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
-from puridentityserver.domain.authorization import Client, ClientType, Scope
+from puridentityserver.domain.authorization import Client, ClientType, Scope, origin_of_uri
 from puridentityserver.domain.jwks import ALL_SIGNING_ALGORITHMS, JWTAlgorithm
 
 _STORAGE_TYPES = ("memory", "sql")
@@ -48,12 +48,20 @@ def _parse_client(raw: dict[str, object]) -> Client:
         post_logout_redirect_uris = frozenset(str(uri) for uri in logout_redirect_raw)
     else:
         post_logout_redirect_uris = frozenset()
+    web_origins_raw = raw.get("web_origins", ())
+    if isinstance(web_origins_raw, (list, tuple)):
+        web_origins = frozenset(
+            origin for origin in map(origin_of_uri, map(str, web_origins_raw)) if origin is not None
+        )
+    else:
+        web_origins = frozenset()
     scopes = frozenset(Scope(token) for token in str(raw.get("scopes", "openid")).split() if token)
     client_type = _parse_client_type(raw.get("client_type", "public"))
     return Client(
         client_id=client_id,
         redirect_uris=redirect_uris,
         post_logout_redirect_uris=post_logout_redirect_uris,
+        web_origins=web_origins,
         scopes=scopes,
         client_type=client_type,
         client_secret_hash=_hash_client_secret(secret),
@@ -111,11 +119,6 @@ class Settings(BaseSettings):
     base_url: str = ""
     host: str = "127.0.0.1"
     port: int = 8000
-
-    # CORS — origines autorisées à appeler les endpoints depuis le navigateur
-    # (client public Authorization Code + PKCE servi depuis un autre port, ex.
-    # le samples/spa-client). Vide = middleware désactivé.
-    cors_origins: Annotated[tuple[str, ...], NoDecode] = ()
 
     # Stockage de l'état persistant du serveur (clés de signature, clients,
     # codes d'autorisation, utilisateurs) : "memory" (monoprocess) ou "sql".
@@ -188,14 +191,6 @@ class Settings(BaseSettings):
         """Transforme `PURIDENTITYSERVER_REGISTRATION_INITIAL_ACCESS_TOKENS` en tuple."""
         if isinstance(value, str):
             return tuple(part.strip() for part in value.split(",") if part.strip())
-        return value
-
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def _split_cors_origins(cls, value: object) -> object:
-        """Transforme `PURIDENTITYSERVER_CORS_ORIGINS` (virgules) en tuple d'origines."""
-        if isinstance(value, str):
-            return tuple(part.strip().rstrip("/") for part in value.split(",") if part.strip())
         return value
 
     @field_validator("clients_seed", mode="before")
