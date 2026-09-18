@@ -34,6 +34,7 @@ class ClientRow(PersistenceBase):
     scopes: Mapped[list[str]] = mapped_column(JSON)
     client_type: Mapped[str] = mapped_column(String(16))
     client_secret_hash: Mapped[str] = mapped_column(String(64), default="")
+    registration_access_token_hash: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     session_lifetime_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -84,6 +85,15 @@ class SQLClientRepository:
             rows = (await session.execute(select(ClientRow))).scalars().all()
         return [_from_row(row) for row in rows]
 
+    async def delete(self, client_id: str) -> None:
+        """Supprime le client identifié par ``client_id`` (idempotent)."""
+        async with self._session_factory() as session:
+            row = await session.get(ClientRow, client_id)
+            if row is None:
+                return
+            await session.delete(row)
+            await session.commit()
+
 
 def _to_row(client: Client) -> ClientRow:
     """Convertit un Client domaine en ligne de persistance."""
@@ -94,6 +104,7 @@ def _to_row(client: Client) -> ClientRow:
         scopes=sorted(scope.value for scope in client.scopes),
         client_type=client.client_type.value,
         client_secret_hash=client.client_secret_hash,
+        registration_access_token_hash=client.registration_access_token_hash,
         created_at=client.created_at,
         is_active=client.is_active,
         session_lifetime_seconds=client.session_lifetime_seconds,
@@ -116,6 +127,7 @@ def _from_row(row: ClientRow) -> Client:
         scopes=frozenset(Scope(value) for value in row.scopes),
         client_type=ClientType(row.client_type),
         client_secret_hash=row.client_secret_hash,
+        registration_access_token_hash=row.registration_access_token_hash or "",
         created_at=created_at,
         is_active=row.is_active,
         session_lifetime_seconds=row.session_lifetime_seconds,

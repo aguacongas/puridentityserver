@@ -40,6 +40,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 - [OAuth 2.0 JWT Access Tokens] (RFC 9068) — extension
 - [Pushed Authorization Requests] (RFC 9126) — extension
 - [OpenID Connect RP-Initiated Logout] (OIDC spec) — `/end_session`
+- [OAuth 2.0 Dynamic Client Registration] (RFC 7591) + [Client Management] (RFC 7592) — `/register`
 
 ## Endpoints prévus
 
@@ -53,7 +54,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 | `/userinfo`                         | Claims de l'utilisateur                   | ✅   |
 | `/introspect`                       | Introspection de token (RFC 7662)         | ✅   |
 | `/revoke`                           | Révocation de token (RFC 7009)            | ✅   |
-| `/registration`                     | Client registration dynamique (option)    | ⬜   |
+| `/registration`                     | Client registration dynamique (RFC 7591/7592) | ✅   |
 | `/end_session`                      | RP-Initiated Logout                       | ✅   |
 
 ## Documentation
@@ -95,8 +96,16 @@ tests/             pytest unit + intégration (TestClient httpx)
 8. ✅ **Implicit & Hybrid** (OIDC Core 1.0)
 9. ✅ **Logout** — RP-Initiated Logout (`/end_session`, `id_token_hint`,
    `post_logout_redirect_uri` enregistrée, `state`, purge du cookie)
-10. **Introspection / Revocation** (RFC 7662 / 7009)
-11. **Client Registration** — registration dynamique
+10. ✅ **Introspection / Revocation** (RFC 7662 / 7009)
+11. ✅ **Client Registration** — registration dynamique (RFC 7591 + 7592) :
+    `POST /register` (création, `client_id` + `client_secret` + registration
+    access token émis une seule fois), gestion `GET/PUT/DELETE
+    /register/{client_id}` via le registration access token. Initial access
+    token exigé (configurable, hash SHA-256 — aucune valeur en clair stockée) ;
+    métadonnées restreintes : grant `authorization_code`, response `code`,
+    auth methods `client_secret_basic`/`client_secret_post`/`none`, redirect
+    URIs absolues http(s) sans fragment, scopes connus ; `registration_endpoint`
+    publié au discovery quand activé.
 12. **Persistence** — stockage pluggable (SQL, Mongo, etc.)
 
 ## Développement local

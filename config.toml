@@ -97,6 +97,24 @@ device_code_interval_seconds = 5
 # dans `[[settings.clients_seed]]`.
 identity_jwt_lifetime_seconds = 3600
 
+# Dynamic Client Registration (RFC 7591 + 7592) : endpoint /register (POST :
+# création de client ; GET/PUT/DELETE /register/{client_id} : gestion via le
+# registration access token, émis à la création et stocké haché SHA-256).
+# - registration_enabled : active l'endpoint et le publie au discovery
+#   (`registration_endpoint`).
+# - registration_requires_initial_access_token : la création exige un initial
+#   access token (en-tête `Authorization: Bearer <token>`) figurant dans
+#   `registration_initial_access_tokens` (liste ; hash SHA-256 comparé).
+#   Le mode ouvert (false) est à n'utiliser qu'en développement.
+# - registration_initial_access_tokens : jetons d'inscription autorisés
+#   (CHAÎNE DE DÉMO — à remplacer en production).
+# Surchargeables via `PURIDENTITYSERVER_REGISTRATION_ENABLED`,
+# `PURIDENTITYSERVER_REGISTRATION_REQUIRES_INITIAL_ACCESS_TOKEN`,
+# `PURIDENTITYSERVER_REGISTRATION_INITIAL_ACCESS_TOKENS` (liste séparée par des virgules).
+registration_enabled = true
+registration_requires_initial_access_token = true
+registration_initial_access_tokens = ["dev-registrar-token"]
+
 # seed utilisateurs (user store) : clé = subject (sub), valeur = claims
 # exposés selon les scopes accordés au jeton (openid > sub, profile >
 # identité, email, address, phone). Sujets = utilisateurs, jamais des
@@ -185,6 +203,9 @@ client_type = "public"
 # - sample-refresh-client   : échange code + rotation du refresh token (RFC 6749 §6)
 # - sample-cc-client        : grant client_credentials, machine à machine (RFC 6749 §4.4)
 # - sample-introspect-client : introspection / révocation (RFC 7662 / 7009)
+# - registration-client     : aucun client seed — le client est créé dynamiquement
+#                             via /register (RFC 7591/7592, voir
+#                             `registration_initial_access_tokens` ci-dessus)
 # → les smokes tests de ces samples PASSERT une configuration spécifique (port
 #   dédié + ce client) via un fichier temporaire ; ici ils sont aussi enregistrés
 #   pour pouvoir lancer le serveur par défaut et tester manuellement les samples.

@@ -142,6 +142,16 @@ class Settings(BaseSettings):
     # UserInfo (OIDC Core §5.4) — seed du user store (`sub` -> claims)
     users_seed: Annotated[dict[str, dict[str, object]], NoDecode] = {}
 
+    # Dynamic Client Registration (RFC 7591 + 7592) — endpoint /register.
+    # `registration_enabled` expose POST /register + GET/PUT/DELETE
+    # /register/{client_id}. Si `requires_initial_access_token` est vrai, la
+    # création exige un initial access token (Bearer) figurant dans
+    # `registration_initial_access_tokens` (liste, sép. virgules) ; le
+    # hash SHA-256 est comparé, jamais la valeur en clair.
+    registration_enabled: bool = False
+    registration_requires_initial_access_token: bool = True
+    registration_initial_access_tokens: Annotated[tuple[str, ...], NoDecode] = ()
+
     # Identité (FastAPI Users, spike) — durée par défaut du cookie de session.
     # Le cookie est signé RS256 avec une clé rotative dédiée (KeyUse.SESSION,
     # jamais publiée) : ni secret statique, ni collision avec les clés de
@@ -154,6 +164,14 @@ class Settings(BaseSettings):
     @classmethod
     def _split_algorithms(cls, value: object) -> object:
         """Transforme `PURIDENTITYSERVER_JWKS_ALGORITHMS="RS256,ES256"` en tuple."""
+        if isinstance(value, str):
+            return tuple(part.strip() for part in value.split(",") if part.strip())
+        return value
+
+    @field_validator("registration_initial_access_tokens", mode="before")
+    @classmethod
+    def _split_initial_access_tokens(cls, value: object) -> object:
+        """Transforme `PURIDENTITYSERVER_REGISTRATION_INITIAL_ACCESS_TOKENS` en tuple."""
         if isinstance(value, str):
             return tuple(part.strip() for part in value.split(",") if part.strip())
         return value
@@ -227,3 +245,10 @@ class Settings(BaseSettings):
     def seed_clients(self) -> tuple[Client, ...]:
         """Clients initiaux déclarés dans la configuration (seed au démarrage)."""
         return tuple(_parse_client(raw) for raw in self.clients_seed)
+
+    @cached_property
+    def registration_initial_access_token_hashes(self) -> frozenset[str]:
+        """Empreintes SHA-256 des initial access tokens seedés (jamais en clair)."""
+        return frozenset(
+            _hash_client_secret(token) for token in self.registration_initial_access_tokens
+        )
