@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, select
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -28,6 +28,9 @@ class ClientRow(PersistenceBase):
 
     client_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     redirect_uris: Mapped[list[str]] = mapped_column(JSON)
+    post_logout_redirect_uris: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default=text("'[]'")
+    )
     scopes: Mapped[list[str]] = mapped_column(JSON)
     client_type: Mapped[str] = mapped_column(String(16))
     client_secret_hash: Mapped[str] = mapped_column(String(64), default="")
@@ -87,6 +90,7 @@ def _to_row(client: Client) -> ClientRow:
     return ClientRow(
         client_id=client.client_id,
         redirect_uris=sorted(client.redirect_uris),
+        post_logout_redirect_uris=sorted(client.post_logout_redirect_uris),
         scopes=sorted(scope.value for scope in client.scopes),
         client_type=client.client_type.value,
         client_secret_hash=client.client_secret_hash,
@@ -108,6 +112,7 @@ def _from_row(row: ClientRow) -> Client:
     return Client(
         client_id=row.client_id,
         redirect_uris=frozenset(row.redirect_uris),
+        post_logout_redirect_uris=frozenset(row.post_logout_redirect_uris or ()),
         scopes=frozenset(Scope(value) for value in row.scopes),
         client_type=ClientType(row.client_type),
         client_secret_hash=row.client_secret_hash,

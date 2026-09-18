@@ -18,6 +18,14 @@ PurIdentityServer puis renouvelle ses jetons hors ligne :
 7. nouvel appui sur « Rafraîchir » avec un jeton déjà consommé : le
    serveur répond ``400 invalid_grant`` (un jeton n'est jamais réutilisable).
 
+Le sample illustre aussi le **RP-Initiated Logout** (OIDC Core 1.0 §5) :
+
+8. ``/logout`` redirige vers l'``end_session_endpoint`` du serveur avec
+   l'``id_token_hint`` (l'``id_token`` courant) et l'URI de sortie
+   ``post_logout_redirect_uri`` enregistrée pour ce client,
+9. le serveur termine la session (cookie effacé) puis renvoie le navigateur
+   vers ``/post-logout`` (``state`` rejoué) où le client purge sa session locale.
+
 Lancement (à la racine du dépôt, serveur PurIdentityServer déjà démarré
 sur le port ``8000`` par défaut) :
 
@@ -89,6 +97,7 @@ class Settings(BaseSettings):
     issuer: str = "http://127.0.0.1:8000"
     client_id: str = "sample-refresh-client"
     redirect_uri: str = "http://127.0.0.1:5174/callback"
+    post_logout_redirect_uri: str = "http://127.0.0.1:5174/post-logout"
     host: str = "127.0.0.1"
     port: int = 5174
 
@@ -129,6 +138,7 @@ class IssuedTokens:
 
 
 _session: IssuedTokens | None = None
+_logout_state: str = ""
 
 
 def _base64url_bytes(size: int) -> str:
@@ -218,8 +228,7 @@ def _tokens_html(
     return _page(
         f"""
 <h1 style="display: inline-block">Connecté</h1> {notice}
-<p>Rafraîchissements : <strong>{tokens.refreshes}</strong>
-<a href="/logout">[réinitialiser la session]</a></p>
+<p>Rafraîchissements : <strong>{tokens.refreshes}</strong></p>
 <p>Session : <code>sub</code> = <code>{html.escape(str(claims.get("sub")))}</code></p>
 <h2>access_token (expire dans {_ttl_seconds(tokens.access_token)} s)</h2>
 <pre>{html.escape(tokens.access_token)}</pre>
@@ -228,10 +237,33 @@ def _tokens_html(
 <form method="post" action="/refresh">
   <button type="submit">Rafraîchir les jetons (grant_type=refresh_token)</button>
 </form>
+<p><a class="button" href="/logout">Se déconnecter (RP-Initiated Logout)</a></p>
 <p><small>Chaque rafraîchissement consomme l'ancien refresh_token et en émet un nouveau ;
 rejouer un jeton déjà consommé produit une erreur <code>400 invalid_grant</code>.</small></p>
 """
     )
+
+
+def _post_logout_html(settings: Settings, state: str, ok: bool) -> str:
+    """Page affichée sur ``/post-logout`` (URI de retour enregistrée de la démo)."""
+    if ok:
+        notice = (
+            "<p>Le serveur a rejoué le <code>state</code> de la demande "
+            "(relie la réponse à la demande de logout).</p>"
+        )
+    else:
+        notice = (
+            "<p><strong>Attention :</strong> le <code>state</code> rejoué ne "
+            "correspond pas à celui émis par ce client.</p>"
+        )
+    body = f"""
+<h1>Déconnecté</h1>
+<p>La session au serveur <code>{html.escape(settings.issuer)}</code> a été
+terminée via le RP-Initiated Logout ({html.escape(state) or "sans state"}).</p>
+{notice}
+<p><a class="button" href="/">Se reconnecter</a></p>
+"""
+    return _page(body)
 
 
 def _authorization_url(
@@ -302,6 +334,53 @@ async def _refresh(
     return response.json()
 
 
+async def _handle_callback(
+    code: str, state: str, pending: dict[str, PendingAuth], settings: Settings
+) -> HTMLResponse:
+    """Échange le code (PKCE), vérifie l'``id_token`` puis stocke les jetons de session."""
+    auth = pending.pop(state, None)
+    if auth is None:
+        raise HTTPException(status_code=400, detail="État inconnu ou expiré")
+
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        endpoints = await _discovery(client, settings)
+        token_payload = await _exchange_code(client, endpoints, settings, code, auth.verifier)
+
+    _verify_id_token(token_payload["id_token"], endpoints, settings, nonce=auth.nonce)
+    if not token_payload.get("refresh_token"):
+        raise HTTPException(status_code=502, detail="Le serveur n'a pas émis de refresh_token")
+    global _session
+    _session = IssuedTokens(
+        access_token=token_payload["access_token"],
+        id_token=token_payload["id_token"],
+        refresh_token=token_payload["refresh_token"],
+    )
+    return HTMLResponse(_tokens_html(endpoints, settings, _session))
+
+
+async def _end_session_location(settings: Settings) -> str:
+    """Construit l'URL de ``/end_session`` (id_token_hint + URI de sortie + state).
+
+    Retourne une chaîne vide si le serveur n'annonce pas
+    ``end_session_endpoint`` : le client purge alors sa session locale
+    sans pouvoir terminer la session qui est au serveur.
+    """
+    global _logout_state
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        endpoints = await _discovery(client, settings)
+    end_session = endpoints.get("end_session_endpoint")
+    if not end_session:
+        return ""
+    state = _base64url_bytes(16)
+    _logout_state = state
+    params: list[str] = []
+    if _session is not None:
+        params.append(f"id_token_hint={quote(_session.id_token, safe='')}")
+    params.append(f"post_logout_redirect_uri={quote(settings.post_logout_redirect_uri, safe='')}")
+    params.append(f"state={state}")
+    return f"{end_session}?{'&'.join(params)}"
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Assemble l'application FastAPI du client de démonstration."""
     app_settings = settings or Settings()
@@ -346,26 +425,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         code: Annotated[str, Query()], state: Annotated[str, Query()]
     ) -> HTMLResponse:
         """Échange le code, vérifie l'``id_token`` et stocke les jetons de session."""
-        auth = pending.pop(state, None)
-        if auth is None:
-            raise HTTPException(status_code=400, detail="État inconnu ou expiré")
-
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-            endpoints = await _discovery(client, app_settings)
-            token_payload = await _exchange_code(
-                client, endpoints, app_settings, code, auth.verifier
-            )
-
-        _verify_id_token(token_payload["id_token"], endpoints, app_settings, nonce=auth.nonce)
-        if not token_payload.get("refresh_token"):
-            raise HTTPException(status_code=502, detail="Le serveur n'a pas émis de refresh_token")
-        global _session
-        _session = IssuedTokens(
-            access_token=token_payload["access_token"],
-            id_token=token_payload["id_token"],
-            refresh_token=token_payload["refresh_token"],
-        )
-        return HTMLResponse(_tokens_html(endpoints, app_settings, _session))
+        return await _handle_callback(code, state, pending, app_settings)
 
     @app.post("/refresh")
     async def refresh() -> HTMLResponse:
@@ -385,10 +445,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/logout")
     async def logout() -> RedirectResponse:
-        """Réinitialise la session du client (supprime les jetons de démonstration)."""
+        """Déclenche le RP-Initiated Logout auprès de l'``end_session_endpoint`` du serveur.
+
+        Transmet l'``id_token_hint`` (l'``id_token`` courant), l'URI de sortie
+        enregistrée et un ``state`` local ; le serveur termine la session OP
+        (cookie purgé) puis renvoie le navigateur vers l'URI de sortie où la
+        session locale du client est purgée.
+        """
+        location = await _end_session_location(app_settings)
+        if not location:
+            global _session
+            _session = None
+            return RedirectResponse(url="/", status_code=302)
+        return RedirectResponse(url=location, status_code=302)
+
+    @app.get("/post-logout", response_class=HTMLResponse)
+    async def post_logout(state: str = "") -> str:
+        """URI de retour du logout : purge la session locale et confirme la sortie.
+
+        Vérifie le ``state`` rejoué par le serveur avant de considérer le
+        logout comme correspondant à la demande émise par ce client.
+        """
         global _session
         _session = None
-        return RedirectResponse(url="/", status_code=302)
+        return _post_logout_html(app_settings, state, state == _logout_state)
 
     return app
 

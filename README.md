@@ -54,7 +54,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 | `/introspect`                       | Introspection de token (RFC 7662)         | ✅   |
 | `/revoke`                           | Révocation de token (RFC 7009)            | ✅   |
 | `/registration`                     | Client registration dynamique (option)    | ⬜   |
-| `/end_session`                      | RP-Initiated Logout                       | ⬜   |
+| `/end_session`                      | RP-Initiated Logout                       | ✅   |
 
 ## Documentation
 
@@ -93,7 +93,8 @@ tests/             pytest unit + intégration (TestClient httpx)
 6. ✅ **Client Credentials** (RFC 6749 §4.4)
 7. ✅ **Device Authorization Grant** (RFC 8628)
 8. ✅ **Implicit & Hybrid** (OIDC Core 1.0)
-9. **Logout** — RP-Initiated Logout
+9. ✅ **Logout** — RP-Initiated Logout (`/end_session`, `id_token_hint`,
+   `post_logout_redirect_uri` enregistrée, `state`, purge du cookie)
 10. **Introspection / Revocation** (RFC 7662 / 7009)
 11. **Client Registration** — registration dynamique
 12. **Persistence** — stockage pluggable (SQL, Mongo, etc.)

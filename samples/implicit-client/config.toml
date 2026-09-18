@@ -6,5 +6,6 @@
 issuer = "http://127.0.0.1:8000"
 client_id = "sample-implicit-client"
 redirect_uri = "http://127.0.0.1:5175/callback"
+post_logout_redirect_uri = "http://127.0.0.1:5175/post-logout"
 host = "127.0.0.1"
 port = 5175

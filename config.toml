@@ -8,6 +8,10 @@
 # seeds clients enregistrés au démarrage du serveur :
 # - client_id      : identifiant du client
 # - redirect_uris  : URI de redirection autorisées pour le flow
+# - post_logout_redirect_uris : URI de retour autorisées pour le RP-Initiated
+#                               Logout (/end_session, OIDC Core 1.0 §5) — toute
+#                               autre valeur est rejetée ; si cette liste est
+#                               absente, aucune redirection de sortie n'est possible
 # - scopes         : scopes accordés au client (séparés par des espaces)
 # - client_type    : "public" (Authorization Code + PKCE, sans secret) ou
 #                    "confidential" (échange de tokens via client_secret ;
@@ -169,6 +173,7 @@ password = "password"
 [[settings.clients_seed]]
 client_id = "sample-pkce-client"
 redirect_uris = ["http://127.0.0.1:5173/callback"]
+post_logout_redirect_uris = ["http://127.0.0.1:5173/post-logout"]
 scopes = "openid profile email"
 client_type = "public"
 
@@ -187,18 +192,21 @@ client_type = "public"
 [[settings.clients_seed]]
 client_id = "sample-implicit-client"
 redirect_uris = ["http://127.0.0.1:5175/callback"]
+post_logout_redirect_uris = ["http://127.0.0.1:5175/post-logout"]
 scopes = "openid profile email"
 client_type = "public"
 
 [[settings.clients_seed]]
 client_id = "sample-hybrid-client"
 redirect_uris = ["http://127.0.0.1:5176/callback"]
+post_logout_redirect_uris = ["http://127.0.0.1:5176/post-logout"]
 scopes = "openid profile email"
 client_type = "public"
 
 [[settings.clients_seed]]
 client_id = "sample-refresh-client"
 redirect_uris = ["http://127.0.0.1:5174/callback"]
+post_logout_redirect_uris = ["http://127.0.0.1:5174/post-logout"]
 scopes = "openid profile email offline_access"
 client_type = "public"
 

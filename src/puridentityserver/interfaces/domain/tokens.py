@@ -63,3 +63,17 @@ class TokenManager(Protocol):
         (signature invalide, émetteur inattendu, expiration…).
         """
         ...
+
+    async def validate_id_token(
+        self,
+        *,
+        token: str,
+        issuer: str,
+    ) -> dict[str, object] | None:
+        """Décode et valide un id_token (signature JWKS, iss, exp).
+
+        Sert notamment à évaluer l'``id_token_hint`` du RP-Initiated Logout
+        (OIDC Core 1.0 §5) : le claim ``aud`` n'est pas vérifié ici, sa
+        résolution vers un client est laissée au cas d'utilisation appelant.
+        """
+        ...

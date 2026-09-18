@@ -22,6 +22,14 @@ d'autorisation remet un ``code`` **et** des jetons ``id_token`` +
    et un ``access_token`` final,
 6. appel de ``/userinfo`` avec l'access token final et affichage des claims.
 
+Le sample illustre aussi le **RP-Initiated Logout** (OIDC Core 1.0 §5) :
+
+7. ``/logout`` redirige vers l'``end_session_endpoint`` du serveur avec
+   l'``id_token_hint`` (l'``id_token`` reçu) et l'URI de sortie
+   ``post_logout_redirect_uri`` enregistrée pour ce client,
+8. le serveur termine la session (cookie effacé) puis renvoie le navigateur
+   vers ``/post-logout`` (``state`` rejoué) où le client purge sa session locale.
+
 Le flow Hybrid permet au client de consommer aussitôt les claims du
 ``id_token`` (rapidité) tout en conservant le code pour obtenir des jetons
 finaux en toute sécurité (tokens finaux jamais exposés au navigateur au
@@ -120,6 +128,7 @@ class Settings(BaseSettings):
     issuer: str = "http://127.0.0.1:8000"
     client_id: str = "sample-hybrid-client"
     redirect_uri: str = "http://127.0.0.1:5176/callback"
+    post_logout_redirect_uri: str = "http://127.0.0.1:5176/post-logout"
     host: str = "127.0.0.1"
     port: int = 5176
 
@@ -363,7 +372,30 @@ et <code>c_hash</code> (code).</p>
 <p><code>{html.escape(token_access_token[:36])}…</code> (expire dans
 {html.escape(str(expires_in))} s)&nbsp;:</p>
 {_claims_table("userinfo", "", userinfo)}
+<p><a class="button" href="/logout">Se déconnecter (RP-Initiated Logout)</a></p>
 <p><a href="/">Retour à l'accueil</a></p>
+"""
+    return _page(body)
+
+
+def _post_logout_html(settings: Settings, state: str, ok: bool) -> str:
+    """Page affichée sur ``/post-logout`` (URI de retour enregistrée de la démo)."""
+    if ok:
+        notice = (
+            "<p>Le serveur a rejoué le <code>state</code> de la demande "
+            "(relie la réponse à la demande de logout).</p>"
+        )
+    else:
+        notice = (
+            "<p><strong>Attention :</strong> le <code>state</code> rejoué ne "
+            "correspond pas à celui émis par ce client.</p>"
+        )
+    body = f"""
+<h1>Déconnecté</h1>
+<p>La session au serveur <code>{html.escape(settings.issuer)}</code> a été
+terminée via le RP-Initiated Logout ({html.escape(state) or "sans state"}).</p>
+{notice}
+<p><a class="button" href="/">Se reconnecter</a></p>
 """
     return _page(body)
 
@@ -372,6 +404,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     """Assemble l'application FastAPI du client de démonstration."""
     app_settings = settings or Settings()
     pending: dict[str, PendingAuth] = {}
+    session: dict[str, str] = {}
 
     app = FastAPI(
         title="PurIdentityServer — client démo (Hybrid flow)",
@@ -448,6 +481,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             auth.nonce,
             access_token=token_response["access_token"],
         )
+        session["id_token"] = token_response["id_token"]
         return HTMLResponse(
             _hybrid_html(
                 authorize_claims,
@@ -458,6 +492,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 userinfo=userinfo,
             )
         )
+
+    @app.get("/logout")
+    async def logout() -> RedirectResponse:
+        """Déclenche le RP-Initiated Logout auprès de l'``end_session_endpoint`` du serveur.
+
+        Transmet l'``id_token_hint`` (l'``id_token`` final reçu), l'URI de
+        sortie enregistrée et un ``state`` local ; le serveur termine la
+        session (cookie purgé) puis renvoie le navigateur vers l'URI de sortie.
+        """
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            endpoints = await _discovery(client, app_settings)
+        end_session = endpoints.get("end_session_endpoint")
+        if not end_session:
+            session.clear()
+            return RedirectResponse(url="/", status_code=302)
+
+        state = _base64url_bytes(16)
+        session["logout_state"] = state
+        id_token = session.get("id_token")
+        params: list[str] = []
+        if id_token:
+            params.append(f"id_token_hint={quote(id_token, safe='')}")
+        params.append(
+            f"post_logout_redirect_uri={quote(app_settings.post_logout_redirect_uri, safe='')}"
+        )
+        params.append(f"state={state}")
+        return RedirectResponse(url=f"{end_session}?{'&'.join(params)}", status_code=302)
+
+    @app.get("/post-logout", response_class=HTMLResponse)
+    async def post_logout(state: str = "") -> str:
+        """URI de retour du logout : purge la session locale et confirme la sortie.
+
+        Vérifie le ``state`` rejoué par le serveur avant de considérer le
+        logout comme correspondant à la demande émise par ce client.
+        """
+        expected = session.get("logout_state")
+        session.clear()
+        return _post_logout_html(app_settings, state, state == expected)
 
     return app
 

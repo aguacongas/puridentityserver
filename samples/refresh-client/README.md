@@ -57,7 +57,10 @@ uv run python samples/refresh-client/app.py
 Parcours : « Se connecter » (login + consentement sur le serveur) →
 le client affiche access_token et refresh_token → « Rafraîchir les
 jetons » → rotation visible (nouveau refresh_token, compteur) → un
-troisième clic échoue avec `400 invalid_grant` (rejeu interdit).
+troisième clic échoue avec `400 invalid_grant` (rejeu interdit) →
+« Se déconnecter (RP-Initiated Logout) » redirige vers l'`end_session`
+du serveur (id_token_hint + URI de sortie + state), le cookie est effacé
+et `/post-logout` (state rejoué) purge la session locale du client.
 
 ## Configuration
 
@@ -75,5 +78,7 @@ de configuration n'est committé par sample.
 
 Le fichier [`config.toml`](config.toml) du sample ne contient que les
 réglages **client** de l'application `app.py` (comme `pkce-client`) :
-issuer `http://127.0.0.1:8000`, port d'écoute `5174`. Surchargeable via
+issuer `http://127.0.0.1:8000`, port d'écoute `5174` et URI de sortie
+`post_logout_redirect_uri` (doit figurer dans les
+`post_logout_redirect_uris` du client côté serveur). Surchargeable via
 `OIDC_SETTINGS_FILE`.
