@@ -76,7 +76,7 @@ src/puridentityserver/
     api/           routes FastAPI (authorize, token, userinfo, jwks, discovery...)
     schemas/       modèles Pydantic request/response OIDC
     repositories/  abstractions de persistance (ports)
-  infrastructure/  PyJWT, storage concret (in-memory d'abord, puis SQL/Mongo)
+  infrastructure/  PyJWT, storage concret (memory + SQL/SQLAlchemy, factory)
   server.py        composition root — montage FastAPI + injection de dépendances
 tests/             pytest unit + intégration (TestClient httpx)
 ```
@@ -120,7 +120,15 @@ tests/             pytest unit + intégration (TestClient httpx)
     `require_pushed_authorization_requests` à la registration, RFC 9126
     §5.2 §6.1) : un tel client voit toute demande directe à `/authorize`
     rejetée en `invalid_request`.
-13. **Persistence** — stockage pluggable (SQL, Mongo, etc.)
+13. ✅ **Persistence** — stockage pluggable : chaque store (clés de
+    signature, clients, codes d'autorisation, device codes, requêtes PAR,
+    refresh tokens, jetons révoqués, profils utilisateurs) est décliné en
+    deux implémentations choisies via `storage_type` — `memory`
+    (process-local, développement) et `sql` (SQLAlchemy 2.0 asynchrone :
+    SQLite, PostgreSQL, MySQL — DSN `storage_dsn`, dialecte asynchrone
+    résolu automatiquement, migrations légères `ALTER TABLE ADD COLUMN` au
+    démarrage). Le backend `sql` autorise le load balancing multi-instance
+    et la reprise après redémarrage.
 
 ## Développement local
 
