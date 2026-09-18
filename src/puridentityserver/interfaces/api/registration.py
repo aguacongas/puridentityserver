@@ -26,6 +26,8 @@ from puridentityserver.application.registration import (
     UpdateClientRequest,
 )
 
+_JSON_MEDIA_TYPE = "application/json"
+
 
 def registration_router(usecase: RegistrationUseCase) -> APIRouter:
     """Construit le routeur FastAPI exposant les endpoints de registration."""
@@ -43,7 +45,7 @@ def registration_router(usecase: RegistrationUseCase) -> APIRouter:
             return _error_response(result)
         return Response(
             content=_registration_json(result),
-            media_type="application/json",
+            media_type=_JSON_MEDIA_TYPE,
             status_code=201,
             headers={"Location": result.registration_client_uri},
         )
@@ -58,7 +60,7 @@ def registration_router(usecase: RegistrationUseCase) -> APIRouter:
         result = await usecase.read(ReadClientRequest(client_id, _bearer_token(request)))
         if isinstance(result, RegistrationError):
             return _error_response(result)
-        return Response(content=_registration_json(result), media_type="application/json")
+        return Response(content=_registration_json(result), media_type=_JSON_MEDIA_TYPE)
 
     @router.put(
         "/register/{client_id}",
@@ -70,7 +72,7 @@ def registration_router(usecase: RegistrationUseCase) -> APIRouter:
         result = await _update_client(usecase, client_id, request)
         if isinstance(result, RegistrationError):
             return _error_response(result)
-        return Response(content=_registration_json(result), media_type="application/json")
+        return Response(content=_registration_json(result), media_type=_JSON_MEDIA_TYPE)
 
     @router.delete(
         "/register/{client_id}",
@@ -156,6 +158,6 @@ def _error_response(error: RegistrationError) -> Response:
             {"error": error.error, "error_description": error.error_description},
             separators=(",", ":"),
         ),
-        media_type="application/json",
+        media_type=_JSON_MEDIA_TYPE,
         status_code=error.status_code,
     )

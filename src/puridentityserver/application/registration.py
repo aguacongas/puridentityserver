@@ -132,6 +132,14 @@ class RegistrationError:
     status_code: int = 400
 
 
+@dataclass(frozen=True, slots=True)
+class _SecretRotation:
+    """Résultat d'une rotation de secret lors d'une mise à jour (RFC 7592 §3)."""
+
+    secret_hash: str
+    issued_secret: str
+
+
 def hash_secret(value: str) -> str:
     """Calcule l'empreinte SHA-256 d'un secret ou jeton (jamais stocké en clair)."""
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
@@ -151,7 +159,7 @@ class RegistrationUseCase:
 
     async def register(self, request: RegisterRequest) -> ClientRegistration | RegistrationError:
         """Crée un client et retourne sa configuration complète (RFC 7591 §4)."""
-        if not await self._authorise_initial(request.initial_access_token):
+        if not self._authorise_initial(request.initial_access_token):
             return RegistrationError(
                 "invalid_client",
                 "Initial access token manquant ou invalide",
@@ -211,17 +219,17 @@ class RegistrationUseCase:
         if isinstance(metadata, RegistrationError):
             return metadata
 
-        secret_hash, issued_secret = self._updated_secret(client, metadata)
+        rotation = self._updated_secret(client, metadata)
         updated = replace(
             client,
             redirect_uris=metadata.redirect_uris,
             post_logout_redirect_uris=metadata.post_logout_redirect_uris,
             scopes=metadata.scopes,
             client_type=metadata.client_type,
-            client_secret_hash=secret_hash,
+            client_secret_hash=rotation.secret_hash,
         )
         await self._clients.save(updated)
-        return self._response(updated, client_secret=issued_secret)
+        return self._response(updated, client_secret=rotation.issued_secret)
 
     async def delete(self, request: DeleteClientRequest) -> RegistrationError | None:
         """Supprime le client et sa configuration (RFC 7592 §4 ; 204 ou erreur)."""
@@ -249,26 +257,26 @@ class RegistrationUseCase:
             )
         return client
 
-    def _updated_secret(self, client: Client, metadata: RegistrationMetadata) -> tuple[str, str]:
-        """Détermine le nouveau hash de secret et, le cas échéant, le secret émis.
+    def _updated_secret(self, client: Client, metadata: RegistrationMetadata) -> _SecretRotation:
+        """Détermine la rotation de secret ; ``issued_secret`` reste vide sans rotation.
 
-        Retourne ``(hash, secret_émis)`` : le secret émis est non vide
-        uniquement quand une rotation est demandée ou qu'un secret est
-        généré pour la première fois (passage en client confidentiel).
+        Le secret est émis en clair uniquement quand une rotation est
+        demandée ou qu'un secret est généré pour la première fois (passage
+        en client confidentiel).
         """
         if metadata.client_type is ClientType.PUBLIC:
-            return "", ""
+            return _SecretRotation("", "")
         if metadata.requested_secret is not None:
             requested_hash = hash_secret(metadata.requested_secret)
             if requested_hash == client.client_secret_hash:
-                return client.client_secret_hash, ""
-            return requested_hash, metadata.requested_secret
+                return _SecretRotation(client.client_secret_hash, "")
+            return _SecretRotation(requested_hash, metadata.requested_secret)
         if client.client_secret_hash:
-            return client.client_secret_hash, ""
+            return _SecretRotation(client.client_secret_hash, "")
         generated = token_urlsafe(48)
-        return hash_secret(generated), generated
+        return _SecretRotation(hash_secret(generated), generated)
 
-    async def _authorise_initial(self, token: str) -> bool:
+    def _authorise_initial(self, token: str) -> bool:
         """Vérifie l'initial access token (RFC 7591 §4.1) si exigé par la config."""
         if not self._config.requires_initial_access_token:
             return True
