@@ -15,7 +15,10 @@ Périmètre maîtrisé (docson du registre) :
   ``client_secret_post`` (client confidentiel, secret émis une seule fois)
   ou ``none`` (client public) ; ``private_key_jwt`` non supporté ;
 - URI de redirection : absolues http(s), sans fragment ;
-- scopes : sous-ensemble connu du serveur.
+- scopes : sous-ensemble connu du serveur ;
+- extensions : ``require_pushed_authorization_requests`` (RFC 9126 §5.2) et
+  ``require_consent`` (écran de consentement OIDC Core 1.0 §3.1.2.2),
+  booléens optionnels par client (défaut ``false``).
 
 Protections anti abus :
 
@@ -66,6 +69,7 @@ class RegistrationMetadata:
     token_endpoint_auth_method: str = _AUTH_METHOD_DEFAULT
     requested_secret: str | None = None
     par_required: bool = False
+    require_consent: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +129,7 @@ class ClientRegistration:
     registration_access_token: str = ""
     registration_client_uri: str = ""
     require_pushed_authorization_requests: bool = False
+    require_consent: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +195,7 @@ class RegistrationUseCase:
             client_secret_hash=secret_hash,
             registration_access_token_hash=hash_secret(registration_token),
             par_required=metadata.par_required,
+            require_consent=metadata.require_consent,
         )
         await self._clients.save(client)
         return self._response(
@@ -244,6 +250,7 @@ class RegistrationUseCase:
             device_code_lifetime_seconds=client.device_code_lifetime_seconds,
             device_code_interval_seconds=client.device_code_interval_seconds,
             par_required=metadata.par_required,
+            require_consent=metadata.require_consent,
         )
         await self._clients.save(updated)
         return self._response(updated, client_secret=rotation.issued_secret)
@@ -333,6 +340,7 @@ class RegistrationUseCase:
             registration_access_token=registration_access_token,
             registration_client_uri=f"{self._base_url()}/register/{client.client_id}",
             require_pushed_authorization_requests=client.par_required,
+            require_consent=client.require_consent,
         )
 
     def _base_url(self) -> str:
@@ -358,7 +366,7 @@ def _parse_metadata(raw: object) -> RegistrationMetadata | RegistrationError:
     extras = _parse_metadata_extras(raw)
     if isinstance(extras, RegistrationError):
         return extras
-    scopes, auth_method, requested_secret, par_required = extras
+    scopes, auth_method, requested_secret, par_required, require_consent = extras
 
     client_type = ClientType.PUBLIC if auth_method == "none" else ClientType.CONFIDENTIAL
     return RegistrationMetadata(
@@ -370,12 +378,13 @@ def _parse_metadata(raw: object) -> RegistrationMetadata | RegistrationError:
         token_endpoint_auth_method=auth_method,
         requested_secret=requested_secret,
         par_required=par_required,
+        require_consent=require_consent,
     )
 
 
 def _parse_metadata_extras(
     raw: dict[str, object],
-) -> tuple[frozenset[Scope], str, str | None, bool] | RegistrationError:
+) -> tuple[frozenset[Scope], str, str | None, bool, bool] | RegistrationError:
     """Valide scopes, méthode d'authentification et exigences du client (RFC 7591 §2).
 
     ``grant_types`` et ``response_types`` sont bornés au périmètre maîtrisé
@@ -400,7 +409,10 @@ def _parse_metadata_extras(
     par_required = _parse_par_required(raw)
     if isinstance(par_required, RegistrationError):
         return par_required
-    return scopes, auth_method, requested_secret, par_required
+    require_consent = _parse_require_consent(raw)
+    if isinstance(require_consent, RegistrationError):
+        return require_consent
+    return scopes, auth_method, requested_secret, par_required, require_consent
 
 
 def _parse_uri_list(
@@ -520,14 +532,31 @@ def _parse_requested_secret(raw: dict[str, object]) -> str | RegistrationError |
     return value
 
 
-def _parse_par_required(raw: dict[str, object]) -> bool | RegistrationError:
-    """Lit ``require_pushed_authorization_requests`` (RFC 9126 §5.2, par défaut false)."""
-    value = raw.get("require_pushed_authorization_requests")
+def _parse_bool_flag(
+    raw: dict[str, object], key: str, *, default: bool
+) -> bool | RegistrationError:
+    """Lit un drapeau booléen de métadonnées client (défaut si absent)."""
+    value = raw.get(key)
     if value is None:
-        return False
+        return default
     if not isinstance(value, bool):
         return RegistrationError(
             "invalid_client_metadata",
-            "require_pushed_authorization_requests doit être un booléen",
+            f"{key} doit être un booléen",
         )
     return value
+
+
+def _parse_par_required(raw: dict[str, object]) -> bool | RegistrationError:
+    """Lit ``require_pushed_authorization_requests`` (RFC 9126 §5.2, par défaut false)."""
+    return _parse_bool_flag(raw, "require_pushed_authorization_requests", default=False)
+
+
+def _parse_require_consent(raw: dict[str, object]) -> bool | RegistrationError:
+    """Lit ``require_consent`` (OIDC Core 1.0 §3.1.2.2, par défaut false).
+
+    Drapeau d'extension PurIdentityServer : contraint la demande
+    d'autorisation à passer par l'écran de consentement de l'utilisateur
+    connecté avant d'émettre le moindre code ou jeton.
+    """
+    return _parse_bool_flag(raw, "require_consent", default=False)
