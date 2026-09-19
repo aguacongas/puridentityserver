@@ -117,17 +117,18 @@ def consent_router(
         response_class=HTMLResponse,
         response_model=None,
         summary="Page de consentement OAuth",
+        responses={400: {"description": "redirect_uri requis"}},
     )
     async def consent_prompt(
-        response_type: str = Query(default=""),
-        client_id: str = Query(default=""),
-        redirect_uri: str = Query(default=""),
-        scope: str = Query(default=""),
-        state: str = Query(default=""),
-        nonce: str = Query(default=""),
-        code_challenge: str = Query(default=""),
-        code_challenge_method: str = Query(default="S256"),
-        response_mode: str = Query(default=""),
+        response_type: Annotated[str, Query()] = "",
+        client_id: Annotated[str, Query()] = "",
+        redirect_uri: Annotated[str, Query()] = "",
+        scope: Annotated[str, Query()] = "",
+        state: Annotated[str, Query()] = "",
+        nonce: Annotated[str, Query()] = "",
+        code_challenge: Annotated[str, Query()] = "",
+        code_challenge_method: Annotated[str, Query()] = "S256",
+        response_mode: Annotated[str, Query()] = "",
         user: CurrentUserOptional = None,
     ) -> RedirectResponse | str:
         request = AuthorizeRequest(
@@ -152,6 +153,7 @@ def consent_router(
         response_class=HTMLResponse,
         response_model=None,
         summary="Autorise ou refuse la demande d'autorisation",
+        responses={400: {"description": "redirect_uri requis"}},
     )
     async def consent_decision(
         response_type: Annotated[str, Form()],
