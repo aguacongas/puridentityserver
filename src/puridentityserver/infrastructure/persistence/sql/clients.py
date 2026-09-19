@@ -43,6 +43,7 @@ class ClientRow(PersistenceBase):
     authorization_code_lifetime_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     device_code_lifetime_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     device_code_interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    require_consent: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
 
 
 class SQLClientRepository:
@@ -120,6 +121,7 @@ def _to_row(client: Client) -> ClientRow:
         authorization_code_lifetime_seconds=client.authorization_code_lifetime_seconds,
         device_code_lifetime_seconds=client.device_code_lifetime_seconds,
         device_code_interval_seconds=client.device_code_interval_seconds,
+        require_consent=client.require_consent,
     )
 
 
@@ -159,4 +161,5 @@ def _from_row(row: ClientRow) -> Client:
         authorization_code_lifetime_seconds=row.authorization_code_lifetime_seconds,
         device_code_lifetime_seconds=row.device_code_lifetime_seconds,
         device_code_interval_seconds=row.device_code_interval_seconds,
+        require_consent=row.require_consent,
     )

@@ -19,6 +19,10 @@
 # - client_type    : "public" (Authorization Code + PKCE, sans secret) ou
 #                    "confidential" (échange de tokens via client_secret ;
 #                    requis pour le grand client_credentials)
+# - require_consent : confirmer chaque nouvelle demande d'autorisation sur la
+#                    page /consent (OIDC Core 1.0 §3.1.2.2) avant d'émettre le
+#                    moindre code ou jeton — les scopes déjà consentis pour ce
+#                    client sont ré-utilisés (auto-approbation)
 # - client_secret  : secret du client (haché SHA-256 en base, jamais stocké
 #                    en clair) — facultatif pour un client "public" ; un client
 #                    confidentiel sans redirect_uris est adapté au flow
@@ -231,7 +235,10 @@ client_type = "public"
 #                             /authorize direct rejeté, le flow doit passer par
 #                             POST /par puis /authorize?client_id+request_uri
 # - spa-client              : SPA statique sans callback (tous les flows OIDC),
-#                             redirection à la racine http://127.0.0.1:5177/
+#                             redirection à la racine http://127.0.0.1:5177/ ;
+#                             `require_consent = true` : la 1re autorisation de
+#                             l'utilisateur passe par la page /consent puis est
+#                             mémorisée (scopes accordés ré-utilisés ensuite)
 # → les smokes tests de ces samples PASSERT une configuration spécifique (port
 #   dédié + ce client) via un fichier temporaire ; ici ils sont aussi enregistrés
 #   pour pouvoir lancer le serveur par défaut et tester manuellement les samples.
@@ -299,3 +306,4 @@ post_logout_redirect_uris = ["http://127.0.0.1:5177/"]
 web_origins = ["http://localhost:5177"]
 scopes = "openid profile email offline_access"
 client_type = "public"
+require_consent = true

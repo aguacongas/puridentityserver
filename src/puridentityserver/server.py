@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from puridentityserver.application.authorize import AuthorizeConfig, AuthorizeUseCase
+from puridentityserver.application.consent import ConsentUseCase
 from puridentityserver.application.device_authorize import (
     DeviceAuthorizationUseCase,
     DeviceConfig,
@@ -36,6 +37,7 @@ from puridentityserver.infrastructure.jwks import DefaultKeyManager
 from puridentityserver.infrastructure.persistence.factory import (
     build_authorization_code_repository,
     build_client_repository,
+    build_consent_repository,
     build_device_authorization_repository,
     build_key_pair_repository,
     build_pushed_authorization_repository,
@@ -46,6 +48,7 @@ from puridentityserver.infrastructure.persistence.factory import (
 from puridentityserver.infrastructure.settings import Settings
 from puridentityserver.infrastructure.tokens import PyJWTTokenManager
 from puridentityserver.interfaces.api.authorize import authorize_router
+from puridentityserver.interfaces.api.consent import consent_router
 from puridentityserver.interfaces.api.cors import DynamicCORSMiddleware
 from puridentityserver.interfaces.api.device_authorize import device_authorization_router
 from puridentityserver.interfaces.api.device_page import device_page_router
@@ -69,16 +72,19 @@ def _mount_authorization_routers(
     authorize_usecase: AuthorizeUseCase,
     par_usecase: PushedAuthorizationUseCase,
     client_repository: ClientRepository,
+    consent_usecase: ConsentUseCase,
     par_enabled: bool,
 ) -> None:
-    """Monte ``/authorize`` (+ ``/par`` quand la Pushed Authorization Request est activée)."""
+    """Monte ``/authorize`` (+ ``/par`` + ``/consent`` selon la configuration)."""
     app.include_router(
         authorize_router(
             authorize_usecase,
             par_usecase=par_usecase if par_enabled else None,
             client_repository=client_repository,
+            consent_usecase=consent_usecase,
         )
     )
+    app.include_router(consent_router(consent_usecase, authorize_usecase, client_repository))
     if par_enabled:
         app.include_router(par_router(par_usecase))
 
@@ -125,6 +131,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     refresh_token_repository = build_refresh_token_repository(settings)
     device_code_repository = build_device_authorization_repository(settings)
     pushed_code_repository = build_pushed_authorization_repository(settings)
+    consent_repository = build_consent_repository(settings)
+    consent_usecase = ConsentUseCase(consent_repository)
 
     authorize_usecase = AuthorizeUseCase(
         AuthorizeConfig(
@@ -220,6 +228,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await refresh_token_repository.initialise()
         await device_code_repository.initialise()
         await pushed_code_repository.initialise()
+        await consent_repository.initialise()
         for client in settings.seed_clients:
             await client_repository.save(client)
         await user_repository.save_all(
@@ -255,6 +264,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await refresh_token_repository.close()
             await device_code_repository.close()
             await pushed_code_repository.close()
+            await consent_repository.close()
 
     app = FastAPI(
         title="PurIdentityServer",
@@ -273,6 +283,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         authorize_usecase=authorize_usecase,
         par_usecase=par_usecase,
         client_repository=client_repository,
+        consent_usecase=consent_usecase,
         par_enabled=settings.par_enabled,
     )
     app.include_router(token_router(token_usecase))

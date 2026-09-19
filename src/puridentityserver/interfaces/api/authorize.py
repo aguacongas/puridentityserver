@@ -13,9 +13,11 @@ from puridentityserver.application.authorize import (
     AuthorizeRequest,
     AuthorizeUseCase,
 )
+from puridentityserver.application.consent import ConsentUseCase
 from puridentityserver.application.par import PushedAuthorizationUseCase, PushError
-from puridentityserver.domain.authorization import ResponseMode
+from puridentityserver.domain.authorization import ResponseMode, Scope
 from puridentityserver.identity.config import CurrentUserOptional
+from puridentityserver.interfaces.api.consent import consent_url
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 
 
@@ -23,13 +25,18 @@ def authorize_router(
     usecase: AuthorizeUseCase,
     par_usecase: PushedAuthorizationUseCase | None = None,
     client_repository: ClientRepository | None = None,
+    consent_usecase: ConsentUseCase | None = None,
 ) -> APIRouter:
     """Construit le routeur FastAPI exposant ``GET /authorize``.
 
     ``par_usecase`` active la résolution de ``request_uri`` (RFC 9126 §6.2) ;
     ``None`` (PAR désactivé) rejette toute référence poussée.
     ``client_repository`` permet d'appliquer l'obligation PAR par client
-    (``par_required``, RFC 9126 §6.1).
+    (``par_required``, RFC 9126 §6.1) et de résoudre le client pour le
+    consentement. ``consent_usecase`` active l'écran de consentement
+    (``require_consent``, OIDC Core 1.0 §3.1.2.2) : la demande est alors
+    redirigée vers ``/consent`` quand les scopes demandés ne sont pas déjà
+    couverts par un consentement mémorisé.
     """
     router = APIRouter(tags=["authorize"])
 
@@ -104,6 +111,11 @@ def authorize_router(
                 code_challenge_method=auth_request.code_challenge_method,
                 response_mode=auth_request.response_mode,
             )
+        consent_redirect = await _consent_redirect_if_required(
+            auth_request, consent_usecase, client_repository
+        )
+        if consent_redirect is not None:
+            return consent_redirect
         result = await usecase.execute(auth_request)
         if isinstance(result, AuthorizeRedirect):
             return RedirectResponse(result.redirect_uri, status_code=302)
@@ -185,6 +197,29 @@ async def _enforce_par_requirement(
                 "Authorization Request (RFC 9126 §6.1)",
             },
         )
+
+
+async def _consent_redirect_if_required(
+    request: AuthorizeRequest,
+    consent_usecase: ConsentUseCase | None,
+    client_repository: ClientRepository | None,
+) -> RedirectResponse | None:
+    """Retourne la redirection vers ``/consent`` quand le consentement est requis.
+
+    Délégué à ``ConsentUseCase.is_required`` : un client sans
+    ``require_consent`` ne passe jamais par la page ; un consentement déjà
+    mémorisé couvrant la demande (``Consent.covers``) n'est pas redemandé.
+    Utilisateur non connecté (``subject`` vide) : la page de consentement
+    redirigera elle-même vers ``/login`` — aucun code ou jeton n'est émis
+    sans confirmation pour les clients ``require_consent``.
+    """
+    if consent_usecase is None or client_repository is None:
+        return None
+    client = await client_repository.find_by_id(request.client_id)
+    scopes = Scope.from_space_separated(request.scope)
+    if client is not None and await consent_usecase.is_required(client, request.subject, scopes):
+        return RedirectResponse(consent_url(request), status_code=302)
+    return None
 
 
 def _error_redirect(result: AuthorizeError) -> RedirectResponse:

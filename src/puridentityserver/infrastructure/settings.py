@@ -74,6 +74,7 @@ def _parse_client(raw: dict[str, object]) -> Client:
         device_code_lifetime_seconds=_optional_int(raw, "device_code_lifetime_seconds"),
         device_code_interval_seconds=_optional_int(raw, "device_code_interval_seconds"),
         par_required=bool(raw.get("par_required")),
+        require_consent=bool(raw.get("require_consent")),
     )
 
 

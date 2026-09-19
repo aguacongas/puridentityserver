@@ -136,6 +136,15 @@ tests/             pytest unit + intégration (TestClient httpx)
     Introspection, Révocation, Logout) avec callback géré dans la page, CORS
     **dérivé des URIs des clients** (`redirect_uris` + `web_origins` du
     client `sample-spa-client`).
+15. ✅ **Écran de consentement** (OIDC Core 1.0 §3.1.2.2) : pour un client
+    marqué `require_consent`, `/authorize` redirige vers `GET /consent`
+    (client, scopes demandés, `redirect_uri`) quand un consentement mémorisé
+    ne couvre pas déjà la demande. `POST /consent` autorise (`ConsentUseCase.grant`
+    — scopes fusionnés, jamais retirés — puis exécution directe d'`AuthorizeUseCase`)
+    ou refuse (`access_denied` vers `redirect_uri`). Utilisateur non connecté :
+    `login?next=/consent…`. Consentements persistés avec les stores (`memory` /
+    `sql`), auto-approbation des demandes déjà couvertes ; compatible PAR
+    (exécution directe après consultation, le `request_uri` étant à usage unique).
 
 ## Développement local
 

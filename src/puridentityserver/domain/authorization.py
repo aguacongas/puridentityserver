@@ -59,7 +59,10 @@ class Client:
     configuration enregistrée (lecture, mise à jour, suppression).
     ``par_required`` (RFC 9126 §6.1) force ce client à pousser ses
     demandes via ``/par`` : l'endpoint d'autorisation rejette alors toute
-    demande directe sans ``request_uri``.
+    demande directe sans ``request_uri``. ``require_consent`` (OAuth 2.0
+    Consent, OIDC Core 1.0 §3.1.2.2) exige la confirmation de
+    l'utilisateur connecté — mémorisée dans le store ``consents`` — avant
+    d'émettre le moindre code ou jeton.
 
     ``web_origins`` déclare explicitement des origines internet autorisées
     à appeler les endpoints du serveur depuis le navigateur (CORS) au-delà
@@ -85,6 +88,7 @@ class Client:
     device_code_lifetime_seconds: int | None = None
     device_code_interval_seconds: int | None = None
     par_required: bool = False
+    require_consent: bool = False
 
     def cors_allowed_origins(self) -> frozenset[str]:
         """Origines autorisées en CORS pour ce client (déduites + déclarées).
@@ -236,3 +240,25 @@ class PushedAuthorization:
     params: dict[str, str] = field(default_factory=dict)
     expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     is_consumed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class Consent:
+    """Consentement accordé par un utilisateur à un client (OIDC Core §3.1.2.2).
+
+    Mémorise l'ensemble des scopes déjà autorisés (``scopes``) par le
+    ``subject`` pour le ``client_id`` : tant que la nouvelle demande est
+    couverte par ce consentement, ``/authorize`` n'exige pas de nouvelle
+    confirmation. ``covers`` teste cette inclusion ; une demande plus large
+    (nouveau scope) nécessite un nouveau consentement, puis les scopes sont
+    fusionnés (l'accord ne retire jamais un scope déjà donné).
+    """
+
+    subject: str
+    client_id: str
+    scopes: frozenset[Scope] = frozenset()
+    granted_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def covers(self, requested: frozenset[Scope]) -> bool:
+        """Vrai si les scopes demandés sont déjà inclus dans le consentement."""
+        return requested <= self.scopes

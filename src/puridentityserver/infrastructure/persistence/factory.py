@@ -16,6 +16,7 @@ from puridentityserver.interfaces.repositories.authorization_code_repository imp
     AuthorizationCodeRepository,
 )
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
+from puridentityserver.interfaces.repositories.consent_repository import ConsentRepository
 from puridentityserver.interfaces.repositories.device_authorization_repository import (
     DeviceAuthorizationRepository,
 )
@@ -159,4 +160,21 @@ def build_pushed_authorization_repository(settings: Settings) -> PushedAuthoriza
         )
 
         return SQLPushedAuthorizationRepository(settings.storage_dsn)
+    raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")
+
+
+def build_consent_repository(settings: Settings) -> ConsentRepository:
+    """Retourne le repository de consentements selon ``storage_type``."""
+    if settings.storage_type == "memory":
+        from puridentityserver.infrastructure.persistence.memory.consents import (
+            InMemoryConsentRepository,
+        )
+
+        return InMemoryConsentRepository()
+    if settings.storage_type == "sql":
+        from puridentityserver.infrastructure.persistence.sql.consents import (
+            SQLConsentRepository,
+        )
+
+        return SQLConsentRepository(settings.storage_dsn)
     raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")

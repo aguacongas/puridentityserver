@@ -150,6 +150,8 @@ def _registration_json(result: ClientRegistration) -> str:
         data["registration_client_uri"] = result.registration_client_uri
     if result.require_pushed_authorization_requests:
         data["require_pushed_authorization_requests"] = True
+    if result.require_consent:
+        data["require_consent"] = True
     return json.dumps(data, separators=(",", ":"))
 
 
