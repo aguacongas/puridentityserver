@@ -107,5 +107,8 @@ Concrètement :
 - `tests/` — tests unitaires et d'intégration (TestClient httpx).
 - **Composition root** unique (`server.py`) : c'est le seul endroit qui assemble
   infrastructure + adaptateurs + usecases (injection de dépendances).
+  **Aucune fonction imbriquée dans `create_app`** : SonarCloud `python:S3776` compte les
+  closures dans la fonction parente (seuil ≤ 15). Extraire au niveau module, de préférence
+  dans le conteneur `_Dependencies`.
 - On n'implémente **pas** la crypto : `PyJWT` (JWT/JWS/JWA/JWK), `cryptography`
   (primitives), `FastAPI` (HTTP/TLS géré par l'infra).
