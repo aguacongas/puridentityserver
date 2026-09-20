@@ -16,6 +16,10 @@ from pydantic_settings import (
 )
 
 from puridentityserver.domain.authorization import Client, ClientType, Scope, origin_of_uri
+from puridentityserver.domain.identity_resource import (
+    DEFAULT_IDENTITY_RESOURCES,
+    IdentityResource,
+)
 from puridentityserver.domain.jwks import ALL_SIGNING_ALGORITHMS, JWTAlgorithm
 
 _STORAGE_TYPES = ("memory", "sql")
@@ -86,6 +90,21 @@ def _parse_client_type(raw: object) -> ClientType:
     return ClientType(value)
 
 
+def _parse_identity_resource(raw: dict[str, object]) -> IdentityResource:
+    """Convertit un dictionnaire de configuration en IdentityResource domaine."""
+    claims_raw = raw.get("user_claims", ())
+    if isinstance(claims_raw, (list, tuple)):
+        user_claims = frozenset(str(claim) for claim in claims_raw)
+    else:
+        user_claims = frozenset()
+    return IdentityResource(
+        name=str(raw["name"]),
+        display_name=str(raw.get("display_name", "")),
+        user_claims=user_claims,
+        show_in_discovery_document=bool(raw.get("show_in_discovery_document", True)),
+    )
+
+
 class Settings(BaseSettings):
     """Réglages du serveur, surchargeables via l'environnement (préfixe `PURIDENTITYSERVER_`)."""
 
@@ -152,6 +171,15 @@ class Settings(BaseSettings):
     # UserInfo (OIDC Core §5.4) — seed du user store (`sub` -> claims)
     users_seed: Annotated[dict[str, dict[str, object]], NoDecode] = {}
 
+    # IdentityResources (OIDC Core §5.4) — scopes identité et claims exposés.
+    # Les resources par défaut de `DEFAULT_IDENTITY_RESOURCES` (openid,
+    # profile, email, address, phone, offline_access) sont seedées quoi
+    # qu'il arrive ; `identity_resources_seed` ajoute des resources
+    # supplémentaires (un nom égal à un défaut surcharge celui-ci). Elles
+    # alimentent `scopes_supported` / `claims_supported` du discovery et le
+    # filtrage des claims de `/userinfo` par scope accordé.
+    identity_resources_seed: Annotated[tuple[dict[str, object], ...], NoDecode] = ()
+
     # Dynamic Client Registration (RFC 7591 + 7592) — endpoint /register.
     # `registration_enabled` expose POST /register + GET/PUT/DELETE
     # /register/{client_id}. Si `requires_initial_access_token` est vrai, la
@@ -204,6 +232,21 @@ class Settings(BaseSettings):
             parsed = json.loads(value)
             if not isinstance(parsed, list):
                 raise ValueError("PURIDENTITYSERVER_CLIENTS doit être une liste JSON")
+            return tuple(parsed)
+        return value
+
+    @field_validator("identity_resources_seed", mode="before")
+    @classmethod
+    def _parse_identity_resources_seed(cls, value: object) -> object:
+        """Transforme `PURIDENTITYSERVER_IDENTITY_RESOURCES_SEED='[...]'` (JSON)."""
+        if isinstance(value, str):
+            import json
+
+            parsed = json.loads(value)
+            if not isinstance(parsed, list):
+                raise ValueError(
+                    "PURIDENTITYSERVER_IDENTITY_RESOURCES_SEED doit être une liste JSON"
+                )
             return tuple(parsed)
         return value
 
@@ -271,6 +314,21 @@ class Settings(BaseSettings):
     def seed_clients(self) -> tuple[Client, ...]:
         """Clients initiaux déclarés dans la configuration (seed au démarrage)."""
         return tuple(_parse_client(raw) for raw in self.clients_seed)
+
+    @cached_property
+    def seed_identity_resources(self) -> tuple[IdentityResource, ...]:
+        """Resources de démarrage : défauts toujours seedés, config en sus.
+
+        Les resources standard d'`DEFAULT_IDENTITY_RESOURCES` sont toujours
+        présentes ; chaque entrée d'`identity_resources_seed` ajoute une
+        resource (un nom déjà porté par un défaut le surcharge, en
+        conservant sa position).
+        """
+        by_name = {resource.name: resource for resource in DEFAULT_IDENTITY_RESOURCES}
+        for raw in self.identity_resources_seed:
+            resource = _parse_identity_resource(raw)
+            by_name[resource.name] = resource
+        return tuple(by_name.values())
 
     @cached_property
     def registration_initial_access_token_hashes(self) -> frozenset[str]:

@@ -9,10 +9,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from puridentityserver.domain.authorization import Scope
+from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCES
 from puridentityserver.domain.revocation import token_hash
 from puridentityserver.interfaces.domain.tokens import TokenManager
 from puridentityserver.interfaces.domain.userinfo import ClaimsProvider
+from puridentityserver.interfaces.repositories.identity_resource_repository import (
+    IdentityResourceRepository,
+)
 from puridentityserver.interfaces.repositories.revoked_token_repository import (
     RevokedTokenRepository,
 )
@@ -62,12 +65,14 @@ class UserInfoUseCase:
         token_manager: TokenManager,
         claims_provider: ClaimsProvider,
         revoked_token_repository: RevokedTokenRepository,
+        identity_resources: IdentityResourceRepository | None = None,
     ) -> None:
-        """Injection de la configuration, du validateur, du fournisseur et du denylist."""
+        """Injection config, validateur, fournisseur, denylist et registre de resources."""
         self._config = config
         self._token_manager = token_manager
         self._claims_provider = claims_provider
         self._blacklist = revoked_token_repository
+        self._identity_resources = identity_resources
 
     async def execute(self, request: UserInfoRequest) -> UserInfoResponse | UserInfoError:
         """Traite la requête et retourne les claims filtrés ou une erreur."""
@@ -87,12 +92,8 @@ class UserInfoUseCase:
         if subject is None:
             return UserInfoError(error="invalid_token", error_description="Claim 'sub' manquante")
 
-        granted_scopes = Scope.from_space_separated(str(claims.get("scope", "")))
+        allowed = await self._allowed_claims(str(claims.get("scope", "")))
         user_claims = await self._claims_provider.get_claims(str(subject))
-
-        allowed = set(_CLAIMS_BY_SCOPE[Scope.OPENID])
-        for scope in granted_scopes:
-            allowed |= _CLAIMS_BY_SCOPE.get(scope, frozenset())
 
         return UserInfoResponse(
             claims={
@@ -101,29 +102,23 @@ class UserInfoUseCase:
             }
         )
 
+    async def _allowed_claims(self, scope: str) -> set[str]:
+        """Claims autorisés par le scope accordé, dérivés des IdentityResources.
 
-_CLAIMS_BY_SCOPE: dict[Scope, frozenset[str]] = {
-    Scope.OPENID: frozenset({"sub"}),
-    Scope.PROFILE: frozenset(
-        {
-            "name",
-            "family_name",
-            "given_name",
-            "middle_name",
-            "nickname",
-            "preferred_username",
-            "profile",
-            "picture",
-            "website",
-            "gender",
-            "birthdate",
-            "zoneinfo",
-            "locale",
-            "updated_at",
-            "roles",
-        }
-    ),
-    Scope.EMAIL: frozenset({"email", "email_verified"}),
-    Scope.ADDRESS: frozenset({"address"}),
-    Scope.PHONE: frozenset({"phone_number", "phone_number_verified"}),
-}
+        Chaque scope nommé dans ``scope`` (séparé par des espaces, RFC 6749
+        §3.3) est mis en correspondance avec une resource du registre : ses
+        claims deviennent accessibles. ``sub`` est toujours autorisé (claim
+        réservé d'OpenID Connect). En l'absence de registre injecté, les
+        resources par défaut s'appliquent.
+        """
+        resources = DEFAULT_IDENTITY_RESOURCES
+        if self._identity_resources is not None:
+            stored = await self._identity_resources.find_all()
+            if stored:
+                resources = tuple(stored)
+        scope_names = set(scope.split())
+        allowed: set[str] = {"sub"}
+        for resource in resources:
+            if resource.name in scope_names:
+                allowed |= set(resource.user_claims)
+        return allowed

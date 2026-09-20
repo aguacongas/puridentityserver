@@ -1,19 +1,30 @@
 """Tests de la feature Discovery (OIDC Discovery 1.0)."""
 
+import asyncio
+from collections.abc import Awaitable
+from typing import TypeVar
+
 from fastapi.testclient import TestClient
 
 from puridentityserver.application.discovery import DiscoveryConfig, DiscoveryUseCase
 from puridentityserver.infrastructure.settings import Settings
 from puridentityserver.server import create_app
 
+_T = TypeVar("_T")
+
 _ISSUER = "https://id.example"
 _BASE_URL = "https://id.example"
 _ALL_ALGOS = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512"]
 
 
+def run(awaitable: Awaitable[_T]) -> _T:
+    """Exécute une coroutine de manière synchrone (tests sans event loop externe)."""
+    return asyncio.run(awaitable)
+
+
 def test_discovery_usecase_builds_document_from_base_url() -> None:
     usecase = DiscoveryUseCase(DiscoveryConfig(issuer=_ISSUER, base_url=_BASE_URL))
-    document = usecase.execute()
+    document = run(usecase.execute())
 
     assert document["issuer"] == _ISSUER
     assert document["authorization_endpoint"] == f"{_BASE_URL}/authorize"
@@ -29,7 +40,7 @@ def test_discovery_usecase_builds_document_from_base_url() -> None:
 
 def test_discovery_usecase_falls_back_to_issuer_as_base_url() -> None:
     usecase = DiscoveryUseCase(DiscoveryConfig(issuer=_ISSUER))
-    document = usecase.execute()
+    document = run(usecase.execute())
 
     assert document["authorization_endpoint"] == f"{_ISSUER}/authorize"
     assert document["jwks_uri"] == f"{_ISSUER}/.well-known/jwks.json"

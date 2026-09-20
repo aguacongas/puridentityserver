@@ -11,7 +11,8 @@ def discovery_router(usecase: DiscoveryUseCase) -> APIRouter:
     router = APIRouter(tags=["discovery"])
 
     @router.get("/.well-known/openid-configuration", summary="OpenID Connect Discovery")
-    def openid_configuration() -> DiscoveryDocument:
-        return DiscoveryDocument(**usecase.execute())
+    async def openid_configuration() -> DiscoveryDocument:
+        doc = await usecase.execute()
+        return DiscoveryDocument(**doc)
 
     return router
