@@ -14,6 +14,7 @@ from puridentityserver.application.device_authorize import (
     DeviceConfig,
 )
 from puridentityserver.application.discovery import DiscoveryConfig, DiscoveryUseCase
+from puridentityserver.application.identity_resource import IdentityResourceUseCase
 from puridentityserver.application.introspect import IntrospectConfig, IntrospectUseCase
 from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
 from puridentityserver.application.logout import LogoutConfig, LogoutUseCase
@@ -39,6 +40,7 @@ from puridentityserver.infrastructure.persistence.factory import (
     build_client_repository,
     build_consent_repository,
     build_device_authorization_repository,
+    build_identity_resource_repository,
     build_key_pair_repository,
     build_pushed_authorization_repository,
     build_refresh_token_repository,
@@ -53,6 +55,7 @@ from puridentityserver.interfaces.api.cors import DynamicCORSMiddleware
 from puridentityserver.interfaces.api.device_authorize import device_authorization_router
 from puridentityserver.interfaces.api.device_page import device_page_router
 from puridentityserver.interfaces.api.discovery import discovery_router
+from puridentityserver.interfaces.api.identity_resources import identity_resources_router
 from puridentityserver.interfaces.api.introspect import introspect_router
 from puridentityserver.interfaces.api.jwks import jwk_set_router
 from puridentityserver.interfaces.api.logout import logout_router
@@ -132,6 +135,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     device_code_repository = build_device_authorization_repository(settings)
     pushed_code_repository = build_pushed_authorization_repository(settings)
     consent_repository = build_consent_repository(settings)
+    identity_resource_repository = build_identity_resource_repository(settings)
     consent_usecase = ConsentUseCase(consent_repository)
 
     authorize_usecase = AuthorizeUseCase(
@@ -177,6 +181,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         token_manager,
         UserStoreClaimsProvider(user_repository),
         revoked_token_repository,
+        identity_resource_repository,
     )
     introspect_usecase = IntrospectUseCase(
         IntrospectConfig(issuer=settings.issuer),
@@ -229,8 +234,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await device_code_repository.initialise()
         await pushed_code_repository.initialise()
         await consent_repository.initialise()
+        await identity_resource_repository.initialise()
         for client in settings.seed_clients:
             await client_repository.save(client)
+        for resource in settings.seed_identity_resources:
+            await identity_resource_repository.save(resource)
         await user_repository.save_all(
             [
                 UserClaims(subject=subject, claims=claims)
@@ -265,6 +273,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await device_code_repository.close()
             await pushed_code_repository.close()
             await consent_repository.close()
+            await identity_resource_repository.close()
 
     app = FastAPI(
         title="PurIdentityServer",
@@ -273,7 +282,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=_lifespan,
     )
     app.add_middleware(DynamicCORSMiddleware, client_repository=client_repository)
-    app.include_router(discovery_router(DiscoveryUseCase(config)))
+    app.include_router(
+        discovery_router(DiscoveryUseCase(config, identity_resources=identity_resource_repository))
+    )
+    app.include_router(
+        identity_resources_router(IdentityResourceUseCase(identity_resource_repository))
+    )
     app.include_router(jwk_set_router(jwks_usecase))
     app.include_router(login_router(_resolve_session_lifetime))
     app.include_router(auth_router)

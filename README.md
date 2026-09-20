@@ -57,6 +57,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 | `/introspect`                       | Introspection de token (RFC 7662)         | ✅   |
 | `/revoke`                           | Révocation de token (RFC 7009)            | ✅   |
 | `/register`                         | Client registration dynamique (RFC 7591/7592) | ✅   |
+| `/identity-resources`              | Gestion CRUD des IdentityResources (scopes + claims) | ✅   |
 | `/end_session`                      | RP-Initiated Logout                       | ✅   |
 
 ## Documentation
@@ -145,6 +146,13 @@ tests/             pytest unit + intégration (TestClient httpx)
     `login?next=/consent…`. Consentements persistés avec les stores (`memory` /
     `sql`), auto-approbation des demandes déjà couvertes ; compatible PAR
     (exécution directe après consultation, le `request_uri` étant à usage unique).
+16. ✅ **IdentityResources** (OIDC Core 1.0 §5.4) : scopes identité et claims
+    exposés déclarés en seed (`identity_resources_seed`, ou resources standard
+    par défaut — openid, profile, email, address, phone, offline_access) et
+    gérables en cours de vie via l'API CRUD `/identity-resources`. Elles
+    alimentent `scopes_supported` / `claims_supported` du discovery et le
+    filtrage des claims de `/userinfo` par scope accordé au jeton (un jeton
+    `openid` seul n'expose que `sub`).
 
 ## Développement local
 
