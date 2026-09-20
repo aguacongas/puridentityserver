@@ -180,7 +180,9 @@ class TestFactory:
 class TestSettingsIdentityResources:
     """Couvre le chargement du seed ``identity_resources_seed``."""
 
-    def test_reads_seed_from_config_toml(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_defaults_seeded_even_without_config_entry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         config = Path(__file__).resolve().parents[1] / "config.toml"
         monkeypatch.setenv("PURIDENTITYSERVER_SETTINGS_FILE", str(config))
         settings = Settings(_env_file=None)
@@ -211,16 +213,37 @@ class TestSettingsIdentityResources:
 
         assert settings.seed_identity_resources == DEFAULT_IDENTITY_RESOURCES
 
-    def test_reads_json_from_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_config_adds_resources_after_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(
             "PURIDENTITYSERVER_IDENTITY_RESOURCES_SEED",
             '[{"name": "custom", "user_claims": ["custom_claim"]}]',
         )
         settings = Settings(_env_file=None)
 
-        assert [(r.name, sorted(r.user_claims)) for r in settings.seed_identity_resources] == [
-            ("custom", ["custom_claim"])
+        names = [r.name for r in settings.seed_identity_resources]
+        assert names == [
+            "openid",
+            "profile",
+            "email",
+            "address",
+            "phone",
+            "offline_access",
+            "custom",
         ]
+        custom = settings.seed_identity_resources[-1]
+        assert custom.user_claims == frozenset({"custom_claim"})
+
+    def test_config_overrides_default_by_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(
+            "PURIDENTITYSERVER_IDENTITY_RESOURCES_SEED",
+            '[{"name": "profile", "user_claims": ["custom_profile_claim"]}]',
+        )
+        settings = Settings(_env_file=None)
+
+        names = [r.name for r in settings.seed_identity_resources]
+        assert names == ["openid", "profile", "email", "address", "phone", "offline_access"]
+        profile = next(r for r in settings.seed_identity_resources if r.name == "profile")
+        assert profile.user_claims == frozenset({"custom_profile_claim"})
 
     def test_rejects_non_list_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("PURIDENTITYSERVER_IDENTITY_RESOURCES_SEED", '{"name": "custom"}')
@@ -426,6 +449,16 @@ class TestDiscoveryResourceDriven:
         assert "name" in document["claims_supported"]
 
 
+_CUSTOM_JSON = {
+    "name": "custom",
+    "display_name": "Custom",
+    "user_claims": ["custom_claim"],
+    "show_in_discovery_document": True,
+}
+
+_DEFAULT_NAMES = ["openid", "profile", "email", "address", "phone", "offline_access"]
+
+
 class TestIdentityResourceEndpoint:
     """Couvre l'API HTTP de gestion (CRUD) sur ``/identity-resources``."""
 
@@ -435,44 +468,59 @@ class TestIdentityResourceEndpoint:
                 issuer=_ISSUER,
                 base_url=_ISSUER,
                 jwks_algorithms=("RS256",),
-                identity_resources_seed=(_PROFILE_JSON, *resources),
+                identity_resources_seed=(*resources,),
             )
         )
 
-    def test_create_list_read_update_delete_flow(self) -> None:
+    def test_defaults_seeded_without_config_entry(self) -> None:
         with TestClient(self._app()) as client:
+            listing = client.get("/identity-resources")
+
+        assert listing.status_code == 200
+        assert [r["name"] for r in listing.json()] == _DEFAULT_NAMES
+
+    def test_create_list_read_update_delete_flow(self) -> None:
+        with TestClient(self._app(_CUSTOM_JSON)) as client:
+            listing = client.get("/identity-resources")
+            assert listing.status_code == 200
+            assert [r["name"] for r in listing.json()] == [*_DEFAULT_NAMES, "custom"]
+
             created = client.post(
                 "/identity-resources",
                 json={
-                    "name": "custom",
-                    "display_name": "Custom",
-                    "user_claims": ["custom_claim"],
+                    "name": "another",
+                    "display_name": "Another",
+                    "user_claims": ["another_claim"],
                     "show_in_discovery_document": True,
                 },
             )
             assert created.status_code == 201
-            assert created.headers["location"] == "/identity-resources/custom"
-            assert created.json()["name"] == "custom"
+            assert created.headers["location"] == "/identity-resources/another"
+            assert created.json()["name"] == "another"
 
             listing = client.get("/identity-resources")
             assert listing.status_code == 200
-            assert [r["name"] for r in listing.json()] == ["profile", "custom"]
+            assert [r["name"] for r in listing.json()] == [
+                *_DEFAULT_NAMES,
+                "custom",
+                "another",
+            ]
 
-            read = client.get("/identity-resources/custom")
+            read = client.get("/identity-resources/another")
             assert read.status_code == 200
-            assert read.json()["user_claims"] == ["custom_claim"]
+            assert read.json()["user_claims"] == ["another_claim"]
 
             replaced = client.put(
-                "/identity-resources/custom",
-                json={"name": "custom-autre", "user_claims": ["autre_claim"]},
+                "/identity-resources/another",
+                json={"name": "another-v2", "user_claims": ["autre_claim"]},
             )
             assert replaced.status_code == 200
-            assert replaced.json()["name"] == "custom"
+            assert replaced.json()["name"] == "another"
             assert replaced.json()["user_claims"] == ["autre_claim"]
 
-            deleted = client.delete("/identity-resources/custom")
+            deleted = client.delete("/identity-resources/another")
             assert deleted.status_code == 204
-            assert client.get("/identity-resources/custom").status_code == 404
+            assert client.get("/identity-resources/another").status_code == 404
 
     def test_duplicate_create_returns_409(self) -> None:
         with TestClient(self._app()) as client:
@@ -502,18 +550,21 @@ class TestIdentityResourceEndpoint:
         assert response.status_code == 404
 
     def test_discovery_reflects_registered_resources(self) -> None:
-        with TestClient(self._app()) as client:
-            assert (
-                client.post(
-                    "/identity-resources",
-                    json={"name": "custom", "user_claims": ["custom_claim"]},
-                ).status_code
-                == 201
-            )
+        with TestClient(self._app(_CUSTOM_JSON)) as client:
             metadata = client.get("/.well-known/openid-configuration").json()
 
-        assert metadata["scopes_supported"] == ["profile", "custom"]
+        assert metadata["scopes_supported"] == [*_DEFAULT_NAMES, "custom"]
         assert "custom_claim" in metadata["claims_supported"]
+        assert "name" in metadata["claims_supported"]
+
+    def test_config_overrides_default_claims(self) -> None:
+        with TestClient(self._app(_PROFILE_JSON)) as client:
+            listing = client.get("/identity-resources")
+            metadata = client.get("/.well-known/openid-configuration").json()
+
+        profile = next(r for r in listing.json() if r["name"] == "profile")
+        assert sorted(profile["user_claims"]) == sorted(_PROFILE_JSON["user_claims"])
+        assert metadata["scopes_supported"] == _DEFAULT_NAMES
 
 
 class TestScopeEnumGuard:

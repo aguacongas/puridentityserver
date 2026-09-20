@@ -147,9 +147,10 @@ tests/             pytest unit + intégration (TestClient httpx)
     `sql`), auto-approbation des demandes déjà couvertes ; compatible PAR
     (exécution directe après consultation, le `request_uri` étant à usage unique).
 16. ✅ **IdentityResources** (OIDC Core 1.0 §5.4) : scopes identité et claims
-    exposés déclarés en seed (`identity_resources_seed`, ou resources standard
-    par défaut — openid, profile, email, address, phone, offline_access) et
-    gérables en cours de vie via l'API CRUD `/identity-resources`. Elles
+    exposés injectés en seed (`identity_resources_seed`, **en plus** des
+    resources standard seedées quoi qu'il arrive — openid, profile, email,
+    address, phone, offline_access ; un nom égal à un standard le surcharge)
+    et gérables en cours de vie via l'API CRUD `/identity-resources`. Elles
     alimentent `scopes_supported` / `claims_supported` du discovery et le
     filtrage des claims de `/userinfo` par scope accordé au jeton (un jeton
     `openid` seul n'expose que `sub`).

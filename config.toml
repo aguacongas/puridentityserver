@@ -214,64 +214,32 @@ email = "bob@example.com"
 password = "password"
 
 # seed IdentityResources (OIDC Core §5.4) : scopes identité et claims exposés
-# quand le scope est accordé au jeton. Chaque entrée :
-# - name                        : nom du scope (ex. "profile")
+# quand le scope est accordé au jeton.
+#
+# ⚠ DÉROGATION : contrairement aux autres seeds, rien n'est obligatoire ici —
+# les resources par défaut (openid, profile, email, address, phone,
+# offline_access) sont seedées QUOI QU'IL ARRIVE, même sans configuration.
+# Elles alimentent `scopes_supported` / `claims_supported` du discovery et le
+# filtrage des claims de /userinfo par scope accordé.
+#
+# `[[settings.identity_resources_seed]]` sert à AJOUTER des resources en plus
+# des défauts (un nom déjà porté par un défaut le surcharge — ex. personnaliser
+# les claims du scope "profile"). Champs d'une entrée :
+# - name                        : nom du scope (ex. "profile", "custom")
 # - display_name                : libellé humain (facultatif)
 # - user_claims                 : claims utilisateur rendus accessibles avec le
 #                                 scope (liste, facultative)
 # - show_in_discovery_document  : publier le scope dans `scopes_supported`
 #                                 (facultatif, défaut true)
-# Elles alimentent `scopes_supported` / `claims_supported` du discovery et le
-# filtrage des claims de /userinfo par scope accordé. Si aucun seed n'est
-# déclaré, les resources par défaut s'appliquent (openid, profile, email,
-# address, phone, offline_access — mêmes claims). Surchargeable en bloc via
-# `PURIDENTITYSERVER_IDENTITY_RESOURCES_SEED` (JSON).
+# Surchargeable en bloc via `PURIDENTITYSERVER_IDENTITY_RESOURCES_SEED` (JSON,
+# même sémantique additive : défauts + entrées de la liste).
 
-[[settings.identity_resources_seed]]
-name = "openid"
-display_name = "Votre identité"
-user_claims = ["sub"]
-
-[[settings.identity_resources_seed]]
-name = "profile"
-display_name = "Votre profil"
-user_claims = [
-    "name",
-    "family_name",
-    "given_name",
-    "middle_name",
-    "nickname",
-    "preferred_username",
-    "profile",
-    "picture",
-    "website",
-    "gender",
-    "birthdate",
-    "zoneinfo",
-    "locale",
-    "updated_at",
-    "roles",
-]
-
-[[settings.identity_resources_seed]]
-name = "email"
-display_name = "Votre adresse e-mail"
-user_claims = ["email", "email_verified"]
-
-[[settings.identity_resources_seed]]
-name = "address"
-display_name = "Votre adresse postale"
-user_claims = ["address"]
-
-[[settings.identity_resources_seed]]
-name = "phone"
-display_name = "Votre numéro de téléphone"
-user_claims = ["phone_number", "phone_number_verified"]
-
-[[settings.identity_resources_seed]]
-name = "offline_access"
-display_name = "Accès hors ligne (refresh token)"
-user_claims = []
+# Exemple (non actif) : ajouter une resource custom en plus des défauts :
+# [[settings.identity_resources_seed]]
+# name = "custom"
+# display_name = "Claims métier"
+# user_claims = ["employee_id", "department"]
+# show_in_discovery_document = true
 
 [[settings.clients_seed]]
 client_id = "sample-pkce-client"

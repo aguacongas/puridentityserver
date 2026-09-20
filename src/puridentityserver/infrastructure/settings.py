@@ -172,9 +172,10 @@ class Settings(BaseSettings):
     users_seed: Annotated[dict[str, dict[str, object]], NoDecode] = {}
 
     # IdentityResources (OIDC Core §5.4) — scopes identité et claims exposés.
-    # seed au démarrage : si `identity_resources_seed` est vide, les
-    # resources par défaut de `DEFAULT_IDENTITY_RESOURCES` sont appliquées
-    # (openid, profile, email, address, phone, offline_access). Elles
+    # Les resources par défaut de `DEFAULT_IDENTITY_RESOURCES` (openid,
+    # profile, email, address, phone, offline_access) sont seedées quoi
+    # qu'il arrive ; `identity_resources_seed` ajoute des resources
+    # supplémentaires (un nom égal à un défaut surcharge celui-ci). Elles
     # alimentent `scopes_supported` / `claims_supported` du discovery et le
     # filtrage des claims de `/userinfo` par scope accordé.
     identity_resources_seed: Annotated[tuple[dict[str, object], ...], NoDecode] = ()
@@ -316,10 +317,18 @@ class Settings(BaseSettings):
 
     @cached_property
     def seed_identity_resources(self) -> tuple[IdentityResource, ...]:
-        """IdentityResources de démarrage (seed de la configuration ou défauts)."""
-        if not self.identity_resources_seed:
-            return DEFAULT_IDENTITY_RESOURCES
-        return tuple(_parse_identity_resource(raw) for raw in self.identity_resources_seed)
+        """Resources de démarrage : défauts toujours seedés, config en sus.
+
+        Les resources standard d'`DEFAULT_IDENTITY_RESOURCES` sont toujours
+        présentes ; chaque entrée d'`identity_resources_seed` ajoute une
+        resource (un nom déjà porté par un défaut le surcharge, en
+        conservant sa position).
+        """
+        by_name = {resource.name: resource for resource in DEFAULT_IDENTITY_RESOURCES}
+        for raw in self.identity_resources_seed:
+            resource = _parse_identity_resource(raw)
+            by_name[resource.name] = resource
+        return tuple(by_name.values())
 
     @cached_property
     def registration_initial_access_token_hashes(self) -> frozenset[str]:
