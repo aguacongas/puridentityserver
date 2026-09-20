@@ -12,6 +12,9 @@ usecases.
 from __future__ import annotations
 
 from puridentityserver.infrastructure.settings import Settings
+from puridentityserver.interfaces.repositories.api_resource_repository import (
+    ApiResourceRepository,
+)
 from puridentityserver.interfaces.repositories.authorization_code_repository import (
     AuthorizationCodeRepository,
 )
@@ -197,4 +200,21 @@ def build_identity_resource_repository(settings: Settings) -> IdentityResourceRe
         )
 
         return SQLIdentityResourceRepository(settings.storage_dsn)
+    raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")
+
+
+def build_api_resource_repository(settings: Settings) -> ApiResourceRepository:
+    """Retourne le repository d'ApiResources selon ``storage_type``."""
+    if settings.storage_type == "memory":
+        from puridentityserver.infrastructure.persistence.memory.api_resources import (
+            InMemoryApiResourceRepository,
+        )
+
+        return InMemoryApiResourceRepository()
+    if settings.storage_type == "sql":
+        from puridentityserver.infrastructure.persistence.sql.api_resources import (
+            SQLApiResourceRepository,
+        )
+
+        return SQLApiResourceRepository(settings.storage_dsn)
     raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")

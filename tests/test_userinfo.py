@@ -323,6 +323,7 @@ class TestUserInfoEndpoint:
                 base_url=_ISSUER,
                 jwks_algorithms=("RS256",),
                 clients_seed=(_CLIENT_JSON,),
+                api_resources_seed=(),
             )
         )
 

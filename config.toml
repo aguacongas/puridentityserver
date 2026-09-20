@@ -241,6 +241,27 @@ password = "password"
 # user_claims = ["employee_id", "department"]
 # show_in_discovery_document = true
 
+# seed ApiResources : scopes d'API (ressources protégées, OIDC §1.2) déclarés
+# en plus des scopes standards. Entrées :
+# - name                  : nom court de la resource (i.e. ``aud`` du access
+#                           token quand des scopes lui sont accordés)
+# - display_name          : libellé humain (facultatif)
+# - scopes                : scopes d'API exposés par la resource (liste ;
+#                           insensibles à la casse, ``-``/``_`` tolérés)
+# - allowed_access_token_signing_algos : algorithmes de signature acceptés
+#                           par la resource (facultatif ; défaut = ceux du
+#                           serveur, `jwks_algorithms`)
+# Surchargeable en bloc via `PURIDENTITYSERVER_API_RESOURCES_SEED` (JSON).
+# Un client doit demander un de ces scopes pour que l'``aud`` du access token
+# porte le nom de la resource ; tout scope non enregistré (standard ou API)
+# est rejeté en ``invalid_scope`` à l'émission (authorize / token / device) et
+# au discovery via `scopes_supported`.
+
+[[settings.api_resources_seed]]
+name = "sample-api"
+display_name = "API de démonstration"
+scopes = ["api.read", "api.write"]
+
 [[settings.clients_seed]]
 client_id = "sample-pkce-client"
 redirect_uris = ["http://127.0.0.1:5173/callback"]

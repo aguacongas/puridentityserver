@@ -22,7 +22,6 @@ from puridentityserver.application.userinfo import (
     UserInfoResponse,
     UserInfoUseCase,
 )
-from puridentityserver.domain.authorization import Scope
 from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCES, IdentityResource
 from puridentityserver.infrastructure.persistence.factory import build_identity_resource_repository
 from puridentityserver.infrastructure.persistence.memory.identity_resources import (
@@ -469,6 +468,7 @@ class TestIdentityResourceEndpoint:
                 base_url=_ISSUER,
                 jwks_algorithms=("RS256",),
                 identity_resources_seed=(*resources,),
+                api_resources_seed=(),
             )
         )
 
@@ -568,9 +568,18 @@ class TestIdentityResourceEndpoint:
 
 
 class TestScopeEnumGuard:
-    """Garde-fou : les scopes réservés restent gérés par le enum ``Scope``."""
+    """Garde-fou : les scopes réservés restent couverts par les resources par défaut."""
+
+    _STANDARD_SCOPES = (
+        "openid",
+        "profile",
+        "email",
+        "address",
+        "phone",
+        "offline_access",
+    )
 
     def test_defaults_cover_standard_scopes(self) -> None:
-        assert {resource.name for resource in DEFAULT_IDENTITY_RESOURCES} >= {
-            scope.value for scope in Scope
-        }
+        assert {resource.name for resource in DEFAULT_IDENTITY_RESOURCES} >= set(
+            self._STANDARD_SCOPES
+        )

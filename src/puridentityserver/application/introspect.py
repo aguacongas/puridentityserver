@@ -109,7 +109,7 @@ class IntrospectUseCase:
         for name in ("iss", "sub", "aud", "exp", "iat", "scope"):
             if name in claims:
                 selected[name] = claims[name]
-        if "aud" in claims:
+        if isinstance(claims.get("aud"), str):
             selected["client_id"] = claims["aud"]
         if "preferred_username" in claims:
             selected["username"] = claims["preferred_username"]

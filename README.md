@@ -42,6 +42,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 - [OpenID Connect RP-Initiated Logout] (OIDC spec) — `/end_session`
 - [OAuth 2.0 Dynamic Client Registration] (RFC 7591) + [Client Management] (RFC 7592) — `/register`
 - CORS — origines autorisées **déduites des URIs des clients actifs** (`redirect_uris` + `web_origins`, OAuth 2.0 for Browser-Based Apps), pour les SPA publics en Authorization Code + PKCE
+- **Ressources protégées** (ApiResources) — registre des audiences API et de leurs scopes : l'`aud` d'un access token porte le nom des resources dont des scopes ont été accordés, tout scope non enregistré est refusé (`invalid_scope`)
 
 ## Endpoints prévus
 
@@ -58,6 +59,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 | `/revoke`                           | Révocation de token (RFC 7009)            | ✅   |
 | `/register`                         | Client registration dynamique (RFC 7591/7592) | ✅   |
 | `/identity-resources`              | Gestion CRUD des IdentityResources (scopes + claims) | ✅   |
+| `/api-resources`                   | Gestion CRUD des ApiResources (scopes d'API / audiences) | ✅   |
 | `/end_session`                      | RP-Initiated Logout                       | ✅   |
 
 ## Documentation
@@ -154,6 +156,19 @@ tests/             pytest unit + intégration (TestClient httpx)
     alimentent `scopes_supported` / `claims_supported` du discovery et le
     filtrage des claims de `/userinfo` par scope accordé au jeton (un jeton
     `openid` seul n'expose que `sub`).
+17. ✅ **ApiResources** (ressources protégées) : registre des audiences API et
+    de leurs scopes d'API, injecté en seed (`api_resources_seed` : `name`,
+    `display_name`, `scopes`, `allowed_access_token_signing_algos` en option)
+    et gérable en vie via l'API CRUD `/api-resources`. Les scopes d'API
+    complètent `scopes_supported` du discovery ; un scope non enregistré
+    (standard ou API) est refusé en `invalid_scope` à l'émission —
+    `/authorize`, `/par`, `/token` (client_credentials, code, refresh,
+    device_code) et `/device_authorization` — et à la registration
+    dynamique (RFC 7591, métadonnée `scope`). L'`aud` d'un access token
+    porte le nom des ApiResources dont des scopes ont été accordés (chaîne
+    unique ou liste triée), sinon le `client_id` émetteur ; l'introspection
+    RFC 7662 conserve une audience multiple sans l'attribuer comme
+    `client_id`.
 
 ## Développement local
 

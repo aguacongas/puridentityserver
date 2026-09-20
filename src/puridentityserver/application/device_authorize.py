@@ -19,6 +19,7 @@ from puridentityserver.application.client_auth import (
     CLIENT_UNKNOWN_ERROR,
     verify_client_secret,
 )
+from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.domain.authorization import (
     ClientType,
     DeviceAuthorization,
@@ -92,11 +93,13 @@ class DeviceAuthorizationUseCase:
         config: DeviceConfig,
         client_repository: ClientRepository,
         device_codes: DeviceAuthorizationRepository,
+        scope_registry: ScopeRegistry | None = None,
     ) -> None:
         """Injection de la configuration et des repositories."""
         self._config = config
         self._clients = client_repository
         self._device_codes = device_codes
+        self._scope_registry = scope_registry
 
     async def execute(
         self, request: DeviceAuthorizationRequest
@@ -118,6 +121,13 @@ class DeviceAuthorizationUseCase:
                     "invalid_scope", "Portée jamais enregistrée pour le client"
                 )
             scopes = requested
+
+        if self._scope_registry is not None:
+            unknown = await self._scope_registry.unknown_scopes(scopes)
+            if unknown:
+                return DeviceAuthorizationError(
+                    "invalid_scope", "Scope(s) non enregistré(s) : " + ", ".join(unknown)
+                )
 
         device_code = token_urlsafe()
         user_code = self._generate_user_code()
