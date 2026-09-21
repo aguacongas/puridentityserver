@@ -15,7 +15,7 @@ Chaque feature restante = **une issue indépendante** (traçabilité + gate par 
 | # | Feature | Pourquoi (playlist OIDC) |
 |---|---|---|
 | #44 ✅ | **IdentityResources** CRUD + seed (username/profile/email/phone/address) | `claims_supported`, `/userinfo`, `scopes_supported` — livré au merge PR#53 |
-| [#45](https://github.com/aguacongas/puridentityserver/issues/45) | **ApiResources** CRUD + seed (ressources protégées) + validation audience | `aud` des access_tokens, `resource` introspection/revocation |
+| [#45](https://github.com/aguacongas/puridentityserver/issues/45) 🎯 | **ApiResources** CRUD + seed (ressources protégées) + validation audience | `aud` des access_tokens, `resource` introspection/revocation — implémenté, PR en cours |
 | [#46](https://github.com/aguacongas/puridentityserver/issues/46) | Grant **jwt-bearer** (RFC 7523) + `client_secret_jwt` + `tls_client_auth` (RFC 8705) | méthodes d'auth client exigées par la playlist de certification |
 | [#47](https://github.com/aguacongas/puridentityserver/issues/47) | Algos manquants (HS256/384/512, ES384/512, JWE : RSA-OAEP, A128KW, dir) | `id_token` encryption + `jwt algos` attendus par la playlist alg |
 

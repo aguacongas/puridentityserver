@@ -11,26 +11,56 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from typing import ClassVar
 from urllib.parse import urlsplit
 from uuid import uuid4
 
 
-class Scope(str, Enum):
-    """Scopes OpenID Connect standard (OIDC Core 1.0 §5.4)."""
+class Scope(str):
+    """Scope OAuth 2.0 / OIDC : valeurs standard (RFC 6749 §3.3, §5.4) et libres.
 
-    OPENID = "openid"
-    PROFILE = "profile"
-    EMAIL = "email"
-    ADDRESS = "address"
-    PHONE = "phone"
-    OFFLINE_ACCESS = "offline_access"
+    Sous-classe de ``str`` : toute chaîne (x. ``api.read``) est une valeur
+    acceptée, ce qui permet de représenter les scopes d'API déclarés par
+    les ``ApiResource``. Les constantes standard gardent leur sémantique
+    (``openid`` requis, ``offline_access`` → refresh token…) ; ``value``
+    rétro-compatibilise l'accès à la chaîne d'un scope, y compris pour une
+    valeur libre.
+    """
+
+    OPENID: ClassVar[Scope]
+    PROFILE: ClassVar[Scope]
+    EMAIL: ClassVar[Scope]
+    ADDRESS: ClassVar[Scope]
+    PHONE: ClassVar[Scope]
+    OFFLINE_ACCESS: ClassVar[Scope]
+
+    @property
+    def value(self) -> str:
+        """Renvoie la valeur de la chaîne du scope."""
+        return str(self)
 
     @classmethod
     def from_space_separated(cls, value: str | None) -> frozenset[Scope]:
-        """Décode une chaîne de scopes séparés par des espaces (RFC 6749 §3.3)."""
+        """Décode une chaîne de scopes séparés par des espaces (RFC 6749 §3.3).
+
+        Aucun token n'est rejeté ici : les scopes standard comme les scopes
+        d'API libres sont acceptés (la validation d'enregistrement est
+        portée par le ``ScopeRegistry`` pull côté usecases).
+        """
         if not value:
             return frozenset()
         return frozenset(Scope(token) for token in value.split() if token)
+
+
+# Constantes standard (affectées après la définition de classe : le nom
+# ``Scope`` n'est lié qu'une fois le corps de classe exécuté, une référence
+# dans le corps lèverait ``NameError``).
+Scope.OPENID = Scope("openid")
+Scope.PROFILE = Scope("profile")
+Scope.EMAIL = Scope("email")
+Scope.ADDRESS = Scope("address")
+Scope.PHONE = Scope("phone")
+Scope.OFFLINE_ACCESS = Scope("offline_access")
 
 
 class ResponseMode(str, Enum):

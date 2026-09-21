@@ -241,6 +241,27 @@ password = "password"
 # user_claims = ["employee_id", "department"]
 # show_in_discovery_document = true
 
+# seed ApiResources : scopes d'API (ressources protégées, OIDC §1.2) déclarés
+# en plus des scopes standards. Entrées :
+# - name                  : nom court de la resource (i.e. ``aud`` du access
+#                           token quand des scopes lui sont accordés)
+# - display_name          : libellé humain (facultatif)
+# - scopes                : scopes d'API exposés par la resource (liste ;
+#                           insensibles à la casse, ``-``/``_`` tolérés)
+# - allowed_access_token_signing_algos : algorithmes de signature acceptés
+#                           par la resource (facultatif ; défaut = ceux du
+#                           serveur, `jwks_algorithms`)
+# Surchargeable en bloc via `PURIDENTITYSERVER_API_RESOURCES_SEED` (JSON).
+# Un client doit demander un de ces scopes pour que l'``aud`` du access token
+# porte le nom de la resource ; tout scope non enregistré (standard ou API)
+# est rejeté en ``invalid_scope`` à l'émission (authorize / token / device) et
+# au discovery via `scopes_supported`.
+
+[[settings.api_resources_seed]]
+name = "sample-api"
+display_name = "API de démonstration"
+scopes = ["api.read", "api.write"]
+
 [[settings.clients_seed]]
 client_id = "sample-pkce-client"
 redirect_uris = ["http://127.0.0.1:5173/callback"]
@@ -255,6 +276,9 @@ client_type = "public"
 #                             puis échange du code au /token avec PKCE
 # - sample-refresh-client   : échange code + rotation du refresh token (RFC 6749 §6)
 # - sample-cc-client        : grant client_credentials, machine à machine (RFC 6749 §4.4)
+# - sample-api-client       : client_credentials vers les ApiResources (scopes d'API,
+#                             audience `aud` de l'access token) — échantillon
+#                             samples/api-resources-client/
 # - sample-introspect-client : introspection / révocation (RFC 7662 / 7009)
 # - registration-client     : aucun client seed — le client est créé dynamiquement
 #                             via /register (RFC 7591/7592, voir
@@ -299,6 +323,12 @@ client_type = "confidential"
 client_secret = "cc-demo-secret"
 
 [[settings.clients_seed]]
+client_id = "sample-api-client"
+scopes = "openid profile api.read api.write"
+client_type = "confidential"
+client_secret = "api-demo-secret"
+
+[[settings.clients_seed]]
 client_id = "sample-introspect-client"
 redirect_uris = ["http://127.0.0.1:8000/callback"]
 scopes = "openid profile"
@@ -341,6 +371,6 @@ web_origins = [
     "http://127.0.0.1:5177",
     "http://localhost:5177",
 ]
-scopes = "openid profile email offline_access"
+scopes = "openid profile email offline_access api.read"
 client_type = "public"
 require_consent = true

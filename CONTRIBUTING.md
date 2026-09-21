@@ -75,6 +75,11 @@ Chaque feature n'est **done** que si elle respecte l'ensemble :
 - [ ] **Qualité** — `scripts/check.py` vert (ruff lint+format, mypy strict, pytest ≥ 80 %)
 - [ ] **Tests** — les endpoints/usecases ajoutés couvrent le nouveau code (100 % sur la
       feature de préférence)
+- [ ] **Sample de démonstration** — la feature est testable par un utilisateur **qui ne
+      connaît pas le projet** : un sample dans `samples/` (`samples/<feature>-client/`, README
+      pas-à-pas : lancement, configuration, résultat attendu) exerce le flux/endpoint de la
+      feature, ou un sample existant documente l'exercice s'il couvre déjà le sujet — pas de
+      sample = PR pas done
 - [ ] **SonarCloud** — aucune nouvelle issue sur le diff de la PR
 - [ ] **Documentation à jour dans la même PR** :
   - [ ] `README.md` — table des endpoints, plan d'implémentation, mention de la feature
@@ -107,5 +112,8 @@ Concrètement :
 - `tests/` — tests unitaires et d'intégration (TestClient httpx).
 - **Composition root** unique (`server.py`) : c'est le seul endroit qui assemble
   infrastructure + adaptateurs + usecases (injection de dépendances).
+  **Aucune fonction imbriquée dans `create_app`** : SonarCloud `python:S3776` compte les
+  closures dans la fonction parente (seuil ≤ 15). Extraire au niveau module, de préférence
+  dans le conteneur `_Dependencies`.
 - On n'implémente **pas** la crypto : `PyJWT` (JWT/JWS/JWA/JWK), `cryptography`
   (primitives), `FastAPI` (HTTP/TLS géré par l'infra).

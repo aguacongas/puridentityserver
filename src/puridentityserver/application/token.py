@@ -33,6 +33,7 @@ from puridentityserver.application.client_auth import (
     CLIENT_UNKNOWN_ERROR,
     verify_client_secret,
 )
+from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.domain.authorization import (
     AuthorizationCode,
     Client,
@@ -119,6 +120,7 @@ class TokenUseCase:
         token_manager: TokenManager,
         refresh_tokens: RefreshTokenRepository,
         device_codes: DeviceAuthorizationRepository | None = None,
+        scope_registry: ScopeRegistry | None = None,
     ) -> None:
         """Injection de la configuration, des repositories et de l'émetteur de jetons."""
         self._config = config
@@ -127,6 +129,7 @@ class TokenUseCase:
         self._token_manager = token_manager
         self._refresh_tokens = refresh_tokens
         self._device_codes = device_codes
+        self._scope_registry = scope_registry
 
     async def execute(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Traite le grant type demandé et retourne les jetons ou une erreur."""
@@ -239,6 +242,13 @@ class TokenUseCase:
                 return self._error("invalid_scope", "Portée jamais enregistrée pour le client")
             scopes = requested
 
+        if self._scope_registry is not None:
+            unknown = await self._scope_registry.unknown_scopes(scopes)
+            if unknown:
+                return self._error(
+                    "invalid_scope", "Scope(s) non enregistré(s) : " + ", ".join(unknown)
+                )
+
         now = datetime.now(timezone.utc)
         access_token, token_ttl = await self._issue_access_token(
             client, subject=client.client_id, scopes=scopes, now=now
@@ -340,11 +350,12 @@ class TokenUseCase:
             issued_at=issued_at,
             scopes=scopes,
         )
+        audience = await self._resolve_audience(client, scopes)
         access_token = await self._token_manager.create_access_token(
             algorithm=self._config.signing_algorithm,
             issuer=self._config.issuer,
             subject=subject,
-            audience=client.client_id,
+            audience=audience,
             expires_at=expires_epoch,
             issued_at=issued_at,
             scopes=scopes,
@@ -366,16 +377,23 @@ class TokenUseCase:
         expires_at = now + timedelta(seconds=token_ttl)
         issued_at = int(now.timestamp())
         expires_epoch = int(expires_at.timestamp())
+        audience = await self._resolve_audience(client, scopes)
         access_token = await self._token_manager.create_access_token(
             algorithm=self._config.signing_algorithm,
             issuer=self._config.issuer,
             subject=subject,
-            audience=client.client_id,
+            audience=audience,
             expires_at=expires_epoch,
             issued_at=issued_at,
             scopes=scopes,
         )
         return access_token, token_ttl
+
+    async def _resolve_audience(self, client: Client, scopes: frozenset[Scope]) -> str | list[str]:
+        """Audience d'un access token : resources protégées accordées, sinon client."""
+        if self._scope_registry is None:
+            return client.client_id
+        return await self._scope_registry.audiences_for(client.client_id, scopes)
 
     async def _issue_refresh_token(
         self,

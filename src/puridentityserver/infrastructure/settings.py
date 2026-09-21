@@ -15,6 +15,7 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
+from puridentityserver.domain.api_resource import ApiResource
 from puridentityserver.domain.authorization import Client, ClientType, Scope, origin_of_uri
 from puridentityserver.domain.identity_resource import (
     DEFAULT_IDENTITY_RESOURCES,
@@ -105,6 +106,36 @@ def _parse_identity_resource(raw: dict[str, object]) -> IdentityResource:
     )
 
 
+def _parse_api_resource(raw: dict[str, object]) -> ApiResource:
+    """Convertit un dictionnaire de configuration en ApiResource domaine.
+
+    Les scopes et les algorithmes de signature autorisés sont normalisés
+    (triés, dédupliqués) ; un algorithme inconnu de ``JWTAlgorithm`` est
+    rejeté (ValueError) pour garantir un jeton validable.
+    """
+    scopes_raw = raw.get("scopes", ())
+    scopes = (
+        frozenset(str(scope) for scope in scopes_raw)
+        if isinstance(scopes_raw, (list, tuple))
+        else frozenset()
+    )
+    algos_raw = raw.get("allowed_access_token_signing_algos", ())
+    algos = tuple(str(algo) for algo in algos_raw) if isinstance(algos_raw, (list, tuple)) else ()
+    unknown = [
+        name
+        for name in algos
+        if name not in JWTAlgorithm.__members__ and name not in JWTAlgorithm._value2member_map_
+    ]
+    if unknown:
+        raise ValueError(f"Algorithme(s) de signature non supportés : {', '.join(unknown)}")
+    return ApiResource(
+        name=str(raw["name"]),
+        display_name=str(raw.get("display_name", "")),
+        scopes=scopes,
+        allowed_access_token_signing_algos=tuple(sorted(set(algos))),
+    )
+
+
 class Settings(BaseSettings):
     """Réglages du serveur, surchargeables via l'environnement (préfixe `PURIDENTITYSERVER_`)."""
 
@@ -180,6 +211,17 @@ class Settings(BaseSettings):
     # filtrage des claims de `/userinfo` par scope accordé.
     identity_resources_seed: Annotated[tuple[dict[str, object], ...], NoDecode] = ()
 
+    # ApiResources (OAuth 2.0 — ressources protégées) — registre des
+    # audiences API et de leurs scopes. Aucun scope non enregistré (ni
+    # IdentityResource, ni scope d'ApiResource) n'est accepté aux endpoints
+    # d'émission ; l'`aud` d'un access token porte le nom des resources
+    # dont des scopes ont été accordés.
+    # `api_resources_seed` ajoute des ressources au démarrage : name,
+    # display_name, scopes (liste) et, facultativement,
+    # allowed_access_token_signing_algos (restriction des algorithmes de
+    # signature acceptables pour cette resource).
+    api_resources_seed: Annotated[tuple[dict[str, object], ...], NoDecode] = ()
+
     # Dynamic Client Registration (RFC 7591 + 7592) — endpoint /register.
     # `registration_enabled` expose POST /register + GET/PUT/DELETE
     # /register/{client_id}. Si `requires_initial_access_token` est vrai, la
@@ -247,6 +289,19 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "PURIDENTITYSERVER_IDENTITY_RESOURCES_SEED doit être une liste JSON"
                 )
+            return tuple(parsed)
+        return value
+
+    @field_validator("api_resources_seed", mode="before")
+    @classmethod
+    def _parse_api_resources_seed(cls, value: object) -> object:
+        """Transforme `PURIDENTITYSERVER_API_RESOURCES_SEED='[...]'` (JSON)."""
+        if isinstance(value, str):
+            import json
+
+            parsed = json.loads(value)
+            if not isinstance(parsed, list):
+                raise ValueError("PURIDENTITYSERVER_API_RESOURCES_SEED doit être une liste JSON")
             return tuple(parsed)
         return value
 
@@ -329,6 +384,11 @@ class Settings(BaseSettings):
             resource = _parse_identity_resource(raw)
             by_name[resource.name] = resource
         return tuple(by_name.values())
+
+    @cached_property
+    def seed_api_resources(self) -> tuple[ApiResource, ...]:
+        """Resources protégées de démarrage, déclarées dans la configuration."""
+        return tuple(_parse_api_resource(raw) for raw in self.api_resources_seed)
 
     @cached_property
     def registration_initial_access_token_hashes(self) -> frozenset[str]:
