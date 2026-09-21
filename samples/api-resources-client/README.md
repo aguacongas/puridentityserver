@@ -32,7 +32,9 @@ Le test de bout en bout lance le serveur avec une configuration dédiée
 
 1. le discovery annonce `scopes_supported` incluant `api.read`, `api.write`
    et `api.admin` ;
-2. `GET /api-resources` liste les resources protégées et leurs scopes ;
+2. `GET /api-resources` liste les resources protégées et leurs scopes (appel
+   authentifié : les CRUD d'administration sont protégés par un Bearer au
+   scope `api.admin`) ;
 3. `/token` (client_credentials, `api.read`) → access token dont l'`aud`
    vaut `sample-api` et le `sub` le `client_id` émetteur ;
 4. `/token` (client_credentials, `api.read api.admin`) → `aud` en liste
@@ -43,8 +45,9 @@ Le test de bout en bout lance le serveur avec une configuration dédiée
    et attribuée comme `client_id` (une audience unique, RFC 7662) ;
 7. `/token` (client_credentials, `openid profile`, aucun scope d'API) →
    `aud` = `client_id` (comportement historique sans audience API) ;
-8. CRUD : `PUT /api-resources/sample-api` remplace ses scopes, `DELETE
-   /api-resources/sample-admin` la retire, `GET` après suppression → `404` ;
+8. CRUD (Bearer `api.admin`) : `PUT /api-resources/sample-api` remplace ses
+   scopes, `DELETE /api-resources/sample-admin` la retire, `GET` après
+   suppression → `404` ;
 9. `GET /api/data` de l'API protégée avec un jeton invalide → `401
    invalid_token` ;
 10. `GET /api/data` avec le jeton `api.read` → `200` et les claims du jeton

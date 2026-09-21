@@ -25,7 +25,8 @@ sur le port 8120, puis joue le scénario :
    ``aud`` = ``client_id`` (comportement historique sans audience API) ;
 8. CRUD : ``PUT /api-resources/sample-api`` remplace ses scopes, ``DELETE
    /api-resources/sample-admin`` la retire, ``GET`` après suppression ->
-   ``404`` ;
+   ``404`` ; ces appels sont authentifiés par un Bearer à claim ``api.admin``
+   (les CRUD d'administration sont protégés par défaut) ;
 9. ``GET /api/data`` de l'API protégée avec un jeton invalide -> ``401
    invalid_token`` ;
 10. ``GET /api/data`` avec le jeton ``api.read`` -> ``200`` et les claims du
@@ -109,6 +110,13 @@ def _token(
     return http.post(f"{SERVER_URL}/token", data=data)
 
 
+def _admin_headers(http: httpx.Client) -> dict[str, str]:
+    """Bearer d'administration : client_credentials avec le scope ``api.admin``."""
+    response = _token(http, scope="api.admin")
+    assert response.status_code == 200, response.text
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
 def _friendly_claims(token: str) -> dict[str, object]:
     """Décode les claims du JWT sans en vérifier la signature (démo)."""
     return pyjwt.decode(token, options={"verify_signature": False})
@@ -185,7 +193,7 @@ def _run_scenario() -> None:
             assert expected in scopes, f"{expected} manquant dans scopes_supported"
         print("  [1/11] discovery OK (scopes_supported contient api.read/api.write/api.admin)")
 
-        response = http.get(f"{SERVER_URL}/api-resources")
+        response = http.get(f"{SERVER_URL}/api-resources", headers=_admin_headers(http))
         assert response.status_code == 200, response.text
         resources = response.json()
         names = [resource["name"] for resource in resources]
@@ -235,22 +243,24 @@ def _run_scenario() -> None:
         assert claims["aud"] == CLIENT_ID, claims
         print(f"  [7/11] client_credentials openid profile -> aud={claims['aud']!r} OK (client_id)")
 
+        admin_headers = _admin_headers(http)
         response = http.put(
             f"{SERVER_URL}/api-resources/sample-api",
             json={"name": "sample-api", "scopes": ["api.read", "api.write", "api.list"]},
+            headers=admin_headers,
         )
         assert response.status_code == 200, response.text
         replaced = response.json()
         assert replaced["scopes"] == ["api.list", "api.read", "api.write"], replaced
-        response = http.get(f"{SERVER_URL}/api-resources/sample-api")
+        response = http.get(f"{SERVER_URL}/api-resources/sample-api", headers=admin_headers)
         assert response.json()["scopes"] == ["api.list", "api.read", "api.write"]
-        response = http.delete(f"{SERVER_URL}/api-resources/sample-admin")
+        response = http.delete(f"{SERVER_URL}/api-resources/sample-admin", headers=admin_headers)
         assert response.status_code == 204, response.text
-        response = http.get(f"{SERVER_URL}/api-resources/sample-admin")
+        response = http.get(f"{SERVER_URL}/api-resources/sample-admin", headers=admin_headers)
         assert response.status_code == 404, response.text
-        response = http.get(f"{SERVER_URL}/api-resources")
+        response = http.get(f"{SERVER_URL}/api-resources", headers=admin_headers)
         assert [resource["name"] for resource in response.json()] == ["sample-api"]
-        print("  [8/11] CRUD /api-resources OK (PUT remplace les scopes, DELETE retire, 404 après)")
+        print("  [8/11] CRUD /api-resources OK (Bearer api.admin, PUT/DELETE, 404 après)")
 
         response = _call_api(token="jeton-pourri")
         assert response.status_code == 401, response.text
@@ -283,7 +293,12 @@ def main() -> None:
     started_at = time.monotonic()
     with (
         watchdog(_DEADLINE),
-        run_server(port=SERVER_PORT, clients=_CLIENTS, api_resources=_API_RESOURCES) as issuer,
+        run_server(
+            port=SERVER_PORT,
+            clients=_CLIENTS,
+            api_resources=_API_RESOURCES,
+            extra_settings={"admin_required_claim_values": ["api.admin"]},
+        ) as issuer,
         _api_server(issuer=issuer),
     ):
         print(f"\nScénario ApiResources + API protégée (deadline={_DEADLINE}s)...")
