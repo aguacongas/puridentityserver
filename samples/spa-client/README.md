@@ -12,6 +12,7 @@ navigateur et exerce **tous** les flows du serveur PurIdentityServer :
 | PAR | requête poussée `POST /par` puis `/authorize?request_uri` | RFC 9126 |
 | Appareil | `POST /device_authorization` + sondage `/token` | RFC 8628 |
 | Client Credentials | flow machine à machine | RFC 6749 §4.4 |
+| API protégée | flow code avec scope d'API puis appel de l'API échantillon qui valide le token | ApiResources |
 | Rafraîchir | rotation du `refresh_token` | RFC 6749 §6 |
 | Introspection | `POST /introspect` du dernier `access_token` | RFC 7662 |
 | Révoquer | `POST /revoke` du dernier `access_token` | RFC 7009 |
@@ -49,6 +50,25 @@ de login du serveur, utiliser un compte de démonstration :
 - `alice@example.com` / `password` — rôle `admin`
 - `bob@example.com` / `password` — rôle `user`
 
+### API protégée
+
+Le bouton **API protégée** exerce la feature ApiResources : la page lance
+un flow Authorization Code + PKCE avec les scopes `openid api.read`, reçoit
+un access token dont l'`aud` porte la ApiResource `sample-api`, puis appelle
+l'API protégée de démonstration. Il faut l'avoir démarrée dans un terminal :
+
+```bash
+# terminal 2 — API protégée échantillon (port 8120)
+uv run python samples/api-resources-client/api_server.py
+```
+
+Celle-ci **valide le token** reçu (`Authorization: Bearer`) : signature
+contre les JWKS de l'issuer, `iss` exact, expiration, `aud` = `sample-api`,
+scope `api.read` requis — et répond `200` avec les claims du jeton, ou
+`401 invalid_token` / `403 insufficient_scope`. La première demande vous
+fait passer par la page de consentement, qui liste aussi les scopes d'API.
+Voir [samples/api-resources-client/](../api-resources-client/README.md).
+
 ## Smoke test
 
 Un test de bout en bout lance le serveur avec la configuration dédiée
@@ -72,6 +92,10 @@ uv run python samples/spa-client/smoke_test.py
 - **Appareil** : la page affiche `user_code` + URL de vérification ; ouvrir
   `verification_uri` dans un onglet, se connecter et saisir le code, puis
   regarder la page SPA recevoir les jetons au sondage suivant.
+- **API protégée** : flow code avec scopes `openid api.read`, puis appel de
+  `GET /api/data` sur l'API échantillon (`api_server.py`) qui vérifie la
+  signature JWKS, `iss`/`exp`/`aud` et le scope; le résultat s'affiche
+  dans le journal et la carte de résultat.
 - **Client Credentials / Introspection / Révocation** : recourent au client
   **confidentiel de démo** `sample-cc-client` (identité d'un serveur de
   ressources). Le secret est **en clair dans le code** : c'est une
@@ -89,6 +113,9 @@ Au sommet d'`app.js`, la constante `SPA_CONFIG` :
 | `postLogoutRedirectUri` | `http://127.0.0.1:5177/` | URI de retour du logout |
 | `scope` | `openid profile email offline_access` | Scopes demandés au login |
 | `ccClientId` / `ccClientSecret` | `sample-cc-client` / `cc-demo-secret` | Client confidentiel de démo |
+| `apiBaseUrl` | `http://127.0.0.1:8120` | API protégée de démonstration (voir ci-dessous) |
+| `apiResource` | `sample-api` | ApiResource attendue dans l'`aud` du token |
+| `apiScope` | `openid api.read` | Scopes demandés par le bouton API protégée |
 
 Les endpoints sont résolus dynamiquement depuis
 `/.well-known/openid-configuration`.

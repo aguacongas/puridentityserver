@@ -41,3 +41,11 @@ Règle à appliquer d'office :
   valeurs seed dans `config.toml`.
 - N'implémenter la crypto que via `PyJWT` / `cryptography` — jamais à la main.
 - Commits : style français, `feat(oidc):`, `fix:`, `chore:` — ne commit/push que si demandé.
+
+## Échantillon de démonstration (DoD)
+
+Chaque feature implémentée doit être testable par un utilisateur **qui ne connaît pas le
+projet** : fournir un sample dans `samples/` (dossier `samples/<feature>-client/` avec README
+pas-à-pas : lancement, config, résultat attendu) qui exerce le flux/endpoint de la feature,
+ou documenter l'exercice dans un sample existant quand il couvre déjà le sujet (cf.
+`samples/*-client/`, un par flow). Pas de sample = la PR n'est pas done.

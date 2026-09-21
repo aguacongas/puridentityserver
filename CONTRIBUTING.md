@@ -75,6 +75,11 @@ Chaque feature n'est **done** que si elle respecte l'ensemble :
 - [ ] **Qualité** — `scripts/check.py` vert (ruff lint+format, mypy strict, pytest ≥ 80 %)
 - [ ] **Tests** — les endpoints/usecases ajoutés couvrent le nouveau code (100 % sur la
       feature de préférence)
+- [ ] **Sample de démonstration** — la feature est testable par un utilisateur **qui ne
+      connaît pas le projet** : un sample dans `samples/` (`samples/<feature>-client/`, README
+      pas-à-pas : lancement, configuration, résultat attendu) exerce le flux/endpoint de la
+      feature, ou un sample existant documente l'exercice s'il couvre déjà le sujet — pas de
+      sample = PR pas done
 - [ ] **SonarCloud** — aucune nouvelle issue sur le diff de la PR
 - [ ] **Documentation à jour dans la même PR** :
   - [ ] `README.md` — table des endpoints, plan d'implémentation, mention de la feature

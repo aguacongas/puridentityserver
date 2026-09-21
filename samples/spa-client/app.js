@@ -28,6 +28,12 @@ const SPA_CONFIG = {
   // uniquement, jamais à réutiliser en production).
   ccClientId: "sample-cc-client",
   ccClientSecret: "cc-demo-secret",
+  // API protégée de démonstration (samples/api-resources-client/api_server.py,
+  // port 8120) : valide l'access token (signature JWKS de l'issuer, iss, exp,
+  // aud = la ApiResource) et exige le scope api.read.
+  apiBaseUrl: "http://127.0.0.1:8120",
+  apiResource: "sample-api",
+  apiScope: "openid api.read",
 };
 
 const store = {
@@ -440,6 +446,42 @@ async function flowClientCredentials() {
   }
 }
 
+async function flowProtectedApi() {
+  try {
+    store.set("api_pending", "1");
+    await beginAuthorizeFlow("code", { scope: SPA_CONFIG.apiScope }, "API protégée");
+  } catch (error) {
+    fail(error, "api protégée");
+  }
+}
+
+async function callProtectedApi() {
+  const token = store.get("access_token");
+  if (!token) {
+    throw new Error("Aucun access_token en session");
+  }
+  const response = await fetch(`${SPA_CONFIG.apiBaseUrl}/api/data`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const text = await response.text();
+  let payload;
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = { raw: text };
+  }
+  if (!response.ok) {
+    throw new Error(`API protégée HTTP ${response.status} : ${JSON.stringify(payload)}`);
+  }
+  log(
+    `API protégée : token valide (signature JWKS de ${SPA_CONFIG.issuer}, ` +
+      `iss/exp/aud contrôlés par le resource server) — ` +
+      `aud=${payload.aud}, scope=${payload.scope}`,
+    "ok"
+  );
+  renderResult("API protégée (/api/data)", payload);
+}
+
 async function flowRefresh() {
   try {
     const refreshToken = store.get("refresh_token");
@@ -537,6 +579,7 @@ function renderFlows() {
     ["PAR", "Pushed Authorization Request (RFC 9126)", flowPar],
     ["Appareil", "Device Authorization Grant (RFC 8628)", flowDevice],
     ["Client Credentials", "RFC 6749 §4.4 (machine à machine)", flowClientCredentials],
+    ["API protégée", "Appel de l'API échantillon (scope api.read, aud sample-api)", flowProtectedApi],
     ["Rafraîchir", "Rotation du refresh_token (RFC 6749 §6)", flowRefresh],
     ["Introspection", "RFC 7662 — active/sub", flowIntrospect],
     ["Révoquer", "RFC 7009 — révoque l'access_token", flowRevoke],
@@ -566,6 +609,14 @@ async function handleCallback() {
   if (search.get("code")) {
     await completeCodeFlow(search);
     cleanupUrl();
+    if (store.get("api_pending")) {
+      store.remove("api_pending");
+      try {
+        await callProtectedApi();
+      } catch (error) {
+        fail(error, "api protégée");
+      }
+    }
     return;
   }
   if (hash.get("id_token") || hash.get("access_token") || hash.get("code")) {

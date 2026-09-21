@@ -168,7 +168,8 @@ tests/             pytest unit + intégration (TestClient httpx)
     porte le nom des ApiResources dont des scopes ont été accordés (chaîne
     unique ou liste triée), sinon le `client_id` émetteur ; l'introspection
     RFC 7662 conserve une audience multiple sans l'attribuer comme
-    `client_id`.
+    `client_id`. Échantillon testable pas-à-pas :
+    `samples/api-resources-client/` (test manuel complet + démo CLI).
 
 ## Développement local
 

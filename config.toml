@@ -276,6 +276,9 @@ client_type = "public"
 #                             puis échange du code au /token avec PKCE
 # - sample-refresh-client   : échange code + rotation du refresh token (RFC 6749 §6)
 # - sample-cc-client        : grant client_credentials, machine à machine (RFC 6749 §4.4)
+# - sample-api-client       : client_credentials vers les ApiResources (scopes d'API,
+#                             audience `aud` de l'access token) — échantillon
+#                             samples/api-resources-client/
 # - sample-introspect-client : introspection / révocation (RFC 7662 / 7009)
 # - registration-client     : aucun client seed — le client est créé dynamiquement
 #                             via /register (RFC 7591/7592, voir
@@ -320,6 +323,12 @@ client_type = "confidential"
 client_secret = "cc-demo-secret"
 
 [[settings.clients_seed]]
+client_id = "sample-api-client"
+scopes = "openid profile api.read api.write"
+client_type = "confidential"
+client_secret = "api-demo-secret"
+
+[[settings.clients_seed]]
 client_id = "sample-introspect-client"
 redirect_uris = ["http://127.0.0.1:8000/callback"]
 scopes = "openid profile"
@@ -362,6 +371,6 @@ web_origins = [
     "http://127.0.0.1:5177",
     "http://localhost:5177",
 ]
-scopes = "openid profile email offline_access"
+scopes = "openid profile email offline_access api.read"
 client_type = "public"
 require_consent = true
