@@ -37,6 +37,15 @@ Elle est lue au démarrage par [pydantic-settings](https://docs.pydantic.dev/lat
 | `PURIDENTITYSERVER_REGISTRATION_INITIAL_ACCESS_TOKENS` | *(config.toml)* | Liste (séparée par des virgules en environnement) des initial access tokens autorisés à créer des clients. Chaque jeton est stocké uniquement sous forme d'empreinte SHA-256. Exemple : `PURIDENTITYSERVER_REGISTRATION_INITIAL_ACCESS_TOKENS="dev-registrar-token,staging-registrar"`. |
 | `PURIDENTITYSERVER_PAR_ENABLED` | `true` | Active la Pushed Authorization Request (RFC 9126) : endpoint `POST /par` et publication de `pushed_authorization_request_endpoint` dans le document de discovery. |
 | `PURIDENTITYSERVER_PAR_TTL_SECONDS` | `90` | Durée de vie du `request_uri` retourné par `/par` (secondes, entre 5 et 600). Le `request_uri` est à usage unique : il expire après ce délai et est détruit dès son utilisation à l'endpoint d'autorisation. |
+| `PURIDENTITYSERVER_ROLE` | `full` | Rôle de déploiement : `full` expose protocole OIDC/OAuth **et** administration ; `protocol` n'expose que le protocole (aucun CRUD) ; `admin` n'expose que la gestion des resources (`/identity-resources`, `/api-resources`), **sans** générer de clés de signature ni seeder clients/utilisateurs. Deux processus séparés partagent le même état via `STORAGE_TYPE=sql` ; un serveur `admin` peut valider les jetons émis par le serveur `protocol` via `MANAGEMENT_JWT_ISSUER` / `MANAGEMENT_JWT_JWKS_URL`. |
+| `PURIDENTITYSERVER_MANAGEMENT_JWT_ISSUER` | *(issuer)* | Issuer de confiance des jetons protégeant les CRUD d'administration. Vide = l'`issuer` du serveur (validation locale, sans réseau). Une valeur différente active la validation **distante** : la signature est vérifiée via le JWKS publié par cet issuer (déploiement séparé). |
+| `PURIDENTITYSERVER_MANAGEMENT_JWT_JWKS_URL` | *(découverte)* | URL explicite du JWKS de l'issuer de gestion (sinon découverte via `<issuer>/.well-known/openid-configuration`). Utile quand le serveur d'administration n'a pas accès au discovery. |
+| `PURIDENTITYSERVER_MANAGEMENT_JWT_AUDIENCE` | *(aucune)* | Audience exigée dans les jetons de gestion (vide = non contrôlée). |
+| `PURIDENTITYSERVER_ADMIN_REQUIRED_CLAIM` | `scope` | Nom du claim exigé sur les CRUD d'administration. Le claim `scope` (chaîne séparée par des espaces) est interprété comme une **appartenance** ; les autres claims sont comparés par **égalité** (valeur unique ou liste). |
+| `PURIDENTITYSERVER_ADMIN_REQUIRED_CLAIM_VALUES` | `admin` | Liste (séparée par des virgules) des valeurs autorisées du claim d'administration. **Une liste vide désactive la protection** des CRUD (dérogation à réserver aux tests / usages mono-utilisateur). |
+| `PURIDENTITYSERVER_REGISTRATION_INITIAL_ACCESS_TOKEN_MODE` | `static` | Mode d'autorisation de `POST /register` : `static` (initial access tokens hachés de `REGISTRATION_INITIAL_ACCESS_TOKENS`), `jwt` (Bearer JWT validé contre l'issuer de gestion + `REGISTRATION_REQUIRED_CLAIM` / `REGISTRATION_REQUIRED_CLAIM_VALUES`) ou `disabled` (aucune autorisation — déconseillé hors développement). |
+| `PURIDENTITYSERVER_REGISTRATION_REQUIRED_CLAIM` | `scope` | Claim exigé en mode `jwt` (mêmes règles que `ADMIN_REQUIRED_CLAIM`). |
+| `PURIDENTITYSERVER_REGISTRATION_REQUIRED_CLAIM_VALUES` | `register` | Valeurs autorisées du claim de registration en mode `jwt` (liste séparée par des virgules). |
 
 Cookie de session : signé RS256 avec une clé dédiée (`KeyUse.SESSION`,
 stockée au même endroit que les clés de signature, mais **jamais publiée**
@@ -136,7 +145,19 @@ Le fichier contient actuellement :
   `device_code_interval_seconds`) ;
 - la **Dynamic Client Registration** (`registration_enabled`,
   `registration_requires_initial_access_token`,
-  `registration_initial_access_tokens` — RFC 7591 + 7592, endpoint `/register`) ;
+  `registration_initial_access_tokens`, `registration_initial_access_token_mode`,
+  `registration_required_claim`, `registration_required_claim_values` — RFC 7591
+  + 7592, endpoint `/register`) ;
+- la **séparation administration / protocole** (`role`) et la **protection des
+  CRUD** (`management_jwt_issuer`, `management_jwt_jwks_url`,
+  `management_jwt_audience`, `admin_required_claim`,
+  `admin_required_claim_values`) — les CRUD sont protégés par défaut ; le client
+  de démo `sample-admin-client` (scope `admin`) permet d'obtenir un jeton.
+  `role` sélectionne le serveur monté : `protocol` →
+  `puridentityprotocol.server:app` (OIDC/OAuth, lecture seule des resources),
+  `admin` → `puridentityadmin.server:app` (CRUD seuls), `full` →
+  `puridentityfull.server:app` (les deux par-dessus les mêmes stores) ; la
+  façade historique `puridentityserver.server:app` dispatche sur `role`.
 - la **Pushed Authorization Request** (`par_enabled`, `par_ttl_seconds` —
   RFC 9126, endpoint `/par`) ;
 - le **client de démo du flow Authorization Code + PKCE** (`sample-pkce-client`, client
@@ -180,6 +201,31 @@ PURIDENTITYSERVER_STORAGE_DSN=postgresql+asyncpg://puridentityserver:secret@db-h
 ```sh
 PURIDENTITYSERVER_ISSUER=https://id.example.com uv run uvicorn puridentityserver.server:app --host 127.0.0.1 --port 8000
 ```
+
+### Séparer protocole et administration (déploiement multi-processus)
+
+Chaque rôle expose son propre point d'entrée ; les deux processus partagent le
+même état via `storage_type = "sql"`, mais l'administration peut valider les
+jetons de gestion contre l'issuer **distant** du protocole
+(`management_jwt_issuer`/`management_jwt_jwks_url`) :
+
+```sh
+# serveur protocole (endpoints OIDC/OAuth) — port 8001
+PURIDENTITYSERVER_ROLE=protocol \
+PURIDENTITYSERVER_ISSUER=https://id.example.com \
+PURIDENTITYSERVER_STORAGE_TYPE=sql \
+uv run uvicorn puridentityprotocol.server:app --host 127.0.0.1 --port 8001
+
+# serveur administration (CRUD des resources) — port 8002
+PURIDENTITYSERVER_ROLE=admin \
+PURIDENTITYSERVER_MANAGEMENT_JWT_ISSUER=https://id.example.com \
+PURIDENTITYSERVER_STORAGE_TYPE=sql \
+uv run uvicorn puridentityadmin.server:app --host 127.0.0.1 --port 8002
+```
+
+Le mode **mémoire seule / mono-processus** correspond à `role = "full"`
+(comportement par défaut) : `puridentityfull.server:app` compose le protocole
+et l'administration par-dessus les mêmes stores.
 
 ## Notes d'implémentation
 

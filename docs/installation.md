@@ -51,6 +51,27 @@ Démarrage :
 uv run uvicorn puridentityserver.server:app --host 127.0.0.1 --port 8000
 ```
 
+Le point d'entrée ci-dessus est une **façade** : il délègue la composition au
+serveur sélectionné par le réglage `role` (défaut `full`, voir
+`docs/configuration.md`). Chaque rôle est aussi déployable indépendamment via
+son propre point d'entrée :
+
+- `role = "full"` (défaut) → `puridentityfull.server:app` : protocole OIDC/OAuth
+  **et** administration par-dessus les mêmes stores (mémoire seule ou SQL partagé,
+  mono-processus) ;
+- `role = "protocol"` → `puridentityprotocol.server:app` : endpoints OIDC/OAuth
+  et identité, accès en **lecture seule** aux resources administrées ;
+- `role = "admin"` → `puridentityadmin.server:app` : CRUD des
+  IdentityResources/ApiResources, sans aucun endpoint OIDC/OAuth.
+
+En production, deux processus séparés (`protocol` + `admin`) partagent le même
+état via `storage_type = "sql"` ; on monte alors chaque point d'entrée explicite :
+
+```sh
+uv run uvicorn puridentityprotocol.server:app --host 127.0.0.1 --port 8001
+uv run uvicorn puridentityadmin.server:app  --host 127.0.0.1 --port 8002
+```
+
 ## 5. Déployer en production
 
 Le projet **ne gère pas TLS lui-même** (choix d'architecture : la crypto de transport est
