@@ -42,7 +42,7 @@ from puridentityserver.interfaces.domain.tokens import TokenManager
 from puridentityserver.interfaces.repositories.authorization_code_repository import (
     AuthorizationCodeRepository,
 )
-from puridentityserver.interfaces.repositories.client_repository import ClientRepository
+from puridentityserver.interfaces.repositories.readers import ClientReader
 
 _VALID_RESPONSE_TYPES = frozenset(
     (
@@ -125,7 +125,7 @@ class ValidatedAuthorization:
 
 async def validate_authorization_request(
     request: AuthorizeRequest,
-    client_repository: ClientRepository,
+    client_repository: ClientReader,
     scope_registry: ScopeRegistry | None = None,
 ) -> ValidatedAuthorization | AuthorizeError:
     """Valide une demande d'autorisation (OIDC Core 1.0 §3.1.2.1).
@@ -237,7 +237,7 @@ class AuthorizeUseCase:
     def __init__(
         self,
         config: AuthorizeConfig,
-        client_repository: ClientRepository,
+        client_repository: ClientReader,
         code_repository: AuthorizationCodeRepository,
         token_manager: TokenManager,
         scope_registry: ScopeRegistry | None = None,

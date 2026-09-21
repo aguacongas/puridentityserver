@@ -25,6 +25,7 @@ from puridentityserver.application.registration import (
     RegistrationUseCase,
     UpdateClientRequest,
 )
+from puridentityserver.interfaces.api.security import bearer_token
 
 _JSON_MEDIA_TYPE = "application/json"
 
@@ -57,7 +58,7 @@ def registration_router(usecase: RegistrationUseCase) -> APIRouter:
     )
     async def read(client_id: str, request: Request) -> Response:
         """Relit la configuration enregistrée d'un client (registration token)."""
-        result = await usecase.read(ReadClientRequest(client_id, _bearer_token(request)))
+        result = await usecase.read(ReadClientRequest(client_id, bearer_token(request)))
         if isinstance(result, RegistrationError):
             return _error_response(result)
         return Response(content=_registration_json(result), media_type=_JSON_MEDIA_TYPE)
@@ -81,7 +82,7 @@ def registration_router(usecase: RegistrationUseCase) -> APIRouter:
     )
     async def delete(client_id: str, request: Request) -> Response:
         """Supprime le client et sa configuration (registration token)."""
-        result = await usecase.delete(DeleteClientRequest(client_id, _bearer_token(request)))
+        result = await usecase.delete(DeleteClientRequest(client_id, bearer_token(request)))
         if isinstance(result, RegistrationError):
             return _error_response(result)
         return Response(status_code=204)
@@ -97,7 +98,7 @@ async def _create_client(
     if isinstance(payload, RegistrationError):
         return payload
     return await usecase.register(
-        RegisterRequest(payload, initial_access_token=_bearer_token(request))
+        RegisterRequest(payload, initial_access_token=bearer_token(request))
     )
 
 
@@ -108,7 +109,7 @@ async def _update_client(
     payload = await _json_body(request)
     if isinstance(payload, RegistrationError):
         return payload
-    return await usecase.update(UpdateClientRequest(client_id, _bearer_token(request), payload))
+    return await usecase.update(UpdateClientRequest(client_id, bearer_token(request), payload))
 
 
 async def _json_body(request: Request) -> dict[str, object] | RegistrationError:
@@ -120,13 +121,6 @@ async def _json_body(request: Request) -> dict[str, object] | RegistrationError:
     if not isinstance(payload, dict):
         return RegistrationError("invalid_client_metadata", "Objet JSON attendu", 400)
     return payload
-
-
-def _bearer_token(request: Request) -> str:
-    """Extrait le jeton de l'en-tête ``Authorization: Bearer <token>``."""
-    authorization = request.headers.get("authorization", "")
-    scheme, _, token = authorization.partition(" ")
-    return token.strip() if scheme.lower() == "bearer" else ""
 
 
 def _registration_json(result: ClientRegistration) -> str:

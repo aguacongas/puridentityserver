@@ -18,13 +18,13 @@ from puridentityserver.application.par import PushedAuthorizationUseCase, PushEr
 from puridentityserver.domain.authorization import ResponseMode, Scope
 from puridentityserver.identity.config import CurrentUserOptional
 from puridentityserver.interfaces.api.consent import consent_url
-from puridentityserver.interfaces.repositories.client_repository import ClientRepository
+from puridentityserver.interfaces.repositories.readers import ClientReader
 
 
 def authorize_router(
     usecase: AuthorizeUseCase,
     par_usecase: PushedAuthorizationUseCase | None = None,
-    client_repository: ClientRepository | None = None,
+    client_repository: ClientReader | None = None,
     consent_usecase: ConsentUseCase | None = None,
 ) -> APIRouter:
     """Construit le routeur FastAPI exposant ``GET /authorize``.
@@ -175,9 +175,7 @@ def _push_error(error: PushError) -> HTTPException:
     )
 
 
-async def _enforce_par_requirement(
-    client_id: str, client_repository: ClientRepository | None
-) -> None:
+async def _enforce_par_requirement(client_id: str, client_repository: ClientReader | None) -> None:
     """Refuse une demande directe à /authorize si le client exige PAR (RFC 9126 §6.1).
 
     Un client marqué ``par_required`` doit pousser ses paramètres via
@@ -202,7 +200,7 @@ async def _enforce_par_requirement(
 async def _consent_redirect_if_required(
     request: AuthorizeRequest,
     consent_usecase: ConsentUseCase | None,
-    client_repository: ClientRepository | None,
+    client_repository: ClientReader | None,
 ) -> RedirectResponse | None:
     """Retourne la redirection vers ``/consent`` quand le consentement est requis.
 

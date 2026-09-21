@@ -23,10 +23,10 @@ from puridentityserver.application.authorize import (
 from puridentityserver.application.client_auth import CLIENT_UNKNOWN_ERROR, verify_client_secret
 from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.domain.authorization import Client, ClientType, PushedAuthorization
-from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 from puridentityserver.interfaces.repositories.pushed_authorization_repository import (
     PushedAuthorizationRepository,
 )
+from puridentityserver.interfaces.repositories.readers import ClientReader
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +64,7 @@ class PushedAuthorizationUseCase:
     def __init__(
         self,
         par_config: PushedAuthorizationConfig,
-        client_repository: ClientRepository,
+        client_repository: ClientReader,
         pushed_repository: PushedAuthorizationRepository,
         scope_registry: ScopeRegistry | None = None,
     ) -> None:

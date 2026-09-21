@@ -25,6 +25,13 @@ from puridentityserver.domain.jwks import ALL_SIGNING_ALGORITHMS, JWTAlgorithm
 
 _STORAGE_TYPES = ("memory", "sql")
 
+# Rôles de déploiement : `full` (tout), `protocol` (OIDC/OAuth seul),
+# `admin` (gestion des resources seul, sans endpoints de protocole).
+_ROLES = ("full", "protocol", "admin")
+
+# Modes d'autorisation de la création de client (RFC 7591 §4.1).
+_REGISTRATION_INITIAL_ACCESS_TOKEN_MODES = ("static", "jwt", "disabled")
+
 _SETTINGS_FILE_ENV = "PURIDENTITYSERVER_SETTINGS_FILE"
 
 
@@ -232,6 +239,39 @@ class Settings(BaseSettings):
     registration_requires_initial_access_token: bool = True
     registration_initial_access_tokens: Annotated[tuple[str, ...], NoDecode] = ()
 
+    # Séparation administration / protocole. `role` sélectionne les endpoints
+    # montés : `full` (défaut) expose protocole + administration ; `protocol`
+    # n'expose que les endpoints OIDC/OAuth ; `admin` n'expose que la gestion
+    # des resources (CRUD `/identity-resources` et `/api-resources`). Deux
+    # processus déployés séparément partagent le même état via `storage_type=sql`.
+    role: str = "full"
+
+    # Authentification JWT des endpoints de gestion (CRUD resources) et, en
+    # mode `jwt`, de la création de client. Le JWT est validé contre l'issuer
+    # de gestion (signature JWKS, `iss`, `exp`) puis un claim configurable est
+    # exigé. `management_jwt_issuer` vide signifie « cet issuer » ; une valeur
+    # différente (déploiement séparé) fait valider le jeton à distance via le
+    # JWKS découvert sur cet issuer. `management_jwt_audience` vide désactive
+    # le contrôle d'audience.
+    management_jwt_issuer: str = ""
+    management_jwt_jwks_url: str = ""
+    management_jwt_audience: str = ""
+
+    # Claim exigé pour les CRUD d'administration. `scope` (chaîne espacée) est
+    # interprété comme une appartenance ; les autres claims sont comparés par
+    # égalité (valeur unique ou liste). Une liste vide désactive la protection
+    # (dérogation explicite : à réserver aux tests/mono-utilisateur).
+    admin_required_claim: str = "scope"
+    admin_required_claim_values: Annotated[tuple[str, ...], NoDecode] = ("admin",)
+
+    # Mode d'autorisation de `POST /register` : `static` (défaut, initial
+    # access tokens hachés de `registration_initial_access_tokens`), `jwt`
+    # (Bearer JWT validé contre l'issuer de gestion + claim configurable
+    # ci-dessous) ou `disabled` (aucune autorisation).
+    registration_initial_access_token_mode: str = "static"  # ruff: ignore[hardcoded-password-string] (nom de mode, pas un secret)
+    registration_required_claim: str = "scope"
+    registration_required_claim_values: Annotated[tuple[str, ...], NoDecode] = ("register",)
+
     # Pushed Authorization Request (RFC 9126) — endpoint /par.
     # `par_enabled` expose POST /par. Le `request_uri` retourné est à usage
     # unique et expire au bout de `par_ttl_seconds` (5 ≤ durée ≤ 600, durée
@@ -260,6 +300,22 @@ class Settings(BaseSettings):
     @classmethod
     def _split_initial_access_tokens(cls, value: object) -> object:
         """Transforme `PURIDENTITYSERVER_REGISTRATION_INITIAL_ACCESS_TOKENS` en tuple."""
+        if isinstance(value, str):
+            return tuple(part.strip() for part in value.split(",") if part.strip())
+        return value
+
+    @field_validator("admin_required_claim_values", mode="before")
+    @classmethod
+    def _split_admin_required_claim_values(cls, value: object) -> object:
+        """Transforme `PURIDENTITYSERVER_ADMIN_REQUIRED_CLAIM_VALUES="admin,x"` en tuple."""
+        if isinstance(value, str):
+            return tuple(part.strip() for part in value.split(",") if part.strip())
+        return value
+
+    @field_validator("registration_required_claim_values", mode="before")
+    @classmethod
+    def _split_registration_required_claim_values(cls, value: object) -> object:
+        """Transforme `PURIDENTITYSERVER_REGISTRATION_REQUIRED_CLAIM_VALUES` en tuple."""
         if isinstance(value, str):
             return tuple(part.strip() for part in value.split(",") if part.strip())
         return value
@@ -339,6 +395,25 @@ class Settings(BaseSettings):
             raise ValueError(f"Type de stockage non supporté : {value}")
         return value
 
+    @field_validator("role")
+    @classmethod
+    def _validate_role(cls, value: str) -> str:
+        """Garantit que le rôle de déploiement est supporté."""
+        if value not in _ROLES:
+            raise ValueError(f"Rôle non supporté : {value} (attendu : {', '.join(_ROLES)})")
+        return value
+
+    @field_validator("registration_initial_access_token_mode")
+    @classmethod
+    def _validate_registration_access_token_mode(cls, value: str) -> str:
+        """Garantit que le mode d'autorisation de la registration est supporté."""
+        if value not in _REGISTRATION_INITIAL_ACCESS_TOKEN_MODES:
+            raise ValueError(
+                f"Mode d'initial access token non supporté : {value} "
+                f"(attendu : {', '.join(_REGISTRATION_INITIAL_ACCESS_TOKEN_MODES)})"
+            )
+        return value
+
     @field_validator("par_ttl_seconds")
     @classmethod
     def _validate_par_ttl(cls, value: int) -> int:
@@ -396,3 +471,13 @@ class Settings(BaseSettings):
         return frozenset(
             _hash_client_secret(token) for token in self.registration_initial_access_tokens
         )
+
+    @cached_property
+    def management_issuer(self) -> str:
+        """Issuer de confiance des jetons de gestion (défaut : l'issuer du serveur)."""
+        return self.management_jwt_issuer or self.issuer
+
+    @cached_property
+    def admin_protected(self) -> bool:
+        """Vrai si les CRUD d'administration exigent un JWT à claim configurable."""
+        return bool(self.admin_required_claim_values)

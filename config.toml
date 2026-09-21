@@ -130,6 +130,43 @@ registration_enabled = true
 registration_requires_initial_access_token = true
 registration_initial_access_tokens = ["dev-registrar-token"]
 
+# Séparation administration / protocole et protection des endpoints de gestion.
+# - role : "full" (défaut) expose protocole OIDC/OAuth + administration ;
+#   "protocol" n'expose que le protocole ; "admin" n'expose que la gestion des
+#   resources (CRUD /identity-resources et /api-resources). Deux processus
+#   séparés partagent le même état via `storage_type = "sql"`.
+# - management_jwt_issuer : issuer de confiance des jetons de gestion ; vide =
+#   l'issuer du serveur (validation locale). Une valeur différente active la
+#   validation distante (JWKS de cet issuer) — utile en déploiement séparé.
+# - management_jwt_jwks_url : URL JWKS explicite (sinon découverte via l'issuer).
+# - management_jwt_audience : audience exigée (vide = non contrôlée).
+# - admin_required_claim / admin_required_claim_values : claim exigé par les
+#   CRUD. `scope` est interprété comme une appartenance (chaîne espacée) ; les
+#   autres claims par égalité. Une liste vide DÉSACTIVE la protection (dérogation
+#   à réserver aux tests / usages mono-utilisateur).
+# Surchargeables via `PURIDENTITYSERVER_ROLE`, `PURIDENTITYSERVER_MANAGEMENT_JWT_ISSUER`,
+# `PURIDENTITYSERVER_MANAGEMENT_JWT_JWKS_URL`, `PURIDENTITYSERVER_MANAGEMENT_JWT_AUDIENCE`,
+# `PURIDENTITYSERVER_ADMIN_REQUIRED_CLAIM`, `PURIDENTITYSERVER_ADMIN_REQUIRED_CLAIM_VALUES`
+# (liste séparée par des virgules).
+role = "full"
+management_jwt_issuer = ""
+management_jwt_jwks_url = ""
+management_jwt_audience = ""
+admin_required_claim = "scope"
+admin_required_claim_values = ["admin"]
+
+# Autorisation de `POST /register` (RFC 7591 §4.1) :
+# - "static" (défaut) : initial access tokens hachés (ci-dessus) ;
+# - "jwt" : Bearer JWT validé contre l'issuer de gestion + claim configurable
+#   (`registration_required_claim` / `registration_required_claim_values`) ;
+# - "disabled" : aucune autorisation (déconseillé hors développement).
+# Surchargeables via `PURIDENTITYSERVER_REGISTRATION_INITIAL_ACCESS_TOKEN_MODE`,
+# `PURIDENTITYSERVER_REGISTRATION_REQUIRED_CLAIM`,
+# `PURIDENTITYSERVER_REGISTRATION_REQUIRED_CLAIM_VALUES`.
+registration_initial_access_token_mode = "static"
+registration_required_claim = "scope"
+registration_required_claim_values = ["register"]
+
 # Pushed Authorization Request (RFC 9126) : endpoint /par.
 # - par_enabled : active POST /par et publie l'endpoint au discovery
 #   (`pushed_authorization_request_endpoint`). Le request_uri retourné est à
@@ -262,6 +299,13 @@ name = "sample-api"
 display_name = "API de démonstration"
 scopes = ["api.read", "api.write"]
 
+# resource dont le scope `admin` alimente le claim `scope` des jetons de gestion
+# (protège les CRUD d'administration) — voir `admin_required_claim_values`.
+[[settings.api_resources_seed]]
+name = "management"
+display_name = "API de gestion"
+scopes = ["admin"]
+
 [[settings.clients_seed]]
 client_id = "sample-pkce-client"
 redirect_uris = ["http://127.0.0.1:5173/callback"]
@@ -279,6 +323,9 @@ client_type = "public"
 # - sample-api-client       : client_credentials vers les ApiResources (scopes d'API,
 #                             audience `aud` de l'access token) — échantillon
 #                             samples/api-resources-client/
+# - sample-admin-client     : client_credentials avec le scope `admin` pour les
+#                             CRUD d'administration protégés par JWT — échantillon
+#                             samples/admin-api-client/
 # - sample-introspect-client : introspection / révocation (RFC 7662 / 7009)
 # - registration-client     : aucun client seed — le client est créé dynamiquement
 #                             via /register (RFC 7591/7592, voir
@@ -327,6 +374,14 @@ client_id = "sample-api-client"
 scopes = "openid profile api.read api.write"
 client_type = "confidential"
 client_secret = "api-demo-secret"
+
+# client d'administration (scope `admin`) pour les CRUD protégés par JWT —
+# échantillon samples/admin-api-client/.
+[[settings.clients_seed]]
+client_id = "sample-admin-client"
+scopes = "openid admin"
+client_type = "confidential"
+client_secret = "admin-demo-secret"
 
 [[settings.clients_seed]]
 client_id = "sample-introspect-client"

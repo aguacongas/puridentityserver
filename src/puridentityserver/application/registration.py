@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from secrets import token_urlsafe
 from urllib.parse import urlsplit
 
+from puridentityserver.application.claim_authorizer import BearerClaimAuthorizer
 from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.domain.authorization import Client, ClientType, Scope, origin_of_uri
 from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCES
@@ -58,6 +59,7 @@ class RegistrationConfig:
     base_url: str = ""
     requires_initial_access_token: bool = True
     initial_access_token_hashes: frozenset[str] = frozenset()
+    initial_access_token_mode: str = "static"  # ruff: ignore[hardcoded-password-string] (nom de mode, pas un secret)
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,11 +167,13 @@ class RegistrationUseCase:
         config: RegistrationConfig,
         client_repository: ClientRepository,
         scope_registry: ScopeRegistry | None = None,
+        initial_access_authorizer: BearerClaimAuthorizer | None = None,
     ) -> None:
         """Injection de la configuration, du registre clients et du registre de scopes."""
         self._config = config
         self._clients = client_repository
         self._scope_registry = scope_registry
+        self._initial_access_authorizer = initial_access_authorizer
 
     async def _known_scopes(self) -> frozenset[str]:
         """Scopes acceptés à l'enregistrement (scopes standard si pas de registre)."""
@@ -179,7 +183,7 @@ class RegistrationUseCase:
 
     async def register(self, request: RegisterRequest) -> ClientRegistration | RegistrationError:
         """Crée un client et retourne sa configuration complète (RFC 7591 §4)."""
-        if not self._authorise_initial(request.initial_access_token):
+        if not await self._authorise_initial(request.initial_access_token):
             return RegistrationError(
                 "invalid_client",
                 "Initial access token manquant ou invalide",
@@ -313,8 +317,22 @@ class RegistrationUseCase:
         generated = token_urlsafe(48)
         return _SecretRotation(hash_secret(generated), generated)
 
-    def _authorise_initial(self, token: str) -> bool:
-        """Vérifie l'initial access token (RFC 7591 §4.1) si exigé par la config."""
+    async def _authorise_initial(self, token: str) -> bool:
+        """Autorise la création selon le mode configuré (RFC 7591 §4.1).
+
+        - ``disabled`` : aucune autorisation ;
+        - ``jwt`` : le Bearer doit être un JWT valide portant le claim
+          configuré (vérifié par l'autoriseur injecté) ;
+        - ``static`` : le Bearer doit correspondre à un initial access token
+          haché de la configuration (comportement historique).
+        """
+        mode = self._config.initial_access_token_mode
+        if mode == "disabled":
+            return True
+        if mode == "jwt":
+            if not token or self._initial_access_authorizer is None:
+                return False
+            return await self._initial_access_authorizer.authorise(token)
         if not self._config.requires_initial_access_token:
             return True
         if not token or not self._config.initial_access_token_hashes:

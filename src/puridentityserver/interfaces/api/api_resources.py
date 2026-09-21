@@ -20,13 +20,23 @@ from puridentityserver.application.api_resource import (
     ApiResourceRequest,
     ApiResourceUseCase,
 )
+from puridentityserver.application.claim_authorizer import BearerClaimAuthorizer
+from puridentityserver.interfaces.api.security import authorization_dependencies
 
 _JSON_MEDIA_TYPE = "application/json"
 
 
-def api_resources_router(usecase: ApiResourceUseCase) -> APIRouter:
-    """Construit le routeur FastAPI exposant la gestion des ApiResources."""
-    router = APIRouter(tags=["api-resources"])
+def api_resources_router(
+    usecase: ApiResourceUseCase,
+    *,
+    authorizer: BearerClaimAuthorizer | None = None,
+) -> APIRouter:
+    """Construit le routeur FastAPI exposant la gestion des ApiResources.
+
+    Si ``authorizer`` est fourni, chaque route exige un JWT portant le claim
+    configuré (401 sinon).
+    """
+    router = APIRouter(tags=["api-resources"], dependencies=authorization_dependencies(authorizer))
 
     @router.get(
         "/api-resources",

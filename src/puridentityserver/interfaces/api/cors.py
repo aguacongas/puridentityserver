@@ -15,7 +15,7 @@ from starlette.datastructures import Headers
 from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from puridentityserver.interfaces.repositories.client_repository import ClientRepository
+from puridentityserver.interfaces.repositories.readers import ClientReader
 
 _ALLOW_METHODS = ("GET", "POST", "DELETE")
 _ALLOW_HEADERS = ("Authorization", "Content-Type")
@@ -37,7 +37,7 @@ class DynamicCORSMiddleware:
     def __init__(
         self,
         app: ASGIApp,
-        client_repository: ClientRepository,
+        client_repository: ClientReader,
         *,
         allow_methods: tuple[str, ...] = _ALLOW_METHODS,
         allow_headers: tuple[str, ...] = _ALLOW_HEADERS,

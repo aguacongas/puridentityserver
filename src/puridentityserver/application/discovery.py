@@ -12,11 +12,9 @@ from dataclasses import dataclass
 
 from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCES
 from puridentityserver.domain.jwks import ALL_SIGNING_ALGORITHMS
-from puridentityserver.interfaces.repositories.api_resource_repository import (
-    ApiResourceRepository,
-)
-from puridentityserver.interfaces.repositories.identity_resource_repository import (
-    IdentityResourceRepository,
+from puridentityserver.interfaces.repositories.readers import (
+    ApiResourceReader,
+    IdentityResourceReader,
 )
 
 
@@ -39,8 +37,8 @@ class DiscoveryUseCase:
     def __init__(
         self,
         config: DiscoveryConfig,
-        identity_resources: IdentityResourceRepository | None = None,
-        api_resources: ApiResourceRepository | None = None,
+        identity_resources: IdentityResourceReader | None = None,
+        api_resources: ApiResourceReader | None = None,
     ) -> None:
         """Injection de la configuration de l'émetteur et des registres de resources."""
         self._config = config

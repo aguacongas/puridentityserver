@@ -13,9 +13,7 @@ from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCE
 from puridentityserver.domain.revocation import token_hash
 from puridentityserver.interfaces.domain.tokens import TokenManager
 from puridentityserver.interfaces.domain.userinfo import ClaimsProvider
-from puridentityserver.interfaces.repositories.identity_resource_repository import (
-    IdentityResourceRepository,
-)
+from puridentityserver.interfaces.repositories.readers import IdentityResourceReader
 from puridentityserver.interfaces.repositories.revoked_token_repository import (
     RevokedTokenRepository,
 )
@@ -65,7 +63,7 @@ class UserInfoUseCase:
         token_manager: TokenManager,
         claims_provider: ClaimsProvider,
         revoked_token_repository: RevokedTokenRepository,
-        identity_resources: IdentityResourceRepository | None = None,
+        identity_resources: IdentityResourceReader | None = None,
     ) -> None:
         """Injection config, validateur, fournisseur, denylist et registre de resources."""
         self._config = config

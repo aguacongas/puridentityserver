@@ -30,10 +30,10 @@ from puridentityserver.domain.authorization import (
     resolve_lifetime_seconds,
 )
 from puridentityserver.domain.revocation import token_hash
-from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 from puridentityserver.interfaces.repositories.device_authorization_repository import (
     DeviceAuthorizationRepository,
 )
+from puridentityserver.interfaces.repositories.readers import ClientReader
 
 _USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
@@ -91,7 +91,7 @@ class DeviceAuthorizationUseCase:
     def __init__(
         self,
         config: DeviceConfig,
-        client_repository: ClientRepository,
+        client_repository: ClientReader,
         device_codes: DeviceAuthorizationRepository,
         scope_registry: ScopeRegistry | None = None,
     ) -> None:
