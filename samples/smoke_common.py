@@ -53,16 +53,35 @@ def wait_port(port: int, timeout: float = _WAIT_PORT_TIMEOUT) -> None:
     raise TimeoutError(f"Port {port} non prêt après {timeout}s")
 
 
+def _render_blocks(table: str, items: tuple[dict[str, object], ...]) -> str:
+    """Rend la séquence de blocs ``[[settings.<table>]]`` pour chaque ``item``."""
+    blocks: list[str] = []
+    for item in items:
+        lines = [f"[[settings.{table}]]"]
+        for key, value in item.items():
+            if isinstance(value, (list, tuple)):
+                rendered = ", ".join(json.dumps(entry) for entry in value)
+                lines.append(f"{key} = [{rendered}]")
+            else:
+                lines.append(f"{key} = {json.dumps(value)}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
 def render_server_config(
     *,
     port: int,
     clients: tuple[dict[str, object], ...],
     users: Mapping[str, Mapping[str, str]] | None = None,
+    api_resources: tuple[dict[str, object], ...] = (),
     registration_enabled: bool = False,
     registration_initial_access_tokens: tuple[str, ...] = (),
 ) -> str:
     """Rend le TOML d'un serveur minimal déclarant ``clients`` (+``users``) sur ``port``.
 
+    ``api_resources`` ajoute des ApiResources seed (``[[settings.api_resources_seed]]``
+    : ``name``, ``display_name``, ``scopes`` et ``allowed_access_token_signing_algos``
+    en option).
     ``registration_enabled`` ajoute les réglages de Dynamic Client
     Registration (RFC 7591/7592) : endpoint ``/register`` activé et liste des
     initial access tokens autorisés (la création exige un Bearer token).
@@ -82,22 +101,16 @@ def render_server_config(
             rendered = ", ".join(json.dumps(t) for t in registration_initial_access_tokens)
             lines.append(f"registration_initial_access_tokens = [{rendered}]")
     head += "\n".join(lines) + "\n\n"
-    blocks: list[str] = []
-    for client in clients:
-        lines = ["[[settings.clients_seed]]"]
-        for key, value in client.items():
-            if isinstance(value, (list, tuple)):
-                rendered = ", ".join(json.dumps(item) for item in value)
-                lines.append(f"{key} = [{rendered}]")
-            else:
-                lines.append(f"{key} = {json.dumps(value)}")
-        blocks.append("\n".join(lines))
+    blocks = [
+        _render_blocks("clients_seed", clients),
+        _render_blocks("api_resources_seed", api_resources),
+    ]
     for subject, credentials in (users or {}).items():
         lines = [f"[settings.identity_seed_users.{subject}]"]
         for key, value in credentials.items():
             lines.append(f"{key} = {json.dumps(value)}")
         blocks.append("\n".join(lines))
-    return head + "\n\n".join(blocks) + "\n"
+    return head + "\n\n".join(block for block in blocks if block) + "\n"
 
 
 @contextmanager
@@ -123,16 +136,18 @@ def run_server(
     port: int,
     clients: tuple[dict[str, object], ...],
     users: Mapping[str, Mapping[str, str]] | None = None,
+    api_resources: tuple[dict[str, object], ...] = (),
     registration_enabled: bool = False,
     registration_initial_access_tokens: tuple[str, ...] = (),
 ) -> Iterator[str]:
     """Lance un serveur dédié pour la configuration spécifique de ce test.
 
     Génère la configuration (issuer = ``port``, clients seed ``clients``,
-    comptes de connexion ``users``, éventuellement la Dynamic Client
-    Registration activée avec ses initial access tokens) dans un fichier
-    temporaire, démarre le serveur uvicorn sur ``port`` puis fournit l'URL de
-    base jusqu'à la sortie du bloc (sous-processus terminé).
+    comptes de connexion ``users``, ApiResources seed ``api_resources``,
+    éventuellement la Dynamic Client Registration activée avec ses initial
+    access tokens) dans un fichier temporaire, démarre le serveur uvicorn
+    sur ``port`` puis fournit l'URL de base jusqu'à la sortie du bloc
+    (sous-processus terminé).
     """
     if port_in_use(port):
         raise SystemExit(f"Port {port} occupé : arrêtez le serveur qui écoute sur {port}.")
@@ -144,6 +159,7 @@ def run_server(
                 port=port,
                 clients=clients,
                 users=users,
+                api_resources=api_resources,
                 registration_enabled=registration_enabled,
                 registration_initial_access_tokens=registration_initial_access_tokens,
             ),

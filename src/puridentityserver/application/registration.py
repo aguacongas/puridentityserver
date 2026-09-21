@@ -37,7 +37,9 @@ from dataclasses import dataclass, field
 from secrets import token_urlsafe
 from urllib.parse import urlsplit
 
+from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.domain.authorization import Client, ClientType, Scope, origin_of_uri
+from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCES
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 
 _ALLOWED_GRANT_TYPES = frozenset({"authorization_code"})
@@ -45,6 +47,7 @@ _ALLOWED_RESPONSE_TYPES = frozenset({"code"})
 _ALLOWED_AUTH_METHODS = frozenset({"none", "client_secret_basic", "client_secret_post"})
 _AUTH_METHOD_DEFAULT = "client_secret_basic"
 _MIN_SECRET_LENGTH = 8
+_STANDARD_SCOPES = frozenset(resource.name for resource in DEFAULT_IDENTITY_RESOURCES)
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,10 +164,18 @@ class RegistrationUseCase:
         self,
         config: RegistrationConfig,
         client_repository: ClientRepository,
+        scope_registry: ScopeRegistry | None = None,
     ) -> None:
-        """Injection de la configuration et du registre clients."""
+        """Injection de la configuration, du registre clients et du registre de scopes."""
         self._config = config
         self._clients = client_repository
+        self._scope_registry = scope_registry
+
+    async def _known_scopes(self) -> frozenset[str]:
+        """Scopes acceptés à l'enregistrement (scopes standard si pas de registre)."""
+        if self._scope_registry is None:
+            return _STANDARD_SCOPES
+        return await self._scope_registry.known_scope_names()
 
     async def register(self, request: RegisterRequest) -> ClientRegistration | RegistrationError:
         """Crée un client et retourne sa configuration complète (RFC 7591 §4)."""
@@ -174,7 +185,8 @@ class RegistrationUseCase:
                 "Initial access token manquant ou invalide",
                 401,
             )
-        metadata = _parse_metadata(request.metadata)
+        known = await self._known_scopes()
+        metadata = _parse_metadata(request.metadata, known)
         if isinstance(metadata, RegistrationError):
             return metadata
 
@@ -227,7 +239,8 @@ class RegistrationUseCase:
         )
         if isinstance(client, RegistrationError):
             return client
-        metadata = _parse_metadata(request.metadata)
+        known = await self._known_scopes()
+        metadata = _parse_metadata(request.metadata, known)
         if isinstance(metadata, RegistrationError):
             return metadata
 
@@ -348,7 +361,9 @@ class RegistrationUseCase:
         return (self._config.base_url or self._config.issuer).rstrip("/")
 
 
-def _parse_metadata(raw: object) -> RegistrationMetadata | RegistrationError:
+def _parse_metadata(
+    raw: object, known_scopes: frozenset[str]
+) -> RegistrationMetadata | RegistrationError:
     """Valide les métadonnées reçues et les normalise (RFC 7591 §2)."""
     if not isinstance(raw, dict):
         return RegistrationError(
@@ -363,7 +378,7 @@ def _parse_metadata(raw: object) -> RegistrationMetadata | RegistrationError:
     web_origins = _parse_web_origins(raw)
     if isinstance(web_origins, RegistrationError):
         return web_origins
-    extras = _parse_metadata_extras(raw)
+    extras = _parse_metadata_extras(raw, known_scopes)
     if isinstance(extras, RegistrationError):
         return extras
     scopes, auth_method, requested_secret, par_required, require_consent = extras
@@ -383,7 +398,7 @@ def _parse_metadata(raw: object) -> RegistrationMetadata | RegistrationError:
 
 
 def _parse_metadata_extras(
-    raw: dict[str, object],
+    raw: dict[str, object], known_scopes: frozenset[str]
 ) -> tuple[frozenset[Scope], str, str | None, bool, bool] | RegistrationError:
     """Valide scopes, méthode d'authentification et exigences du client (RFC 7591 §2).
 
@@ -391,7 +406,7 @@ def _parse_metadata_extras(
     du registre (``authorization_code``/``code``) : seule leur validité est
     vérifiée, la valeur étant imposée par le serveur.
     """
-    scopes = _parse_scopes(raw)
+    scopes = _parse_scopes(raw, known_scopes)
     if isinstance(scopes, RegistrationError):
         return scopes
     auth_method = _parse_auth_method(raw)
@@ -471,17 +486,23 @@ def _is_web_origin(uri: str) -> bool:
     return parsed.path in ("", "/") and parsed.query == "" and parsed.fragment == ""
 
 
-def _parse_scopes(raw: dict[str, object]) -> frozenset[Scope] | RegistrationError:
+def _parse_scopes(
+    raw: dict[str, object], known_scopes: frozenset[str]
+) -> frozenset[Scope] | RegistrationError:
     """Valide le scope (chaîne espacée) contre les scopes connus du serveur."""
     value = raw.get("scope")
     if value is None or value == "":
         return frozenset((Scope.OPENID,))
     if not isinstance(value, str):
         return RegistrationError("invalid_client_metadata", "scope doit être une chaîne")
-    try:
-        return frozenset(Scope(token) for token in value.split())
-    except ValueError:
-        return RegistrationError("invalid_client_metadata", f"scope inconnu : {value}")
+    tokens = value.split()
+    unknown = [token for token in tokens if token not in known_scopes]
+    if unknown:
+        return RegistrationError(
+            "invalid_client_metadata",
+            "scope(s) non enregistré(s) : " + ", ".join(sorted(unknown)),
+        )
+    return frozenset(Scope(token) for token in tokens)
 
 
 def _parse_auth_method(raw: dict[str, object]) -> str | RegistrationError:

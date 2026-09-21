@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
 
+from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.domain.authorization import (
     AuthorizationCode,
     Client,
@@ -125,14 +126,18 @@ class ValidatedAuthorization:
 async def validate_authorization_request(
     request: AuthorizeRequest,
     client_repository: ClientRepository,
+    scope_registry: ScopeRegistry | None = None,
 ) -> ValidatedAuthorization | AuthorizeError:
     """Valide une demande d'autorisation (OIDC Core 1.0 §3.1.2.1).
 
     Partagée entre l'endpoint ``/authorize`` et le endpoint PAR
     (RFC 9126 §2.1) : le ``response_type`` doit être supporté, le client
     connu et actif, la ``redirect_uri`` enregistrée, le scope ``openid``
-    requis, et PKCE / ``nonce`` contrôlés. Retourne le bundle validé
-    (client + mode de réponse) ou l'erreur à renvoyer au client.
+    requis, et PKCE / ``nonce`` contrôlés. Lorsqu'un ``ScopeRegistry`` est
+    fourni, chaque scope demandé doit être enregistré (IdentityResource ou
+    ApiResource), sinon la demande est rejetée en ``invalid_scope``.
+    Retourne le bundle validé (client + mode de réponse) ou l'erreur à
+    renvoyer au client.
     """
     response_types = frozenset(request.response_type.split())
     has_tokens = bool(response_types & frozenset(("id_token", "token")))
@@ -182,6 +187,16 @@ async def validate_authorization_request(
             response_mode=response_mode,
         )
 
+    if scope_registry is not None:
+        unknown = await scope_registry.unknown_scopes(scopes)
+        if unknown:
+            return _authorize_error(
+                "invalid_scope",
+                request,
+                description="Scope(s) non enregistré(s) : " + ", ".join(unknown),
+                response_mode=response_mode,
+            )
+
     if request.code_challenge and request.code_challenge_method not in ("S256", "plain"):
         return _authorize_error(
             "invalid_request",
@@ -225,16 +240,20 @@ class AuthorizeUseCase:
         client_repository: ClientRepository,
         code_repository: AuthorizationCodeRepository,
         token_manager: TokenManager,
+        scope_registry: ScopeRegistry | None = None,
     ) -> None:
         """Injection de la configuration, des repositories et de l'émetteur de jetons."""
         self._config = config
         self._clients = client_repository
         self._codes = code_repository
         self._token_manager = token_manager
+        self._scope_registry = scope_registry
 
     async def execute(self, request: AuthorizeRequest) -> AuthorizeResult:
         """Traite la demande d'autorisation et retourne le redirect ou l'erreur."""
-        validated = await validate_authorization_request(request, self._clients)
+        validated = await validate_authorization_request(
+            request, self._clients, self._scope_registry
+        )
         if isinstance(validated, AuthorizeError):
             return validated
 
@@ -318,11 +337,12 @@ class AuthorizeUseCase:
         at_hash = ""
         access_token = ""
         if wants_token:
+            audience = await self._resolve_audience(client, scopes)
             access_token = await self._token_manager.create_access_token(
                 algorithm=self._config.signing_algorithm,
                 issuer=self._config.issuer,
                 subject=request.subject,
-                audience=client.client_id,
+                audience=audience,
                 expires_at=expires_epoch,
                 issued_at=issued_at,
                 scopes=scopes,
@@ -344,6 +364,12 @@ class AuthorizeUseCase:
                 c_hash=_hash_artefact(code, self._config.signing_algorithm) if code else "",
             )
         return id_token, access_token, token_ttl
+
+    async def _resolve_audience(self, client: Client, scopes: frozenset[Scope]) -> str | list[str]:
+        """Audience d'un access token : resources protégées accordées, sinon client."""
+        if self._scope_registry is None:
+            return client.client_id
+        return await self._scope_registry.audiences_for(client.client_id, scopes)
 
     def _build_success_params(
         self,

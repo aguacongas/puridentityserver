@@ -217,6 +217,7 @@ def test_settings_client_seed_reads_defaults_from_config_toml(
         "sample-hybrid-client",
         "sample-refresh-client",
         "sample-cc-client",
+        "sample-api-client",
         "sample-introspect-client",
         "sample-device-client",
         "sample-par-client",
@@ -229,7 +230,7 @@ def test_settings_client_seed_reads_defaults_from_config_toml(
     assert client.access_token_lifetime_seconds is None
     assert client.authorization_code_lifetime_seconds is None
     assert client.par_required is False
-    assert settings.seed_clients[7].par_required is True
+    assert settings.seed_clients[8].par_required is True
 
 
 def test_settings_client_seed_parses_lifetime_fields() -> None:

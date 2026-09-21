@@ -70,12 +70,16 @@ class PyJWTTokenManager:
         algorithm: JWTAlgorithm,
         issuer: str,
         subject: str,
-        audience: str,
+        audience: str | list[str],
         expires_at: int,
         issued_at: int,
         scopes: frozenset[Scope],
     ) -> str:
-        """Construit l'access_token : identité ``sub`` + scopes accordés."""
+        """Construit l'access_token : identité ``sub`` + scopes accordés.
+
+        ``aud`` porte le ``client_id`` ou les noms des ressources
+        protégées dont des scopes ont été accordés (chaîne ou liste).
+        """
         payload: dict[str, object] = {
             "iss": issuer,
             "sub": subject,

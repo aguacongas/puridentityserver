@@ -21,6 +21,7 @@ from puridentityserver.application.authorize import (
     validate_authorization_request,
 )
 from puridentityserver.application.client_auth import CLIENT_UNKNOWN_ERROR, verify_client_secret
+from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.domain.authorization import Client, ClientType, PushedAuthorization
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 from puridentityserver.interfaces.repositories.pushed_authorization_repository import (
@@ -65,11 +66,13 @@ class PushedAuthorizationUseCase:
         par_config: PushedAuthorizationConfig,
         client_repository: ClientRepository,
         pushed_repository: PushedAuthorizationRepository,
+        scope_registry: ScopeRegistry | None = None,
     ) -> None:
         """Prépare le use case avec ses dépendances de configuration et stockage."""
         self._config = par_config
         self._clients = client_repository
         self._pushed = pushed_repository
+        self._scope_registry = scope_registry
 
     async def _authenticate_client(self, client_id: str, client_secret: str) -> Client | PushError:
         """Authentifie le client du push ; retourne ``PushError`` ``invalid_client`` sinon.
@@ -141,7 +144,9 @@ class PushedAuthorizationUseCase:
             response_mode=params.get("response_mode", "query"),
         )
 
-        validated = await validate_authorization_request(authorize_request, self._clients)
+        validated = await validate_authorization_request(
+            authorize_request, self._clients, self._scope_registry
+        )
         if isinstance(validated, AuthorizeError):
             return PushError(
                 error=validated.error,

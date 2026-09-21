@@ -12,6 +12,9 @@ from dataclasses import dataclass
 
 from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCES
 from puridentityserver.domain.jwks import ALL_SIGNING_ALGORITHMS
+from puridentityserver.interfaces.repositories.api_resource_repository import (
+    ApiResourceRepository,
+)
 from puridentityserver.interfaces.repositories.identity_resource_repository import (
     IdentityResourceRepository,
 )
@@ -37,10 +40,12 @@ class DiscoveryUseCase:
         self,
         config: DiscoveryConfig,
         identity_resources: IdentityResourceRepository | None = None,
+        api_resources: ApiResourceRepository | None = None,
     ) -> None:
-        """Injection de la configuration de l'émetteur et du registre de resources."""
+        """Injection de la configuration de l'émetteur et des registres de resources."""
         self._config = config
         self._identity_resources = identity_resources
+        self._api_resources = api_resources
 
     async def execute(self) -> dict[str, object]:
         """Construit les métadonnées OIDC Discovery (§3 OIDC Discovery 1.0)."""
@@ -67,7 +72,7 @@ class DiscoveryUseCase:
         return metadata
 
     async def _scopes_and_claims(self) -> tuple[list[str], list[str]]:
-        """Scopes et claims publiés, dérivés des IdentityResources enregistrées."""
+        """Scopes et claims publiés, dérivés des IdentityResources + scopes d'API."""
         resources = DEFAULT_IDENTITY_RESOURCES
         if self._identity_resources is not None:
             stored = await self._identity_resources.find_all()
@@ -81,7 +86,15 @@ class DiscoveryUseCase:
                 if claim not in seen:
                     seen.add(claim)
                     claims.append(claim)
+        scopes.extend(sorted(await self._api_scope_names()))
         return scopes, claims
+
+    async def _api_scope_names(self) -> set[str]:
+        """Scopes d'API déclarés par les ApiResources enregistrées."""
+        if self._api_resources is None:
+            return set()
+        stored = await self._api_resources.find_all()
+        return {scope for resource in stored for scope in resource.scopes}
 
     def _resolve_base_url(self) -> str:
         return (self._config.base_url or self._config.issuer).rstrip("/")

@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from puridentityserver.application.api_resource import ApiResourceUseCase
 from puridentityserver.application.authorize import AuthorizeConfig, AuthorizeUseCase
 from puridentityserver.application.consent import ConsentUseCase
 from puridentityserver.application.device_authorize import (
@@ -21,6 +22,7 @@ from puridentityserver.application.logout import LogoutConfig, LogoutUseCase
 from puridentityserver.application.par import PushedAuthorizationConfig, PushedAuthorizationUseCase
 from puridentityserver.application.registration import RegistrationConfig, RegistrationUseCase
 from puridentityserver.application.revocation import RevocationConfig, RevocationUseCase
+from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.application.token import TokenConfig, TokenUseCase
 from puridentityserver.application.userinfo import UserInfoConfig, UserInfoUseCase
 from puridentityserver.domain.jwks import JWTAlgorithm, KeyUse
@@ -36,6 +38,7 @@ from puridentityserver.identity.config import (
 from puridentityserver.infrastructure.claims import UserStoreClaimsProvider
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
 from puridentityserver.infrastructure.persistence.factory import (
+    build_api_resource_repository,
     build_authorization_code_repository,
     build_client_repository,
     build_consent_repository,
@@ -49,6 +52,7 @@ from puridentityserver.infrastructure.persistence.factory import (
 )
 from puridentityserver.infrastructure.settings import Settings
 from puridentityserver.infrastructure.tokens import PyJWTTokenManager
+from puridentityserver.interfaces.api.api_resources import api_resources_router
 from puridentityserver.interfaces.api.authorize import authorize_router
 from puridentityserver.interfaces.api.consent import consent_router
 from puridentityserver.interfaces.api.cors import DynamicCORSMiddleware
@@ -154,6 +158,10 @@ class _Dependencies:
         self.pushed_code_repository = build_pushed_authorization_repository(settings)
         self.consent_repository = build_consent_repository(settings)
         self.identity_resource_repository = build_identity_resource_repository(settings)
+        self.api_resource_repository = build_api_resource_repository(settings)
+        self.scope_registry = ScopeRegistry(
+            self.identity_resource_repository, self.api_resource_repository
+        )
 
         self.authorize_usecase = AuthorizeUseCase(
             AuthorizeConfig(
@@ -165,6 +173,7 @@ class _Dependencies:
             self.client_repository,
             self.code_repository,
             self.token_manager,
+            self.scope_registry,
         )
         self.token_usecase = TokenUseCase(
             TokenConfig(
@@ -178,6 +187,7 @@ class _Dependencies:
             self.token_manager,
             self.refresh_token_repository,
             self.device_code_repository,
+            self.scope_registry,
         )
         self.device_usecase = DeviceAuthorizationUseCase(
             DeviceConfig(
@@ -188,6 +198,7 @@ class _Dependencies:
             ),
             self.client_repository,
             self.device_code_repository,
+            self.scope_registry,
         )
         self.userinfo_usecase = UserInfoUseCase(
             UserInfoConfig(issuer=settings.issuer),
@@ -221,13 +232,16 @@ class _Dependencies:
                 initial_access_token_hashes=settings.registration_initial_access_token_hashes,
             ),
             self.client_repository,
+            self.scope_registry,
         )
         self.par_usecase = PushedAuthorizationUseCase(
             PushedAuthorizationConfig(ttl_seconds=settings.par_ttl_seconds),
             self.client_repository,
             self.pushed_code_repository,
+            self.scope_registry,
         )
         self.consent_usecase = ConsentUseCase(self.consent_repository)
+        self.api_resources_usecase = ApiResourceUseCase(self.api_resource_repository)
 
     async def resolve_session_lifetime(self, client_id: str) -> int | None:
         """Retourne la durée de session cookie configurée pour le client, si présente."""
@@ -249,10 +263,13 @@ class _Dependencies:
         await self.pushed_code_repository.initialise()
         await self.consent_repository.initialise()
         await self.identity_resource_repository.initialise()
+        await self.api_resource_repository.initialise()
         for client in self.settings.seed_clients:
             await self.client_repository.save(client)
         for resource in self.settings.seed_identity_resources:
             await self.identity_resource_repository.save(resource)
+        for api_resource in self.settings.seed_api_resources:
+            await self.api_resource_repository.save(api_resource)
         await self.user_repository.save_all(
             [
                 UserClaims(subject=subject, claims=claims)
@@ -288,6 +305,7 @@ class _Dependencies:
             await self.pushed_code_repository.close()
             await self.consent_repository.close()
             await self.identity_resource_repository.close()
+            await self.api_resource_repository.close()
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -304,12 +322,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(DynamicCORSMiddleware, client_repository=deps.client_repository)
     app.include_router(
         discovery_router(
-            DiscoveryUseCase(deps.config, identity_resources=deps.identity_resource_repository)
+            DiscoveryUseCase(
+                deps.config,
+                identity_resources=deps.identity_resource_repository,
+                api_resources=deps.api_resource_repository,
+            )
         )
     )
     app.include_router(
         identity_resources_router(IdentityResourceUseCase(deps.identity_resource_repository))
     )
+    app.include_router(api_resources_router(deps.api_resources_usecase))
     app.include_router(jwk_set_router(deps.jwks_usecase))
     app.include_router(login_router(deps.resolve_session_lifetime))
     app.include_router(auth_router)

@@ -43,12 +43,17 @@ class TokenManager(Protocol):
         algorithm: JWTAlgorithm,
         issuer: str,
         subject: str,
-        audience: str,
+        audience: str | list[str],
         expires_at: int,
         issued_at: int,
         scopes: frozenset[Scope],
     ) -> str:
-        """Crée un access_token signé JWS (JWT) pour le client ``audience``."""
+        """Crée un access_token signé JWS (JWT) pour ``audience``.
+
+        L'audience est le ``client_id`` émetteur, ou le(s) nom(s) des
+        ``ApiResource`` dont des scopes ont été accordés au jeton (RFC
+        7519 §4.1.3 : ``aud`` peut être une chaîne ou une liste).
+        """
         ...
 
     async def validate_access_token(
