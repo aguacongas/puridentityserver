@@ -20,8 +20,8 @@
 const SPA_CONFIG = {
   issuer: "http://127.0.0.1:8000",
   clientId: "sample-spa-client",
-  redirectUri: "http://127.0.0.1:5177/",
-  postLogoutRedirectUri: "http://127.0.0.1:5177/",
+  redirectUri: `${window.location.origin}/`,
+  postLogoutRedirectUri: `${window.location.origin}/`,
   scope: "openid profile email offline_access",
   // Client confidentiel de démo pour introspect / revoke / client_credentials
   // (déclaré dans config.toml — secret EN CLAIR : serveur de démonstration

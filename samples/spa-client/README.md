@@ -50,6 +50,12 @@ de login du serveur, utiliser un compte de démonstration :
 - `alice@example.com` / `password` — rôle `admin`
 - `bob@example.com` / `password` — rôle `user`
 
+> La page construit son `redirect_uri` à partir de l'origine réellement
+> ouverte (`window.location.origin`) : <http://127.0.0.1:5177> et
+> <http://localhost:5177> fonctionnent tous les deux, les deux URIs étant
+> déclarées dans `config.toml`. Pas de « redirect_uri mismatch » selon
+> l'adresse tapée dans le navigateur.
+
 ### API protégée
 
 Le bouton **API protégée** exerce la feature ApiResources : la page lance
