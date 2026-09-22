@@ -30,12 +30,18 @@ class KeyUse(str, Enum):
                  passe (emails), jamais publiée.
     ``verify`` : signature des jetons de vérification de compte
                  (emails), jamais publiée.
+    ``secret`` : chiffrement au repos des secrets clients HMAC
+                 (``client_secret_jwt``), jamais publiée. Mise en rotation
+                 automatiquement mais **jamais purgée** : un secret est
+                 chiffré à vie dans le registre, l'ancienne clé doit
+                 rester le temps du drain avant retrait manuel.
     """
 
     SIG = "sig"
     SESSION = "session"
     RESET = "reset"
     VERIFY = "verify"
+    SECRET = "secret"  # ruff: ignore[hardcoded-password-string] — valeur de persistance de l'enum, pas un vrai mot de passe
 
 
 class JWTAlgorithm(str, Enum):

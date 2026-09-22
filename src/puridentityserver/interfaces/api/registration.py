@@ -128,24 +128,31 @@ def _registration_json(result: ClientRegistration) -> str:
     data: dict[str, object] = {
         "client_id": result.client_id,
         "client_id_issued_at": result.client_id_issued_at,
+        "client_type": result.client_type.value,
         "token_endpoint_auth_method": result.token_endpoint_auth_method,
         "grant_types": result.grant_types,
         "response_types": result.response_types,
         "scope": result.scope,
         "redirect_uris": result.redirect_uris,
     }
-    if result.post_logout_redirect_uris:
-        data["post_logout_redirect_uris"] = result.post_logout_redirect_uris
-    if result.client_secret:
-        data["client_secret"] = result.client_secret
-    if result.registration_access_token:
-        data["registration_access_token"] = result.registration_access_token
-    if result.registration_client_uri:
-        data["registration_client_uri"] = result.registration_client_uri
-    if result.require_pushed_authorization_requests:
-        data["require_pushed_authorization_requests"] = True
-    if result.require_consent:
-        data["require_consent"] = True
+    jwks: object = json.loads(result.jwks) if result.jwks else ""
+    optional_fields: tuple[tuple[str, object], ...] = (
+        ("post_logout_redirect_uris", result.post_logout_redirect_uris),
+        ("web_origins", result.web_origins),
+        ("jwks_uri", result.jwks_uri),
+        ("jwks", jwks),
+        ("tls_client_auth_subject_dn", result.tls_client_auth_subject_dn),
+        ("tls_client_certificate_hash", result.tls_client_certificate_hash),
+        ("client_secret", result.client_secret),
+        ("registration_access_token", result.registration_access_token),
+        ("registration_client_uri", result.registration_client_uri),
+        (
+            "require_pushed_authorization_requests",
+            result.require_pushed_authorization_requests,
+        ),
+        ("require_consent", result.require_consent),
+    )
+    data.update({name: value for name, value in optional_fields if value})
     return json.dumps(data, separators=(",", ":"))
 
 

@@ -8,8 +8,9 @@ injecté, les resources par défaut s'appliquent.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from puridentityserver.domain.authorization import TokenEndpointAuthMethod
 from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCES
 from puridentityserver.domain.jwks import ALL_SIGNING_ALGORITHMS
 from puridentityserver.interfaces.repositories.readers import (
@@ -28,6 +29,16 @@ class DiscoveryConfig:
     par_enabled: bool = True
     signing_algorithms: tuple[str, ...] = tuple(
         algorithm.value for algorithm in ALL_SIGNING_ALGORITHMS
+    )
+    token_endpoint_auth_methods: tuple[str, ...] = field(
+        default_factory=lambda: tuple(method.value for method in TokenEndpointAuthMethod)
+    )
+    grant_types_supported: tuple[str, ...] = (
+        "authorization_code",
+        "refresh_token",
+        "client_credentials",
+        "urn:ietf:params:oauth:grant-type:device_code",
+        "urn:ietf:params:oauth:grant-type:jwt-bearer",
     )
 
 
@@ -60,6 +71,8 @@ class DiscoveryUseCase:
             "end_session_endpoint": f"{base}/end_session",
             "device_authorization_endpoint": f"{base}/device_authorization",
             "id_token_signing_alg_values_supported": list(self._config.signing_algorithms),
+            "token_endpoint_auth_methods_supported": list(self._config.token_endpoint_auth_methods),
+            "grant_types_supported": list(self._config.grant_types_supported),
             "scopes_supported": scopes_supported,
             "claims_supported": claims_supported,
         }

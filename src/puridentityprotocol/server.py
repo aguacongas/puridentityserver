@@ -40,6 +40,7 @@ from puridentityserver.application.revocation import RevocationConfig, Revocatio
 from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.application.token import TokenConfig, TokenUseCase
 from puridentityserver.application.userinfo import UserInfoConfig, UserInfoUseCase
+from puridentityserver.domain.authorization import TokenEndpointAuthMethod
 from puridentityserver.domain.jwks import JWTAlgorithm, KeyUse
 from puridentityserver.domain.userinfo import UserClaims
 from puridentityserver.identity.config import (
@@ -51,6 +52,7 @@ from puridentityserver.identity.config import (
 )
 from puridentityserver.infrastructure.bearer import build_bearer_verifier
 from puridentityserver.infrastructure.claims import UserStoreClaimsProvider
+from puridentityserver.infrastructure.client_assertions import PyJWTClientAssertionVerifier
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
 from puridentityserver.infrastructure.persistence.readers import build_readers_from_stores
 from puridentityserver.infrastructure.persistence.stores import (
@@ -61,6 +63,7 @@ from puridentityserver.infrastructure.persistence.stores import (
     initialise_protocol_stores,
     initialise_resources,
 )
+from puridentityserver.infrastructure.secrets import AsymmetricSecretCipher, load_seal_key_pair
 from puridentityserver.infrastructure.settings import Settings
 from puridentityserver.infrastructure.tokens import PyJWTTokenManager
 from puridentityserver.interfaces.api.authorize import authorize_router
@@ -129,6 +132,7 @@ class ProtocolDependencies:
         self.session_key_manager = DefaultKeyManager(stores.key_pair, use=KeyUse.SESSION)
         self.reset_key_manager = DefaultKeyManager(stores.key_pair, use=KeyUse.RESET)
         self.verify_key_manager = DefaultKeyManager(stores.key_pair, use=KeyUse.VERIFY)
+        self.secret_key_manager = DefaultKeyManager(stores.key_pair, use=KeyUse.SECRET)
         configure_identity(
             session_key_manager=self.session_key_manager,
             reset_token_key_manager=self.reset_key_manager,
@@ -143,6 +147,7 @@ class ProtocolDependencies:
             registration_enabled=settings.registration_enabled,
             par_enabled=settings.par_enabled,
             signing_algorithms=settings.jwks_algorithms,
+            token_endpoint_auth_methods=self._token_endpoint_auth_methods(),
         )
         self.jwks_usecase = JWKSetUseCase(
             JWKSetConfig(
@@ -154,6 +159,8 @@ class ProtocolDependencies:
             self.key_manager,
         )
         self.token_manager = PyJWTTokenManager(self.key_manager)
+        self.secret_cipher = AsymmetricSecretCipher(self.secret_key_manager)
+        self.client_assertions = PyJWTClientAssertionVerifier(self.secret_cipher)
         self.bearer_verifier = build_bearer_verifier(settings, self.token_manager)
         self.registration_authorizer = BearerClaimAuthorizer(
             self.bearer_verifier,
@@ -190,6 +197,7 @@ class ProtocolDependencies:
                 signing_algorithm=_primary_algorithm(settings),
                 access_token_ttl_seconds=settings.access_token_ttl_seconds,
                 refresh_token_ttl_seconds=settings.refresh_token_ttl_seconds,
+                token_endpoint=f"{settings.base_url or settings.issuer}".rstrip("/") + "/token",
             ),
             self.readers.client,
             stores.code,
@@ -197,6 +205,7 @@ class ProtocolDependencies:
             stores.refresh,
             stores.device,
             self.scope_registry,
+            self.client_assertions,
         )
         self.device_usecase = DeviceAuthorizationUseCase(
             DeviceConfig(
@@ -244,6 +253,7 @@ class ProtocolDependencies:
             stores.client,
             self.scope_registry,
             self.registration_authorizer,
+            self.secret_cipher,
         )
         self.par_usecase = PushedAuthorizationUseCase(
             PushedAuthorizationConfig(ttl_seconds=settings.par_ttl_seconds),
@@ -252,6 +262,15 @@ class ProtocolDependencies:
             self.scope_registry,
         )
         self.consent_usecase = ConsentUseCase(stores.consent)
+
+    @staticmethod
+    def _token_endpoint_auth_methods() -> tuple[str, ...]:
+        """Méthodes d'auth du token endpoint publiées au discovery.
+
+        La clé de scellement des secrets HMAC (``KeyUse.SECRET``) étant
+        générée automatiquement, ``client_secret_jwt`` est toujours annoncé.
+        """
+        return tuple(method.value for method in TokenEndpointAuthMethod)
 
     async def resolve_session_lifetime(self, client_id: str) -> int | None:
         """Retourne la durée de session cookie configurée pour le client, si présente."""
@@ -291,6 +310,23 @@ class ProtocolDependencies:
             self.verify_key_manager,
         ):
             await manager.ensure_active_key(2048, JWTAlgorithm.RS256)
+        await self._initialise_seal_key()
+
+    async def _initialise_seal_key(self) -> None:
+        """Prépare la clé de scellement des secrets HMAC (``KeyUse.SECRET``).
+
+        Un seed PEM configuré est enregistré si aucune clé de scellement
+        n'existe encore (déterminisme des serveurs en mémoire) puis la
+        clé active est générée / tourne suivant ``jwks_rotation_days``.
+        """
+        if self.settings.client_secret_seal_key_pem:
+            existing = await self.secret_key_manager.get_active_keys()
+            if not existing:
+                seed = load_seal_key_pair(self.settings.client_secret_seal_key_pem)
+                await self.stores.key_pair.save(seed)
+        await self.secret_cipher.rotate_if_stale(
+            self.settings.jwks_key_size, self.settings.jwks_rotation_days
+        )
 
     def mount(self, app: FastAPI) -> None:
         """Monte les endpoints de protocole OIDC/OAuth sur ``app``."""

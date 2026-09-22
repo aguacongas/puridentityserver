@@ -1,10 +1,12 @@
-"""Routes FastAPI de l'endpoint de jetons (RFC 6749 §4.1.3, §6)."""
+"""Routes FastAPI de l'endpoint de jetons (RFC 6749 §4.1.3, §6, §4.4, RFC 7523, RFC 8628)."""
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 
-from fastapi import APIRouter, Form, Response
+from fastapi import APIRouter, Form, Request, Response
 
 from puridentityserver.application.token import (
     TokenError,
@@ -12,6 +14,7 @@ from puridentityserver.application.token import (
     TokenResponse,
     TokenUseCase,
 )
+from puridentityserver.infrastructure.client_tls import extract_client_certificate
 
 
 def token_router(usecase: TokenUseCase) -> APIRouter:
@@ -20,6 +23,7 @@ def token_router(usecase: TokenUseCase) -> APIRouter:
 
     @router.post("/token", summary="Endpoint de jetons OAuth 2.0")
     async def token(
+        request: Request,
         grant_type: str = Form(...),
         code: str = Form(default=""),
         redirect_uri: str = Form(default=""),
@@ -29,8 +33,16 @@ def token_router(usecase: TokenUseCase) -> APIRouter:
         refresh_token: str = Form(default=""),
         scope: str = Form(default=""),
         device_code: str = Form(default=""),
+        client_assertion_type: str = Form(default=""),
+        client_assertion: str = Form(default=""),
+        assertion: str = Form(default=""),
     ) -> Response:
-        request = TokenRequest(
+        header_id, header_secret = _parse_basic_auth(request)
+        if not client_id:
+            client_id = header_id
+        if not client_secret:
+            client_secret = header_secret
+        token_request = TokenRequest(
             grant_type=grant_type,
             code=code,
             redirect_uri=redirect_uri,
@@ -40,13 +52,32 @@ def token_router(usecase: TokenUseCase) -> APIRouter:
             refresh_token=refresh_token,
             scope=scope,
             device_code=device_code,
+            client_assertion_type=client_assertion_type,
+            client_assertion=client_assertion,
+            assertion=assertion,
+            tls_certificate=extract_client_certificate(request),
         )
-        result = await usecase.execute(request)
+        result = await usecase.execute(token_request)
         if isinstance(result, TokenError):
             return _error_response(result)
         return _success_response(result)
 
     return router
+
+
+def _parse_basic_auth(request: Request) -> tuple[str, str]:
+    """Identifiants client depuis l'en-tête ``Authorization: Basic`` (RFC 7617)."""
+    authorization = request.headers.get("Authorization", "")
+    if not authorization.lower().startswith("basic "):
+        return "", ""
+    try:
+        decoded = base64.b64decode(authorization.split(None, 1)[1], validate=True).decode("utf-8")
+    except (ValueError, binascii.Error, UnicodeDecodeError):
+        return "", ""
+    username, separator, password = decoded.partition(":")
+    if not separator:
+        return "", ""
+    return username, password
 
 
 def _success_response(result: TokenResponse) -> Response:
