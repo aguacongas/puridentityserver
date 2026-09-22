@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
 
+from puridentityserver.application.id_token_encryption import encrypt_id_token_for_client
 from puridentityserver.application.id_token_material import resolve_id_token_material
 from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.domain.authorization import (
@@ -40,7 +41,11 @@ from puridentityserver.domain.authorization import (
 )
 from puridentityserver.domain.jwks import JWTAlgorithm
 from puridentityserver.interfaces.domain.secrets import SecretCipher
-from puridentityserver.interfaces.domain.tokens import TokenManager
+from puridentityserver.interfaces.domain.tokens import (
+    IdTokenEncrypter,
+    JWEUnavailableError,
+    TokenManager,
+)
 from puridentityserver.interfaces.repositories.authorization_code_repository import (
     AuthorizationCodeRepository,
 )
@@ -68,6 +73,7 @@ class AuthorizeConfig:
     signing_algorithm: JWTAlgorithm = JWTAlgorithm.RS256
     issuer: str = ""
     secret_cipher: SecretCipher | None = None
+    id_token_encrypter: IdTokenEncrypter | None = None
 
 
 @dataclass(slots=True)
@@ -380,6 +386,19 @@ class AuthorizeUseCase:
                 c_hash=(_hash_artefact(code, id_token_algorithm) if code else ""),
                 shared_secret=shared_secret,
             )
+            try:
+                id_token = await encrypt_id_token_for_client(
+                    id_token=id_token,
+                    client=client,
+                    secret_cipher=self._config.secret_cipher,
+                    encrypter=self._config.id_token_encrypter,
+                )
+            except JWEUnavailableError:
+                return _authorize_error(
+                    "invalid_client",
+                    request,
+                    description="Matériel de chiffrement d'id_token indisponible",
+                )
         return id_token, access_token, token_ttl
 
     async def _resolve_audience(self, client: Client, scopes: frozenset[Scope]) -> str | list[str]:

@@ -88,6 +88,19 @@ jwks_algorithms = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256"
 jwks_rotation_days = 90
 jwks_grace_period_days = 7
 
+# Chiffrement JWE des id_token (OIDC Core 1.0 §3.1.3.6) : algorithmes de
+# gestion de clé (`alg`) et méthodes de chiffrement du contenu (`enc`)
+# annoncés au discovery (`id_token_encryption_alg_values_supported` /
+# `id_token_encryption_enc_values_supported`). Un client choisit par
+# `id_token_encrypted_response_alg` / `id_token_encrypted_response_enc`
+# (cf. `clients_seed` et /register) ; une méthode `enc` absente retombe
+# sur `A128CBC-HS256`. Surchargeables via
+# `PURIDENTITYSERVER_JWKS_ENCRYPTION_ALGORITHMS` /
+# `PURIDENTITYSERVER_JWKS_ENCRYPTION_METHODS` (listes séparées par des
+# virgules).
+jwks_encryption_algorithms = ["RSA-OAEP", "RSA-OAEP-256", "A128KW", "A256KW", "dir"]
+jwks_encryption_methods = ["A128CBC-HS256", "A192CBC-HS384", "A256CBC-HS512", "A128GCM", "A192GCM", "A256GCM"]
+
 # OAuth 2.0 / OIDC : durées de vie par défaut du serveur, appliquées quand le
 # client ne précise pas les siennes (`access_token_lifetime_seconds` /
 # `authorization_code_lifetime_seconds` / `refresh_token_lifetime_seconds`

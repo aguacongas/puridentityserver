@@ -62,6 +62,12 @@ from puridentityserver.domain.authorization import (
     origin_of_uri,
 )
 from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCES
+from puridentityserver.domain.jwe import (
+    ALL_ENCRYPTION_ALGORITHMS,
+    ALL_ENCRYPTION_METHODS,
+    ASYMMETRIC_ENCRYPTION_ALGORITHMS,
+    SYMMETRIC_ENCRYPTION_ALGORITHMS,
+)
 from puridentityserver.domain.jwks import SYMMETRIC_ALGORITHMS, JWTAlgorithm
 from puridentityserver.interfaces.domain.secrets import SecretCipher
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
@@ -83,6 +89,14 @@ _AUTH_METHOD_DEFAULT = "client_secret_basic"
 _TLS_KEY_AUTH_METHODS = frozenset({"tls_client_auth", "self_signed_tls_client_auth"})
 _KEYLESS_AUTH_METHODS = frozenset({"none", "private_key_jwt"}) | _TLS_KEY_AUTH_METHODS
 _SYMMETRIC_SIGNING_VALUES = frozenset(algorithm.value for algorithm in SYMMETRIC_ALGORITHMS)
+_ASYMMETRIC_ENCRYPTION_VALUES = frozenset(
+    algorithm.value for algorithm in ASYMMETRIC_ENCRYPTION_ALGORITHMS
+)
+_SYMMETRIC_ENCRYPTION_VALUES = frozenset(
+    algorithm.value for algorithm in SYMMETRIC_ENCRYPTION_ALGORITHMS
+)
+_ALGORITHM_ENCRYPTION_VALUES = frozenset(algorithm.value for algorithm in ALL_ENCRYPTION_ALGORITHMS)
+_METHOD_ENCRYPTION_VALUES = frozenset(method.value for method in ALL_ENCRYPTION_METHODS)
 _MIN_SECRET_LENGTH = 8
 _STANDARD_SCOPES = frozenset(resource.name for resource in DEFAULT_IDENTITY_RESOURCES)
 
@@ -116,6 +130,8 @@ class RegistrationMetadata:
     par_required: bool = False
     require_consent: bool = False
     id_token_signed_response_alg: str = ""
+    id_token_encrypted_response_alg: str = ""
+    id_token_encrypted_response_enc: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +198,8 @@ class ClientRegistration:
     require_pushed_authorization_requests: bool = False
     require_consent: bool = False
     id_token_signed_response_alg: str = ""
+    id_token_encrypted_response_alg: str = ""
+    id_token_encrypted_response_enc: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,6 +267,9 @@ class RegistrationUseCase:
         signing_error = self._validate_signing_material(metadata)
         if signing_error is not None:
             return signing_error
+        encryption_error = self._validate_encryption_material(metadata)
+        if encryption_error is not None:
+            return encryption_error
 
         client_id = token_urlsafe(24)
         secret_hash, secret_ciphertext, client_secret = await self._credentials_for(metadata)
@@ -271,6 +292,8 @@ class RegistrationUseCase:
             par_required=metadata.par_required,
             require_consent=metadata.require_consent,
             id_token_signed_response_alg=metadata.id_token_signed_response_alg,
+            id_token_encrypted_response_alg=metadata.id_token_encrypted_response_alg,
+            id_token_encrypted_response_enc=metadata.id_token_encrypted_response_enc,
         )
         await self._clients.save(client)
         return self._response(
@@ -312,9 +335,15 @@ class RegistrationUseCase:
         signing_error = self._validate_signing_material(metadata)
         if signing_error is not None:
             return signing_error
+        encryption_error = self._validate_encryption_material(metadata)
+        if encryption_error is not None:
+            return encryption_error
         rotation_error = self._validate_signing_rotation(client, metadata)
         if rotation_error is not None:
             return rotation_error
+        encryption_rotation = self._validate_encryption_rotation(client, metadata)
+        if encryption_rotation is not None:
+            return encryption_rotation
 
         rotation = await self._updated_credentials(client, metadata)
         if isinstance(rotation, RegistrationError):
@@ -345,6 +374,8 @@ class RegistrationUseCase:
             par_required=metadata.par_required,
             require_consent=metadata.require_consent,
             id_token_signed_response_alg=metadata.id_token_signed_response_alg,
+            id_token_encrypted_response_alg=metadata.id_token_encrypted_response_alg,
+            id_token_encrypted_response_enc=metadata.id_token_encrypted_response_enc,
         )
         await self._clients.save(updated)
         return self._response(updated, client_secret=rotation.issued_secret)
@@ -443,12 +474,89 @@ class RegistrationUseCase:
                 )
         return None
 
+    def _validate_encryption_material(
+        self, metadata: RegistrationMetadata
+    ) -> RegistrationError | None:
+        """Vérifie que le chiffrement JWE d'``id_token`` demandé est réalisable (§3.1.3.6)."""
+        algorithm = metadata.id_token_encrypted_response_alg
+        method = metadata.id_token_encrypted_response_enc
+        if not algorithm and not method:
+            return None
+        if not algorithm:
+            return RegistrationError(
+                "invalid_client_metadata",
+                "id_token_encrypted_response_enc exige id_token_encrypted_response_alg",
+            )
+        if method and method not in _METHOD_ENCRYPTION_VALUES:
+            return RegistrationError(
+                "invalid_client_metadata",
+                "id_token_encrypted_response_enc non supporté (attendu une méthode JWE)",
+            )
+        if algorithm in _ASYMMETRIC_ENCRYPTION_VALUES:
+            if not self._has_rsa_jwks(metadata.jwks):
+                return RegistrationError(
+                    "invalid_client_metadata",
+                    "Un chiffrement d'id_token RSA-OAEP exige une clé publique RSA dans jwks",
+                )
+            return None
+        if algorithm not in _ALGORITHM_ENCRYPTION_VALUES:
+            return RegistrationError(
+                "invalid_client_metadata",
+                "id_token_encrypted_response_alg non supporté (attendu un algorithme JWE)",
+            )
+        if metadata.token_endpoint_auth_method in _KEYLESS_AUTH_METHODS:
+            return RegistrationError(
+                "invalid_client_metadata",
+                "Un algorithme symétrique chiffre l'id_token avec le secret partagé : "
+                "la méthode d'authentification doit produire un secret client",
+            )
+        if self._secret_cipher is None:
+            return RegistrationError(
+                "invalid_client_metadata",
+                "Un algorithme symétrique exige un chiffreur de secrets disponible "
+                "(clé de scellement KeyUse.SECRET)",
+            )
+        return None
+
+    def _validate_encryption_rotation(
+        self, client: Client, metadata: RegistrationMetadata
+    ) -> RegistrationError | None:
+        """Vérifie qu'un passage vers un chiffrement symétrique est réalisable (§3.1.3.6)."""
+        if metadata.id_token_encrypted_response_alg not in _SYMMETRIC_ENCRYPTION_VALUES:
+            return None
+        method = metadata.token_endpoint_auth_method
+        if method in ("client_secret_basic", "client_secret_post"):
+            if not client.client_secret_ciphertext and metadata.requested_secret is None:
+                return RegistrationError(
+                    "invalid_client_metadata",
+                    "Passage vers un chiffrement symétrique : le secret du client "
+                    "n'étant pas conservé, fournir un nouveau client_secret",
+                )
+            if metadata.requested_secret is not None and (
+                hash_secret(metadata.requested_secret) == client.client_secret_hash
+                and not client.client_secret_ciphertext
+            ):
+                return RegistrationError(
+                    "invalid_client_metadata",
+                    "Passage vers un chiffrement symétrique : fournir un nouveau "
+                    "client_secret (le secret actuel n'est pas récupérable)",
+                )
+        return None
+
+    @staticmethod
+    def _has_rsa_jwks(jwks: str) -> bool:
+        """Vrai si le JWKS enregistré porte au moins une clé publique RSA."""
+        if not jwks:
+            return False
+        return any(str(key.get("kty", "")).upper() == "RSA" for key in _keys_from_jwks_json(jwks))
+
     async def _credentials_for(self, metadata: RegistrationMetadata) -> tuple[str, str, str]:
         """Génère et prépare le secret client (empreinte, chiffrement, valeur émise)."""
         method = metadata.token_endpoint_auth_method
         needs_seal = (
             method == "client_secret_jwt"
             or metadata.id_token_signed_response_alg in _SYMMETRIC_SIGNING_VALUES
+            or metadata.id_token_encrypted_response_alg in _SYMMETRIC_ENCRYPTION_VALUES
         )
         if needs_seal:
             secret = token_urlsafe(48)
@@ -470,7 +578,10 @@ class RegistrationUseCase:
             return _SecretRotation("", "")
         if method == "client_secret_jwt":
             return await self._rotate_jwt_secret(client, metadata)
-        needs_seal = metadata.id_token_signed_response_alg in _SYMMETRIC_SIGNING_VALUES
+        needs_seal = (
+            metadata.id_token_signed_response_alg in _SYMMETRIC_SIGNING_VALUES
+            or metadata.id_token_encrypted_response_alg in _SYMMETRIC_ENCRYPTION_VALUES
+        )
         if metadata.requested_secret is not None:
             requested_hash = hash_secret(metadata.requested_secret)
             if requested_hash == client.client_secret_hash and client.client_secret_ciphertext:
@@ -587,6 +698,8 @@ class RegistrationUseCase:
             require_pushed_authorization_requests=client.par_required,
             require_consent=client.require_consent,
             id_token_signed_response_alg=client.id_token_signed_response_alg,
+            id_token_encrypted_response_alg=client.id_token_encrypted_response_alg,
+            id_token_encrypted_response_enc=client.id_token_encrypted_response_enc,
         )
 
     def _base_url(self) -> str:
@@ -625,6 +738,8 @@ def _parse_metadata(
         tls_subject_dn,
         tls_certificate_hash,
         id_token_signing_alg,
+        id_token_encryption_alg,
+        id_token_encryption_enc,
     ) = extras
 
     client_type = ClientType.PUBLIC if auth_method == "none" else ClientType.CONFIDENTIAL
@@ -643,6 +758,8 @@ def _parse_metadata(
         par_required=par_required,
         require_consent=require_consent,
         id_token_signed_response_alg=id_token_signing_alg,
+        id_token_encrypted_response_alg=id_token_encryption_alg,
+        id_token_encrypted_response_enc=id_token_encryption_enc,
     )
 
 
@@ -652,7 +769,20 @@ _MetadataParser = Callable[[dict[str, object], frozenset[str]], object]
 def _parse_metadata_extras(
     raw: dict[str, object], known_scopes: frozenset[str]
 ) -> (
-    tuple[frozenset[Scope], str, str | None, bool, bool, str, str, str, str, str]
+    tuple[
+        frozenset[Scope],
+        str,
+        str | None,
+        bool,
+        bool,
+        str,
+        str,
+        str,
+        str,
+        str,
+        str,
+        str,
+    ]
     | RegistrationError
 ):
     """Valide scopes, méthode d'authentification, matériel de clé et exigences (RFC 7591 §2).
@@ -686,6 +816,8 @@ def _parse_metadata_extras(
         ("tls_subject_dn", lambda raw, _known: _parse_tls_subject_dn(raw)),
         ("tls_certificate_hash", lambda raw, _known: _parse_tls_certificate(raw)),
         ("id_token_signing_alg", lambda raw, _known: _parse_id_token_signing_alg(raw)),
+        ("id_token_encryption_alg", lambda raw, _known: _parse_id_token_encryption_alg(raw)),
+        ("id_token_encryption_enc", lambda raw, _known: _parse_id_token_encryption_enc(raw)),
     )
     results: dict[str, object] = {}
     for name, parser in parsers:
@@ -698,7 +830,7 @@ def _parse_metadata_extras(
 
 def _assemble_extras(
     results: dict[str, object],
-) -> tuple[frozenset[Scope], str, str | None, bool, bool, str, str, str, str, str]:
+) -> tuple[frozenset[Scope], str, str | None, bool, bool, str, str, str, str, str, str, str]:
     """Recompose le tuple de métadonnées extraites (types garantis par les parseurs)."""
     return (
         cast(frozenset[Scope], results["scopes"]),
@@ -711,6 +843,8 @@ def _assemble_extras(
         cast(str, results["tls_subject_dn"]),
         cast(str, results["tls_certificate_hash"]),
         cast(str, results["id_token_signing_alg"]),
+        cast(str, results["id_token_encryption_alg"]),
+        cast(str, results["id_token_encryption_enc"]),
     )
 
 
@@ -817,6 +951,41 @@ def _parse_id_token_signing_alg(raw: dict[str, object]) -> str | RegistrationErr
         return RegistrationError(
             "invalid_client_metadata",
             "id_token_signed_response_alg non supporté (attendu un algorithme JWS)",
+        )
+    return value
+
+
+def _parse_id_token_encryption_alg(raw: dict[str, object]) -> str | RegistrationError:
+    """Lit ``id_token_encrypted_response_alg`` (OIDC Core §3.1.3.6, RFC 7591 §2.1).
+
+    Vide par défaut (id_token non chiffré) ; toute autre valeur doit être un
+    algorithme de gestion de clé JWE supporté (RSA-OAEP*, A*KW, ``dir``).
+    """
+    value = raw.get("id_token_encrypted_response_alg")
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str) or value not in _ALGORITHM_ENCRYPTION_VALUES:
+        return RegistrationError(
+            "invalid_client_metadata",
+            "id_token_encrypted_response_alg non supporté (attendu un algorithme JWE)",
+        )
+    return value
+
+
+def _parse_id_token_encryption_enc(raw: dict[str, object]) -> str | RegistrationError:
+    """Lit ``id_token_encrypted_response_enc`` (OIDC Core §3.1.3.6, RFC 7591 §2.1).
+
+    Vide par défaut (le serveur applique sa méthode par défaut, ex.
+    ``A128CBC-HS256``) ; toute autre valeur doit être une méthode JWE
+    supportée (``A*CBC-HS*``, ``A*GCM``).
+    """
+    value = raw.get("id_token_encrypted_response_enc")
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str) or value not in _METHOD_ENCRYPTION_VALUES:
+        return RegistrationError(
+            "invalid_client_metadata",
+            "id_token_encrypted_response_enc non supporté (attendu une méthode JWE)",
         )
     return value
 

@@ -53,6 +53,7 @@ from puridentityserver.identity.config import (
 from puridentityserver.infrastructure.bearer import build_bearer_verifier
 from puridentityserver.infrastructure.claims import UserStoreClaimsProvider
 from puridentityserver.infrastructure.client_assertions import PyJWTClientAssertionVerifier
+from puridentityserver.infrastructure.jwe import JWEIdTokenEncrypter
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
 from puridentityserver.infrastructure.persistence.readers import build_readers_from_stores
 from puridentityserver.infrastructure.persistence.stores import (
@@ -154,6 +155,8 @@ class ProtocolDependencies:
             registration_enabled=settings.registration_enabled,
             par_enabled=settings.par_enabled,
             signing_algorithms=settings.jwks_algorithms,
+            encryption_algorithms=settings.jwks_encryption_algorithms,
+            encryption_methods=settings.jwks_encryption_methods,
             token_endpoint_auth_methods=self._token_endpoint_auth_methods(),
         )
         self.jwks_usecase = JWKSetUseCase(
@@ -167,6 +170,7 @@ class ProtocolDependencies:
         )
         self.token_manager = PyJWTTokenManager(self.key_manager)
         self.secret_cipher = AsymmetricSecretCipher(self.secret_key_manager)
+        self.id_token_encrypter = JWEIdTokenEncrypter()
         self.client_assertions = PyJWTClientAssertionVerifier(self.secret_cipher)
         self.bearer_verifier = build_bearer_verifier(settings, self.token_manager)
         self.registration_authorizer = BearerClaimAuthorizer(
@@ -193,6 +197,7 @@ class ProtocolDependencies:
                 signing_algorithm=_primary_algorithm(settings),
                 issuer=settings.issuer,
                 secret_cipher=self.secret_cipher,
+                id_token_encrypter=self.id_token_encrypter,
             ),
             self.readers.client,
             stores.code,
@@ -207,6 +212,7 @@ class ProtocolDependencies:
                 refresh_token_ttl_seconds=settings.refresh_token_ttl_seconds,
                 token_endpoint=f"{settings.base_url or settings.issuer}".rstrip("/") + "/token",
                 secret_cipher=self.secret_cipher,
+                id_token_encrypter=self.id_token_encrypter,
             ),
             self.readers.client,
             stores.code,

@@ -159,6 +159,11 @@ class Client:
     retombe sur l'algorithme de signature principal du serveur, une valeur
     symétrique HS* signe avec le secret partagé du client (conservé
     chiffré, cf. ``client_secret_ciphertext``).
+    ``id_token_encrypted_response_alg`` / ``..._enc`` (OIDC Core 1.0
+    §3.1.3.6) imposent un chiffrement JWE de l'``id_token`` : vide = le
+    jeton JWS est émis tel quel ; sinon le JWS imbriqué est chiffré avec
+    ``client_secret_ciphertext`` (familles symétriques) ou la clé publique
+    RSA du ``jwks`` (RSA-OAEP).
     """
 
     client_id: str
@@ -186,6 +191,8 @@ class Client:
     tls_client_auth_subject_dn: str = ""
     tls_client_certificate_hash: str = ""
     id_token_signed_response_alg: str = ""
+    id_token_encrypted_response_alg: str = ""
+    id_token_encrypted_response_enc: str = ""
 
     @property
     def effective_auth_method(self) -> TokenEndpointAuthMethod:

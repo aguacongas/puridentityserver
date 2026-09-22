@@ -44,6 +44,7 @@ from puridentityserver.application.client_auth import (
     CLIENT_UNKNOWN_ERROR,
     verify_client_secret,
 )
+from puridentityserver.application.id_token_encryption import encrypt_id_token_for_client
 from puridentityserver.application.id_token_material import resolve_id_token_material
 from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.domain.authorization import (
@@ -66,7 +67,11 @@ from puridentityserver.interfaces.domain.client_assertions import (
     ClientAssertionVerifier,
 )
 from puridentityserver.interfaces.domain.secrets import SecretCipher
-from puridentityserver.interfaces.domain.tokens import TokenManager
+from puridentityserver.interfaces.domain.tokens import (
+    IdTokenEncrypter,
+    JWEUnavailableError,
+    TokenManager,
+)
 from puridentityserver.interfaces.repositories.authorization_code_repository import (
     AuthorizationCodeRepository,
 )
@@ -89,6 +94,7 @@ class TokenConfig:
     refresh_token_ttl_seconds: int = 2592000
     token_endpoint: str = ""
     secret_cipher: SecretCipher | None = None
+    id_token_encrypter: IdTokenEncrypter | None = None
 
 
 @dataclass(slots=True)
@@ -518,6 +524,15 @@ class TokenUseCase:
             scopes=scopes,
             shared_secret=shared_secret,
         )
+        try:
+            id_token = await encrypt_id_token_for_client(
+                id_token=id_token,
+                client=client,
+                secret_cipher=self._config.secret_cipher,
+                encrypter=self._config.id_token_encrypter,
+            )
+        except JWEUnavailableError:
+            return self._error("invalid_client", "Matériel de chiffrement d'id_token indisponible")
         audience = await self._resolve_audience(client, scopes)
         access_token = await self._token_manager.create_access_token(
             algorithm=self._config.signing_algorithm,

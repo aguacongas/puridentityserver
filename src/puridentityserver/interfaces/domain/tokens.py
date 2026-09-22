@@ -1,11 +1,27 @@
-"""Port d'émission et de validation des jetons OIDC (id_token, access_token)."""
+"""Ports d'émission, de validation et de chiffrement des jetons OIDC.
+
+Couvre l'id_token (signature JWS et chiffrement JWE) et l'access_token ;
+les implémentations concrètes vivent dans l'infrastructure (PyJWT /
+``cryptography``).
+"""
 
 from __future__ import annotations
 
 from typing import Protocol
 
-from puridentityserver.domain.authorization import Scope
+from puridentityserver.domain.authorization import Client, Scope
 from puridentityserver.domain.jwks import JWTAlgorithm
+
+
+class JWEUnavailableError(Exception):
+    """Matériel de chiffrement d'``id_token`` indisponible.
+
+    Levée quand un id_token demandé chiffré (``id_token_encrypted_response_alg``
+    configuré) ne peut pas l'être : chiffreur absent de la composition,
+    secret partagé non récupérable, ou clé publique RSA manquante dans le
+    ``jwks`` du client. Les cas d'utilisation la traduisent en erreur
+    ``invalid_client`` (OIDC Core 1.0 §3.1.3.6).
+    """
 
 
 class TokenManager(Protocol):
@@ -83,5 +99,31 @@ class TokenManager(Protocol):
         Sert notamment à évaluer l'``id_token_hint`` du RP-Initiated Logout
         (OIDC Core 1.0 §5) : le claim ``aud`` n'est pas vérifié ici, sa
         résolution vers un client est laissée au cas d'utilisation appelant.
+        """
+        ...
+
+
+class IdTokenEncrypter(Protocol):
+    """Interface de chiffrement d'un ``id_token`` (JWE compact, RFC 7516).
+
+    L'infrastructure fournit l'implémentation concrète (``cryptography``),
+    documentée par le wrapper RFC 7516 — conformément à la contrainte du
+    dépôt (la crypto ne passe jamais par une implémentation maison). Le
+    port isole les usecases de la bibliothèque de chiffrement.
+    """
+
+    async def encrypt_id_token(
+        self,
+        *,
+        id_token: str,
+        client: Client,
+        shared_secret: str = "",
+    ) -> str:
+        """Chiffre l'``id_token`` JWS en JWE compact pour le client.
+
+        ``shared_secret`` porte le secret partagé du client pour les
+        familles symétriques (A*KW / ``dir``) ; les algorithmes RSA-OAEP
+        utilisent la clé publique RSA du ``jwks`` du client. L'``id_token``
+        chiffré imbriqué porte ``cty: JWT`` (OIDC Core 1.0 §3.1.3.6).
         """
         ...
