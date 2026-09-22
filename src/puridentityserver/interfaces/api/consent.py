@@ -34,7 +34,7 @@ from puridentityserver.application.authorize import (
 from puridentityserver.application.consent import ConsentUseCase
 from puridentityserver.domain.authorization import ResponseMode, Scope
 from puridentityserver.identity.config import CurrentUserOptional
-from puridentityserver.interfaces.repositories.client_repository import ClientRepository
+from puridentityserver.interfaces.repositories.readers import ClientReader
 
 _SCOPE_LABELS = {
     Scope.OPENID: "S'identifier (OpenID)",
@@ -107,7 +107,7 @@ def consent_url(request: AuthorizeRequest) -> str:
 def consent_router(
     consent_usecase: ConsentUseCase,
     authorize_usecase: AuthorizeUseCase,
-    client_repository: ClientRepository,
+    client_repository: ClientReader,
 ) -> APIRouter:
     """Construit le routeur FastAPI exposant la page de consentement ``/consent``."""
     router = APIRouter(tags=["consent"])
@@ -219,7 +219,7 @@ def consent_router(
 async def _handle_consent(
     consent_usecase: ConsentUseCase,
     authorize_usecase: AuthorizeUseCase,
-    client_repository: ClientRepository,
+    client_repository: ClientReader,
     request: AuthorizeRequest,
     subject: str,
 ) -> RedirectResponse | str:

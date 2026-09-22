@@ -9,7 +9,7 @@ depuis les profils déclarés dans la configuration
 from __future__ import annotations
 
 from puridentityserver.domain.userinfo import UserClaims
-from puridentityserver.interfaces.repositories.user_repository import UserRepository
+from puridentityserver.interfaces.repositories.readers import UserReader
 
 
 class UserStoreClaimsProvider:
@@ -19,7 +19,7 @@ class UserStoreClaimsProvider:
     renvoyé ensuite par le use case).
     """
 
-    def __init__(self, user_repository: UserRepository) -> None:
+    def __init__(self, user_repository: UserReader) -> None:
         """Injection du user store (port ``UserRepository``)."""
         self._user_repository = user_repository
 

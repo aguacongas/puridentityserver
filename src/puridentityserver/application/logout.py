@@ -22,7 +22,7 @@ from dataclasses import dataclass
 
 from puridentityserver.domain.authorization import Client
 from puridentityserver.interfaces.domain.tokens import TokenManager
-from puridentityserver.interfaces.repositories.client_repository import ClientRepository
+from puridentityserver.interfaces.repositories.readers import ClientReader
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +74,7 @@ class LogoutUseCase:
     def __init__(
         self,
         config: LogoutConfig,
-        client_repository: ClientRepository,
+        client_repository: ClientReader,
         token_manager: TokenManager,
     ) -> None:
         """Injection de la configuration et des dépendances du périmètre."""

@@ -469,6 +469,7 @@ class TestIdentityResourceEndpoint:
                 jwks_algorithms=("RS256",),
                 identity_resources_seed=(*resources,),
                 api_resources_seed=(),
+                admin_required_claim_values=(),
             )
         )
 

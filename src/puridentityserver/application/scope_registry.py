@@ -11,11 +11,9 @@ du client émetteur, audience historique des tokens du serveur).
 from __future__ import annotations
 
 from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCES
-from puridentityserver.interfaces.repositories.api_resource_repository import (
-    ApiResourceRepository,
-)
-from puridentityserver.interfaces.repositories.identity_resource_repository import (
-    IdentityResourceRepository,
+from puridentityserver.interfaces.repositories.readers import (
+    ApiResourceReader,
+    IdentityResourceReader,
 )
 
 
@@ -24,8 +22,8 @@ class ScopeRegistry:
 
     def __init__(
         self,
-        identity_resources: IdentityResourceRepository | None = None,
-        api_resources: ApiResourceRepository | None = None,
+        identity_resources: IdentityResourceReader | None = None,
+        api_resources: ApiResourceReader | None = None,
     ) -> None:
         """Injection des registres de resources (identité et API)."""
         self._identity_resources = identity_resources

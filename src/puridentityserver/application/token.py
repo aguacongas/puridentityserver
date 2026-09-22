@@ -49,10 +49,10 @@ from puridentityserver.interfaces.domain.tokens import TokenManager
 from puridentityserver.interfaces.repositories.authorization_code_repository import (
     AuthorizationCodeRepository,
 )
-from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 from puridentityserver.interfaces.repositories.device_authorization_repository import (
     DeviceAuthorizationRepository,
 )
+from puridentityserver.interfaces.repositories.readers import ClientReader
 from puridentityserver.interfaces.repositories.refresh_token_repository import (
     RefreshTokenRepository,
 )
@@ -115,7 +115,7 @@ class TokenUseCase:
     def __init__(
         self,
         config: TokenConfig,
-        client_repository: ClientRepository,
+        client_repository: ClientReader,
         code_repository: AuthorizationCodeRepository,
         token_manager: TokenManager,
         refresh_tokens: RefreshTokenRepository,

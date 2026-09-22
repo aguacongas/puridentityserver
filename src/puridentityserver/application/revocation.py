@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from puridentityserver.application.client_auth import authenticate_confidential_client
 from puridentityserver.domain.revocation import RevokedToken, token_hash
 from puridentityserver.interfaces.domain.tokens import TokenManager
-from puridentityserver.interfaces.repositories.client_repository import ClientRepository
+from puridentityserver.interfaces.repositories.readers import ClientReader
 from puridentityserver.interfaces.repositories.revoked_token_repository import (
     RevokedTokenRepository,
 )
@@ -67,7 +67,7 @@ class RevocationUseCase:
     def __init__(
         self,
         config: RevocationConfig,
-        client_repository: ClientRepository,
+        client_repository: ClientReader,
         token_manager: TokenManager,
         revoked_token_repository: RevokedTokenRepository,
     ) -> None:

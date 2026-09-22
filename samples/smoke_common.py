@@ -68,6 +68,14 @@ def _render_blocks(table: str, items: tuple[dict[str, object], ...]) -> str:
     return "\n\n".join(blocks)
 
 
+def _render_settings_value(value: object) -> str:
+    """Rend une valeur ``[settings]`` en TOML (liste JSON ou scalaire)."""
+    if isinstance(value, (list, tuple)):
+        rendered = ", ".join(json.dumps(entry) for entry in value)
+        return f"[{rendered}]"
+    return json.dumps(value)
+
+
 def render_server_config(
     *,
     port: int,
@@ -76,6 +84,7 @@ def render_server_config(
     api_resources: tuple[dict[str, object], ...] = (),
     registration_enabled: bool = False,
     registration_initial_access_tokens: tuple[str, ...] = (),
+    extra_settings: Mapping[str, object] | None = None,
 ) -> str:
     """Rend le TOML d'un serveur minimal déclarant ``clients`` (+``users``) sur ``port``.
 
@@ -85,6 +94,8 @@ def render_server_config(
     ``registration_enabled`` ajoute les réglages de Dynamic Client
     Registration (RFC 7591/7592) : endpoint ``/register`` activé et liste des
     initial access tokens autorisés (la création exige un Bearer token).
+    ``extra_settings`` ajoute des clés ``[settings]`` arbitraires (ex.
+    ``role``, ``admin_required_claim_values``, mode de registration).
     """
     head = (
         "[settings]\n"
@@ -100,6 +111,8 @@ def render_server_config(
         if registration_initial_access_tokens:
             rendered = ", ".join(json.dumps(t) for t in registration_initial_access_tokens)
             lines.append(f"registration_initial_access_tokens = [{rendered}]")
+    for key, value in (extra_settings or {}).items():
+        lines.append(f"{key} = {_render_settings_value(value)}")
     head += "\n".join(lines) + "\n\n"
     blocks = [
         _render_blocks("clients_seed", clients),
@@ -139,15 +152,16 @@ def run_server(
     api_resources: tuple[dict[str, object], ...] = (),
     registration_enabled: bool = False,
     registration_initial_access_tokens: tuple[str, ...] = (),
+    extra_settings: Mapping[str, object] | None = None,
 ) -> Iterator[str]:
     """Lance un serveur dédié pour la configuration spécifique de ce test.
 
     Génère la configuration (issuer = ``port``, clients seed ``clients``,
     comptes de connexion ``users``, ApiResources seed ``api_resources``,
     éventuellement la Dynamic Client Registration activée avec ses initial
-    access tokens) dans un fichier temporaire, démarre le serveur uvicorn
-    sur ``port`` puis fournit l'URL de base jusqu'à la sortie du bloc
-    (sous-processus terminé).
+    access tokens, plus ``extra_settings``) dans un fichier temporaire,
+    démarre le serveur uvicorn sur ``port`` puis fournit l'URL de base
+    jusqu'à la sortie du bloc (sous-processus terminé).
     """
     if port_in_use(port):
         raise SystemExit(f"Port {port} occupé : arrêtez le serveur qui écoute sur {port}.")
@@ -162,6 +176,7 @@ def run_server(
                 api_resources=api_resources,
                 registration_enabled=registration_enabled,
                 registration_initial_access_tokens=registration_initial_access_tokens,
+                extra_settings=extra_settings,
             ),
             encoding="utf-8",
         )

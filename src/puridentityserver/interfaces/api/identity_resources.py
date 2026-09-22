@@ -14,19 +14,31 @@ from typing import Annotated
 from fastapi import APIRouter, Path, Request
 from fastapi.responses import Response
 
+from puridentityserver.application.claim_authorizer import BearerClaimAuthorizer
 from puridentityserver.application.identity_resource import (
     IdentityResourceData,
     IdentityResourceError,
     IdentityResourceRequest,
     IdentityResourceUseCase,
 )
+from puridentityserver.interfaces.api.security import authorization_dependencies
 
 _JSON_MEDIA_TYPE = "application/json"
 
 
-def identity_resources_router(usecase: IdentityResourceUseCase) -> APIRouter:
-    """Construit le routeur FastAPI exposant la gestion des IdentityResources."""
-    router = APIRouter(tags=["identity-resources"])
+def identity_resources_router(
+    usecase: IdentityResourceUseCase,
+    *,
+    authorizer: BearerClaimAuthorizer | None = None,
+) -> APIRouter:
+    """Construit le routeur FastAPI exposant la gestion des IdentityResources.
+
+    Si ``authorizer`` est fourni, chaque route exige un JWT portant le claim
+    configuré (401 sinon).
+    """
+    router = APIRouter(
+        tags=["identity-resources"], dependencies=authorization_dependencies(authorizer)
+    )
 
     @router.get(
         "/identity-resources",

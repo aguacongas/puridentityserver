@@ -12,7 +12,7 @@ import hashlib
 import hmac
 
 from puridentityserver.domain.authorization import Client, ClientType
-from puridentityserver.interfaces.repositories.client_repository import ClientRepository
+from puridentityserver.interfaces.repositories.readers import ClientReader
 
 CLIENT_UNKNOWN_ERROR = "Client inconnu ou désactivé"
 
@@ -24,7 +24,7 @@ def verify_client_secret(client: Client, secret: str) -> bool:
 
 
 async def authenticate_confidential_client(
-    client_repository: ClientRepository,
+    client_repository: ClientReader,
     client_id: str,
     client_secret: str,
 ) -> bool:

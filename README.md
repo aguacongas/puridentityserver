@@ -170,6 +170,27 @@ tests/             pytest unit + intégration (TestClient httpx)
     RFC 7662 conserve une audience multiple sans l'attribuer comme
     `client_id`. Échantillon testable pas-à-pas :
     `samples/api-resources-client/` (test manuel complet + démo CLI).
+18. ✅ **Séparation administration / protocole + protection JWT** : le réglage
+    `role` (`full` par défaut, `protocol`, `admin`) choisit les endpoints montés
+    — `protocol` n'expose que le protocole OIDC/OAuth, `admin` n'expose que la
+    gestion des resources (CRUD `/identity-resources` et `/api-resources`,
+    sans génération de clés ni seed clients). Deux processus déployés
+    séparément partagent le même état via `storage_type = "sql"`. Les CRUD
+    d'administration sont **protégés par défaut** par un JWT Bearer validé
+    (signature JWKS, `iss`, `exp`, `aud` optionnelle) contre l'issuer de
+    gestion (`management_jwt_issuer` : local si vide, distant via
+    `management_jwt_jwks_url` sinon) et portant un claim configurable
+    (`admin_required_claim` / `admin_required_claim_values` : `scope` en
+    appartenance, sinon égalité). `POST /register` gagne un mode
+    `registration_initial_access_token_mode` : `static` (défaut, initial access
+    tokens hachés), `jwt` (Bearer JWT + claim configurable) ou `disabled`.
+    Les deux serveurs sont des **packages indépendants** guidés par `role`,
+    déployables via leur propre point d'entrée
+    (`puridentityprotocol.server:app`, `puridentityadmin.server:app`) et
+    composés par-dessus les **mêmes stores** en mono-processus
+    (`puridentityfull.server:app`, mémoire seule) ; la façade historique
+    `puridentityserver.server:app` dispatche sur `role`.
+    Échantillon testable pas-à-pas : `samples/admin-api-client/`.
 
 ## Développement local
 

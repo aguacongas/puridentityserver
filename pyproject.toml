@@ -106,11 +106,16 @@ disallow_untyped_defs = false
 # pytest + couverture
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
-addopts = "-q --cov=puridentityserver --cov-report=term-missing"
+addopts = "-q --cov=puridentityserver --cov=puridentityprotocol --cov=puridentityadmin --cov=puridentityfull --cov-report=term-missing"
 testpaths = ["tests"]
 
 [tool.coverage.run]
-source = ["src/puridentityserver"]
+source = [
+    "src/puridentityserver",
+    "src/puridentityprotocol",
+    "src/puridentityadmin",
+    "src/puridentityfull",
+]
 branch = true
 omit = ["src/puridentityserver/__main__.py"]
 

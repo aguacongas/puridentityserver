@@ -114,7 +114,13 @@ def _app(
     clients_seed: tuple[dict[str, object], ...] = (_API_CLIENT,),
     **settings: object,
 ) -> FastAPI:
-    """Assemble une application avec les ApiResources et clients seedés."""
+    """Assemble une application avec les ApiResources et clients seedés.
+
+    La protection JWT des CRUD est désactivée par défaut (les tests CRUD
+    n'envoient pas de jeton) ; passer ``admin_required_claim_values`` pour
+    l'activer.
+    """
+    settings.setdefault("admin_required_claim_values", ())
     return create_app(
         Settings(
             issuer=_ISSUER,
