@@ -184,7 +184,9 @@ class TestEncryptDecryptCompact:
         header_json = json.loads(b64u_decode(header).decode("utf-8"))
         assert header_json["alg"] == algorithm.value
         assert header_json["enc"] == method.value
-        assert b64u_decode(iv) and b64u_decode(ciphertext) and b64u_decode(tag)
+        assert b64u_decode(iv)
+        assert b64u_decode(ciphertext)
+        assert b64u_decode(tag)
 
     @pytest.mark.parametrize("method", CBC_ENCRYPTION_METHODS)
     def test_tampered_ciphertext_rejected(self, method: JWEEncryptionMethod) -> None:
@@ -273,14 +275,9 @@ class TestJWEIdTokenEncrypter:
     def test_unknown_algorithm_raises(self) -> None:
         encrypter = JWEIdTokenEncrypter()
         client = self._client(algorithm="BOGUS", enc="", keys=())
+        coroutine = encrypter.encrypt_id_token(id_token="jws", client=client, shared_secret=_SECRET)
         with pytest.raises(JWEUnavailableError):
-            run(
-                encrypter.encrypt_id_token(
-                    id_token="jws",
-                    client=client,
-                    shared_secret=_SECRET,
-                )
-            )
+            run(coroutine)
 
 
 class TestResolveIdTokenEncryption:
@@ -367,15 +364,14 @@ class TestResolveIdTokenEncryption:
         )
 
     def test_missing_encrypter_raises(self) -> None:
+        coroutine = encrypt_id_token_for_client(
+            id_token="jws",
+            client=self._client(algorithm="dir"),
+            secret_cipher=None,
+            encrypter=None,
+        )
         with pytest.raises(JWEUnavailableError, match="aucun chiffreur"):
-            run(
-                encrypt_id_token_for_client(
-                    id_token="jws",
-                    client=self._client(algorithm="dir"),
-                    secret_cipher=None,
-                    encrypter=None,
-                )
-            )
+            run(coroutine)
 
 
 class TestTokenEndpointEncryptedIdToken:
@@ -608,7 +604,8 @@ class TestRegistrationEncryption:
         assert result.id_token_encrypted_response_enc == "A256GCM"
         stored = run(usecase._clients.find_by_id(result.client_id))
         assert stored is not None
-        assert stored.jwks and stored.jwks[0]["kty"] == "RSA"
+        assert stored.jwks
+        assert stored.jwks[0]["kty"] == "RSA"
 
     def test_rejects_rsa_without_public_key(self) -> None:
         usecase = self._usecase(secret_cipher=None)

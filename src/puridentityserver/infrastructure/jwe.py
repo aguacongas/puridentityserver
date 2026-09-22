@@ -20,6 +20,7 @@ les opérations cryptographiques elles-mêmes passent exclusivement par
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
@@ -210,36 +211,51 @@ class JWEIdTokenEncrypter:
             client.id_token_encrypted_response_enc,
             default=DEFAULT_ENCRYPTION_METHOD,
         )
-        aad = _protected_b64({"alg": algorithm.value, "enc": method.value, "cty": "JWT"})
-
-        if algorithm in ASYMMETRIC_ENCRYPTION_ALGORITHMS:
-            cek = os.urandom(method.cek_size)
-            encrypted_key = rsa_public_key_from_jwks(client.jwks).encrypt(cek, _oaep(algorithm))
-        else:
-            if not shared_secret:
-                raise JWEUnavailableError(
-                    "un algorithme symétrique d'id_token exige le secret partagé du client"
-                )
-            shared_kek = derive_content_key(shared_secret, _kek_size(algorithm, method))
-            if algorithm is JWEKeyManagementAlgorithm.DIRECT:
-                cek = shared_kek
-                encrypted_key = b""
-            else:
-                cek = os.urandom(method.cek_size)
-                encrypted_key = keywrap.aes_key_wrap(shared_kek, cek)
-
-        iv, ciphertext, tag = _encrypt_content(
-            method, cek, aad.encode("ascii"), id_token.encode("utf-8")
+        # Chiffrement coûteux (OAEP/AES) : exécuté hors de l'event loop, comme
+        # la résolution des clés d'assertion (client_assertions.py).
+        return await asyncio.to_thread(
+            _seal_id_token, id_token, client.jwks, algorithm, method, shared_secret
         )
-        return ".".join(
-            (
-                aad,
-                b64u(encrypted_key),
-                b64u(iv),
-                b64u(ciphertext),
-                b64u(tag),
+
+
+def _seal_id_token(
+    id_token: str,
+    jwks: tuple[dict[str, object], ...],
+    algorithm: JWEKeyManagementAlgorithm,
+    method: JWEEncryptionMethod,
+    shared_secret: str,
+) -> str:
+    """Construit puis scelle l'``id_token`` (familles asymétrique et symétrique)."""
+    aad = _protected_b64({"alg": algorithm.value, "enc": method.value, "cty": "JWT"})
+
+    if algorithm in ASYMMETRIC_ENCRYPTION_ALGORITHMS:
+        cek = os.urandom(method.cek_size)
+        encrypted_key = rsa_public_key_from_jwks(jwks).encrypt(cek, _oaep(algorithm))
+    else:
+        if not shared_secret:
+            raise JWEUnavailableError(
+                "un algorithme symétrique d'id_token exige le secret partagé du client"
             )
+        shared_kek = derive_content_key(shared_secret, _kek_size(algorithm, method))
+        if algorithm is JWEKeyManagementAlgorithm.DIRECT:
+            cek = shared_kek
+            encrypted_key = b""
+        else:
+            cek = os.urandom(method.cek_size)
+            encrypted_key = keywrap.aes_key_wrap(shared_kek, cek)
+
+    iv, ciphertext, tag = _encrypt_content(
+        method, cek, aad.encode("ascii"), id_token.encode("utf-8")
+    )
+    return ".".join(
+        (
+            aad,
+            b64u(encrypted_key),
+            b64u(iv),
+            b64u(ciphertext),
+            b64u(tag),
         )
+    )
 
 
 def _protected_b64(header: dict[str, str]) -> str:

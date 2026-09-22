@@ -52,6 +52,7 @@ from puridentityserver.domain.authorization import (
     Client,
     ClientCertificate,
     ClientType,
+    DeviceAuthorization,
     DeviceAuthorizationStatus,
     RefreshToken,
     Scope,
@@ -335,9 +336,7 @@ class TokenUseCase:
         )
         return self._success("", access_token, token_ttl, scopes)
 
-    async def _device_code(  # ruff: ignore[complex-structure] — le poll gère 6 états (RFC 8628 §3.4)
-        self, request: TokenRequest
-    ) -> TokenResponse | TokenError:
+    async def _device_code(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Poll l'état de la session appareil et émet les jetons une fois approuvée.
 
         Tant que l'utilisateur n'a pas validé l'appareil sur la page de
@@ -373,19 +372,7 @@ class TokenUseCase:
 
         now = datetime.now(timezone.utc)
         if stored.status == DeviceAuthorizationStatus.APPROVED:
-            await self._device_codes.delete(stored.device_code_hash)
-            refresh_token = ""
-            if Scope.OFFLINE_ACCESS in stored.scopes:
-                refresh_token = await self._issue_refresh_token(
-                    client, stored.subject, stored.scopes, now
-                )
-            issued = await self._issue_tokens(
-                client, stored.subject, stored.scopes, nonce="", now=now
-            )
-            if isinstance(issued, TokenError):
-                return issued
-            id_token, access_token, token_ttl = issued
-            return self._success(id_token, access_token, token_ttl, stored.scopes, refresh_token)
+            return await self._device_approved_flow(client, stored, now)
 
         if (
             stored.last_polled_at is not None
@@ -397,6 +384,27 @@ class TokenUseCase:
             return self._error("slow_down", "Polling trop rapide : augmentez l'intervalle")
         await self._device_codes.save(replace(stored, last_polled_at=now))
         return self._error("authorization_pending", "En attente de l'autorisation de l'utilisateur")
+
+    async def _device_approved_flow(
+        self,
+        client: Client,
+        stored: DeviceAuthorization,
+        now: datetime,
+    ) -> TokenResponse | TokenError:
+        """Consomme la session appareil approuvée et émet ses jetons (RFC 8628 §3.5)."""
+        if self._device_codes is None:
+            return self._error("unsupported_grant_type")
+        await self._device_codes.delete(stored.device_code_hash)
+        refresh_token = ""
+        if Scope.OFFLINE_ACCESS in stored.scopes:
+            refresh_token = await self._issue_refresh_token(
+                client, stored.subject, stored.scopes, now
+            )
+        issued = await self._issue_tokens(client, stored.subject, stored.scopes, nonce="", now=now)
+        if isinstance(issued, TokenError):
+            return issued
+        id_token, access_token, token_ttl = issued
+        return self._success(id_token, access_token, token_ttl, stored.scopes, refresh_token)
 
     async def _effective_scope(
         self, client: Client, requested: str, *, default: frozenset[Scope]
