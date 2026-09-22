@@ -11,14 +11,23 @@ Périmètre maîtrisé (docson du registre) :
   s'obtient via le scope ``offline_access``) ;
 - response types : ``code`` uniquement — les flows implicit/hybrid via
   enregistrement dynamique sont refusés ;
-- authentification du client : ``client_secret_basic`` /
-  ``client_secret_post`` (client confidentiel, secret émis une seule fois)
-  ou ``none`` (client public) ; ``private_key_jwt`` non supporté ;
+- authentification du client : les sept méthodes de ``token_endpoint_auth``
+  (RFC 6749 §2.3.1, RFC 7523 §2.2, RFC 8705) — ``none`` (client public),
+  ``client_secret_basic`` / ``client_secret_post`` / ``client_secret_jwt``
+  (client confidentiel, secret émis une seule fois), ``private_key_jwt``
+  (clé publique via ``jwks`` ou ``jwks_uri``) et ``tls_client_auth`` /
+  ``self_signed_tls_client_auth`` (liens certificat/subject DN) ;
 - URI de redirection : absolues http(s), sans fragment ;
 - scopes : sous-ensemble connu du serveur ;
 - extensions : ``require_pushed_authorization_requests`` (RFC 9126 §5.2) et
   ``require_consent`` (écran de consentement OIDC Core 1.0 §3.1.2.2),
   booléens optionnels par client (défaut ``false``).
+
+Les secrets des méthodes HMAC (``client_secret_jwt``) sont **chiffrés au
+repos** (RSA-OAEP, clé de scellement ``KeyUse.SECRET`` gérée par le store
+``key_pair`` — générée et entrée en rotation automatiquement) — le serveur doit pouvoir
+les déchiffrer au moment de vérifier les assertions ; à défaut de chiffreur,
+l'enregistrement de tels clients est refusé.
 
 Protections anti abus :
 
@@ -26,27 +35,52 @@ Protections anti abus :
   un initial access token (Bearer) dont l'empreinte est seedée en
   configuration — sinon 401 ;
 - les opérations de gestion exigent le registration access token du client ;
-- secrets et jetons ne sont jamais stockés en clair (empreintes SHA-256).
+- secrets et jetons ne sont jamais stockés en clair (empreinte SHA-256 pour
+  les secrets ``basic``/``post``, chiffrement RSA-OAEP pour ``client_secret_jwt``).
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
+import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from secrets import token_urlsafe
+from typing import cast
 from urllib.parse import urlsplit
 
 from puridentityserver.application.claim_authorizer import BearerClaimAuthorizer
 from puridentityserver.application.scope_registry import ScopeRegistry
-from puridentityserver.domain.authorization import Client, ClientType, Scope, origin_of_uri
+from puridentityserver.domain.authorization import (
+    Client,
+    ClientType,
+    Scope,
+    TokenEndpointAuthMethod,
+    der_certificate_hash,
+    origin_of_uri,
+)
 from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCES
+from puridentityserver.interfaces.domain.secrets import SecretCipher
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 
 _ALLOWED_GRANT_TYPES = frozenset({"authorization_code"})
 _ALLOWED_RESPONSE_TYPES = frozenset({"code"})
-_ALLOWED_AUTH_METHODS = frozenset({"none", "client_secret_basic", "client_secret_post"})
+_ALLOWED_AUTH_METHODS = frozenset(
+    {
+        "none",
+        "client_secret_basic",
+        "client_secret_post",
+        "client_secret_jwt",
+        "private_key_jwt",
+        "tls_client_auth",
+        "self_signed_tls_client_auth",
+    }
+)
 _AUTH_METHOD_DEFAULT = "client_secret_basic"
+_TLS_KEY_AUTH_METHODS = frozenset({"tls_client_auth", "self_signed_tls_client_auth"})
+_KEYLESS_AUTH_METHODS = frozenset({"none", "private_key_jwt"}) | _TLS_KEY_AUTH_METHODS
 _MIN_SECRET_LENGTH = 8
 _STANDARD_SCOPES = frozenset(resource.name for resource in DEFAULT_IDENTITY_RESOURCES)
 
@@ -72,6 +106,10 @@ class RegistrationMetadata:
     scopes: frozenset[Scope] = frozenset((Scope.OPENID,))
     client_type: ClientType = ClientType.CONFIDENTIAL
     token_endpoint_auth_method: str = _AUTH_METHOD_DEFAULT
+    jwks_uri: str = ""
+    jwks: str = ""
+    tls_client_auth_subject_dn: str = ""
+    tls_client_certificate_hash: str = ""
     requested_secret: str | None = None
     par_required: bool = False
     require_consent: bool = False
@@ -117,7 +155,8 @@ class ClientRegistration:
     Le ``client_secret`` (client confidentiel) et le
     ``registration_access_token`` ne sont rendus en clair qu'une seule
     fois, à la création (et lors d'une rotation de secret en PUT) : le
-    serveur n'en conserve que l'empreinte SHA-256.
+    serveur n'en conserve que l'empreinte SHA-256 (ou le chiffrement
+    RSA-OAEP de la clé de scellement pour les méthodes HMAC).
     """
 
     client_id: str
@@ -130,6 +169,10 @@ class ClientRegistration:
     redirect_uris: list[str] = field(default_factory=list)
     post_logout_redirect_uris: list[str] = field(default_factory=list)
     web_origins: list[str] = field(default_factory=list)
+    jwks_uri: str = ""
+    jwks: str = ""
+    tls_client_auth_subject_dn: str = ""
+    tls_client_certificate_hash: str = ""
     client_secret: str = ""
     registration_access_token: str = ""
     registration_client_uri: str = ""
@@ -152,6 +195,7 @@ class _SecretRotation:
 
     secret_hash: str
     issued_secret: str
+    secret_ciphertext: str = ""
 
 
 def hash_secret(value: str) -> str:
@@ -168,12 +212,14 @@ class RegistrationUseCase:
         client_repository: ClientRepository,
         scope_registry: ScopeRegistry | None = None,
         initial_access_authorizer: BearerClaimAuthorizer | None = None,
+        secret_cipher: SecretCipher | None = None,
     ) -> None:
-        """Injection de la configuration, du registre clients et du registre de scopes."""
+        """Injection de la configuration, des registres, de l'autoriseur initial et du chiffreur."""
         self._config = config
         self._clients = client_repository
         self._scope_registry = scope_registry
         self._initial_access_authorizer = initial_access_authorizer
+        self._secret_cipher = secret_cipher
 
     async def _known_scopes(self) -> frozenset[str]:
         """Scopes acceptés à l'enregistrement (scopes standard si pas de registre)."""
@@ -193,13 +239,12 @@ class RegistrationUseCase:
         metadata = _parse_metadata(request.metadata, known)
         if isinstance(metadata, RegistrationError):
             return metadata
+        material_error = self._validate_method_material(metadata)
+        if material_error is not None:
+            return material_error
 
         client_id = token_urlsafe(24)
-        client_secret = ""
-        secret_hash = ""
-        if metadata.client_type is ClientType.CONFIDENTIAL:
-            client_secret = token_urlsafe(48)
-            secret_hash = hash_secret(client_secret)
+        secret_hash, secret_ciphertext, client_secret = await self._credentials_for(metadata)
         registration_token = token_urlsafe(48)
         client = Client(
             client_id=client_id,
@@ -209,7 +254,13 @@ class RegistrationUseCase:
             scopes=metadata.scopes,
             client_type=metadata.client_type,
             client_secret_hash=secret_hash,
+            client_secret_ciphertext=secret_ciphertext,
             registration_access_token_hash=hash_secret(registration_token),
+            token_endpoint_auth_method=TokenEndpointAuthMethod(metadata.token_endpoint_auth_method),
+            jwks_uri=metadata.jwks_uri,
+            jwks=_keys_from_jwks_json(metadata.jwks),
+            tls_client_auth_subject_dn=metadata.tls_client_auth_subject_dn,
+            tls_client_certificate_hash=metadata.tls_client_certificate_hash,
             par_required=metadata.par_required,
             require_consent=metadata.require_consent,
         )
@@ -247,8 +298,11 @@ class RegistrationUseCase:
         metadata = _parse_metadata(request.metadata, known)
         if isinstance(metadata, RegistrationError):
             return metadata
+        material_error = self._validate_method_material(metadata)
+        if material_error is not None:
+            return material_error
 
-        rotation = self._updated_secret(client, metadata)
+        rotation = await self._updated_credentials(client, metadata)
         updated = Client(
             client_id=client.client_id,
             redirect_uris=metadata.redirect_uris,
@@ -257,7 +311,13 @@ class RegistrationUseCase:
             scopes=metadata.scopes,
             client_type=metadata.client_type,
             client_secret_hash=rotation.secret_hash,
+            client_secret_ciphertext=rotation.secret_ciphertext,
             registration_access_token_hash=client.registration_access_token_hash,
+            token_endpoint_auth_method=TokenEndpointAuthMethod(metadata.token_endpoint_auth_method),
+            jwks_uri=metadata.jwks_uri,
+            jwks=_keys_from_jwks_json(metadata.jwks),
+            tls_client_auth_subject_dn=metadata.tls_client_auth_subject_dn,
+            tls_client_certificate_hash=metadata.tls_client_certificate_hash,
             created_at=client.created_at,
             is_active=client.is_active,
             session_lifetime_seconds=client.session_lifetime_seconds,
@@ -298,15 +358,50 @@ class RegistrationUseCase:
             )
         return client
 
-    def _updated_secret(self, client: Client, metadata: RegistrationMetadata) -> _SecretRotation:
-        """Détermine la rotation de secret ; ``issued_secret`` reste vide sans rotation.
+    def _validate_method_material(self, metadata: RegistrationMetadata) -> RegistrationError | None:
+        """Vérifie que le matériel requis par la méthode d'auth est présent (RFC 7591 §2.3)."""
+        method = metadata.token_endpoint_auth_method
+        if method == "client_secret_jwt" and self._secret_cipher is None:
+            return RegistrationError(
+                "invalid_client_metadata",
+                "client_secret_jwt exige un chiffreur de secrets disponible "
+                "(clé de scellement KeyUse.SECRET)",
+            )
+        if method == "private_key_jwt" and not (metadata.jwks or metadata.jwks_uri):
+            return RegistrationError(
+                "invalid_client_metadata",
+                "private_key_jwt exige jwks ou jwks_uri",
+            )
+        if method in _TLS_KEY_AUTH_METHODS and not (
+            metadata.tls_client_auth_subject_dn or metadata.tls_client_certificate_hash
+        ):
+            return RegistrationError(
+                "invalid_client_metadata",
+                f"{method} exige tls_client_auth_subject_dn ou tls_client_certificate",
+            )
+        return None
 
-        Le secret est émis en clair uniquement quand une rotation est
-        demandée ou qu'un secret est généré pour la première fois (passage
-        en client confidentiel).
-        """
-        if metadata.client_type is ClientType.PUBLIC:
+    async def _credentials_for(self, metadata: RegistrationMetadata) -> tuple[str, str, str]:
+        """Génère et prépare le secret client (empreinte, chiffrement, valeur émise)."""
+        method = metadata.token_endpoint_auth_method
+        if method == "client_secret_jwt":
+            secret = token_urlsafe(48)
+            ciphertext = await self._secret_cipher.encrypt(secret)  # type: ignore[union-attr]  # validé par _validate_method_material
+            return "", ciphertext, secret
+        if method in ("client_secret_basic", "client_secret_post"):
+            secret = token_urlsafe(48)
+            return hash_secret(secret), "", secret
+        return "", "", ""
+
+    async def _updated_credentials(
+        self, client: Client, metadata: RegistrationMetadata
+    ) -> _SecretRotation:
+        """Détermine la rotation de secret selon la méthode ; secret jamais ré-émis."""
+        method = metadata.token_endpoint_auth_method
+        if method in _KEYLESS_AUTH_METHODS:
             return _SecretRotation("", "")
+        if method == "client_secret_jwt":
+            return await self._rotate_jwt_secret(client, metadata)
         if metadata.requested_secret is not None:
             requested_hash = hash_secret(metadata.requested_secret)
             if requested_hash == client.client_secret_hash:
@@ -316,6 +411,29 @@ class RegistrationUseCase:
             return _SecretRotation(client.client_secret_hash, "")
         generated = token_urlsafe(48)
         return _SecretRotation(hash_secret(generated), generated)
+
+    async def _rotate_jwt_secret(
+        self, client: Client, metadata: RegistrationMetadata
+    ) -> _SecretRotation:
+        """Fait tourner le secret HMAC chiffré (RFC 7592 §3, méthode ``client_secret_jwt``).
+
+        Un nouveau ``client_secret`` fourni est chiffré avec la clé la plus
+        récente du trousseau et émis une seule fois. Sans valeur fournie, le
+        secret courant est **conservé** ; s'il était chiffré sous une clé
+        sortante, son chiffré est re-scellé sous la clé la plus récente
+        (drain de la rotation de la clé de scellement).
+        """
+        if self._secret_cipher is None:
+            return _SecretRotation("", "")
+        if metadata.requested_secret is not None:
+            ciphertext = await self._secret_cipher.encrypt(metadata.requested_secret)
+            return _SecretRotation("", metadata.requested_secret, ciphertext)
+        if not client.client_secret_ciphertext:
+            return _SecretRotation("", "")
+        if not await self._secret_cipher.is_current(client.client_secret_ciphertext):
+            ciphertext = await self._secret_cipher.reencrypt(client.client_secret_ciphertext)
+            return _SecretRotation("", "", ciphertext)
+        return _SecretRotation("", "", client.client_secret_ciphertext)
 
     async def _authorise_initial(self, token: str) -> bool:
         """Autorise la création selon le mode configuré (RFC 7591 §4.1).
@@ -357,7 +475,12 @@ class RegistrationUseCase:
         registration_access_token: str = "",
     ) -> ClientRegistration:
         """Construit la réponse de registration depuis le client persisté."""
-        auth_method = "none" if client.client_type is ClientType.PUBLIC else "client_secret_basic"
+        if client.token_endpoint_auth_method is not None:
+            auth_method = client.token_endpoint_auth_method.value
+        elif client.client_type is ClientType.PUBLIC:
+            auth_method = "none"
+        else:
+            auth_method = "client_secret_basic"
         return ClientRegistration(
             client_id=client.client_id,
             client_id_issued_at=int(client.created_at.timestamp()),
@@ -367,6 +490,10 @@ class RegistrationUseCase:
             redirect_uris=sorted(client.redirect_uris),
             post_logout_redirect_uris=sorted(client.post_logout_redirect_uris),
             web_origins=sorted(client.web_origins),
+            jwks_uri=client.jwks_uri,
+            jwks=_jwks_json(client.jwks),
+            tls_client_auth_subject_dn=client.tls_client_auth_subject_dn,
+            tls_client_certificate_hash=client.tls_client_certificate_hash,
             client_secret=client_secret,
             registration_access_token=registration_access_token,
             registration_client_uri=f"{self._base_url()}/register/{client.client_id}",
@@ -399,7 +526,17 @@ def _parse_metadata(
     extras = _parse_metadata_extras(raw, known_scopes)
     if isinstance(extras, RegistrationError):
         return extras
-    scopes, auth_method, requested_secret, par_required, require_consent = extras
+    (
+        scopes,
+        auth_method,
+        requested_secret,
+        par_required,
+        require_consent,
+        jwks_uri,
+        jwks,
+        tls_subject_dn,
+        tls_certificate_hash,
+    ) = extras
 
     client_type = ClientType.PUBLIC if auth_method == "none" else ClientType.CONFIDENTIAL
     return RegistrationMetadata(
@@ -409,43 +546,77 @@ def _parse_metadata(
         scopes=scopes,
         client_type=client_type,
         token_endpoint_auth_method=auth_method,
+        jwks_uri=jwks_uri,
+        jwks=jwks,
+        tls_client_auth_subject_dn=tls_subject_dn,
+        tls_client_certificate_hash=tls_certificate_hash,
         requested_secret=requested_secret,
         par_required=par_required,
         require_consent=require_consent,
     )
 
 
+_MetadataParser = Callable[[dict[str, object], frozenset[str]], object]
+
+
 def _parse_metadata_extras(
     raw: dict[str, object], known_scopes: frozenset[str]
-) -> tuple[frozenset[Scope], str, str | None, bool, bool] | RegistrationError:
-    """Valide scopes, méthode d'authentification et exigences du client (RFC 7591 §2).
+) -> tuple[frozenset[Scope], str, str | None, bool, bool, str, str, str, str] | RegistrationError:
+    """Valide scopes, méthode d'authentification, matériel de clé et exigences (RFC 7591 §2).
 
-    ``grant_types`` et ``response_types`` sont bornés au périmètre maîtrisé
-    du registre (``authorization_code``/``code``) : seule leur validité est
-    vérifiée, la valeur étant imposée par le serveur.
+    Chaque membre est passé à son parseur ; le premier rejet (ou la
+    première erreur) est renvoyé tel quel. ``grant_types`` et
+    ``response_types`` sont bornés au périmètre maîtrisé du registre
+    (``authorization_code``/``code``) : seule leur validité est vérifiée,
+    la valeur étant imposée par le serveur.
     """
-    scopes = _parse_scopes(raw, known_scopes)
-    if isinstance(scopes, RegistrationError):
-        return scopes
-    auth_method = _parse_auth_method(raw)
-    if isinstance(auth_method, RegistrationError):
-        return auth_method
-    grants = _parse_members(raw, "grant_types", _ALLOWED_GRANT_TYPES, "authorization_code")
-    if isinstance(grants, RegistrationError):
-        return grants
-    responses = _parse_members(raw, "response_types", _ALLOWED_RESPONSE_TYPES, "code")
-    if isinstance(responses, RegistrationError):
-        return responses
-    requested_secret = _parse_requested_secret(raw)
-    if isinstance(requested_secret, RegistrationError):
-        return requested_secret
-    par_required = _parse_par_required(raw)
-    if isinstance(par_required, RegistrationError):
-        return par_required
-    require_consent = _parse_require_consent(raw)
-    if isinstance(require_consent, RegistrationError):
-        return require_consent
-    return scopes, auth_method, requested_secret, par_required, require_consent
+    parsers: tuple[tuple[str, _MetadataParser], ...] = (
+        ("scopes", _parse_scopes),
+        ("auth_method", lambda raw, _known: _parse_auth_method(raw)),
+        (
+            "grant_types",
+            lambda raw, _known: _parse_members(
+                raw, "grant_types", _ALLOWED_GRANT_TYPES, "authorization_code"
+            ),
+        ),
+        (
+            "response_types",
+            lambda raw, _known: _parse_members(
+                raw, "response_types", _ALLOWED_RESPONSE_TYPES, "code"
+            ),
+        ),
+        ("requested_secret", lambda raw, _known: _parse_requested_secret(raw)),
+        ("par_required", lambda raw, _known: _parse_par_required(raw)),
+        ("require_consent", lambda raw, _known: _parse_require_consent(raw)),
+        ("jwks_uri", lambda raw, _known: _parse_jwks_uri(raw)),
+        ("jwks", lambda raw, _known: _parse_jwks(raw)),
+        ("tls_subject_dn", lambda raw, _known: _parse_tls_subject_dn(raw)),
+        ("tls_certificate_hash", lambda raw, _known: _parse_tls_certificate(raw)),
+    )
+    results: dict[str, object] = {}
+    for name, parser in parsers:
+        value = parser(raw, known_scopes)
+        if isinstance(value, RegistrationError):
+            return value
+        results[name] = value
+    return _assemble_extras(results)
+
+
+def _assemble_extras(
+    results: dict[str, object],
+) -> tuple[frozenset[Scope], str, str | None, bool, bool, str, str, str, str]:
+    """Recompose le tuple de métadonnées extraites (types garantis par les parseurs)."""
+    return (
+        cast(frozenset[Scope], results["scopes"]),
+        cast(str, results["auth_method"]),
+        cast(str | None, results["requested_secret"]),
+        cast(bool, results["par_required"]),
+        cast(bool, results["require_consent"]),
+        cast(str, results["jwks_uri"]),
+        cast(str, results["jwks"]),
+        cast(str, results["tls_subject_dn"]),
+        cast(str, results["tls_certificate_hash"]),
+    )
 
 
 def _parse_uri_list(
@@ -532,7 +703,7 @@ def _parse_auth_method(raw: dict[str, object]) -> str | RegistrationError:
         return RegistrationError(
             "invalid_client_metadata",
             "token_endpoint_auth_method non supporté (attendu : "
-            "client_secret_basic, client_secret_post ou none)",
+            + ", ".join(sorted(_ALLOWED_AUTH_METHODS)),
         )
     return value
 
@@ -599,3 +770,97 @@ def _parse_require_consent(raw: dict[str, object]) -> bool | RegistrationError:
     connecté avant d'émettre le moindre code ou jeton.
     """
     return _parse_bool_flag(raw, "require_consent", default=False)
+
+
+def _parse_jwks_uri(raw: dict[str, object]) -> str | RegistrationError:
+    """Lit ``jwks_uri`` (RFC 7591 §2.1, RFC 7523 §2.2) — https, loopback http accepté."""
+    value = raw.get("jwks_uri")
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str) or not _is_jwks_uri(value):
+        return RegistrationError(
+            "invalid_client_metadata", "jwks_uri doit être une URI http(s) sans fragment"
+        )
+    return value
+
+
+def _is_jwks_uri(uri: str) -> bool:
+    """Vérifie qu'une ``jwks_uri`` est https (ou http loopback, pour le dev local)."""
+    parsed = urlsplit(uri)
+    if parsed.scheme not in ({"http", "https"}) or not parsed.netloc or parsed.fragment:
+        return False
+    if parsed.scheme == "https":
+        return True
+    host = parsed.hostname or ""
+    return host in {"localhost", "127.0.0.1", "::1"}
+
+
+def _parse_jwks(raw: dict[str, object]) -> str | RegistrationError:
+    """Lit ``jwks`` (RFC 7591 §2.1) : objet JSON avec une liste ``keys``, normalisé compact."""
+    value = raw.get("jwks")
+    if value is None:
+        return ""
+    if not isinstance(value, dict):
+        return RegistrationError(
+            "invalid_client_metadata", "jwks doit être un objet JSON (JWK Set)"
+        )
+    keys = value.get("keys")
+    if not isinstance(keys, list) or not all(isinstance(key, dict) for key in keys):
+        return RegistrationError(
+            "invalid_client_metadata", "jwks doit porter une liste keys de JWK"
+        )
+    return json.dumps({"keys": keys}, separators=(",", ":"), sort_keys=True)
+
+
+def _keys_from_jwks_json(jwks: str) -> tuple[dict[str, object], ...]:
+    """Dé-sérialise le JWKS compact normalisé en tuple de clés (pour le domaine Client)."""
+    if not jwks:
+        return ()
+    keys = json.loads(jwks).get("keys", [])
+    return tuple(dict(key) for key in keys)
+
+
+def _jwks_json(keys: tuple[dict[str, object], ...]) -> str:
+    """Sérialise les clés du client en JWKS JSON compact (écho à la registration)."""
+    if not keys:
+        return ""
+    return json.dumps({"keys": list(keys)}, separators=(",", ":"), sort_keys=True)
+
+
+def _parse_tls_subject_dn(raw: dict[str, object]) -> str | RegistrationError:
+    """Lit ``tls_client_auth_subject_dn`` (RFC 8705 §2.1.1) — chaîne DN non vide."""
+    value = raw.get("tls_client_auth_subject_dn")
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str):
+        return RegistrationError(
+            "invalid_client_metadata", "tls_client_auth_subject_dn doit être une chaîne"
+        )
+    return value
+
+
+def _parse_tls_certificate(raw: dict[str, object]) -> str | RegistrationError:
+    """Lit ``tls_client_certificate`` (RFC 8705 §2.1.2) et en dérive l'empreinte.
+
+    Seule l'empreinte base64url(SHA-256) du certificat est conservée : le
+    serveur la compare à celle du certificat présenté à chaque usage du
+    token endpoint (RFC 8705 §2.1.2, hash alg SH-256).
+    """
+    value = raw.get("tls_client_certificate")
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str):
+        return RegistrationError(
+            "invalid_client_metadata", "tls_client_certificate doit être une chaîne base64"
+        )
+    try:
+        der = base64.b64decode(value, validate=True)
+    except (ValueError, TypeError):
+        return RegistrationError(
+            "invalid_client_metadata", "tls_client_certificate n'est pas du base64 valide"
+        )
+    if not der:
+        return RegistrationError(
+            "invalid_client_metadata", "tls_client_certificate ne contient aucun octet"
+        )
+    return der_certificate_hash(der)

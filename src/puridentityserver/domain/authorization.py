@@ -7,6 +7,8 @@ FastAPI, SQLAlchemy ou PyJWT. Les ports associés vivent dans
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -77,6 +79,49 @@ class ClientType(str, Enum):
     PUBLIC = "public"
 
 
+class TokenEndpointAuthMethod(str, Enum):
+    """Méthode d'authentification du client au token endpoint.
+
+    Les valeurs suivent les RFC 6749 §2.3, 7523 §2.2 et 8705 : ``none``
+    (client public, aucune authentification), ``basic``/``post`` (secret
+    client via en-tête HTTP Basic ou champ de formulaire),
+    ``client_secret_jwt`` (assertion JWT signée HMAC avec le secret
+    partagé), ``private_key_jwt`` (assertion signée avec une clé privée
+    dont la publique est enregistrée via ``jwks`` / ``jwks_uri``) et
+    ``tls_client_auth`` / ``self_signed_tls_client_auth`` (certificat
+    client mTLS, RFC 8705).
+    """
+
+    NONE = "none"
+    CLIENT_SECRET_BASIC = "client_secret_basic"  # ruff: ignore[hardcoded-password-string]  (nom de méthode, pas un secret)
+    CLIENT_SECRET_POST = "client_secret_post"  # ruff: ignore[hardcoded-password-string]  (nom de méthode, pas un secret)
+    CLIENT_SECRET_JWT = "client_secret_jwt"  # ruff: ignore[hardcoded-password-string]  (nom de méthode, pas un secret)
+    PRIVATE_KEY_JWT = "private_key_jwt"
+    TLS_CLIENT_AUTH = "tls_client_auth"
+    SELF_SIGNED_TLS_CLIENT_AUTH = "self_signed_tls_client_auth"
+
+
+@dataclass(frozen=True, slots=True)
+class ClientCertificate:
+    """Certificat client présenté en authentification TLS mutuelle (RFC 8705).
+
+    ``der`` contient la forme DER du certificat (``None`` si aucun certificat
+    n'a pu être extrait, ex. navire HTTP sans proxy de terminaison).
+    ``subject_dn`` est le sujet au format one-line RFC 4514 et
+    ``is_self_signed`` indique une signature auto-référée (RFC 8705 §2.3.2).
+    """
+
+    der: bytes | None = None
+    subject_dn: str = ""
+    is_self_signed: bool = False
+
+
+def der_certificate_hash(der: bytes) -> str:
+    """Empreinte base64url(SHA-256(DER)) d'un certificat client (RFC 8705 §2.1.2)."""
+    digest = hashlib.sha256(der).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
 @dataclass(frozen=True, slots=True)
 class Client:
     """Client OAuth 2.0 / OIDC enregistré auprès du fournisseur.
@@ -99,6 +144,16 @@ class Client:
     de celles déduites des ``redirect_uris`` (OAuth 2.0 for Browser-Based
     Apps — la métadonnée ``web_origins`` du registration est prise en
     charge au RFC 7591).
+
+    ``token_endpoint_auth_method`` sélectionne la méthode d'authentification
+    au token endpoint : à défaut (``None``), ``effective_auth_method``
+    dérive ``none`` pour un client public et ``client_secret_basic`` pour un
+    client confidentiel. ``client_secret_ciphertext`` conserve le secret
+    **chiffré** (RSA-OAEP, clé de scellement ``KeyUse.SECRET`` auto-rotée) des
+    clients ``client_secret_jwt`` / grant jwt-bearer ; ``jwks_uri`` /
+    ``jwks`` portent les clés publiques des
+    clients ``private_key_jwt`` ; ``tls_client_auth_subject_dn`` et
+    ``tls_client_certificate_hash`` lient le client à son certificat mTLS.
     """
 
     client_id: str
@@ -119,6 +174,21 @@ class Client:
     device_code_interval_seconds: int | None = None
     par_required: bool = False
     require_consent: bool = False
+    token_endpoint_auth_method: TokenEndpointAuthMethod | None = None
+    client_secret_ciphertext: str = ""
+    jwks_uri: str = ""
+    jwks: tuple[dict[str, object], ...] = ()
+    tls_client_auth_subject_dn: str = ""
+    tls_client_certificate_hash: str = ""
+
+    @property
+    def effective_auth_method(self) -> TokenEndpointAuthMethod:
+        """Méthode d'authentification effective (défauts dérivés du type pubic/confidentiel)."""
+        if self.token_endpoint_auth_method is not None:
+            return self.token_endpoint_auth_method
+        if self.client_type is ClientType.PUBLIC:
+            return TokenEndpointAuthMethod.NONE
+        return TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
 
     def cors_allowed_origins(self) -> frozenset[str]:
         """Origines autorisées en CORS pour ce client (déduites + déclarées).

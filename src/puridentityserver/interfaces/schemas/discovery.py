@@ -49,6 +49,18 @@ class DiscoveryDocument(BaseModel):
             "refresh_token",
             "client_credentials",
             "urn:ietf:params:oauth:grant-type:device_code",
+            "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        ]
+    )
+    token_endpoint_auth_methods_supported: list[str] = Field(
+        default_factory=lambda: [
+            "none",
+            "client_secret_basic",
+            "client_secret_post",
+            "client_secret_jwt",
+            "private_key_jwt",
+            "tls_client_auth",
+            "self_signed_tls_client_auth",
         ]
     )
     subject_types_supported: list[str] = Field(default_factory=lambda: ["public"])

@@ -16,7 +16,13 @@ from pydantic_settings import (
 )
 
 from puridentityserver.domain.api_resource import ApiResource
-from puridentityserver.domain.authorization import Client, ClientType, Scope, origin_of_uri
+from puridentityserver.domain.authorization import (
+    Client,
+    ClientType,
+    Scope,
+    TokenEndpointAuthMethod,
+    origin_of_uri,
+)
 from puridentityserver.domain.identity_resource import (
     DEFAULT_IDENTITY_RESOURCES,
     IdentityResource,
@@ -69,6 +75,9 @@ def _parse_client(raw: dict[str, object]) -> Client:
         web_origins = frozenset()
     scopes = frozenset(Scope(token) for token in str(raw.get("scopes", "openid")).split() if token)
     client_type = _parse_client_type(raw.get("client_type", "public"))
+    auth_method = _parse_auth_method(raw)
+    jwks_raw = raw.get("jwks")
+    jwks = tuple(dict(key) for key in jwks_raw) if isinstance(jwks_raw, (list, tuple)) else ()
     return Client(
         client_id=client_id,
         redirect_uris=redirect_uris,
@@ -77,6 +86,12 @@ def _parse_client(raw: dict[str, object]) -> Client:
         scopes=scopes,
         client_type=client_type,
         client_secret_hash=_hash_client_secret(secret),
+        client_secret_ciphertext=str(raw.get("client_secret_encrypted", "")),
+        token_endpoint_auth_method=auth_method,
+        jwks_uri=str(raw.get("jwks_uri", "")),
+        jwks=jwks,
+        tls_client_auth_subject_dn=str(raw.get("tls_client_auth_subject_dn", "")),
+        tls_client_certificate_hash=str(raw.get("tls_client_certificate_hash", "")),
         session_lifetime_seconds=_optional_int(raw, "session_lifetime_seconds"),
         access_token_lifetime_seconds=_optional_int(raw, "access_token_lifetime_seconds"),
         authorization_code_lifetime_seconds=_optional_int(
@@ -88,6 +103,17 @@ def _parse_client(raw: dict[str, object]) -> Client:
         par_required=bool(raw.get("par_required")),
         require_consent=bool(raw.get("require_consent")),
     )
+
+
+def _parse_auth_method(raw: dict[str, object]) -> TokenEndpointAuthMethod | None:
+    """Résout la méthode d'authentification déclarée par un client seedé."""
+    value = raw.get("token_endpoint_auth_method")
+    if value is None:
+        return None
+    method = str(value)
+    if method not in TokenEndpointAuthMethod._value2member_map_:
+        raise ValueError(f"Méthode d'authentification non supportée : {method}")
+    return TokenEndpointAuthMethod(method)
 
 
 def _parse_client_type(raw: object) -> ClientType:
@@ -238,6 +264,21 @@ class Settings(BaseSettings):
     registration_enabled: bool = False
     registration_requires_initial_access_token: bool = True
     registration_initial_access_tokens: Annotated[tuple[str, ...], NoDecode] = ()
+
+    # Secrets des méthodes HMAC (``client_secret_jwt`` et grant
+    # ``jwt-bearer`` signés secret partagé) : chiffrement **au repos** avec
+    # la clé de scellement de la famille ``KeyUse.SECRET`` — une clé RSA
+    # générée automatiquement au démarrage, persisée dans le store
+    # ``key_pair`` (comme les clés de signature/cookies) et qui tourne suivant
+    # ``jwks_rotation_days``. Aucune clé à configurer ; les anciennes clés
+    # ne sont **jamais purgées** (un secret est chiffré à vie) : retrait
+    # manuel une fois le drain terminé.
+    #
+    # **Seed facultatif** : `client_secret_seal_key_pem` fournit la clé
+    # privée RSA (PEM) à enregistrer au démarrage si aucune clé de
+    # scellement n'existe encore — utile aux serveurs en mémoire
+    # (déterminisme d'un redémarrage à l'autre).
+    client_secret_seal_key_pem: str = ""
 
     # Séparation administration / protocole. `role` sélectionne les endpoints
     # montés : `full` (défaut) expose protocole + administration ; `protocol`

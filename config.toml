@@ -130,6 +130,23 @@ registration_enabled = true
 registration_requires_initial_access_token = true
 registration_initial_access_tokens = ["dev-registrar-token"]
 
+# Chiffrement au repos des secrets clients HMAC (`client_secret_jwt`,
+# grant jwt-bearer signé), issue #46 — clé de scellement AUTOMATIQUE :
+# une clé RSA de la famille `KeyUse.SECRET` est générée dans le store
+# `key_pair` au démarrage (mêmes mécanismes que les clés de signature) et
+# tourne suivant `jwks_rotation_days`. AUCUNE clé à fournir en production.
+# ROTATION (transparente pour le client — le secret en clair n'est émis
+# qu'une fois, à `POST /register` puis à chaque `PUT` avec un nouveau
+# `client_secret`) : chaque jeton chiffré porte le `kid` de sa clé (SHA-256
+# de la clé publique), la vérification le résout. La rotation ajoute une clé
+# mais ne purge JAMAIS : un secret est chiffré à vie dans le registre.
+# Drain = re-scellement des clients au prochain `PUT` (un `PUT` sans
+# nouveau secret re-scellé le ciphertext existant sans ré-émettre), puis
+# retrait MANUEL de l'ancienne clé de la table `key_pairs`.
+# Seed facultatif (serveurs en mémoire / mondes déterministes) : clé privée
+# RSA PEM injectée au démarrage si aucune clé de scellement n'existe encore.
+# Surchargeable via `PURIDENTITYSERVER_CLIENT_SECRET_SEAL_KEY_PEM`.
+
 # Séparation administration / protocole et protection des endpoints de gestion.
 # - role : "full" (défaut) expose protocole OIDC/OAuth + administration ;
 #   "protocol" n'expose que le protocole ; "admin" n'expose que la gestion des

@@ -8,11 +8,16 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, select, text
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Mapped, mapped_column
 
-from puridentityserver.domain.authorization import Client, ClientType, Scope
+from puridentityserver.domain.authorization import (
+    Client,
+    ClientType,
+    Scope,
+    TokenEndpointAuthMethod,
+)
 
 from .base import (
     PersistenceBase,
@@ -35,14 +40,30 @@ class ClientRow(PersistenceBase):
     scopes: Mapped[list[str]] = mapped_column(JSON)
     client_type: Mapped[str] = mapped_column(String(16))
     client_secret_hash: Mapped[str] = mapped_column(String(64), default="")
+    client_secret_ciphertext: Mapped[str] = mapped_column(
+        Text, default="", server_default=text("''")
+    )
+    token_endpoint_auth_method: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    jwks_uri: Mapped[str] = mapped_column(String(512), default="", server_default=text("''"))
+    jwks: Mapped[list[dict[str, object]]] = mapped_column(
+        JSON, default=list, server_default=text("'[]'")
+    )
+    tls_client_auth_subject_dn: Mapped[str] = mapped_column(
+        String(1024), default="", server_default=text("''")
+    )
+    tls_client_certificate_hash: Mapped[str] = mapped_column(
+        String(64), default="", server_default=text("''")
+    )
     registration_access_token_hash: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     session_lifetime_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     access_token_lifetime_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     authorization_code_lifetime_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    refresh_token_lifetime_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     device_code_lifetime_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     device_code_interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    par_required: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
     require_consent: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
 
 
@@ -113,14 +134,26 @@ def _to_row(client: Client) -> ClientRow:
         scopes=sorted(scope.value for scope in client.scopes),
         client_type=client.client_type.value,
         client_secret_hash=client.client_secret_hash,
+        client_secret_ciphertext=client.client_secret_ciphertext,
+        token_endpoint_auth_method=(
+            client.token_endpoint_auth_method.value
+            if client.token_endpoint_auth_method is not None
+            else None
+        ),
+        jwks_uri=client.jwks_uri,
+        jwks=list(client.jwks),
+        tls_client_auth_subject_dn=client.tls_client_auth_subject_dn,
+        tls_client_certificate_hash=client.tls_client_certificate_hash,
         registration_access_token_hash=client.registration_access_token_hash,
         created_at=client.created_at,
         is_active=client.is_active,
         session_lifetime_seconds=client.session_lifetime_seconds,
         access_token_lifetime_seconds=client.access_token_lifetime_seconds,
         authorization_code_lifetime_seconds=client.authorization_code_lifetime_seconds,
+        refresh_token_lifetime_seconds=client.refresh_token_lifetime_seconds,
         device_code_lifetime_seconds=client.device_code_lifetime_seconds,
         device_code_interval_seconds=client.device_code_interval_seconds,
+        par_required=client.par_required,
         require_consent=client.require_consent,
     )
 
@@ -153,13 +186,25 @@ def _from_row(row: ClientRow) -> Client:
         scopes=frozenset(Scope(value) for value in row.scopes),
         client_type=ClientType(row.client_type),
         client_secret_hash=row.client_secret_hash,
+        client_secret_ciphertext=row.client_secret_ciphertext or "",
+        token_endpoint_auth_method=(
+            TokenEndpointAuthMethod(row.token_endpoint_auth_method)
+            if row.token_endpoint_auth_method
+            else None
+        ),
+        jwks_uri=row.jwks_uri or "",
+        jwks=tuple(dict(key) for key in (row.jwks or ())),
+        tls_client_auth_subject_dn=row.tls_client_auth_subject_dn or "",
+        tls_client_certificate_hash=row.tls_client_certificate_hash or "",
         registration_access_token_hash=row.registration_access_token_hash or "",
         created_at=created_at,
         is_active=row.is_active,
         session_lifetime_seconds=row.session_lifetime_seconds,
         access_token_lifetime_seconds=row.access_token_lifetime_seconds,
         authorization_code_lifetime_seconds=row.authorization_code_lifetime_seconds,
+        refresh_token_lifetime_seconds=row.refresh_token_lifetime_seconds,
         device_code_lifetime_seconds=row.device_code_lifetime_seconds,
         device_code_interval_seconds=row.device_code_interval_seconds,
+        par_required=row.par_required,
         require_consent=row.require_consent,
     )
