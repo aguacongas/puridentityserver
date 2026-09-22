@@ -24,6 +24,7 @@ import jwt as pyjwt
 from jwt import PyJWKClient, PyJWKSet  # type: ignore[attr-defined]  # non exposés par types-PyJWT
 
 from puridentityserver.domain.authorization import Client
+from puridentityserver.domain.key_validation import usable_for_signing
 from puridentityserver.interfaces.domain.secrets import SecretCipher
 
 _HMAC_ALGORITHMS = ("HS256", "HS384", "HS512")
@@ -174,13 +175,16 @@ def _resolve_signing_key(
     dans le set (le ``kid`` est obligatoire pour les assertions à JWKS).
     """
     if jwks:
+        signing_jwks = usable_for_signing(jwks)
+        if not signing_jwks:
+            return None
         try:
             kid = pyjwt.get_unverified_header(token).get("kid")
         except pyjwt.PyJWTError:
             return None
         if not kid:
             return None
-        jwk_set = PyJWKSet(list(jwks))
+        jwk_set = PyJWKSet(list(signing_jwks))
         for candidate in jwk_set.keys:
             if candidate.key_id == kid:
                 return cast(object, candidate)

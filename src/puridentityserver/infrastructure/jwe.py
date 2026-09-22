@@ -47,6 +47,7 @@ from puridentityserver.domain.jwe import (
     JWEEncryptionMethod,
     JWEKeyManagementAlgorithm,
 )
+from puridentityserver.domain.key_validation import _MIN_RSA_MODULUS_BITS
 from puridentityserver.interfaces.domain.tokens import JWEUnavailableError
 
 # Vecteurs d'initialisation : 16 octets pour AES-CBC, 96 bits pour AES-GCM
@@ -112,7 +113,7 @@ def rsa_public_key_from_jwks(keys: tuple[dict[str, object], ...]) -> RSAPublicKe
             e = int.from_bytes(b64u_decode(exponent), "big")
         except ValueError:
             continue
-        if n <= 0 or e <= 0:
+        if n <= 0 or e <= 0 or n.bit_length() < _MIN_RSA_MODULUS_BITS:
             continue
         return RSAPublicNumbers(e, n).public_key()
     raise JWEUnavailableError("aucune clé publique RSA dans le jwks du client")

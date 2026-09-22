@@ -69,6 +69,11 @@ from puridentityserver.domain.jwe import (
     SYMMETRIC_ENCRYPTION_ALGORITHMS,
 )
 from puridentityserver.domain.jwks import SYMMETRIC_ALGORITHMS, JWTAlgorithm
+from puridentityserver.domain.key_validation import (
+    require_encryption_rsa_key,
+    require_signing_key,
+    validate_client_jwks,
+)
 from puridentityserver.interfaces.domain.secrets import SecretCipher
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 
@@ -264,6 +269,9 @@ class RegistrationUseCase:
         material_error = self._validate_method_material(metadata)
         if material_error is not None:
             return material_error
+        usage_error = self._validate_jwks_usage(metadata)
+        if usage_error is not None:
+            return usage_error
         signing_error = self._validate_signing_material(metadata)
         if signing_error is not None:
             return signing_error
@@ -332,6 +340,9 @@ class RegistrationUseCase:
         material_error = self._validate_method_material(metadata)
         if material_error is not None:
             return material_error
+        usage_error = self._validate_jwks_usage(metadata)
+        if usage_error is not None:
+            return usage_error
         signing_error = self._validate_signing_material(metadata)
         if signing_error is not None:
             return signing_error
@@ -493,11 +504,9 @@ class RegistrationUseCase:
                 "id_token_encrypted_response_enc non supporté (attendu une méthode JWE)",
             )
         if algorithm in _ASYMMETRIC_ENCRYPTION_VALUES:
-            if not self._has_rsa_jwks(metadata.jwks):
-                return RegistrationError(
-                    "invalid_client_metadata",
-                    "Un chiffrement d'id_token RSA-OAEP exige une clé publique RSA dans jwks",
-                )
+            problem = require_encryption_rsa_key(_keys_from_jwks_json(metadata.jwks))
+            if problem:
+                return RegistrationError("invalid_client_metadata", problem)
             return None
         if algorithm not in _ALGORITHM_ENCRYPTION_VALUES:
             return RegistrationError(
@@ -544,11 +553,18 @@ class RegistrationUseCase:
         return None
 
     @staticmethod
-    def _has_rsa_jwks(jwks: str) -> bool:
-        """Vrai si le JWKS enregistré porte au moins une clé publique RSA."""
-        if not jwks:
-            return False
-        return any(str(key.get("kty", "")).upper() == "RSA" for key in _keys_from_jwks_json(jwks))
+    def _validate_jwks_usage(metadata: RegistrationMetadata) -> RegistrationError | None:
+        """Vérifie la conformité d'usage du JWKS embarqué avec la méthode d'auth."""
+        if (
+            metadata.token_endpoint_auth_method != TokenEndpointAuthMethod.PRIVATE_KEY_JWT.value
+            or not metadata.jwks
+            or metadata.jwks_uri
+        ):
+            return None
+        problem = require_signing_key(_keys_from_jwks_json(metadata.jwks))
+        if problem:
+            return RegistrationError("invalid_client_metadata", problem)
+        return None
 
     async def _credentials_for(self, metadata: RegistrationMetadata) -> tuple[str, str, str]:
         """Génère et prépare le secret client (empreinte, chiffrement, valeur émise)."""
@@ -1091,6 +1107,9 @@ def _parse_jwks(raw: dict[str, object]) -> str | RegistrationError:
         return RegistrationError(
             "invalid_client_metadata", "jwks doit porter une liste keys de JWK"
         )
+    problems = validate_client_jwks(cast(tuple[dict[str, object], ...], tuple(keys)))
+    if problems:
+        return RegistrationError("invalid_client_metadata", problems[0])
     return json.dumps({"keys": keys}, separators=(",", ":"), sort_keys=True)
 
 
