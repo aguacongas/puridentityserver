@@ -154,6 +154,11 @@ class Client:
     ``jwks`` portent les clés publiques des
     clients ``private_key_jwt`` ; ``tls_client_auth_subject_dn`` et
     ``tls_client_certificate_hash`` lient le client à son certificat mTLS.
+    ``id_token_signed_response_alg`` (OIDC Core 1.0 §3.1.3.7) impose un
+    algorithme de signature d'``id_token`` par client : une valeur vide
+    retombe sur l'algorithme de signature principal du serveur, une valeur
+    symétrique HS* signe avec le secret partagé du client (conservé
+    chiffré, cf. ``client_secret_ciphertext``).
     """
 
     client_id: str
@@ -180,6 +185,7 @@ class Client:
     jwks: tuple[dict[str, object], ...] = ()
     tls_client_auth_subject_dn: str = ""
     tls_client_certificate_hash: str = ""
+    id_token_signed_response_alg: str = ""
 
     @property
     def effective_auth_method(self) -> TokenEndpointAuthMethod:

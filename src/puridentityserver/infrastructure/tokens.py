@@ -16,8 +16,10 @@ from cryptography.hazmat.primitives.serialization import (
 )
 
 from puridentityserver.domain.authorization import Scope
-from puridentityserver.domain.jwks import JWTAlgorithm, KeyPair
+from puridentityserver.domain.jwks import SYMMETRIC_ALGORITHMS, JWTAlgorithm, KeyPair
 from puridentityserver.interfaces.domain.jwks import KeyManager
+
+_HMAC_ALGORITHMS = frozenset(SYMMETRIC_ALGORITHMS)
 
 
 class PyJWTTokenManager:
@@ -40,6 +42,7 @@ class PyJWTTokenManager:
         scopes: frozenset[Scope],
         at_hash: str = "",
         c_hash: str = "",
+        shared_secret: str = "",
     ) -> str:
         """Construit l'``id_token`` : identité ``sub`` + audience ``client_id``.
 
@@ -47,6 +50,9 @@ class PyJWTTokenManager:
         refresh ne doit pas porter de nonce (OIDC Core 1.0 §12.2). Les
         empreintes ``at_hash`` / ``c_hash`` (liens implicit/hybrid) ne sont
         ajoutées que lorsqu'elles sont fournies (OIDC Core 1.0 §3.3.2.11).
+        ``shared_secret`` porte le secret partagé du client pour les
+        algorithmes symétriques HS* (OIDC Core 1.0 §3.1.3.7) ; il est
+        ignoré pour les familles asymétriques.
         """
         payload: dict[str, object] = {
             "iss": issuer,
@@ -62,7 +68,7 @@ class PyJWTTokenManager:
             payload["at_hash"] = at_hash
         if c_hash:
             payload["c_hash"] = c_hash
-        return await self._sign(algorithm, payload)
+        return await self._sign(algorithm, payload, shared_secret)
 
     async def create_access_token(
         self,
@@ -153,8 +159,23 @@ class PyJWTTokenManager:
                 return key
         return None
 
-    async def _sign(self, algorithm: JWTAlgorithm, payload: dict[str, object]) -> str:
-        """Signe le payload avec la première clé active de l'algorithme."""
+    async def _sign(
+        self, algorithm: JWTAlgorithm, payload: dict[str, object], shared_secret: str = ""
+    ) -> str:
+        """Signe le payload avec la clé de l'algorithme (serveur ou secret client)."""
+        if algorithm in _HMAC_ALGORITHMS:
+            if not shared_secret:
+                raise ValueError(
+                    f"{algorithm.value} signe l'id_token avec le secret partagé du client, absent"
+                )
+            return cast(
+                str,
+                pyjwt.encode(
+                    payload,
+                    shared_secret.encode("utf-8"),
+                    algorithm=algorithm.value,
+                ),
+            )
         key_pair = await self._first_active_key(algorithm)
         private_key = load_pem_private_key(key_pair.private_key_pem.encode("ascii"), None)
         return cast(

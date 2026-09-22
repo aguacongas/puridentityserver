@@ -14,7 +14,12 @@ from cryptography.hazmat.primitives.serialization import (
     PublicFormat,
 )
 
-from puridentityserver.domain.jwks import JWTAlgorithm, KeyPair, KeyUse
+from puridentityserver.domain.jwks import (
+    SYMMETRIC_ALGORITHMS,
+    JWTAlgorithm,
+    KeyPair,
+    KeyUse,
+)
 from puridentityserver.interfaces.repositories.key_pair_repository import KeyPairRepository
 
 _RSA_ALGORITHMS = (
@@ -128,7 +133,17 @@ class DefaultKeyManager:
 
 
 def _generate_key_pair(key_size: int, algorithm: JWTAlgorithm) -> KeyPair:
-    """Génère une paire de clés PEM adaptée à l'algorithme demandé."""
+    """Génère une paire de clés PEM adaptée à l'algorithme demandé.
+
+    Ne gère que les algorithmes **asymétriques** (RS*/PS*/ES*) : la
+    famille symétrique HS* ne possède pas de paire de clés — elle signe
+    l'``id_token`` avec le secret partagé du client, jamais avec une clé
+    de serveur.
+    """
+    if algorithm in SYMMETRIC_ALGORITHMS:
+        raise ValueError(
+            f"{algorithm.value} est un algorithme symétrique (HMAC) : aucune clé à générer"
+        )
     if algorithm in _RSA_ALGORITHMS:
         pk: _PEMPrivateKey = rsa.generate_private_key(public_exponent=65537, key_size=key_size)
     else:

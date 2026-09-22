@@ -14,7 +14,20 @@ _T = TypeVar("_T")
 
 _ISSUER = "https://id.example"
 _BASE_URL = "https://id.example"
-_ALL_ALGOS = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512"]
+_ALL_ALGOS = [
+    "RS256",
+    "RS384",
+    "RS512",
+    "PS256",
+    "PS384",
+    "PS512",
+    "ES256",
+    "ES384",
+    "ES512",
+    "HS256",
+    "HS384",
+    "HS512",
+]
 
 
 def run(awaitable: Awaitable[_T]) -> _T:

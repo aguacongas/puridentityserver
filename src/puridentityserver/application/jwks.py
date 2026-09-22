@@ -4,8 +4,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from puridentityserver.domain.jwks import ALL_SIGNING_ALGORITHMS, JWTAlgorithm, KeyPair
+from puridentityserver.domain.jwks import (
+    ALL_SIGNING_ALGORITHMS,
+    SYMMETRIC_ALGORITHMS,
+    JWTAlgorithm,
+    KeyPair,
+)
 from puridentityserver.interfaces.domain.jwks import KeyManager
+
+
+def _managed_algorithms(algorithms: tuple[JWTAlgorithm, ...]) -> tuple[JWTAlgorithm, ...]:
+    """Ne conserve que les algorithmes générant une paire de clés (asymétriques).
+
+    La famille HS* signe l'``id_token`` avec le secret partagé du client :
+    aucune clé de serveur à générer ni à publier au JWKS.
+    """
+    return tuple(algorithm for algorithm in algorithms if algorithm not in SYMMETRIC_ALGORITHMS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,8 +47,11 @@ class JWKSetUseCase:
         self._key_manager = key_manager
 
     async def initialise(self) -> None:
-        """Génère une clé initiale par algorithme si le magasin est vide."""
-        for algorithm in self._config.algorithms:
+        """Génère une clé initiale par algorithme si le magasin est vide.
+
+        Les algorithmes symétriques (HS*) ne produisent aucune clé.
+        """
+        for algorithm in _managed_algorithms(self._config.algorithms):
             await self._key_manager.ensure_active_key(self._config.key_size, algorithm)
 
     async def get_active_keys(self) -> list[KeyPair]:
@@ -48,7 +65,7 @@ class JWKSetUseCase:
             self._config.rotation_days, self._config.grace_period_days
         )
         if removed > 0:
-            for algorithm in self._config.algorithms:
+            for algorithm in _managed_algorithms(self._config.algorithms):
                 active = [
                     key
                     for key in await self._key_manager.get_active_keys()

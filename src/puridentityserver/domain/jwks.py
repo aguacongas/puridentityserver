@@ -17,6 +17,7 @@ class KeyType(str, Enum):
 
     RSA = "RSA"
     EC = "EC"
+    OCT = "oct"
 
 
 class KeyUse(str, Enum):
@@ -45,7 +46,14 @@ class KeyUse(str, Enum):
 
 
 class JWTAlgorithm(str, Enum):
-    """Algorithmes de signature supportés (JWA RFC 7518)."""
+    """Algorithmes de signature supportés (JWA RFC 7518).
+
+    Les familles asymétriques (RS*/PS*/ES*) reposent sur des paires de
+    clés générées par le serveur et publiées dans le JWKS ; la famille
+    symétrique (HS*) signe l'``id_token`` avec le **secret partagé du
+    client** (OIDC Core 1.0 §3.1.3.7) — aucune clé de serveur n'est
+    générée ni publiée pour HS*.
+    """
 
     RS256 = "RS256"
     RS384 = "RS384"
@@ -56,6 +64,9 @@ class JWTAlgorithm(str, Enum):
     ES256 = "ES256"
     ES384 = "ES384"
     ES512 = "ES512"
+    HS256 = "HS256"
+    HS384 = "HS384"
+    HS512 = "HS512"
 
     @property
     def key_type(self) -> KeyType:
@@ -69,16 +80,41 @@ class JWTAlgorithm(str, Enum):
             JWTAlgorithm.PS512,
         ):
             return KeyType.RSA
+        if self in (
+            JWTAlgorithm.HS256,
+            JWTAlgorithm.HS384,
+            JWTAlgorithm.HS512,
+        ):
+            return KeyType.OCT
         return KeyType.EC
 
     @property
     def curve(self) -> str:
-        """Courbe JWK (``crv``), vide pour les clés RSA."""
+        """Courbe JWK (``crv``), vide pour les clés RSA et HMAC."""
         return {
             JWTAlgorithm.ES256: "P-256",
             JWTAlgorithm.ES384: "P-384",
             JWTAlgorithm.ES512: "P-521",
         }.get(self, "")
+
+
+ASYMMETRIC_ALGORITHMS: tuple[JWTAlgorithm, ...] = (
+    JWTAlgorithm.RS256,
+    JWTAlgorithm.RS384,
+    JWTAlgorithm.RS512,
+    JWTAlgorithm.PS256,
+    JWTAlgorithm.PS384,
+    JWTAlgorithm.PS512,
+    JWTAlgorithm.ES256,
+    JWTAlgorithm.ES384,
+    JWTAlgorithm.ES512,
+)
+
+SYMMETRIC_ALGORITHMS: tuple[JWTAlgorithm, ...] = (
+    JWTAlgorithm.HS256,
+    JWTAlgorithm.HS384,
+    JWTAlgorithm.HS512,
+)
 
 
 ALL_SIGNING_ALGORITHMS: tuple[JWTAlgorithm, ...] = tuple(JWTAlgorithm)

@@ -80,7 +80,11 @@ port = 8000
 storage_type = "memory"
 storage_dsn = "sqlite:///puridentityserver.db"
 jwks_key_size = 4096
-jwks_algorithms = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512"]
+# Algorithmes de signature d'id_token/access_token annoncés au discovery
+# (RS*/PS*/ES* signent avec une clé de serveur publiée au JWKS ; HS* signe
+# l'id_token avec le secret partagé du client enregistré). Surchargeables via
+# `PURIDENTITYSERVER_JWKS_ALGORITHMS` (liste séparée par des virgules).
+jwks_algorithms = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512", "HS256", "HS384", "HS512"]
 jwks_rotation_days = 90
 jwks_grace_period_days = 7
 

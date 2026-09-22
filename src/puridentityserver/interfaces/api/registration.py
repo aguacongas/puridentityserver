@@ -151,6 +151,7 @@ def _registration_json(result: ClientRegistration) -> str:
             result.require_pushed_authorization_requests,
         ),
         ("require_consent", result.require_consent),
+        ("id_token_signed_response_alg", result.id_token_signed_response_alg),
     )
     data.update({name: value for name, value in optional_fields if value})
     return json.dumps(data, separators=(",", ":"))

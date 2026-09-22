@@ -44,6 +44,7 @@ from puridentityserver.application.client_auth import (
     CLIENT_UNKNOWN_ERROR,
     verify_client_secret,
 )
+from puridentityserver.application.id_token_material import resolve_id_token_material
 from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.domain.authorization import (
     AuthorizationCode,
@@ -64,6 +65,7 @@ from puridentityserver.interfaces.domain.client_assertions import (
     JWT_BEARER_GRANT_TYPE_URN,
     ClientAssertionVerifier,
 )
+from puridentityserver.interfaces.domain.secrets import SecretCipher
 from puridentityserver.interfaces.domain.tokens import TokenManager
 from puridentityserver.interfaces.repositories.authorization_code_repository import (
     AuthorizationCodeRepository,
@@ -86,6 +88,7 @@ class TokenConfig:
     access_token_ttl_seconds: int = 3600
     refresh_token_ttl_seconds: int = 2592000
     token_endpoint: str = ""
+    secret_cipher: SecretCipher | None = None
 
 
 @dataclass(slots=True)
@@ -203,9 +206,12 @@ class TokenUseCase:
             refresh_token = await self._issue_refresh_token(
                 client, auth_code.subject, auth_code.scopes, now
             )
-        id_token, access_token, token_ttl = await self._issue_tokens(
+        issued = await self._issue_tokens(
             client, auth_code.subject, auth_code.scopes, nonce=auth_code.nonce, now=now
         )
+        if isinstance(issued, TokenError):
+            return issued
+        id_token, access_token, token_ttl = issued
         return self._success(id_token, access_token, token_ttl, auth_code.scopes, refresh_token)
 
     async def _refresh(self, request: TokenRequest) -> TokenResponse | TokenError:
@@ -239,9 +245,10 @@ class TokenUseCase:
         now = datetime.now(timezone.utc)
         await self._refresh_tokens.consume(stored.token_hash)
         refresh_token = await self._issue_refresh_token(client, stored.subject, scopes, now)
-        id_token, access_token, token_ttl = await self._issue_tokens(
-            client, stored.subject, scopes, nonce="", now=now
-        )
+        issued = await self._issue_tokens(client, stored.subject, scopes, nonce="", now=now)
+        if isinstance(issued, TokenError):
+            return issued
+        id_token, access_token, token_ttl = issued
         return self._success(id_token, access_token, token_ttl, scopes, refresh_token)
 
     async def _client_credentials(self, request: TokenRequest) -> TokenResponse | TokenError:
@@ -366,9 +373,12 @@ class TokenUseCase:
                 refresh_token = await self._issue_refresh_token(
                     client, stored.subject, stored.scopes, now
                 )
-            id_token, access_token, token_ttl = await self._issue_tokens(
+            issued = await self._issue_tokens(
                 client, stored.subject, stored.scopes, nonce="", now=now
             )
+            if isinstance(issued, TokenError):
+                return issued
+            id_token, access_token, token_ttl = issued
             return self._success(id_token, access_token, token_ttl, stored.scopes, refresh_token)
 
         if (
@@ -484,7 +494,7 @@ class TokenUseCase:
         *,
         nonce: str,
         now: datetime,
-    ) -> tuple[str, str, int]:
+    ) -> tuple[str, str, int] | TokenError:
         """Émet et retourne l'``id_token``, l'``access_token`` et la TTL effective."""
         token_ttl = resolve_lifetime_seconds(
             client.access_token_lifetime_seconds, self._config.access_token_ttl_seconds
@@ -493,8 +503,12 @@ class TokenUseCase:
         issued_at = int(now.timestamp())
         expires_epoch = int(expires_at.timestamp())
 
+        material = await self._id_token_material(client)
+        if isinstance(material, TokenError):
+            return material
+        id_token_algorithm, shared_secret = material
         id_token = await self._token_manager.create_id_token(
-            algorithm=self._config.signing_algorithm,
+            algorithm=id_token_algorithm,
             issuer=self._config.issuer,
             subject=subject,
             audience=client.client_id,
@@ -502,6 +516,7 @@ class TokenUseCase:
             expires_at=expires_epoch,
             issued_at=issued_at,
             scopes=scopes,
+            shared_secret=shared_secret,
         )
         audience = await self._resolve_audience(client, scopes)
         access_token = await self._token_manager.create_access_token(
@@ -514,6 +529,17 @@ class TokenUseCase:
             scopes=scopes,
         )
         return id_token, access_token, token_ttl
+
+    async def _id_token_material(self, client: Client) -> tuple[JWTAlgorithm, str] | TokenError:
+        """Résout algorithme et matériel de signature d'``id_token`` du client."""
+        material = await resolve_id_token_material(
+            client, self._config.signing_algorithm, self._config.secret_cipher
+        )
+        if material is None:
+            return self._error(
+                "invalid_client", "Secret du client indisponible pour la signature HS*"
+            )
+        return material
 
     async def _issue_access_token(
         self,

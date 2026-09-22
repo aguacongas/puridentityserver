@@ -54,6 +54,9 @@ class ClientRow(PersistenceBase):
     tls_client_certificate_hash: Mapped[str] = mapped_column(
         String(64), default="", server_default=text("''")
     )
+    id_token_signed_response_alg: Mapped[str] = mapped_column(
+        String(32), default="", server_default=text("''")
+    )
     registration_access_token_hash: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -144,6 +147,7 @@ def _to_row(client: Client) -> ClientRow:
         jwks=list(client.jwks),
         tls_client_auth_subject_dn=client.tls_client_auth_subject_dn,
         tls_client_certificate_hash=client.tls_client_certificate_hash,
+        id_token_signed_response_alg=client.id_token_signed_response_alg,
         registration_access_token_hash=client.registration_access_token_hash,
         created_at=client.created_at,
         is_active=client.is_active,
@@ -196,6 +200,7 @@ def _from_row(row: ClientRow) -> Client:
         jwks=tuple(dict(key) for key in (row.jwks or ())),
         tls_client_auth_subject_dn=row.tls_client_auth_subject_dn or "",
         tls_client_certificate_hash=row.tls_client_certificate_hash or "",
+        id_token_signed_response_alg=row.id_token_signed_response_alg or "",
         registration_access_token_hash=row.registration_access_token_hash or "",
         created_at=created_at,
         is_active=row.is_active,

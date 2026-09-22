@@ -92,6 +92,7 @@ def _parse_client(raw: dict[str, object]) -> Client:
         jwks=jwks,
         tls_client_auth_subject_dn=str(raw.get("tls_client_auth_subject_dn", "")),
         tls_client_certificate_hash=str(raw.get("tls_client_certificate_hash", "")),
+        id_token_signed_response_alg=str(raw.get("id_token_signed_response_alg", "")),
         session_lifetime_seconds=_optional_int(raw, "session_lifetime_seconds"),
         access_token_lifetime_seconds=_optional_int(raw, "access_token_lifetime_seconds"),
         authorization_code_lifetime_seconds=_optional_int(
