@@ -475,11 +475,12 @@ class RegistrationUseCase:
         registration_access_token: str = "",
     ) -> ClientRegistration:
         """Construit la réponse de registration depuis le client persisté."""
-        auth_method = (
-            client.token_endpoint_auth_method.value
-            if client.token_endpoint_auth_method is not None
-            else ("none" if client.client_type is ClientType.PUBLIC else "client_secret_basic")
-        )
+        if client.token_endpoint_auth_method is not None:
+            auth_method = client.token_endpoint_auth_method.value
+        elif client.client_type is ClientType.PUBLIC:
+            auth_method = "none"
+        else:
+            auth_method = "client_secret_basic"
         return ClientRegistration(
             client_id=client.client_id,
             client_id_issued_at=int(client.created_at.timestamp()),

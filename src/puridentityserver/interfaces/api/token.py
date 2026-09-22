@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import binascii
 import json
 
 from fastapi import APIRouter, Form, Request, Response
@@ -72,7 +71,7 @@ def _parse_basic_auth(request: Request) -> tuple[str, str]:
         return "", ""
     try:
         decoded = base64.b64decode(authorization.split(None, 1)[1], validate=True).decode("utf-8")
-    except (ValueError, binascii.Error, UnicodeDecodeError):
+    except ValueError:
         return "", ""
     username, separator, password = decoded.partition(":")
     if not separator:

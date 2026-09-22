@@ -75,8 +75,9 @@ def test_decrypt_fails_after_key_removed() -> None:
     run(manager.generate_key_pair(2048, JWTAlgorithm.RS256))
     # drain terminé : la clé du jeton est retirée du store, une autre reste
     run(repository.delete(token.split(":", 1)[0]))
+    awaitable = cipher.decrypt(token)
     with pytest.raises(ValueError, match="secret client indéchiffrable"):
-        run(cipher.decrypt(token))
+        asyncio.run(awaitable)
 
 
 def test_legacy_token_without_prefix_still_decrypts() -> None:
@@ -110,8 +111,9 @@ def test_reencrypt_is_identity_when_already_current() -> None:
 def test_missing_seal_key_raises() -> None:
     manager, _ = _ring()
     cipher = _cipher(manager)
+    awaitable = cipher.encrypt("valeur")
     with pytest.raises(ValueError, match="aucune clé de scellement"):
-        run(cipher.encrypt("valeur"))
+        asyncio.run(awaitable)
 
 
 def test_rotate_if_stale_generates_when_old() -> None:

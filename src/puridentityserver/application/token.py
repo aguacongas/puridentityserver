@@ -34,7 +34,6 @@ portée par le port ``client_assertions``, ou ``tls_client_auth`` /
 from __future__ import annotations
 
 import base64
-import binascii
 import hashlib
 import json
 from dataclasses import dataclass, replace
@@ -621,6 +620,6 @@ def _unverified_assertion_claims(assertion: str) -> dict[str, object] | None:
         _, payload, _ = assertion.split(".")
         padded = payload + "=" * (-len(payload) % 4)  # NOSONAR(S5659) — localisation seule
         data = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError, ValueError, binascii.Error):
+    except (ValueError, TypeError):
         return None
     return data if isinstance(data, dict) else None

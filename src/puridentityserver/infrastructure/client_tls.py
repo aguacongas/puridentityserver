@@ -60,7 +60,7 @@ def _der_from_headers(request: Request) -> bytes | None:
         return x509.load_pem_x509_certificate(pem_user.encode("ascii")).public_bytes(
             cast(Encoding, Encoding.DER)
         )
-    except (ValueError, UnicodeEncodeError):
+    except ValueError:
         return None
 
 
