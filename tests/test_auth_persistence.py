@@ -38,6 +38,10 @@ _CLIENT = Client(
     session_lifetime_seconds=1800,
     access_token_lifetime_seconds=120,
     authorization_code_lifetime_seconds=30,
+    frontchannel_logout_uri="https://app.example/front-logout",
+    frontchannel_logout_session_required=True,
+    backchannel_logout_uri="https://ssr.example/back-logout",
+    backchannel_logout_session_required=True,
 )
 
 _T = TypeVar("_T")
@@ -73,6 +77,10 @@ def test_sql_client_repo_round_trip(tmp_path: Path) -> None:
     assert stored.session_lifetime_seconds == 1800
     assert stored.access_token_lifetime_seconds == 120
     assert stored.authorization_code_lifetime_seconds == 30
+    assert stored.frontchannel_logout_uri == "https://app.example/front-logout"
+    assert stored.frontchannel_logout_session_required is True
+    assert stored.backchannel_logout_uri == "https://ssr.example/back-logout"
+    assert stored.backchannel_logout_session_required is True
     run(repo.close())
 
 

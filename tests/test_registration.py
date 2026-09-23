@@ -191,6 +191,63 @@ class TestRegister:
         assert isinstance(result, RegistrationError)
         assert result.error == "invalid_client_metadata"
 
+    def test_register_echoes_logout_channel_uris(self) -> None:
+        usecase = _usecase()
+
+        result = run(
+            usecase.register(
+                RegisterRequest(
+                    {
+                        **_REGISTRATION,
+                        "frontchannel_logout_uri": "https://app.example/front-logout",
+                        "frontchannel_logout_session_required": True,
+                        "backchannel_logout_uri": "https://ssr.example/back-logout",
+                        "backchannel_logout_session_required": True,
+                    },
+                    initial_access_token=_INITIAL_TOKEN,
+                )
+            )
+        )
+
+        assert isinstance(result, ClientRegistration)
+        assert result.frontchannel_logout_uri == "https://app.example/front-logout"
+        assert result.frontchannel_logout_session_required is True
+        assert result.backchannel_logout_uri == "https://ssr.example/back-logout"
+        assert result.backchannel_logout_session_required is True
+        stored = run(usecase._clients.find_by_id(result.client_id))
+        assert stored is not None
+        assert stored.frontchannel_logout_uri == result.frontchannel_logout_uri
+        assert stored.backchannel_logout_session_required is True
+
+    def test_register_rejects_invalid_logout_uri(self) -> None:
+        usecase = _usecase()
+
+        for bad in ("javascript:alert(1)", "ftp://evil.example/back", "//evil.example/x"):
+            result = run(
+                usecase.register(
+                    RegisterRequest(
+                        {**_REGISTRATION, "backchannel_logout_uri": bad},
+                        initial_access_token=_INITIAL_TOKEN,
+                    )
+                )
+            )
+            assert isinstance(result, RegistrationError)
+            assert result.error == "invalid_redirect_uri"
+
+    def test_register_rejects_non_bool_session_required(self) -> None:
+        usecase = _usecase()
+
+        result = run(
+            usecase.register(
+                RegisterRequest(
+                    {**_REGISTRATION, "frontchannel_logout_session_required": "yes"},
+                    initial_access_token=_INITIAL_TOKEN,
+                )
+            )
+        )
+        assert isinstance(result, RegistrationError)
+        assert result.error == "invalid_client_metadata"
+
     def test_register_issues_secret_only_once(self) -> None:
         usecase = _usecase()
         result = _registered(usecase)

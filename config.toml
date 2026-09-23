@@ -27,6 +27,17 @@
 #                    en clair) — facultatif pour un client "public" ; un client
 #                    confidentiel sans redirect_uris est adapté au flow
 #                    machine à machine (client_credentials)
+# Terminaison de session OIDC (Front/Back-Channel Logout) :
+# - frontchannel_logout_uri              : iframe de déconnexion chargée par
+#                                          /end_session (iss/sid en query) —
+#                                          OIDC Front-Channel Logout 1.0 §2
+# - frontchannel_logout_session_required : exige l'envoi du `sid` à cette URI
+# - backchannel_logout_uri               : POST logout_token direct serveur→client
+#                                          (OIDC Back-Channel Logout 1.0 §2)
+# - backchannel_logout_session_required  : exige l'envoi du `sid` au logout_token
+# Le `sid` n'est envoyé que s'il est présent dans la session (utilisateur
+# connecté au navigateur) ; un client `*_session_required` sans `sid`
+# vérifiable n'est pas notifié (sécurité du "properly focus").
 # Durées de vie accordées au client (facultatives ; le défaut serveur
 # s'applique si absentes) :
 # - session_lifetime_seconds          : cookie de session (par défaut

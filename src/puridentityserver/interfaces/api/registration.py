@@ -154,6 +154,16 @@ def _registration_json(result: ClientRegistration) -> str:
         ("id_token_signed_response_alg", result.id_token_signed_response_alg),
         ("id_token_encrypted_response_alg", result.id_token_encrypted_response_alg),
         ("id_token_encrypted_response_enc", result.id_token_encrypted_response_enc),
+        ("frontchannel_logout_uri", result.frontchannel_logout_uri),
+        (
+            "frontchannel_logout_session_required",
+            result.frontchannel_logout_session_required,
+        ),
+        ("backchannel_logout_uri", result.backchannel_logout_uri),
+        (
+            "backchannel_logout_session_required",
+            result.backchannel_logout_session_required,
+        ),
     )
     data.update({name: value for name, value in optional_fields if value})
     return json.dumps(data, separators=(",", ":"))

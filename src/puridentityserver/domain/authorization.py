@@ -164,6 +164,13 @@ class Client:
     jeton JWS est émis tel quel ; sinon le JWS imbriqué est chiffré avec
     ``client_secret_ciphertext`` (familles symétriques) ou la clé publique
     RSA du ``jwks`` (RSA-OAEP).
+    ``frontchannel_logout_uri`` / ``backchannel_logout_uri`` (OIDC
+    Front-Channel Logout 1.0 §2 / Back-Channel Logout 1.0 §2) : URI de
+    terminaison de session du client appelées par ``/end_session`` après la
+    déconnexion — iframe (front-channel, ``iss``/``sid`` en query) ou
+    ``POST logout_token`` direct serveur→client (back-channel).
+    ``..._session_required`` impose l'envoi du ``sid`` (Session Management
+    properly focus) ; sans ``sid`` vérifiable, la notification est omise.
     """
 
     client_id: str
@@ -193,6 +200,10 @@ class Client:
     id_token_signed_response_alg: str = ""
     id_token_encrypted_response_alg: str = ""
     id_token_encrypted_response_enc: str = ""
+    frontchannel_logout_uri: str = ""
+    frontchannel_logout_session_required: bool = False
+    backchannel_logout_uri: str = ""
+    backchannel_logout_session_required: bool = False
 
     @property
     def effective_auth_method(self) -> TokenEndpointAuthMethod:
