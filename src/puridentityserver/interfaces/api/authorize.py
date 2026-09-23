@@ -12,6 +12,7 @@ from puridentityserver.application.authorize import (
     AuthorizeRedirect,
     AuthorizeRequest,
     AuthorizeUseCase,
+    validate_authorization_request,
 )
 from puridentityserver.application.consent import ConsentUseCase
 from puridentityserver.application.par import PushedAuthorizationUseCase, PushError
@@ -26,6 +27,8 @@ def authorize_router(
     par_usecase: PushedAuthorizationUseCase | None = None,
     client_repository: ClientReader | None = None,
     consent_usecase: ConsentUseCase | None = None,
+    *,
+    require_login: bool = False,
 ) -> APIRouter:
     """Construit le routeur FastAPI exposant ``GET /authorize``.
 
@@ -36,7 +39,9 @@ def authorize_router(
     consentement. ``consent_usecase`` active l'écran de consentement
     (``require_consent``, OIDC Core 1.0 §3.1.2.2) : la demande est alors
     redirigée vers ``/consent`` quand les scopes demandés ne sont pas déjà
-    couverts par un consentement mémorisé.
+    couverts par un consentement mémorisé. ``require_login`` : la demande non
+    authentifiée est redirigée vers ``/login`` (OIDC Core 1.0 §3.1.2.1), ou
+    renvoyée en erreur ``login_required`` quand ``prompt=none`` (§3.1.2.6).
     """
     router = APIRouter(tags=["authorize"])
 
@@ -62,6 +67,7 @@ def authorize_router(
         code_challenge: str = Query(default=""),
         code_challenge_method: str = Query(default="S256"),
         response_mode: str = Query(default=""),
+        prompt: str = Query(default=""),
         request_uri: str = Query(default=""),
         user: CurrentUserOptional = None,
     ) -> RedirectResponse:
@@ -96,7 +102,11 @@ def authorize_router(
                 code_challenge=code_challenge,
                 code_challenge_method=code_challenge_method,
                 response_mode=response_mode,
+                prompt=prompt,
             )
+
+        if require_login and user is None:
+            return await _login_or_error(auth_request, request, client_repository)
 
         if user is not None:
             auth_request = AuthorizeRequest(
@@ -110,6 +120,7 @@ def authorize_router(
                 code_challenge=auth_request.code_challenge,
                 code_challenge_method=auth_request.code_challenge_method,
                 response_mode=auth_request.response_mode,
+                prompt=auth_request.prompt,
                 session_id=await session_sid(request),
             )
         consent_redirect = await _consent_redirect_if_required(
@@ -123,6 +134,39 @@ def authorize_router(
         return _error_redirect(result)
 
     return router
+
+
+async def _login_or_error(
+    auth_request: AuthorizeRequest,
+    http_request: Request,
+    client_repository: ClientReader | None,
+) -> RedirectResponse:
+    """Gère une demande ``/authorize`` non authentifiée (:param:`require_login`).
+
+    ``prompt=none`` (OIDC Core 1.0 §3.1.2.6) : aucune redirection vers le
+    formulaire n'est autorisée — une erreur ``login_required`` est renvoyée au
+    client via sa ``redirect_uri`` (validation préalable pour ne jamais
+    rediriger sur une URI non enregistrée). Sinon : redirection vers
+    ``/login?next=<url complète d'/authorize>`` ; après connexion le
+    ``subject`` est porté par le cookie et la demande est rejouée telle quelle.
+    """
+    if "none" in auth_request.prompt.split():
+        validated = (
+            await validate_authorization_request(auth_request, client_repository)
+            if client_repository is not None
+            else None
+        )
+        if isinstance(validated, AuthorizeError):
+            return _error_redirect(validated)
+        error = AuthorizeError(
+            error="login_required",
+            error_description="Authentification requise (prompt=none)",
+            redirect_uri=auth_request.redirect_uri,
+            state=auth_request.state,
+            response_mode=validated.response_mode if validated is not None else ResponseMode.QUERY,
+        )
+        return _error_redirect(error)
+    return RedirectResponse(f"/login?next={quote(str(http_request.url))}", status_code=302)
 
 
 async def _resolve_pushed_request(

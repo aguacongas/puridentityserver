@@ -79,6 +79,10 @@ retenue :
   `log-detail.html` du module dans l'interface de la suite pendant le run
   (logs visibles dans l'étape du workflow) ; ajouter un
   `"browser": [...]` plus précis dans le plan concerné.
+- **`sub` vide dans l'id_token** : l'instance n'a pas `require_login = true`
+  (config.render.toml) — l'utilisateur anonyme reçoit un code sans sujet ;
+  activer le réglage pour forcer la page `/login` (remplie par le `browser`
+  du plan) avant toute émission.
 - **Plan inconnu** : la version de la suite peut renommer un plan/sélecteur ;
   l'erreur de `run-test-plan.py` liste les identifiants disponibles.
 - **ERREUR sur Redis/nginx** : relancer ; le premier pull des images
@@ -89,7 +93,7 @@ retenue :
 | Fichier | Rôle |
 | --- | --- |
 | `render.yaml` / `Dockerfile` / `.dockerignore` | déploiement de l'OP sur Render (mémoire) |
-| `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo) |
+| `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`) |
 | `plans/basic|implicit|hybrid.json` | configs des plans Core de la suite (alias, discovery, verts navigateur login/consent) |
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés |
 | `../.github/workflows/certification.yml` | workflow witness : deploy + suite + plans + rapport |

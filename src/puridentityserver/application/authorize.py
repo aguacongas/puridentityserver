@@ -94,6 +94,7 @@ class AuthorizeRequest:
     code_challenge: str = ""
     code_challenge_method: str = "S256"
     response_mode: str = ""
+    prompt: str = ""
     session_id: str = ""
 
 

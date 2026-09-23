@@ -27,6 +27,13 @@ storage_type = "memory"
 registration_enabled = true
 registration_initial_access_token_mode = "disabled"
 
+# Login obligatoire à l'endpoint /authorize (OIDC Core 1.0 §3.1.2.1) : la
+# demande non authentifiée est redirigée vers /login (refresh de session du
+# navigateur interne de la suite), `prompt=none` reçoit `login_required`.
+# Sans ce réglage l'utilisateur anonyme reçoit un code (subject vide -> `sub`
+# invalide : les modules de la certification échouent).
+require_login = true
+
 # Comptes de connexion de démo (login navigateur pilote par la suite via la
 # config `browser` des plans) — voir `certification/README.md`.
 

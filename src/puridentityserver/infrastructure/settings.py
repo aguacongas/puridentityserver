@@ -348,6 +348,15 @@ class Settings(BaseSettings):
     par_enabled: bool = True
     par_ttl_seconds: int = 90
 
+    # Authentification à l'endpoint /authorize.
+    # `require_login = false` (défaut de démo) : l'utilisateur non connecté est
+    # autorisé avec un `subject` vide (spike de développement). `true` : la
+    # demande d'autorisation non authentifiée renvoie vers la page `/login`
+    # (sauf `prompt=none` : erreur `login_required`) ; après connexion, le
+    # `subject` et le `sub` des id_token sont ceux du compte — comportement
+    # exigé par la certification OIDC (instance `certification/config.render.toml`).
+    require_login: bool = False
+
     # Identité (FastAPI Users, spike) — durée par défaut du cookie de session.
     # Le cookie est signé RS256 avec une clé rotative dédiée (KeyUse.SESSION,
     # jamais publiée) : ni secret statique, ni collision avec les clés de
