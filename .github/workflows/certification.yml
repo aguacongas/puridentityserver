@@ -1,0 +1,142 @@
+name: Certification OIDC
+
+# Suite de certification officielle OpenID Foundation (openid/conformance-suite),
+# jouée contre l'instance Render publique seedee (certification/config.render.toml).
+#
+# PR 1 : job WITNESS — non bloquant pour la CI. Déclenchement manuel ou
+# hebdomadaire ; les gaps Core (modules ne passant pas encore) NE font pas
+# échouer le workflow : chaque run produit un rapport brut + une page GitHub
+# Pages. Le passage en gate bloquant (PR 2) interviendra une fois les plans
+# Core stables.
+#
+# Pré-requis :
+# - service Render libre (render.yaml) : https://puridentityserver-certification.onrender.com
+# - secret GitHub `RENDER_DEPLOY_HOOK_URL` (Render -> Service -> Settings -> Deploy Hook)
+# - variable optionnelle `CERTIFICATION_OP_URL` (URL publique de l'OP)
+# - GitHub Pages activé avec source "GitHub Actions"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * MON"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+env:
+  OP_URL: ${{ vars.CERTIFICATION_OP_URL || 'https://puridentityserver-certification.onrender.com' }}
+  CONFORMANCE_SERVER: https://localhost.emobix.co.uk:8443/
+  CONFORMANCE_SERVER_MTLS: https://localhost.emobix.co.uk:8444/
+  SUITE_VERSION: release-v5.2.4
+
+concurrency:
+  group: certification
+  cancel-in-progress: true
+
+jobs:
+  certification:
+    name: Suite de certification OIDC (witness)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Redéploiement de l'OP sur Render (deploy hook)
+        if: ${{ secrets.RENDER_DEPLOY_HOOK_URL != '' }}
+        run: curl -sSf -X POST "$RENDER_DEPLOY_HOOK_URL"
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+
+      - name: Attente de l'OP sur $OP_URL (discovery opérationnel)
+        run: |
+          deadline=$((SECONDS + 900))
+          until [ $SECONDS -ge $deadline ]; do
+            issuer=$(curl -fsS --max-time 15 "$OP_URL/.well-known/openid-configuration" \
+              | python3 -c 'import json,sys;print(json.load(sys.stdin)["issuer"])' 2>/dev/null) \
+              && [ "$issuer" = "$OP_URL" ] && { echo "OP prêt : $issuer"; exit 0; }
+            echo "OP pas encore prêt (en attente du cold start Render)…"
+            sleep 15
+          done
+          echo "::error::L'OP $OP_URL n'a pas répondu sous 15 minutes" && exit 1
+
+      - name: Vérification de la validité des fichiers de plans
+        run: python3 -c "import json,glob; [json.load(open(p)) for p in glob.glob('certification/plans/*.json')]"
+
+      - name: Clone de la suite de certification (version pinnée)
+        run: |
+          git clone --depth 1 --branch "$SUITE_VERSION" \
+            https://gitlab.com/openid/conformance-suite.git
+
+      - name: Substitution de l'URL de l'OP dans les plans
+        run: |
+          for f in certification/plans/*.json; do
+            sed -i "s#{OPURL}#${OP_URL}#g" "$f"
+          done
+
+      - name: Démarrage de la suite (conformance-suite + nginx + mongodb)
+        working-directory: conformance-suite
+        run: docker compose -f docker-compose-prebuilt.yml up -d
+
+      - name: Attente de l'interface de la suite (https://localhost.emobix.co.uk:8443)
+        run: |
+          deadline=$((SECONDS + 900))
+          until [ $SECONDS -ge $deadline ]; do
+            if curl -ksS --max-time 15 -o /dev/null "$CONFORMANCE_SERVER"; then
+              echo "Suite opérationnelle."; exit 0
+            fi
+            echo "Suite pas encore prête…"
+            sleep 10
+          done
+          echo "::error::La suite n'a pas répondu sous 15 minutes" && exit 1
+
+      - name: Lancement des plans Core (Basic / Implicit / Hybrid)
+        continue-on-error: true
+        working-directory: conformance-suite
+        run: |
+          set +e
+          for plan in \
+            "oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|basic" \
+            "oidcc-implicit-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|implicit" \
+            "oidcc-hybrid-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|hybrid" ; do
+            selector="${plan%%|*}"; name="${plan##*|}"
+            echo "### Plan $name : $selector" >> "$GITHUB_STEP_SUMMARY"
+            python3 scripts/run-test-plan.py \
+              --export-dir "$GITHUB_WORKSPACE/results" \
+              "$selector" \
+              "$GITHUB_WORKSPACE/certification/plans/$name.json" >> "$GITHUB_STEP_SUMMARY" 2>&1
+            code=$?
+            echo "- exit code : $code (les gaps sont acceptés en mode witness)" >> "$GITHUB_STEP_SUMMARY"
+            [ "$code" -eq 0 ] || echo "plan $name en échec partiel (witness)" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Génération du rapport statique (GitHub Pages)
+        run: python3 certification/report.py --results results --site _site
+
+      - name: Upload des artefacts (rapports bruts)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: certification-results
+          path: |
+            results/
+            _site/
+          if-no-files-found: ignore
+
+      - name: Configuration GitHub Pages
+        if: always()
+        uses: actions/configure-pages@v5
+
+      - name: Publication du rapport sur GitHub Pages
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy GitHub Pages
+        if: always()
+        continue-on-error: true
+        id: deployment
+        uses: actions/deploy-pages@v4

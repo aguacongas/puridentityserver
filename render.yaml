@@ -1,0 +1,34 @@
+# Render Blueprint — instance de certification publique (PurIdentityServer).
+#
+# Service web gratuit "Spark" à mémoire seule (`storage_type = "memory"` dans
+# `certification/config.render.toml`) : l'état est perdu au redémarrage et
+# rien n'est écrit sur le disque éphémère de Render. Cette instance sert de
+# cible à la suite de certification OIDC lancée par le workflow
+# `.github/workflows/certification.yml` (l'OP doit être joignable à distance
+# par la suite, qui tourne dans le runner GitHub).
+#
+# Procédure : importer ce blueprint depuis le dashboard Render
+# (New -> Blueprint -> repo GitHub), puis récupérer l'URL du Deploy Hook du
+# service (Settings -> Deploy Hook) et la stocker en secret GitHub
+# `RENDER_DEPLOY_HOOK_URL`. Le nom du service détermine l'URL publique :
+# https://puridentityserver-certification.onrender.com
+
+services:
+  - type: web
+    name: puridentityserver-certification
+    runtime: docker
+    repo: https://github.com/aguacongas/puridentityserver
+    plan: free
+    branch: main
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /.well-known/openid-configuration
+    autoDeploy: false
+    envVars:
+      - key: PURIDENTITYSERVER_ISSUER
+        value: https://puridentityserver-certification.onrender.com
+      - key: PURIDENTITYSERVER_BASE_URL
+        value: ""
+      - key: PURIDENTITYSERVER_HOST
+        value: 0.0.0.0
+      - key: PURIDENTITYSERVER_SETTINGS_FILE
+        value: /app/certification/config.render.toml
