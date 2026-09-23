@@ -74,6 +74,11 @@ def test_discovery_endpoint_returns_oidc_metadata() -> None:
     assert metadata["authorization_endpoint"] == f"{_BASE_URL}/authorize"
     assert metadata["token_endpoint"] == f"{_BASE_URL}/token"
     assert metadata["jwks_uri"] == f"{_BASE_URL}/.well-known/jwks.json"
+    assert metadata["end_session_endpoint"] is not None
+    assert metadata["frontchannel_logout_supported"] is True
+    assert metadata["frontchannel_logout_session_supported"] is True
+    assert metadata["backchannel_logout_supported"] is True
+    assert metadata["backchannel_logout_session_supported"] is True
     assert metadata["response_types_supported"] == [
         "code",
         "id_token",
