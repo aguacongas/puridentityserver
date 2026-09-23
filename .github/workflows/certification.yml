@@ -115,14 +115,14 @@ jobs:
             "oidcc-implicit-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|implicit" \
             "oidcc-hybrid-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|hybrid" ; do
             selector="${plan%%|*}"; name="${plan##*|}"
-            echo "### Plan $name : $selector" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Plan $name : $selector" | tee -a "$GITHUB_STEP_SUMMARY"
             python3 scripts/run-test-plan.py \
               --export-dir "$GITHUB_WORKSPACE/results" \
               "$selector" \
-              "$GITHUB_WORKSPACE/certification/plans/$name.json" >> "$GITHUB_STEP_SUMMARY" 2>&1
-            code=$?
-            echo "- exit code : $code (les gaps sont acceptés en mode witness)" >> "$GITHUB_STEP_SUMMARY"
-            [ "$code" -eq 0 ] || echo "plan $name en échec partiel (witness)" >> "$GITHUB_STEP_SUMMARY"
+              "$GITHUB_WORKSPACE/certification/plans/$name.json" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+            code=${PIPESTATUS[0]}
+            echo "- exit code : $code (les gaps sont acceptés en mode witness)" | tee -a "$GITHUB_STEP_SUMMARY"
+            [ "$code" -eq 0 ] || echo "plan $name en échec partiel (witness)" | tee -a "$GITHUB_STEP_SUMMARY"
           done
 
       - name: Génération du rapport statique (GitHub Pages)
@@ -141,6 +141,8 @@ jobs:
       - name: Configuration GitHub Pages
         if: always()
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - name: Publication du rapport sur GitHub Pages
         if: always()
