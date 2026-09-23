@@ -23,8 +23,9 @@ Chaque feature restante = **une issue indépendante** (traçabilité + gate par 
 | [#46](https://github.com/aguacongas/puridentityserver/issues/46) ✅ | Grant **jwt-bearer** (RFC 7523) + `client_secret_jwt` + `tls_client_auth` (RFC 8705) — méthodes d'auth client exigées par la playlist de certification, livré avec sample DoD `samples/jwt-bearer-client/` |
 | [#47](https://github.com/aguacongas/puridentityserver/issues/47) ✅ | Algos manquants (HS256/384/512, ES384/512, JWE : RSA-OAEP, A128KW, dir) | `id_token` encryption + `jwt algos` attendus par la playlist alg — livré au merge PR#60 |
 | [#48](https://github.com/aguacongas/puridentityserver/issues/48) ✅ | **Logout front/back-channel** (OIDC Session Mgmt) | `sid` émis au login, claim `sid` des `id_token` ; `/end_session` → iframes `frontchannel_logout_uri` (+ `?sid=` si session_required) et POST du `logout_token` signé vers chaque `backchannel_logout_uri` ; annonces discovery — livré avec sample DoD `samples/logout-channel-client/` |
+| [#62](https://github.com/aguacongas/puridentityserver/issues/62) ✅ | **Session Management natif navigateur** (OIDC Session Mgmt 1.0) | `session_state` dans la réponse d'`/authorize` (empreinte salée client + origin + `sid` cookie HttpOnly, jamais lisible en JS) ; page `check_session_iframe` (`/session_state`) + endpoint de statut `/check_session` (réponses `unchanged`/`changed`/`error`) ; métadonnée discovery — livré dans sample DoD `samples/spa-client/` |
 
-Ordre d'implémentation conseillé : **#44 → #45 → #46 → #47** (terminés : #44, #46, #47, #48).
+Ordre d'implémentation conseillé : **#44 → #45 → #46 → #47** (terminés : #44, #46, #47, #48, #62).
 
 ## Extensions — OIDC Advanced / proche (P1)
 

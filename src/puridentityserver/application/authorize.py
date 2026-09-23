@@ -32,6 +32,10 @@ from secrets import token_urlsafe
 from puridentityserver.application.id_token_encryption import encrypt_id_token_for_client
 from puridentityserver.application.id_token_material import resolve_id_token_material
 from puridentityserver.application.scope_registry import ScopeRegistry
+from puridentityserver.application.session_management import (
+    SessionManagementUseCase,
+    origin_of_url,
+)
 from puridentityserver.domain.authorization import (
     AuthorizationCode,
     Client,
@@ -251,6 +255,7 @@ class AuthorizeUseCase:
         code_repository: AuthorizationCodeRepository,
         token_manager: TokenManager,
         scope_registry: ScopeRegistry | None = None,
+        session_management: SessionManagementUseCase | None = None,
     ) -> None:
         """Injection de la configuration, des repositories et de l'émetteur de jetons."""
         self._config = config
@@ -258,6 +263,7 @@ class AuthorizeUseCase:
         self._codes = code_repository
         self._token_manager = token_manager
         self._scope_registry = scope_registry
+        self._session_management = session_management
 
     async def execute(self, request: AuthorizeRequest) -> AuthorizeResult:
         """Traite la demande d'autorisation et retourne le redirect ou l'erreur."""
@@ -295,6 +301,7 @@ class AuthorizeUseCase:
             expires_in=expires_in,
             scopes=scopes if validated.wants_token else frozenset(),
             state=request.state,
+            session_state=self._resolve_session_state(request),
         )
         return AuthorizeRedirect(
             redirect_uri=self._build_redirect_uri(
@@ -419,6 +426,7 @@ class AuthorizeUseCase:
         expires_in: int,
         scopes: frozenset[Scope],
         state: str,
+        session_state: str = "",
     ) -> list[str]:
         """Assemble les paramètres de succès de la redirection (RFC 6749 §4.1.2, §4.2.2)."""
         params: list[str] = []
@@ -431,9 +439,26 @@ class AuthorizeUseCase:
             params.append("scope=" + " ".join(sorted(scope.value for scope in scopes)))
         if id_token:
             params.append(f"id_token={id_token}")
+        if session_state:
+            params.append(f"session_state={session_state}")
         if state:
             params.append(f"state={state}")
         return params
+
+    def _resolve_session_state(self, request: AuthorizeRequest) -> str:
+        """Valeur ``session_state`` de la réponse (OIDC Session Management 1.0 §2).
+
+        Présente uniquement quand une session utilisateur est active (cookie
+        ``opbs``) : l'origin de la ``redirect_uri`` sert d'origin RP (RFC 6454
+        §4). Sans use case injecté, aucun paramètre n'est ajouté.
+        """
+        if self._session_management is None or not request.session_id:
+            return ""
+        return self._session_management.create_session_state(
+            client_id=request.client_id,
+            origin=origin_of_url(request.redirect_uri),
+            session_id=request.session_id,
+        )
 
     def _build_redirect_uri(
         self, redirect_uri: str, response_mode: ResponseMode, params: list[str]

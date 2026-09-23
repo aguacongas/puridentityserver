@@ -41,6 +41,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 - [Pushed Authorization Requests] (RFC 9126) — extension
 - [OpenID Connect RP-Initiated Logout] (OIDC spec) — `/end_session`
 - [OpenID Connect Front-Channel Logout] + [Back-Channel Logout] (OIDC spec) — notifications de déconnexion
+- [OpenID Connect Session Management] (OIDC Session Management 1.0) — `session_state`, iframe `check_session_iframe`
 - [OAuth 2.0 Dynamic Client Registration] (RFC 7591) + [Client Management] (RFC 7592) — `/register`
 - CORS — origines autorisées **déduites des URIs des clients actifs** (`redirect_uris` + `web_origins`, OAuth 2.0 for Browser-Based Apps), pour les SPA publics en Authorization Code + PKCE
 - **Ressources protégées** (ApiResources) — registre des audiences API et de leurs scopes : l'`aud` d'un access token porte le nom des resources dont des scopes ont été accordés, tout scope non enregistré est refusé (`invalid_scope`)
@@ -62,6 +63,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 | `/identity-resources`              | Gestion CRUD des IdentityResources (scopes + claims) | ✅   |
 | `/api-resources`                   | Gestion CRUD des ApiResources (scopes d'API / audiences) | ✅   |
 | `/end_session`                      | RP-Initiated Logout                       | ✅   |
+| `/session_state` + `/check_session` | Session Management (iframe OP + statut)   | ✅   |
 
 ## Documentation
 
@@ -215,6 +217,18 @@ tests/             pytest unit + intégration (TestClient httpx)
     (`id_token_signing_alg_values_supported`, `id_token_encryption_alg_values_supported`,
     `id_token_encryption_enc_values_supported`) ; réglages serveur
     `PURIDENTITYSERVER_JWKS_ENCRYPTION_ALGORITHMS` / `_METHODS`.
+20. ✅ **Session Management natif navigateur** (issue #62, OIDC Session Management
+    1.0) : le paramètre `session_state` est ajouté à la réponse d'`/authorize`
+    quand une session est active (query du code flow, fragment des flows à
+    jeton) — empreinte salée
+    `base64url(SHA256(client_id " " origin " " sid " " salt)) + "." + salt`,
+    jamais d'espace, sel `secrets.token_urlsafe(32)`. Le **calcul reste côté
+    serveur** : la page `check_session_iframe` (`/session_state`) relaie
+    l'`event.origin` du `postMessage("client_id session_state")` vers
+    `GET /check_session`, qui recalcule l'empreinte avec le `sid` du cookie
+    HttpOnly (jamais exposé au JS) et répond `ok` / `changed` / `error` ;
+    la métadonnée `check_session_iframe` est publiée au discovery. Sample DoD :
+    `samples/spa-client/` (superviseur de session dans le navigateur).
 
 ## Développement local
 
@@ -269,3 +283,4 @@ gh secret set SONAR_SECRET
 [OpenID Connect RP-Initiated Logout]: https://openid.net/specs/openid-connect-rpinitiated-1_0.html
 [OpenID Connect Front-Channel Logout]: https://openid.net/specs/openid-connect-frontchannel-1_0.html
 [OpenID Connect Back-Channel Logout]: https://openid.net/specs/openid-connect-backchannel-1_0.html
+[OpenID Connect Session Management]: https://openid.net/specs/openid-connect-session-1_0.html

@@ -73,6 +73,15 @@
     }
     #status .error { color: var(--error); }
     #status .ok { color: #116d8e; }
+    #session-status { font-weight: 600; margin-left: 0.5rem; }
+    #session-status.ok { color: #116d8e; }
+    #session-status.error { color: var(--error); }
+    #session-monitor { margin-top: 0.35rem; }
+    #session-monitor button {
+      padding: 0.4rem 0.75rem;
+      font-size: 0.8rem;
+      border-radius: 6px;
+    }
     .grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
@@ -115,6 +124,25 @@
     <section>
       <h2>Résultats</h2>
       <div id="results" class="grid"></div>
+    </section>
+
+    <section>
+      <h2>Supervision de session — OIDC Session Management 1.0</h2>
+      <div class="card">
+        <h3>
+          check_session_iframe (§3.2)
+          <span id="session-status" class="error">inactive</span>
+        </h3>
+        <p id="session-monitor">
+          Lancez un flow connecté (Se connecter / Implicit / Hybrid / PAR),
+          puis cliquez sur <strong>Supervision de session</strong> : la page
+          embarque l'iframe d'état fournie par
+          <code>check_session_iframe</code>, envoie
+          <code>client_id + session_state</code> par <code>postMessage</code>
+          et affiche la réponse <code>unchanged</code> / <code>changed</code>
+          / <code>error</code> toutes les 5 s.
+        </p>
+      </div>
     </section>
   </main>
   <script src="app.js"></script>

@@ -314,6 +314,9 @@ async function completeCodeFlow(search) {
   if (!code || !verifier) {
     throw new Error("code d'autorisation ou code_verifier manquant");
   }
+  if (search.get("session_state")) {
+    store.set("session_state", search.get("session_state"));
+  }
   const config = await discovery();
   const algo = store.get("algo_flow") ? JSON.parse(store.get("algo_flow")) : null;
   if (algo) {
@@ -375,6 +378,9 @@ async function completeFragmentFlow(hash) {
   verifyState(hash.get("state"));
   const nonce = store.get("nonce");
   store.remove("nonce");
+  if (hash.get("session_state")) {
+    store.set("session_state", hash.get("session_state"));
+  }
   const config = await discovery();
   let claims = null;
   let response = {
@@ -728,6 +734,71 @@ async function flowRevoke() {
   }
 }
 
+let sessionSource = "";
+let sessionFrame = null;
+let sessionFrameOrigin = "";
+let sessionTimer = null;
+
+function showSessionStatus(status) {
+  const badge = document.getElementById("session-status");
+  badge.textContent = status;
+  badge.className = status === "unchanged" ? "ok" : "error";
+  log(`Supervision de session : ${status}`, status === "unchanged" ? "ok" : "error");
+}
+
+function stopSessionMonitor() {
+  if (sessionTimer !== null) {
+    window.clearInterval(sessionTimer);
+    sessionTimer = null;
+  }
+  if (sessionFrame !== null) {
+    sessionFrame.remove();
+    sessionFrame = null;
+  }
+}
+
+function pollSessionState(sessionState) {
+  const frame = document.createElement("iframe");
+  frame.src = sessionFrameOrigin;
+  frame.setAttribute("aria-hidden", "true");
+  frame.style.display = "none";
+  document.body.appendChild(frame);
+  sessionFrame = frame;
+  const send = () => {
+    frame.contentWindow.postMessage(`${SPA_CONFIG.clientId} ${sessionState}`, sessionFrameOrigin);
+  };
+  frame.addEventListener("load", send);
+  sessionTimer = window.setInterval(send, 5000);
+}
+
+async function flowSessionMonitor() {
+  try {
+    const config = await discovery();
+    if (!config.check_session_iframe) {
+      throw new Error("check_session_iframe non publié par le serveur");
+    }
+    const sessionState = store.get("session_state");
+    if (!sessionState) {
+      throw new Error(
+        "Aucun session_state mémorisé : lancez d'abord un flow connecté " +
+          "(Se connecter, Implicit, Hybrid ou PAR)"
+      );
+    }
+    stopSessionMonitor();
+    sessionFrameOrigin = config.check_session_iframe;
+    window.addEventListener("message", (event) => {
+      if (event.origin !== sessionFrameOrigin || event.source !== sessionFrame?.contentWindow) {
+        return;
+      }
+      showSessionStatus(typeof event.data === "string" ? event.data : "error");
+    });
+    showSessionStatus("supervision démarrée");
+    pollSessionState(sessionState);
+  } catch (error) {
+    fail(error, "supervision de session");
+  }
+}
+
 async function flowLogout() {
   try {
     const config = await discovery();
@@ -761,6 +832,7 @@ function renderFlows() {
     ["Rafraîchir", "Rotation du refresh_token (RFC 6749 §6)", flowRefresh],
     ["Introspection", "RFC 7662 — active/sub", flowIntrospect],
     ["Révoquer", "RFC 7009 — révoque l'access_token", flowRevoke],
+    ["Supervision de session", "OIDC Session Management 1.0 — check_session_iframe + session_state", flowSessionMonitor],
     ["Déconnexion", "RP-Initiated Logout (OIDC §5.2)", flowLogout],
   ];
   buttons.forEach(([label, subtitle, handler]) => {
