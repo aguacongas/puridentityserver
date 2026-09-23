@@ -17,6 +17,7 @@ navigateur et exerce **tous** les flows du serveur PurIdentityServer :
 | Rafraîchir | rotation du `refresh_token` | RFC 6749 §6 |
 | Introspection | `POST /introspect` du dernier `access_token` | RFC 7662 |
 | Révoquer | `POST /revoke` du dernier `access_token` | RFC 7009 |
+| Supervision de session | iframe `check_session_iframe` + `session_state` | OIDC Session Management 1.0 §3.2 |
 | Déconnexion | RP-Initiated Logout via `/end_session` | OIDC Core §5.2 |
 
 Le callback est géré **dans le navigateur** (pas de serveur applicatif) : le
@@ -98,6 +99,45 @@ scope `api.read` requis — et répond `200` avec les claims du jeton, ou
 fait passer par la page de consentement, qui liste aussi les scopes d'API.
 Voir [samples/api-resources-client/](../api-resources-client/README.md).
 
+> La supervision de session relève du navigateur (iframe + `postMessage` +
+> cookie HttpOnly) : elle n'est pas couverte par le smoke test CORS ci-dessous.
+> Le contrat serveur (paramètre `session_state` d'/authorize, page
+> `/session_state`, endpoint `/check_session`) est couvert par
+> `tests/test_session_management.py`.
+
+### Supervision de session (Session Management — issue #62)
+
+Le bouton **Supervision de session** exerce le **Session Management natif
+navigateur** (OIDC Session Management 1.0) : le serveur est l'OP, la page
+SPA joue la *relying party* qui garde l'œil sur sa session SSO.
+
+1. **Lancement** : serveur démarré (port 8000) + page ouverte sur
+   <http://127.0.0.1:5177>. Exécuter un flow connecté (**Se connecter**,
+   **Implicit**, **Hybrid** ou **PAR**) et se connecter avec un compte de
+   démo (`alice@example.com` / `password`).
+2. **Config** : à la redirection de retour, le serveur ajoute le paramètre
+   `session_state` à la réponse d'autorisation (query du code flow,
+   fragment des flows à jeton) — la page le mémorise. La métadonnée
+   `check_session_iframe` de `/.well-known/openid-configuration` pointe vers
+   `http://127.0.0.1:8000/session_state`.
+3. **Résultat attendu** : cliquer sur **Supervision de session** — la page
+   embarque l'iframe d'état du serveur (cachée) et lui envoie toutes les
+   5 s le message `postMessage("sample-spa-client <session_state>")`. Le
+   serveur recalcule l'empreinte avec l'origine de la page (`event.origin`)
+   et son propre cookie de session, puis répond `unchanged` — l'état
+   s'affiche en vert, la session est toujours active.
+
+**Changement d'état** : pendant que la supervision tourne, ouvrir
+**Déconnexion** (RP-Initiated Logout) puis revenir sur la page : au sondage
+suivant l'iframe répond `changed` — le serveur ne retrouve plus de session
+active correspondant au `session_state` ; un vrai RP déclencherait alors
+une ré-authentification silencieuse (`prompt=none`).
+
+Note : rien d'identitaire ne transit par le postMessage ni par
+`/check_session` — seule l'empreinte salée `session_state` est échangée,
+et le cookie de session reste HttpOnly côté serveur (l'OP n'expose jamais
+le `sid` au JavaScript, cf. spec §5.1 et §6).
+
 ## Smoke test
 
 Un test de bout en bout lance le serveur avec la configuration dédiée
@@ -127,6 +167,10 @@ uv run python samples/spa-client/smoke_test.py
 - **Appareil** : la page affiche `user_code` + URL de vérification ; ouvrir
   `verification_uri` dans un onglet, se connecter et saisir le code, puis
   regarder la page SPA recevoir les jetons au sondage suivant.
+- **Supervision de session** : iframe OP cachée (`check_session_iframe`),
+  `postMessage` de `client_id + session_state` toutes les 5 s, affichage de
+  la réponse `unchanged` / `changed` / `error`. La déconnexion depuis le
+  même navigateur fait basculer le statut sur `changed`.
 - **API protégée** : flow code avec scopes `openid api.read`, puis appel de
   `GET /api/data` sur l'API échantillon (`api_server.py`) qui vérifie la
   signature JWKS, `iss`/`exp`/`aud` et le scope; le résultat s'affiche
@@ -176,3 +220,9 @@ Les endpoints sont résolus dynamiquement depuis
 - Le formulaire `/login` du serveur est une page HTML de démonstration ;
   une SSO réelle branchée sur ce SPA passerait par l'authentification du
   serveur.
+- **Supervision de session en déploiement cross-site** : dans cette démo,
+  SPA (`127.0.0.1:5177`) et serveur (`127.0.0.1:8000`) partagent le même
+  site (`127.0.0.1`) : le cookie de session SameSite=Lax circule jusqu'à
+  l'iframe du serveur. Un RP réel sur un domaine distinct se heurterait aux
+  restrictions tierces (SameSite=Lax/None, ITP) décrites par la spec §5.1 —
+  limitation documentée, pas un défaut de cette implémentation.
