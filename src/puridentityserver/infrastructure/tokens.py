@@ -126,9 +126,7 @@ class PyJWTTokenManager:
             "iat": issued_at,
             "exp": expires_at,
             "jti": jwt_id,
-            "events": {  # NOSONAR(S5332) -- URI d'événement imposée par OIDC BCL 1.0 §2.1
-                "http://schemas.openid.net/event/backchannel-logout": {}
-            },
+            "events": {"http://schemas.openid.net/event/backchannel-logout": {}},  # NOSONAR(S5332)
         }
         if sid:
             payload["sid"] = sid
