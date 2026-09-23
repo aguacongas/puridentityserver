@@ -42,6 +42,10 @@ env:
   # Token factice : l'instance locale de la suite est ouverte, le header
   # Bearer n'y est pas vérifié (dev_mode exige simplement une valeur non nulle).
   CONFORMANCE_TOKEN: placeholder-local-suite
+  # Le nginx local de la suite sert un certificat auto-signé pour
+  # localhost.emobix.co.uk : désactivation de la vérification TLS côté driver
+  # (liaison interne runner<->suite uniquement ; l'OP sur Render garde son TLS).
+  DISABLE_SSL_VERIFY: '1'
   SUITE_VERSION: release-v5.2.4
 
 concurrency:
