@@ -105,6 +105,9 @@ jobs:
           done
           echo "::error::La suite n'a pas répondu sous 15 minutes" && exit 1
 
+      - name: Dépendances Python du driver officiel (httpx)
+        run: python3 -m pip install --disable-pip-version-check --quiet httpx
+
       - name: Lancement des plans Core (Basic / Implicit / Hybrid)
         continue-on-error: true
         working-directory: conformance-suite
