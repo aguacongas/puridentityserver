@@ -47,6 +47,11 @@ env:
   # localhost.emobix.co.uk : désactivation de la vérification TLS côté driver
   # (liaison interne runner<->suite uniquement ; l'OP sur Render garde son TLS).
   DISABLE_SSL_VERIFY: '1'
+  # Suite démarrée à froid sur le runner + OP Render en cold start : le timeout
+  # par défaut de 240 s/module (conformance.py wait_for_state) peut être dépassé
+  # sur les premiers modules (chauffe du moteur de test / egress lente).
+  # La valeur est injectée par le patch sed de l'étape dédiée.
+  CONFORMANCE_MODULE_TIMEOUT: '600'
   SUITE_VERSION: release-v5.2.4
 
 concurrency:
@@ -118,6 +123,14 @@ jobs:
 
       - name: Dépendances Python du driver officiel (httpx)
         run: python3 -m pip install --disable-pip-version-check --quiet httpx
+
+      - name: Timeout par module piloté par CONFORMANCE_MODULE_TIMEOUT
+        # Le driver upstream hardcode timeout=240 dans wait_for_state : on rend
+        # cette valeur règlable sans dévier du script officiel (patch sémantique).
+        working-directory: conformance-suite
+        run: |
+          sed -i 's/def wait_for_state(self, module_id, required_states, timeout=240):/def wait_for_state(self, module_id, required_states, timeout=int(os.getenv("CONFORMANCE_MODULE_TIMEOUT", "240"))):/' scripts/conformance.py
+          grep -n "CONFORMANCE_MODULE_TIMEOUT" scripts/conformance.py
 
       - name: Lancement des plans Core (Basic / Implicit / Hybrid)
         continue-on-error: true
