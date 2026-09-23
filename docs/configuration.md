@@ -287,8 +287,11 @@ et l'administration par-dessus les mêmes stores.
   Les clés JWKS embarquées sont **validées** à la registration (kty RSA/EC
   uniquement, membres `n`/`e` ou `crv`/`x`/`y` intacts en base64url, module
   RSA ≥ 2048 bits, `use`/`alg` cohérents) puis **re-vérifiées à l'émission**
-  (défense en profondeur) ; un matérial de chiffrement indisponible ou
-  non conforme est rejeté en `invalid_client`/`invalid_client_metadata`.
+  (défense en profondeur) ; une réponse de registration (RFC 7591 / RFC 7592)
+  reflète aussi les choix d'`id_token` du client
+  (`id_token_signed_response_alg`/`id_token_encrypted_response_alg`/
+  `id_token_encrypted_response_enc`) ; un matérial de chiffrement indisponible
+  ou non conforme est rejeté en `invalid_client`/`invalid_client_metadata`.
 - L'endpoint `/userinfo` valide l'access token Bearer (signature JWKS, `iss`,
   `exp`) puis renvoie les claims filtrés par les scopes accordés au jeton
   (OIDC Core 1.0 §5.4). Les claims sont résolus par un `ClaimsProvider`
