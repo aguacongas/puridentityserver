@@ -169,7 +169,7 @@ def test_rotation_regenerates_a_missing_algorithm_alongside_active_others() -> N
 
 def test_settings_reject_unsupported_algorithm() -> None:
     with pytest.raises(ValueError):
-        Settings(jwks_algorithms=("RS256", "HS256"))
+        Settings(jwks_algorithms=("RS256", "HE256"))
 
 
 def test_settings_reject_unsupported_storage_type() -> None:

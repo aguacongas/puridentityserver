@@ -191,6 +191,18 @@ tests/             pytest unit + intégration (TestClient httpx)
     (`puridentityfull.server:app`, mémoire seule) ; la façade historique
     `puridentityserver.server:app` dispatche sur `role`.
     Échantillon testable pas-à-pas : `samples/admin-api-client/`.
+19. ✅ **Algorithmes d'`id_token`** (issue #47, OIDC Core 1.0 §3.1.3) — signature
+    par client : `RS*`/`PS*`/`ES*` (clé serveur du JWKS) ou **HS*** (`HS256`/
+    `HS384`/`HS512`, signé avec le secret partagé du client, jamais publié) via
+    `id_token_signed_response_alg` ; **chiffrement JWE** (RFC 7516) optionnel via
+    `id_token_encrypted_response_alg`/`_enc` — `RSA-OAEP`/`RSA-OAEP-256`
+    (clé publique RSA ≥ 2048 bits du `jwks` enregistré), `A128KW`/`A256KW`/`dir`
+    (clé dérivée du secret partagé, HKDF-SHA256), méthodes `A*CBC-HS*`/`A*GCM`.
+    Les clés JWKS embarquées sont validées à l'enregistrement et re-vérifiées à
+    l'émission (matériel indisponible ⇒ `invalid_client`). Annonces au discovery
+    (`id_token_signing_alg_values_supported`, `id_token_encryption_alg_values_supported`,
+    `id_token_encryption_enc_values_supported`) ; réglages serveur
+    `PURIDENTITYSERVER_JWKS_ENCRYPTION_ALGORITHMS` / `_METHODS`.
 
 ## Développement local
 

@@ -12,6 +12,10 @@ from dataclasses import dataclass, field
 
 from puridentityserver.domain.authorization import TokenEndpointAuthMethod
 from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCES
+from puridentityserver.domain.jwe import (
+    ALL_ENCRYPTION_ALGORITHMS,
+    ALL_ENCRYPTION_METHODS,
+)
 from puridentityserver.domain.jwks import ALL_SIGNING_ALGORITHMS
 from puridentityserver.interfaces.repositories.readers import (
     ApiResourceReader,
@@ -30,6 +34,10 @@ class DiscoveryConfig:
     signing_algorithms: tuple[str, ...] = tuple(
         algorithm.value for algorithm in ALL_SIGNING_ALGORITHMS
     )
+    encryption_algorithms: tuple[str, ...] = tuple(
+        algorithm.value for algorithm in ALL_ENCRYPTION_ALGORITHMS
+    )
+    encryption_methods: tuple[str, ...] = tuple(method.value for method in ALL_ENCRYPTION_METHODS)
     token_endpoint_auth_methods: tuple[str, ...] = field(
         default_factory=lambda: tuple(method.value for method in TokenEndpointAuthMethod)
     )
@@ -71,6 +79,8 @@ class DiscoveryUseCase:
             "end_session_endpoint": f"{base}/end_session",
             "device_authorization_endpoint": f"{base}/device_authorization",
             "id_token_signing_alg_values_supported": list(self._config.signing_algorithms),
+            "id_token_encryption_alg_values_supported": list(self._config.encryption_algorithms),
+            "id_token_encryption_enc_values_supported": list(self._config.encryption_methods),
             "token_endpoint_auth_methods_supported": list(self._config.token_endpoint_auth_methods),
             "grant_types_supported": list(self._config.grant_types_supported),
             "scopes_supported": scopes_supported,

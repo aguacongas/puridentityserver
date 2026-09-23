@@ -41,7 +41,7 @@ from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.application.token import TokenConfig, TokenUseCase
 from puridentityserver.application.userinfo import UserInfoConfig, UserInfoUseCase
 from puridentityserver.domain.authorization import TokenEndpointAuthMethod
-from puridentityserver.domain.jwks import JWTAlgorithm, KeyUse
+from puridentityserver.domain.jwks import SYMMETRIC_ALGORITHMS, JWTAlgorithm, KeyUse
 from puridentityserver.domain.userinfo import UserClaims
 from puridentityserver.identity.config import (
     auth_router,
@@ -53,6 +53,7 @@ from puridentityserver.identity.config import (
 from puridentityserver.infrastructure.bearer import build_bearer_verifier
 from puridentityserver.infrastructure.claims import UserStoreClaimsProvider
 from puridentityserver.infrastructure.client_assertions import PyJWTClientAssertionVerifier
+from puridentityserver.infrastructure.jwe import JWEIdTokenEncrypter
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
 from puridentityserver.infrastructure.persistence.readers import build_readers_from_stores
 from puridentityserver.infrastructure.persistence.stores import (
@@ -86,9 +87,16 @@ _PACKAGE_VERSION = "0.1.0"
 
 
 def _primary_algorithm(settings: Settings) -> JWTAlgorithm:
-    """Algorithme de signature principal, ou RS256 si aucun n'est configuré."""
-    algorithms = settings.jwks_signing_algorithms
-    return algorithms[0] if algorithms else JWTAlgorithm.RS256
+    """Algorithme asymétrique de signature principal, ou RS256 sinon.
+
+    La famille HS* signe l'``id_token`` avec le secret partagé du client :
+    elle ne fournit jamais la clé de serveur signant l'access_token et le
+    reste des jetons — premier algorithme asymétrique configuré.
+    """
+    for algorithm in settings.jwks_signing_algorithms:
+        if algorithm not in SYMMETRIC_ALGORITHMS:
+            return algorithm
+    return JWTAlgorithm.RS256
 
 
 def _mount_authorization_routers(
@@ -147,6 +155,8 @@ class ProtocolDependencies:
             registration_enabled=settings.registration_enabled,
             par_enabled=settings.par_enabled,
             signing_algorithms=settings.jwks_algorithms,
+            encryption_algorithms=settings.jwks_encryption_algorithms,
+            encryption_methods=settings.jwks_encryption_methods,
             token_endpoint_auth_methods=self._token_endpoint_auth_methods(),
         )
         self.jwks_usecase = JWKSetUseCase(
@@ -160,6 +170,7 @@ class ProtocolDependencies:
         )
         self.token_manager = PyJWTTokenManager(self.key_manager)
         self.secret_cipher = AsymmetricSecretCipher(self.secret_key_manager)
+        self.id_token_encrypter = JWEIdTokenEncrypter()
         self.client_assertions = PyJWTClientAssertionVerifier(self.secret_cipher)
         self.bearer_verifier = build_bearer_verifier(settings, self.token_manager)
         self.registration_authorizer = BearerClaimAuthorizer(
@@ -185,6 +196,8 @@ class ProtocolDependencies:
                 access_token_ttl_seconds=settings.access_token_ttl_seconds,
                 signing_algorithm=_primary_algorithm(settings),
                 issuer=settings.issuer,
+                secret_cipher=self.secret_cipher,
+                id_token_encrypter=self.id_token_encrypter,
             ),
             self.readers.client,
             stores.code,
@@ -198,6 +211,8 @@ class ProtocolDependencies:
                 access_token_ttl_seconds=settings.access_token_ttl_seconds,
                 refresh_token_ttl_seconds=settings.refresh_token_ttl_seconds,
                 token_endpoint=f"{settings.base_url or settings.issuer}".rstrip("/") + "/token",
+                secret_cipher=self.secret_cipher,
+                id_token_encrypter=self.id_token_encrypter,
             ),
             self.readers.client,
             stores.code,

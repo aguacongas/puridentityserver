@@ -29,6 +29,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
 
+from puridentityserver.application.id_token_encryption import encrypt_id_token_for_client
+from puridentityserver.application.id_token_material import resolve_id_token_material
 from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.domain.authorization import (
     AuthorizationCode,
@@ -38,7 +40,12 @@ from puridentityserver.domain.authorization import (
     resolve_lifetime_seconds,
 )
 from puridentityserver.domain.jwks import JWTAlgorithm
-from puridentityserver.interfaces.domain.tokens import TokenManager
+from puridentityserver.interfaces.domain.secrets import SecretCipher
+from puridentityserver.interfaces.domain.tokens import (
+    IdTokenEncrypter,
+    JWEUnavailableError,
+    TokenManager,
+)
 from puridentityserver.interfaces.repositories.authorization_code_repository import (
     AuthorizationCodeRepository,
 )
@@ -65,6 +72,8 @@ class AuthorizeConfig:
     access_token_ttl_seconds: int = 3600
     signing_algorithm: JWTAlgorithm = JWTAlgorithm.RS256
     issuer: str = ""
+    secret_cipher: SecretCipher | None = None
+    id_token_encrypter: IdTokenEncrypter | None = None
 
 
 @dataclass(slots=True)
@@ -266,7 +275,7 @@ class AuthorizeUseCase:
         access_token = ""
         expires_in = 0
         if validated.wants_id_token or validated.wants_token:
-            id_token, access_token, expires_in = await self._issue_tokens(
+            issued = await self._issue_tokens(
                 request,
                 scopes,
                 validated.client,
@@ -274,6 +283,9 @@ class AuthorizeUseCase:
                 validated.wants_id_token,
                 validated.wants_token,
             )
+            if isinstance(issued, AuthorizeError):
+                return issued
+            id_token, access_token, expires_in = issued
 
         params = self._build_success_params(
             code=code,
@@ -325,7 +337,7 @@ class AuthorizeUseCase:
         code: str,
         wants_id_token: bool,
         wants_token: bool,
-    ) -> tuple[str, str, int]:
+    ) -> tuple[str, str, int] | AuthorizeError:
         """Émet id_token et/ou access token depuis ``/authorize`` (implicit/hybrid)."""
         token_ttl = resolve_lifetime_seconds(
             client.access_token_lifetime_seconds, self._config.access_token_ttl_seconds
@@ -351,8 +363,18 @@ class AuthorizeUseCase:
 
         id_token = ""
         if wants_id_token:
+            material = await resolve_id_token_material(
+                client, self._config.signing_algorithm, self._config.secret_cipher
+            )
+            if material is None:
+                return _authorize_error(
+                    "invalid_client",
+                    request,
+                    description="Secret du client indisponible pour la signature HS*",
+                )
+            id_token_algorithm, shared_secret = material
             id_token = await self._token_manager.create_id_token(
-                algorithm=self._config.signing_algorithm,
+                algorithm=id_token_algorithm,
                 issuer=self._config.issuer,
                 subject=request.subject,
                 audience=client.client_id,
@@ -361,8 +383,22 @@ class AuthorizeUseCase:
                 issued_at=issued_at,
                 scopes=scopes,
                 at_hash=at_hash,
-                c_hash=_hash_artefact(code, self._config.signing_algorithm) if code else "",
+                c_hash=(_hash_artefact(code, id_token_algorithm) if code else ""),
+                shared_secret=shared_secret,
             )
+            try:
+                id_token = await encrypt_id_token_for_client(
+                    id_token=id_token,
+                    client=client,
+                    secret_cipher=self._config.secret_cipher,
+                    encrypter=self._config.id_token_encrypter,
+                )
+            except JWEUnavailableError:
+                return _authorize_error(
+                    "invalid_client",
+                    request,
+                    description="Matériel de chiffrement d'id_token indisponible",
+                )
         return id_token, access_token, token_ttl
 
     async def _resolve_audience(self, client: Client, scopes: frozenset[Scope]) -> str | list[str]:

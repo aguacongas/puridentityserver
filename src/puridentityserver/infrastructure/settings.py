@@ -27,6 +27,12 @@ from puridentityserver.domain.identity_resource import (
     DEFAULT_IDENTITY_RESOURCES,
     IdentityResource,
 )
+from puridentityserver.domain.jwe import (
+    ALL_ENCRYPTION_ALGORITHMS,
+    ALL_ENCRYPTION_METHODS,
+    JWEEncryptionMethod,
+    JWEKeyManagementAlgorithm,
+)
 from puridentityserver.domain.jwks import ALL_SIGNING_ALGORITHMS, JWTAlgorithm
 
 _STORAGE_TYPES = ("memory", "sql")
@@ -92,6 +98,9 @@ def _parse_client(raw: dict[str, object]) -> Client:
         jwks=jwks,
         tls_client_auth_subject_dn=str(raw.get("tls_client_auth_subject_dn", "")),
         tls_client_certificate_hash=str(raw.get("tls_client_certificate_hash", "")),
+        id_token_signed_response_alg=str(raw.get("id_token_signed_response_alg", "")),
+        id_token_encrypted_response_alg=str(raw.get("id_token_encrypted_response_alg", "")),
+        id_token_encrypted_response_enc=str(raw.get("id_token_encrypted_response_enc", "")),
         session_lifetime_seconds=_optional_int(raw, "session_lifetime_seconds"),
         access_token_lifetime_seconds=_optional_int(raw, "access_token_lifetime_seconds"),
         authorization_code_lifetime_seconds=_optional_int(
@@ -216,6 +225,20 @@ class Settings(BaseSettings):
     )
     jwks_rotation_days: int = 90
     jwks_grace_period_days: int = 7
+
+    # Chiffrement JWE des id_token (OIDC Core 1.0 §3.1.3.6) : algorithmes
+    # de gestion de clé (``alg``) et méthodes de chiffrement du contenu
+    # (``enc``) annoncés au discovery
+    # (``id_token_encryption_alg_values_supported`` /
+    # ``id_token_encryption_enc_values_supported``). Un client peut en
+    # choisir un par ``id_token_encrypted_response_alg`` /
+    # ``id_token_encrypted_response_enc`` (cf. ``_parse_client``).
+    jwks_encryption_algorithms: Annotated[tuple[str, ...], NoDecode] = tuple(
+        algorithm.value for algorithm in ALL_ENCRYPTION_ALGORITHMS
+    )
+    jwks_encryption_methods: Annotated[tuple[str, ...], NoDecode] = tuple(
+        method.value for method in ALL_ENCRYPTION_METHODS
+    )
 
     # OAuth 2.0 / OIDC (RFC 6749, RFC 7636) — durées de vie par défaut du
     # serveur. Un client peut les surcharger via `access_token_lifetime_seconds`
@@ -474,6 +497,34 @@ class Settings(BaseSettings):
         ]
         if unknown:
             raise ValueError(f"Algorithmes de signature non supportés : {', '.join(unknown)}")
+        return value
+
+    @field_validator("jwks_encryption_algorithms")
+    @classmethod
+    def _validate_encryption_algorithms(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Garantit que chaque algorithme de gestion de clé configuré est supporté."""
+        unknown = [
+            name
+            for name in value
+            if name not in JWEKeyManagementAlgorithm.__members__
+            and name not in JWEKeyManagementAlgorithm._value2member_map_
+        ]
+        if unknown:
+            raise ValueError(f"Algorithmes de chiffrement non supportés : {', '.join(unknown)}")
+        return value
+
+    @field_validator("jwks_encryption_methods")
+    @classmethod
+    def _validate_encryption_methods(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Garantit que chaque méthode de chiffrement configurée est supportée."""
+        unknown = [
+            name
+            for name in value
+            if name not in JWEEncryptionMethod.__members__
+            and name not in JWEEncryptionMethod._value2member_map_
+        ]
+        if unknown:
+            raise ValueError(f"Méthodes de chiffrement non supportées : {', '.join(unknown)}")
         return value
 
     @cached_property

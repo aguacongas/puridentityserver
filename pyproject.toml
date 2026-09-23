@@ -79,10 +79,11 @@ max-complexity = 10
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["assert", "undocumented-public-module", "undocumented-public-class", "undocumented-public-method", "undocumented-public-function", "hardcoded-password-string", "hardcoded-password-func-arg"]  # assert + docstrings non requis dans les tests, S105/S106 pour valeurs de référence (jetons, secrets) dans les assertions
+"src/puridentityserver/infrastructure/jwe.py" = ["suspicious-insecure-hash-usage"]  # SHA-1 imposé par RFC 7518 §4.3 pour RSA-OAEP (cf. NOSONAR(S4790) in situ)
 "scripts/**" = ["print", "suspicious-subprocess-import", "subprocess-without-shell-equals-true"]  # script de dev : print + subprocess ok
-"samples/**/smoke_test.py" = ["assert", "print", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "try-except-in-loop", "hardcoded-password-string", "hardcoded-password-func-arg"]  # smoke test : print + assert + subprocess + polling retries + valeurs de référence (token/secret client démo)
+"samples/**/smoke_test.py" = ["assert", "print", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "try-except-in-loop", "hardcoded-password-string", "hardcoded-password-func-arg", "weak-cryptographic-key"]  # smoke test : print + assert + subprocess + polling retries + valeurs de référence (token/secret client démo) + clé RSA 1024 bits volontaire pour prouver la défense du serveur (RFC 7518 §4.3)
 "samples/smoke_common.py" = ["print", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "try-except-in-loop"]  # helper des smoke tests : affiche l'état, lance le serveur en sous-processus (liste d'arguments, pas de shell), sonde le port
-"samples/**/client.py" = ["print"]  # démo CLI : affichage de résultats
+"samples/**/client.py" = ["print", "weak-cryptographic-key"]  # démo CLI : affichage de résultats ; clé RSA 1024 bits volontaire pour prouver le rejet d'une clé courte
 
 [tool.ruff.format]
 quote-style = "double"

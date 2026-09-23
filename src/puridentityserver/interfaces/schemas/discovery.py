@@ -2,6 +2,10 @@
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from puridentityserver.domain.jwe import (
+    ALL_ENCRYPTION_ALGORITHMS,
+    ALL_ENCRYPTION_METHODS,
+)
 from puridentityserver.domain.jwks import ALL_SIGNING_ALGORITHMS
 
 
@@ -66,6 +70,12 @@ class DiscoveryDocument(BaseModel):
     subject_types_supported: list[str] = Field(default_factory=lambda: ["public"])
     id_token_signing_alg_values_supported: list[str] = Field(
         default_factory=lambda: [algorithm.value for algorithm in ALL_SIGNING_ALGORITHMS]
+    )
+    id_token_encryption_alg_values_supported: list[str] = Field(
+        default_factory=lambda: [algorithm.value for algorithm in ALL_ENCRYPTION_ALGORITHMS]
+    )
+    id_token_encryption_enc_values_supported: list[str] = Field(
+        default_factory=lambda: [method.value for method in ALL_ENCRYPTION_METHODS]
     )
     claims_supported: list[str] = Field(
         default_factory=lambda: [

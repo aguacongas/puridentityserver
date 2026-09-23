@@ -84,6 +84,7 @@ def render_server_config(
     api_resources: tuple[dict[str, object], ...] = (),
     registration_enabled: bool = False,
     registration_initial_access_tokens: tuple[str, ...] = (),
+    jwks_algorithms: tuple[str, ...] = _JWKS_ALGORITHMS,
     extra_settings: Mapping[str, object] | None = None,
 ) -> str:
     """Rend le TOML d'un serveur minimal déclarant ``clients`` (+``users``) sur ``port``.
@@ -94,6 +95,8 @@ def render_server_config(
     ``registration_enabled`` ajoute les réglages de Dynamic Client
     Registration (RFC 7591/7592) : endpoint ``/register`` activé et liste des
     initial access tokens autorisés (la création exige un Bearer token).
+    ``jwks_algorithms`` choisit les algorithmes de signature fournis (défaut
+    ``RS256`` — un smoke test des HS* doit passer ``("RS256", "HS256", ...)``).
     ``extra_settings`` ajoute des clés ``[settings]`` arbitraires (ex.
     ``role``, ``admin_required_claim_values``, mode de registration).
     """
@@ -103,7 +106,7 @@ def render_server_config(
         'base_url = ""\n'
         f'host = "{HOST}"\n'
         f"port = {port}\n"
-        f"jwks_algorithms = {json.dumps(_JWKS_ALGORITHMS)}\n"
+        f"jwks_algorithms = {json.dumps(list(jwks_algorithms))}\n"
     )
     lines: list[str] = []
     if registration_enabled:
@@ -152,6 +155,7 @@ def run_server(
     api_resources: tuple[dict[str, object], ...] = (),
     registration_enabled: bool = False,
     registration_initial_access_tokens: tuple[str, ...] = (),
+    jwks_algorithms: tuple[str, ...] = _JWKS_ALGORITHMS,
     extra_settings: Mapping[str, object] | None = None,
 ) -> Iterator[str]:
     """Lance un serveur dédié pour la configuration spécifique de ce test.
@@ -159,9 +163,10 @@ def run_server(
     Génère la configuration (issuer = ``port``, clients seed ``clients``,
     comptes de connexion ``users``, ApiResources seed ``api_resources``,
     éventuellement la Dynamic Client Registration activée avec ses initial
-    access tokens, plus ``extra_settings``) dans un fichier temporaire,
-    démarre le serveur uvicorn sur ``port`` puis fournit l'URL de base
-    jusqu'à la sortie du bloc (sous-processus terminé).
+    access tokens, algorithmes de signature ``jwks_algorithms``, plus
+    ``extra_settings``) dans un fichier temporaire, démarre le serveur uvicorn
+    sur ``port`` puis fournit l'URL de base jusqu'à la sortie du bloc
+    (sous-processus terminé).
     """
     if port_in_use(port):
         raise SystemExit(f"Port {port} occupé : arrêtez le serveur qui écoute sur {port}.")
@@ -176,6 +181,7 @@ def run_server(
                 api_resources=api_resources,
                 registration_enabled=registration_enabled,
                 registration_initial_access_tokens=registration_initial_access_tokens,
+                jwks_algorithms=jwks_algorithms,
                 extra_settings=extra_settings,
             ),
             encoding="utf-8",
