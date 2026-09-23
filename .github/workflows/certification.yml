@@ -98,7 +98,10 @@ jobs:
 
       - name: Démarrage de la suite (conformance-suite + nginx + mongodb)
         working-directory: conformance-suite
-        run: docker compose -f docker-compose-prebuilt.yml up -d
+        # IMAGE_TAG pinné sur la même release que les scripts : l'image `latest`
+        # du registre est la build de production (auth par token exigée), la
+        # release embarque le profil dev (devmode => dummy user, /api ouvert).
+        run: IMAGE_TAG="$SUITE_VERSION" docker compose -f docker-compose-prebuilt.yml up -d
 
       - name: Attente de l'interface de la suite (https://localhost.emobix.co.uk:8443)
         run: |
