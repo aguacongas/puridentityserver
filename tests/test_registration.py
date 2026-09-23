@@ -661,6 +661,7 @@ class TestRegistrationEndpoint:
             registration = response.json()
             assert registration["client_id"]
             assert registration["client_secret"]
+            assert registration["client_secret_expires_at"] == 0
             assert registration["registration_access_token"]
             assert response.headers["location"] == registration["registration_client_uri"]
 

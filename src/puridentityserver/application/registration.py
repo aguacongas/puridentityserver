@@ -202,6 +202,7 @@ class ClientRegistration:
     tls_client_auth_subject_dn: str = ""
     tls_client_certificate_hash: str = ""
     client_secret: str = ""
+    client_secret_expires_at: int = 0
     registration_access_token: str = ""
     registration_client_uri: str = ""
     require_pushed_authorization_requests: bool = False

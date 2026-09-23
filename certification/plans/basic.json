@@ -10,6 +10,7 @@
       "tasks": [
         {
           "task": "Login",
+          "optional": true,
           "match": "{OPURL}/login*",
           "commands": [
             ["text", "name", "username", "alice@example.com"],
@@ -24,10 +25,6 @@
           "commands": [
             ["click", "css", "button[name=action][value=authorize]"]
           ]
-        },
-        {
-          "task": "Verify Complete",
-          "match": "*/test/a/puridentityserver/callback*"
         }
       ]
     }

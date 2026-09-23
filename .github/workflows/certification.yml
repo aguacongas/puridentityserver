@@ -39,9 +39,10 @@ env:
   OP_URL: ${{ vars.CERTIFICATION_OP_URL || 'https://puridentityserver-certification.onrender.com' }}
   CONFORMANCE_SERVER: https://localhost.emobix.co.uk:8443/
   CONFORMANCE_SERVER_MTLS: https://localhost.emobix.co.uk:8444/
-  # Token factice : l'instance locale de la suite est ouverte, le header
-  # Bearer n'y est pas vérifié (dev_mode exige simplement une valeur non nulle).
-  CONFORMANCE_TOKEN: placeholder-local-suite
+  # instance locale en profil dev : le driver doit éviter tout header Bearer
+  # (un Bearer invalide fait échouer la requête malgré le dummy user).
+  # CONFORMANCE_DEV_MODE force dev_mode=True dans run-test-plan.py => token=None.
+  CONFORMANCE_DEV_MODE: '1'
   # Le nginx local de la suite sert un certificat auto-signé pour
   # localhost.emobix.co.uk : désactivation de la vérification TLS côté driver
   # (liaison interne runner<->suite uniquement ; l'OP sur Render garde son TLS).

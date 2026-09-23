@@ -134,6 +134,7 @@ def _registration_json(result: ClientRegistration) -> str:
         "response_types": result.response_types,
         "scope": result.scope,
         "redirect_uris": result.redirect_uris,
+        "client_secret_expires_at": result.client_secret_expires_at,
     }
     jwks: object = json.loads(result.jwks) if result.jwks else ""
     optional_fields: tuple[tuple[str, object], ...] = (
