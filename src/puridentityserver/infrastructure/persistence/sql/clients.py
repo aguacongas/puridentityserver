@@ -63,6 +63,18 @@ class ClientRow(PersistenceBase):
     id_token_encrypted_response_enc: Mapped[str] = mapped_column(
         String(32), default="", server_default=text("''")
     )
+    frontchannel_logout_uri: Mapped[str] = mapped_column(
+        String(512), default="", server_default=text("''")
+    )
+    frontchannel_logout_session_required: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("0")
+    )
+    backchannel_logout_uri: Mapped[str] = mapped_column(
+        String(512), default="", server_default=text("''")
+    )
+    backchannel_logout_session_required: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("0")
+    )
     registration_access_token_hash: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -156,6 +168,10 @@ def _to_row(client: Client) -> ClientRow:
         id_token_signed_response_alg=client.id_token_signed_response_alg,
         id_token_encrypted_response_alg=client.id_token_encrypted_response_alg,
         id_token_encrypted_response_enc=client.id_token_encrypted_response_enc,
+        frontchannel_logout_uri=client.frontchannel_logout_uri,
+        frontchannel_logout_session_required=client.frontchannel_logout_session_required,
+        backchannel_logout_uri=client.backchannel_logout_uri,
+        backchannel_logout_session_required=client.backchannel_logout_session_required,
         registration_access_token_hash=client.registration_access_token_hash,
         created_at=client.created_at,
         is_active=client.is_active,
@@ -211,6 +227,10 @@ def _from_row(row: ClientRow) -> Client:
         id_token_signed_response_alg=row.id_token_signed_response_alg or "",
         id_token_encrypted_response_alg=row.id_token_encrypted_response_alg or "",
         id_token_encrypted_response_enc=row.id_token_encrypted_response_enc or "",
+        frontchannel_logout_uri=row.frontchannel_logout_uri or "",
+        frontchannel_logout_session_required=row.frontchannel_logout_session_required,
+        backchannel_logout_uri=row.backchannel_logout_uri or "",
+        backchannel_logout_session_required=row.backchannel_logout_session_required,
         registration_access_token_hash=row.registration_access_token_hash or "",
         created_at=created_at,
         is_active=row.is_active,

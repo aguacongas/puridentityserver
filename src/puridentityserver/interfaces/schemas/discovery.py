@@ -22,6 +22,10 @@ class DiscoveryDocument(BaseModel):
     introspection_endpoint: str | None = None
     revocation_endpoint: str | None = None
     end_session_endpoint: str | None = None
+    frontchannel_logout_supported: bool = True
+    frontchannel_logout_session_supported: bool = True
+    backchannel_logout_supported: bool = True
+    backchannel_logout_session_supported: bool = True
     registration_endpoint: str | None = None
     device_authorization_endpoint: str | None = None
     pushed_authorization_request_endpoint: str | None = None

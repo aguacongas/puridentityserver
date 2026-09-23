@@ -22,14 +22,14 @@ Chaque feature restante = **une issue indépendante** (traçabilité + gate par 
 | [#45](https://github.com/aguacongas/puridentityserver/issues/45) 🎯 | **ApiResources** CRUD + seed (ressources protégées) + validation audience | `aud` des access_tokens, `resource` introspection/revocation — implémenté, PR en cours |
 | [#46](https://github.com/aguacongas/puridentityserver/issues/46) ✅ | Grant **jwt-bearer** (RFC 7523) + `client_secret_jwt` + `tls_client_auth` (RFC 8705) — méthodes d'auth client exigées par la playlist de certification, livré avec sample DoD `samples/jwt-bearer-client/` |
 | [#47](https://github.com/aguacongas/puridentityserver/issues/47) ✅ | Algos manquants (HS256/384/512, ES384/512, JWE : RSA-OAEP, A128KW, dir) | `id_token` encryption + `jwt algos` attendus par la playlist alg — livré au merge PR#60 |
+| [#48](https://github.com/aguacongas/puridentityserver/issues/48) ✅ | **Logout front/back-channel** (OIDC Session Mgmt) | `sid` émis au login, claim `sid` des `id_token` ; `/end_session` → iframes `frontchannel_logout_uri` (+ `?sid=` si session_required) et POST du `logout_token` signé vers chaque `backchannel_logout_uri` ; annonces discovery — livré avec sample DoD `samples/logout-channel-client/` |
 
-Ordre d'implémentation conseillé : **#44 → #45 → #46 → #47** (terminés : #44, #46, #47).
+Ordre d'implémentation conseillé : **#44 → #45 → #46 → #47** (terminés : #44, #46, #47, #48).
 
 ## Extensions — OIDC Advanced / proche (P1)
 
 | # | Feature | Référence |
 |---|---|---|
-| [#48](https://github.com/aguacongas/puridentityserver/issues/48) | Logout **front-channel + back-channel** (hors `end_session` seul) | OIDC Session Mgmt |
 | [#49](https://github.com/aguacongas/puridentityserver/issues/49) | **DPoP** (RFC 9449) — proof-of-possession du token | authorization/token/introspection |
 | [#50](https://github.com/aguacongas/puridentityserver/issues/50) | **CIBA** (Client-Initiated Backchannel Authentication) — modes poll/ping | OIDC CIBA |
 

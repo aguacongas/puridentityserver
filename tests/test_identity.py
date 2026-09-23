@@ -270,22 +270,14 @@ async def test_post_login_rejects_wrong_password(
 
 
 @pytest.mark.anyio
-async def test_post_login_tolerates_empty_cookie_response(
+async def test_post_login_sets_session_cookie_with_sid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """POST /login tolère une réponse backend sans cookie."""
-    from puridentityserver.identity import config as mod
-
+    """POST /login pose ``set-cookie`` (JWT de session + ``sid`` OIDC)."""
     _ensure_identity_configured()
     _inject_test_db(monkeypatch)
     await apply_schema()
     await seed_users(_IDENTITY_SEED)
-
-    async def _fake_login(_self: object, strategy: object, user: object) -> object:
-        await asyncio.sleep(0)
-        return type("Fake", (object,), {"headers": {}})()
-
-    monkeypatch.setattr(mod.AuthenticationBackend, "login", _fake_login)
 
     endpoint = _post_login_endpoint()
     response = await endpoint(
@@ -296,7 +288,10 @@ async def test_post_login_tolerates_empty_cookie_response(
 
     assert response.status_code == 302
     assert response.headers["location"] == "/target"
-    assert "set-cookie" not in response.headers
+    token = re.search(r"fastapiusersauth=([^;]+)", response.headers["set-cookie"]).group(1)
+    claims = jwt.decode(token, options={"verify_signature": False})
+    assert claims["sub"]
+    assert claims["sid"]
 
 
 @pytest.mark.anyio
@@ -660,6 +655,74 @@ def test_login_per_client_lifetime_from_seed() -> None:
         token = re.search(r"fastapiusersauth=([^;]+)", cookie).group(1)
         claims = jwt.decode(token, options={"verify_signature": False})
         assert claims["exp"] - claims["iat"] == 1800
+        assert claims["sid"]  # OIDC Session Management §2 : sid généré au login
+
+
+def test_login_sid_exposed_by_session_sid_helper() -> None:
+    """session_sid() retrouve le sid du cookie du login depuis une requête brute.
+
+    Le cookie de session (nom ``fastapiusersauth``) porte le ``sid``
+    (OIDC Session Management 1.0 §2) ; ``identity.config.session_sid`` le
+    re-décode depuis le signataire rotatif de session sans re-signer.
+    """
+    app = create_app(
+        Settings(
+            issuer=_ISSUER,
+            base_url=_ISSUER,
+            jwks_algorithms=("RS256",),
+            clients_seed=(_CLIENT_JSON,),
+            identity_seed_users=_IDENTITY_SEED,
+        )
+    )
+    with TestClient(app) as client:
+        login_resp = client.post(
+            "/login",
+            data={"username": "alice@example.com", "password": "password", "next": "/"},
+            follow_redirects=False,
+        )
+        assert login_resp.status_code == 302
+        cookie = login_resp.headers["set-cookie"]
+        token = re.search(r"fastapiusersauth=([^;]+)", cookie).group(1)
+        expected = jwt.decode(token, options={"verify_signature": False})["sid"]
+
+        from fastapi import Request as StarletteRequest
+
+        from puridentityserver.identity.config import session_sid
+
+        request = StarletteRequest(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0", "spec_version": "2.3"},
+                "http_version": "1.1",
+                "method": "GET",
+                "scheme": "http",
+                "path": "/",
+                "raw_path": b"/",
+                "query_string": b"",
+                "headers": [(b"cookie", f"fastapiusersauth={token}".encode())],
+                "client": ("127.0.0.1", 1234),
+                "server": ("127.0.0.1", 8080),
+            }
+        )
+        sid = asyncio.run(session_sid(request))
+        assert sid == expected
+
+        empty_request = StarletteRequest(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0", "spec_version": "2.3"},
+                "http_version": "1.1",
+                "method": "GET",
+                "scheme": "http",
+                "path": "/",
+                "raw_path": b"/",
+                "query_string": b"",
+                "headers": [],
+                "client": ("127.0.0.1", 1234),
+                "server": ("127.0.0.1", 8080),
+            }
+        )
+        assert asyncio.run(session_sid(empty_request)) == ""
 
 
 def test_login_cookie_signed_with_dedicated_session_key(tmp_path: Path) -> None:

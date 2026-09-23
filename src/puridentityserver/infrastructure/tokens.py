@@ -37,6 +37,7 @@ class PyJWTTokenManager:
         subject: str,
         audience: str,
         nonce: str,
+        session_id: str = "",
         expires_at: int,
         issued_at: int,
         scopes: frozenset[Scope],
@@ -52,7 +53,9 @@ class PyJWTTokenManager:
         ajoutées que lorsqu'elles sont fournies (OIDC Core 1.0 §3.3.2.11).
         ``shared_secret`` porte le secret partagé du client pour les
         algorithmes symétriques HS* (OIDC Core 1.0 §3.1.3.7) ; il est
-        ignoré pour les familles asymétriques.
+        ignoré pour les familles asymétriques. ``session_id`` reproduit le
+        ``sid`` (OIDC Session Management 1.0 §2) dans le claim ``sid``
+        seulement s'il est non vide.
         """
         payload: dict[str, object] = {
             "iss": issuer,
@@ -64,6 +67,8 @@ class PyJWTTokenManager:
         }
         if nonce:
             payload["nonce"] = nonce
+        if session_id:
+            payload["sid"] = session_id
         if at_hash:
             payload["at_hash"] = at_hash
         if c_hash:
@@ -95,6 +100,37 @@ class PyJWTTokenManager:
             "scope": " ".join(sorted(scope.value for scope in scopes)),
         }
         return await self._sign(algorithm, payload)
+
+    async def create_logout_token(
+        self,
+        *,
+        issuer: str,
+        subject: str,
+        audience: str,
+        sid: str,
+        expires_at: int,
+        issued_at: int,
+        jwt_id: str,
+    ) -> str:
+        """Construit un ``logout_token`` : ``events`` + ``sub``/``sid`` + ``jti``.
+
+        Toujours signé avec la clé serveur ``sig`` (famille publiée au
+        JWKS) pour que le client puisse vérifier le jeton. Le claim
+        événementiel (OIDC Back-Channel Logout 1.0 §2.1) le distingue d'un
+        ``id_token`` ; ``sid`` n'est embarqué que lorsqu'il est renseigné.
+        """
+        payload: dict[str, object] = {
+            "iss": issuer,
+            "aud": audience,
+            "sub": subject,
+            "iat": issued_at,
+            "exp": expires_at,
+            "jti": jwt_id,
+            "events": {"http://schemas.openid.net/event/backchannel-logout": {}},  # NOSONAR(S5332)
+        }
+        if sid:
+            payload["sid"] = sid
+        return await self._sign(JWTAlgorithm.RS256, payload)
 
     async def validate_access_token(
         self,

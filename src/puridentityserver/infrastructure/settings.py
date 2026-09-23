@@ -101,6 +101,10 @@ def _parse_client(raw: dict[str, object]) -> Client:
         id_token_signed_response_alg=str(raw.get("id_token_signed_response_alg", "")),
         id_token_encrypted_response_alg=str(raw.get("id_token_encrypted_response_alg", "")),
         id_token_encrypted_response_enc=str(raw.get("id_token_encrypted_response_enc", "")),
+        frontchannel_logout_uri=str(raw.get("frontchannel_logout_uri", "")),
+        frontchannel_logout_session_required=bool(raw.get("frontchannel_logout_session_required")),
+        backchannel_logout_uri=str(raw.get("backchannel_logout_uri", "")),
+        backchannel_logout_session_required=bool(raw.get("backchannel_logout_session_required")),
         session_lifetime_seconds=_optional_int(raw, "session_lifetime_seconds"),
         access_token_lifetime_seconds=_optional_int(raw, "access_token_lifetime_seconds"),
         authorization_code_lifetime_seconds=_optional_int(

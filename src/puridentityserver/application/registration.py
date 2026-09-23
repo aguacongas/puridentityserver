@@ -137,6 +137,10 @@ class RegistrationMetadata:
     id_token_signed_response_alg: str = ""
     id_token_encrypted_response_alg: str = ""
     id_token_encrypted_response_enc: str = ""
+    frontchannel_logout_uri: str = ""
+    frontchannel_logout_session_required: bool = False
+    backchannel_logout_uri: str = ""
+    backchannel_logout_session_required: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,6 +209,10 @@ class ClientRegistration:
     id_token_signed_response_alg: str = ""
     id_token_encrypted_response_alg: str = ""
     id_token_encrypted_response_enc: str = ""
+    frontchannel_logout_uri: str = ""
+    frontchannel_logout_session_required: bool = False
+    backchannel_logout_uri: str = ""
+    backchannel_logout_session_required: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -302,6 +310,10 @@ class RegistrationUseCase:
             id_token_signed_response_alg=metadata.id_token_signed_response_alg,
             id_token_encrypted_response_alg=metadata.id_token_encrypted_response_alg,
             id_token_encrypted_response_enc=metadata.id_token_encrypted_response_enc,
+            frontchannel_logout_uri=metadata.frontchannel_logout_uri,
+            frontchannel_logout_session_required=metadata.frontchannel_logout_session_required,
+            backchannel_logout_uri=metadata.backchannel_logout_uri,
+            backchannel_logout_session_required=metadata.backchannel_logout_session_required,
         )
         await self._clients.save(client)
         return self._response(
@@ -387,6 +399,10 @@ class RegistrationUseCase:
             id_token_signed_response_alg=metadata.id_token_signed_response_alg,
             id_token_encrypted_response_alg=metadata.id_token_encrypted_response_alg,
             id_token_encrypted_response_enc=metadata.id_token_encrypted_response_enc,
+            frontchannel_logout_uri=metadata.frontchannel_logout_uri,
+            frontchannel_logout_session_required=metadata.frontchannel_logout_session_required,
+            backchannel_logout_uri=metadata.backchannel_logout_uri,
+            backchannel_logout_session_required=metadata.backchannel_logout_session_required,
         )
         await self._clients.save(updated)
         return self._response(updated, client_secret=rotation.issued_secret)
@@ -716,6 +732,10 @@ class RegistrationUseCase:
             id_token_signed_response_alg=client.id_token_signed_response_alg,
             id_token_encrypted_response_alg=client.id_token_encrypted_response_alg,
             id_token_encrypted_response_enc=client.id_token_encrypted_response_enc,
+            frontchannel_logout_uri=client.frontchannel_logout_uri,
+            frontchannel_logout_session_required=client.frontchannel_logout_session_required,
+            backchannel_logout_uri=client.backchannel_logout_uri,
+            backchannel_logout_session_required=client.backchannel_logout_session_required,
         )
 
     def _base_url(self) -> str:
@@ -756,6 +776,10 @@ def _parse_metadata(
         id_token_signing_alg,
         id_token_encryption_alg,
         id_token_encryption_enc,
+        frontchannel_logout_uri,
+        frontchannel_logout_session_required,
+        backchannel_logout_uri,
+        backchannel_logout_session_required,
     ) = extras
 
     client_type = ClientType.PUBLIC if auth_method == "none" else ClientType.CONFIDENTIAL
@@ -776,6 +800,10 @@ def _parse_metadata(
         id_token_signed_response_alg=id_token_signing_alg,
         id_token_encrypted_response_alg=id_token_encryption_alg,
         id_token_encrypted_response_enc=id_token_encryption_enc,
+        frontchannel_logout_uri=frontchannel_logout_uri,
+        frontchannel_logout_session_required=frontchannel_logout_session_required,
+        backchannel_logout_uri=backchannel_logout_uri,
+        backchannel_logout_session_required=backchannel_logout_session_required,
     )
 
 
@@ -798,6 +826,10 @@ def _parse_metadata_extras(
         str,
         str,
         str,
+        str,
+        bool,
+        str,
+        bool,
     ]
     | RegistrationError
 ):
@@ -834,6 +866,24 @@ def _parse_metadata_extras(
         ("id_token_signing_alg", lambda raw, _known: _parse_id_token_signing_alg(raw)),
         ("id_token_encryption_alg", lambda raw, _known: _parse_id_token_encryption_alg(raw)),
         ("id_token_encryption_enc", lambda raw, _known: _parse_id_token_encryption_enc(raw)),
+        (
+            "frontchannel_logout_uri",
+            lambda raw, _known: _parse_logout_uri(raw, "frontchannel_logout_uri"),
+        ),
+        (
+            "frontchannel_logout_session_required",
+            lambda raw, _known: _parse_session_required(
+                raw, "frontchannel_logout_session_required"
+            ),
+        ),
+        (
+            "backchannel_logout_uri",
+            lambda raw, _known: _parse_logout_uri(raw, "backchannel_logout_uri"),
+        ),
+        (
+            "backchannel_logout_session_required",
+            lambda raw, _known: _parse_session_required(raw, "backchannel_logout_session_required"),
+        ),
     )
     results: dict[str, object] = {}
     for name, parser in parsers:
@@ -846,7 +896,24 @@ def _parse_metadata_extras(
 
 def _assemble_extras(
     results: dict[str, object],
-) -> tuple[frozenset[Scope], str, str | None, bool, bool, str, str, str, str, str, str, str]:
+) -> tuple[
+    frozenset[Scope],
+    str,
+    str | None,
+    bool,
+    bool,
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+    bool,
+    str,
+    bool,
+]:
     """Recompose le tuple de métadonnées extraites (types garantis par les parseurs)."""
     return (
         cast(frozenset[Scope], results["scopes"]),
@@ -861,6 +928,10 @@ def _assemble_extras(
         cast(str, results["id_token_signing_alg"]),
         cast(str, results["id_token_encryption_alg"]),
         cast(str, results["id_token_encryption_enc"]),
+        cast(str, results["frontchannel_logout_uri"]),
+        cast(bool, results["frontchannel_logout_session_required"]),
+        cast(str, results["backchannel_logout_uri"]),
+        cast(bool, results["backchannel_logout_session_required"]),
     )
 
 
@@ -887,6 +958,35 @@ def _is_redirect_uri(uri: str) -> bool:
     """Vérifie qu'une URI est absolue, http(s), sans fragment (RFC 7591 §2)."""
     parsed = urlsplit(uri)
     return parsed.scheme in ({"http", "https"}) and bool(parsed.netloc) and parsed.fragment == ""
+
+
+def _parse_logout_uri(raw: dict[str, object], key: str) -> str | RegistrationError:
+    """Lit une URI de terminaison de session front/back-channel (logout).
+
+    Absente ou vide : aucune notification pour ce canal. Présente : chaîne
+    obligatoirement http(s) de bout en bout (RFC 7591 §2, exposition
+    directe par ``/end_session`` — redirection ou POST serveur→client).
+    """
+    value = raw.get(key)
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str):
+        return RegistrationError("invalid_client_metadata", f"{key} doit être une chaîne")
+    if not _is_redirect_uri(value):
+        return RegistrationError(
+            "invalid_redirect_uri", f"{key} contient une URI invalide : {value}"
+        )
+    return value
+
+
+def _parse_session_required(raw: dict[str, object], key: str) -> bool | RegistrationError:
+    """Lit le drapeau ``*_logout_session_required`` (booléen ou valeur absente)."""
+    value = raw.get(key)
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        return RegistrationError("invalid_client_metadata", f"{key} doit être un booléen")
+    return value
 
 
 def _parse_web_origins(raw: dict[str, object]) -> frozenset[str] | RegistrationError:

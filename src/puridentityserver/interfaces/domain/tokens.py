@@ -40,6 +40,7 @@ class TokenManager(Protocol):
         subject: str,
         audience: str,
         nonce: str,
+        session_id: str = "",
         expires_at: int,
         issued_at: int,
         scopes: frozenset[Scope],
@@ -53,6 +54,9 @@ class TokenManager(Protocol):
         ``c_hash`` (hybrid) au code d'autorisation (OIDC Core 1.0 §3.3.2.11).
         ``shared_secret`` fournit le secret partagé du client pour la
         signature symétrique HS* (OIDC Core 1.0 §3.1.3.7).
+        ``session_id`` porte le ``sid`` de la session navigateur (OIDC
+        Session Management 1.0 §2) : le claim ``sid`` est ajouté seulement
+        si non vide, pour rester stable pour les flux sans session.
         """
         ...
 
@@ -72,6 +76,28 @@ class TokenManager(Protocol):
         L'audience est le ``client_id`` émetteur, ou le(s) nom(s) des
         ``ApiResource`` dont des scopes ont été accordés au jeton (RFC
         7519 §4.1.3 : ``aud`` peut être une chaîne ou une liste).
+        """
+        ...
+
+    async def create_logout_token(
+        self,
+        *,
+        issuer: str,
+        subject: str,
+        audience: str,
+        sid: str,
+        expires_at: int,
+        issued_at: int,
+        jwt_id: str,
+    ) -> str:
+        """Crée un ``logout_token`` (OIDC Back-Channel Logout 1.0 §2.2).
+
+        Signé côté serveur (famille ``sig``), destiné à un client
+        ``backchannel_logout_uri`` unique (``aud`` = ``client_id``).
+        ``sub`` identifie l'utilisateur déconnecté, ``sid`` sa session
+        (OIDC Session Management) ; ``jti`` rend le jeton unique. Le claim
+        ``events`` (``http://schemas.openid.net/event/backchannel-logout``)
+        marque un jeton de déconnexion — jamais un id_token.
         """
         ...
 

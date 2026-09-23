@@ -59,6 +59,7 @@ _reset_signer: RotatingTokenSigner | None = None
 _verify_signer: RotatingTokenSigner | None = None
 _cookie_lifetime_seconds = 3600
 _NOT_CONFIGURED = "configure_identity() n'a pas encore été appelé"
+_SESSION_COOKIE_NAME = "fastapiusersauth"
 
 # ── base de données users (async, séparée des stores OIDC) ──────────────────
 _session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -288,6 +289,26 @@ auth_router = fastapi_users.get_auth_router(cookie_backend)
 register_router = fastapi_users.get_register_router(UserRead, UserCreate)
 
 
+async def session_sid(request: Request) -> str:
+    """Retourne le ``sid`` de la session navigateur (OIDC Session Management §2).
+
+    Lit le cookie ``fastapiusersauth`` de la requête et le décode via le
+    signataire de session rotatif — jamais de signature sur données non
+    vérifiées. ``""`` si le cookie est absent, invalide, ou sans claim
+    ``sid`` (session créée avant la feature ou non connecté).
+    """
+    if _session_signer is None:
+        return ""
+    token = request.cookies.get(_SESSION_COOKIE_NAME)
+    if not token:
+        return ""
+    data = await _session_signer.read(token)
+    if data is None:
+        return ""
+    sid = data.get("sid")
+    return str(sid) if sid else ""
+
+
 def init_users_db() -> None:
     """Initialise le moteur (SQLite en mémoire partagée) et le session factory."""
     global _session_factory, _engine
@@ -439,12 +460,10 @@ def login_router(
             )
 
             strategy = _session_strategy(lifetime_seconds=lifetime)
-            backend = AuthenticationBackend(
-                name=cookie_backend.name,
-                transport=CookieTransport(cookie_secure=False, cookie_max_age=lifetime),
-                get_strategy=lambda: strategy,
-            )
-            login_response = await backend.login(strategy, user)
+            token = await strategy.write_token(user, sid=uuid.uuid4().hex)
+            login_response = await CookieTransport(
+                cookie_secure=False, cookie_max_age=lifetime
+            ).get_login_response(token)
             redirect = RedirectResponse(next_url or "/", status_code=302)
             cookie = login_response.headers.get("set-cookie")
             if cookie:

@@ -47,6 +47,10 @@ def test_discovery_usecase_builds_document_from_base_url() -> None:
     assert document["introspection_endpoint"] == f"{_BASE_URL}/introspect"
     assert document["revocation_endpoint"] == f"{_BASE_URL}/revoke"
     assert document["end_session_endpoint"] == f"{_BASE_URL}/end_session"
+    assert document["frontchannel_logout_supported"] is True
+    assert document["frontchannel_logout_session_supported"] is True
+    assert document["backchannel_logout_supported"] is True
+    assert document["backchannel_logout_session_supported"] is True
     assert document["device_authorization_endpoint"] == f"{_BASE_URL}/device_authorization"
     assert document["id_token_signing_alg_values_supported"] == _ALL_ALGOS
 
@@ -70,6 +74,11 @@ def test_discovery_endpoint_returns_oidc_metadata() -> None:
     assert metadata["authorization_endpoint"] == f"{_BASE_URL}/authorize"
     assert metadata["token_endpoint"] == f"{_BASE_URL}/token"
     assert metadata["jwks_uri"] == f"{_BASE_URL}/.well-known/jwks.json"
+    assert metadata["end_session_endpoint"] is not None
+    assert metadata["frontchannel_logout_supported"] is True
+    assert metadata["frontchannel_logout_session_supported"] is True
+    assert metadata["backchannel_logout_supported"] is True
+    assert metadata["backchannel_logout_session_supported"] is True
     assert metadata["response_types_supported"] == [
         "code",
         "id_token",

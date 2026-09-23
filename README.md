@@ -40,6 +40,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 - [OAuth 2.0 JWT Access Tokens] (RFC 9068) — extension
 - [Pushed Authorization Requests] (RFC 9126) — extension
 - [OpenID Connect RP-Initiated Logout] (OIDC spec) — `/end_session`
+- [OpenID Connect Front-Channel Logout] + [Back-Channel Logout] (OIDC spec) — notifications de déconnexion
 - [OAuth 2.0 Dynamic Client Registration] (RFC 7591) + [Client Management] (RFC 7592) — `/register`
 - CORS — origines autorisées **déduites des URIs des clients actifs** (`redirect_uris` + `web_origins`, OAuth 2.0 for Browser-Based Apps), pour les SPA publics en Authorization Code + PKCE
 - **Ressources protégées** (ApiResources) — registre des audiences API et de leurs scopes : l'`aud` d'un access token porte le nom des resources dont des scopes ont été accordés, tout scope non enregistré est refusé (`invalid_scope`)
@@ -100,7 +101,18 @@ tests/             pytest unit + intégration (TestClient httpx)
 7. ✅ **Device Authorization Grant** (RFC 8628)
 8. ✅ **Implicit & Hybrid** (OIDC Core 1.0)
 9. ✅ **Logout** — RP-Initiated Logout (`/end_session`, `id_token_hint`,
-   `post_logout_redirect_uri` enregistrée, `state`, purge du cookie)
+   `post_logout_redirect_uri` enregistrée, `state`, purge du cookie) avec
+   **session OIDC `sid`** (émis au login, claim `sid` de l'`id_token` et du
+   cookie de session, corrélé code d'autorisation → jeton) : notification
+   **Front-Channel Logout 1.0** (iframes vers les `frontchannel_logout_uri`
+   des clients actifs, `sid` ajouté si `frontchannel_logout_session_required`)
+   et **Back-Channel Logout 1.0** (POST d'un `logout_token` signé RS256
+   serveur — `iss`/`aud`/`sub`/`sid`/`events`/`jti`, TTL `logout_token_ttl_seconds`
+   60 s — vers chaque `backchannel_logout_uri`, best effort hors-boucle
+   uvicorn). Annonces au discovery : `frontchannel_logout_supported`,
+   `frontchannel_logout_session_supported`, `backchannel_logout_supported`,
+   `backchannel_logout_session_supported`. Échantillon testable pas-à-pas :
+   `samples/logout-channel-client/` (les deux canaux vérifiés de bout en bout).
 10. ✅ **Introspection / Revocation** (RFC 7662 / 7009)
 11. ✅ **Client Registration** — registration dynamique (RFC 7591 + 7592) :
     `POST /register` (création, `client_id` + `client_secret` + registration
@@ -255,3 +267,5 @@ gh secret set SONAR_SECRET
 [OAuth 2.0 JWT Access Tokens]: https://datatracker.ietf.org/doc/html/rfc9068
 [Pushed Authorization Requests]: https://datatracker.ietf.org/doc/html/rfc9126
 [OpenID Connect RP-Initiated Logout]: https://openid.net/specs/openid-connect-rpinitiated-1_0.html
+[OpenID Connect Front-Channel Logout]: https://openid.net/specs/openid-connect-frontchannel-1_0.html
+[OpenID Connect Back-Channel Logout]: https://openid.net/specs/openid-connect-backchannel-1_0.html

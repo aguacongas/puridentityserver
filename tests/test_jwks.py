@@ -254,6 +254,39 @@ def test_settings_client_seed_parses_lifetime_fields() -> None:
     assert client.authorization_code_lifetime_seconds == 30
 
 
+def test_settings_client_seed_parses_logout_channel_fields() -> None:
+    settings = Settings(
+        clients_seed=(
+            {
+                "client_id": "x",
+                "redirect_uris": ("https://x.example/cb",),
+                "frontchannel_logout_uri": "https://x.example/front-logout",
+                "frontchannel_logout_session_required": True,
+                "backchannel_logout_uri": "https://ssr.example/back-logout",
+                "backchannel_logout_session_required": True,
+            },
+        )
+    )
+
+    client = settings.seed_clients[0]
+    assert client.frontchannel_logout_uri == "https://x.example/front-logout"
+    assert client.frontchannel_logout_session_required is True
+    assert client.backchannel_logout_uri == "https://ssr.example/back-logout"
+    assert client.backchannel_logout_session_required is True
+
+
+def test_settings_client_seed_logout_channels_default_absent() -> None:
+    settings = Settings(
+        clients_seed=({"client_id": "x", "redirect_uris": ("https://x.example/cb",)},)
+    )
+
+    client = settings.seed_clients[0]
+    assert client.frontchannel_logout_uri == ""
+    assert client.frontchannel_logout_session_required is False
+    assert client.backchannel_logout_uri == ""
+    assert client.backchannel_logout_session_required is False
+
+
 def test_settings_client_seed_rejects_non_list_json(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PURIDENTITYSERVER_CLIENTS_SEED", '{"client_id": "env-app"}')
     with pytest.raises(ValueError, match="doit être une liste JSON"):
