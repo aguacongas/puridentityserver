@@ -77,6 +77,7 @@ class DiscoveryUseCase:
             "introspection_endpoint": f"{base}/introspect",
             "revocation_endpoint": f"{base}/revoke",
             "end_session_endpoint": f"{base}/end_session",
+            "check_session_iframe": f"{base}/session_state",
             "frontchannel_logout_supported": True,
             "frontchannel_logout_session_supported": True,
             "backchannel_logout_supported": True,

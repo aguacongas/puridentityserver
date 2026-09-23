@@ -38,6 +38,7 @@ from puridentityserver.application.par import PushedAuthorizationConfig, PushedA
 from puridentityserver.application.registration import RegistrationConfig, RegistrationUseCase
 from puridentityserver.application.revocation import RevocationConfig, RevocationUseCase
 from puridentityserver.application.scope_registry import ScopeRegistry
+from puridentityserver.application.session_management import SessionManagementUseCase
 from puridentityserver.application.token import TokenConfig, TokenUseCase
 from puridentityserver.application.userinfo import UserInfoConfig, UserInfoUseCase
 from puridentityserver.domain.authorization import TokenEndpointAuthMethod
@@ -80,6 +81,7 @@ from puridentityserver.interfaces.api.logout import logout_router
 from puridentityserver.interfaces.api.par import par_router
 from puridentityserver.interfaces.api.registration import registration_router
 from puridentityserver.interfaces.api.revocation import revocation_router
+from puridentityserver.interfaces.api.session_management import session_management_router
 from puridentityserver.interfaces.api.token import token_router
 from puridentityserver.interfaces.api.userinfo import userinfo_router
 from puridentityserver.interfaces.repositories.readers import ClientReader
@@ -190,6 +192,7 @@ class ProtocolDependencies:
         self.scope_registry = ScopeRegistry(
             self.readers.identity_resource, self.readers.api_resource
         )
+        self.session_management = SessionManagementUseCase()
 
         self.authorize_usecase = AuthorizeUseCase(
             AuthorizeConfig(
@@ -204,6 +207,7 @@ class ProtocolDependencies:
             stores.code,
             self.token_manager,
             self.scope_registry,
+            session_management=self.session_management,
         )
         self.token_usecase = TokenUseCase(
             TokenConfig(
@@ -375,6 +379,7 @@ class ProtocolDependencies:
         app.include_router(introspect_router(self.introspect_usecase))
         app.include_router(revocation_router(self.revocation_usecase))
         app.include_router(logout_router(self.logout_usecase))
+        app.include_router(session_management_router(self.session_management, self.readers.client))
         if self.settings.registration_enabled:
             app.include_router(registration_router(self.registration_usecase))
 

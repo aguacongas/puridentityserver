@@ -22,6 +22,7 @@ class DiscoveryDocument(BaseModel):
     introspection_endpoint: str | None = None
     revocation_endpoint: str | None = None
     end_session_endpoint: str | None = None
+    check_session_iframe: str | None = None
     frontchannel_logout_supported: bool = True
     frontchannel_logout_session_supported: bool = True
     backchannel_logout_supported: bool = True
