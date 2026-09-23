@@ -34,7 +34,18 @@ const SPA_CONFIG = {
   apiBaseUrl: "http://127.0.0.1:8120",
   apiResource: "sample-api",
   apiScope: "openid api.read",
+  // Démo id_token HS* + JWE : client créé à la volée via /register (RFC 7591)
+  // avec le jeton d'inscription de la configuration de démonstration
+  // (`registration_initial_access_tokens`, config.toml).
+  registerToken: "dev-registrar-token",
+  idTokenSigningAlg: "HS256",
+  idTokenEncryptionAlg: "RSA-OAEP-256",
+  idTokenEncryptionEnc: "A256GCM",
 };
+
+// Scopes demandés par le flow id_token HS*/JWE (sans offline_access/api.read,
+// pour ne sortir ni refresh token ni audience ApiResource de ce flow).
+const IDTOKEN_ALGOS_SCOPE = "openid profile email";
 
 const store = {
   get(key) {
@@ -111,13 +122,7 @@ function discovery() {
   return discoveryPromise;
 }
 
-async function postForm(url, data) {
-  const body = new URLSearchParams(data).toString();
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-  });
+async function parseJsonResponse(response) {
   const text = await response.text();
   let payload;
   try {
@@ -128,6 +133,63 @@ async function postForm(url, data) {
   payload._status = response.status;
   payload._ok = response.ok;
   return payload;
+}
+
+async function postForm(url, data) {
+  const body = new URLSearchParams(data).toString();
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  return parseJsonResponse(response);
+}
+
+function basicAuthHeader(username, password) {
+  return `Basic ${btoa(`${username}:${password}`)}`;
+}
+
+async function postFormBasic(url, data, username, password) {
+  const body = new URLSearchParams(data).toString();
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: basicAuthHeader(username, password),
+    },
+    body,
+  });
+  return parseJsonResponse(response);
+}
+
+async function postJson(url, data, bearerToken) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${bearerToken}`,
+    },
+    body: JSON.stringify(data),
+  });
+  return parseJsonResponse(response);
+}
+
+async function generateRsaOaepJwk() {
+  const pair = await crypto.subtle.generateKey(
+    {
+      name: "RSA-OAEP",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
+    true,
+    ["encrypt", "decrypt"]
+  );
+  const jwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
+  jwk.use = "enc";
+  jwk.alg = "RSA-OAEP-256";
+  jwk.kid = randomToken(8);
+  return jwk;
 }
 
 function issuerOrigin() {
@@ -204,6 +266,31 @@ function rememberTokens(flowLabel, tokenResponse, claims, userInfo) {
   );
 }
 
+function rememberAlgoToken(flowLabel, tokenResponse, jwe, userInfo) {
+  if (tokenResponse.access_token) store.set("access_token", tokenResponse.access_token);
+  renderResult(flowLabel, {
+    access_token: tokenResponse.access_token
+      ? `${tokenResponse.access_token.slice(0, 32)}… (expires_in ${tokenResponse.expires_in}s)`
+      : undefined,
+    id_token_jwe: tokenResponse.id_token ? `${tokenResponse.id_token.slice(0, 64)}…` : undefined,
+    jwe,
+    userinfo: userInfo,
+    token_type: tokenResponse.token_type,
+  });
+}
+
+function renderJweIdToken(idToken) {
+  const parts = idToken.split(".");
+  if (parts.length !== 5) {
+    throw new Error("id_token non JWE compact (5 segments attendus)");
+  }
+  return {
+    header_jwe: JSON.parse(b64urlDecode(parts[0])),
+    payload: "chiffré (JWE) — le déchiffrement et la vérification HS256 sont démontrés "
+      + "par samples/id-token-algos-client (Python, WebCrypto non utilisé ici).",
+  };
+}
+
 async function fetchUserInfo(endpoint, accessToken) {
   const response = await fetch(endpoint, {
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -228,6 +315,41 @@ async function completeCodeFlow(search) {
     throw new Error("code d'autorisation ou code_verifier manquant");
   }
   const config = await discovery();
+  const algo = store.get("algo_flow") ? JSON.parse(store.get("algo_flow")) : null;
+  if (algo) {
+    store.remove("algo_flow");
+    const response = await postFormBasic(
+      config.token_endpoint,
+      {
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: SPA_CONFIG.redirectUri,
+        client_id: algo.clientId,
+        code_verifier: verifier,
+      },
+      algo.clientId,
+      algo.clientSecret
+    );
+    if (!response._ok) {
+      throw new Error(`/token HTTP ${response._status} : ${JSON.stringify(response)}`);
+    }
+    if (!response.access_token) {
+      throw new Error(`/token sans access_token : ${JSON.stringify(response)}`);
+    }
+    const userInfo = response.access_token
+      ? await fetchUserInfo(config.userinfo_endpoint, response.access_token)
+      : null;
+    if (!response.id_token) {
+      throw new Error(`/token sans id_token : ${JSON.stringify(response)}`);
+    }
+    log(
+      "Code échangé : id_token chiffré (JWE) reçu — signature HS256 et déchiffrement " +
+        "démontrés par le sample Python samples/id-token-algos-client",
+      "ok"
+    );
+    rememberAlgoToken("id_token HS* + JWE", response, renderJweIdToken(response.id_token), userInfo);
+    return;
+  }
   const response = await postForm(config.token_endpoint, {
     grant_type: "authorization_code",
     code,
@@ -446,6 +568,61 @@ async function flowClientCredentials() {
   }
 }
 
+async function flowIdTokenAlgos() {
+  try {
+    const config = await discovery();
+    if (!config.registration_endpoint) {
+      throw new Error("endpoint /register non publié (registration_enabled=false)");
+    }
+    const jwk = await generateRsaOaepJwk();
+    const registered = await postJson(
+      config.registration_endpoint,
+      {
+        redirect_uris: [SPA_CONFIG.redirectUri],
+        scope: IDTOKEN_ALGOS_SCOPE,
+        token_endpoint_auth_method: "client_secret_basic",
+        id_token_signed_response_alg: SPA_CONFIG.idTokenSigningAlg,
+        id_token_encrypted_response_alg: SPA_CONFIG.idTokenEncryptionAlg,
+        id_token_encrypted_response_enc: SPA_CONFIG.idTokenEncryptionEnc,
+        jwks: { keys: [jwk] },
+      },
+      SPA_CONFIG.registerToken
+    );
+    if (!registered._ok) {
+      throw new Error(`/register HTTP ${registered._status} : ${JSON.stringify(registered)}`);
+    }
+    const state = randomToken(16);
+    const nonce = randomToken(16);
+    const verifier = randomToken(32);
+    const challenge = await sha256(verifier);
+    store.set("verifier", verifier);
+    store.set("state", state);
+    store.set("nonce", nonce);
+    store.set(
+      "algo_flow",
+      JSON.stringify({ clientId: registered.client_id, clientSecret: registered.client_secret })
+    );
+    const authorize = buildUrl(config.authorization_endpoint, {
+      response_type: "code",
+      client_id: registered.client_id,
+      redirect_uri: SPA_CONFIG.redirectUri,
+      scope: IDTOKEN_ALGOS_SCOPE,
+      state,
+      nonce,
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+    });
+    log(
+      `id_token HS*/JWE : client ${registered.client_id} créé (/${SPA_CONFIG.idTokenSigningAlg} ` +
+        `+ ${SPA_CONFIG.idTokenEncryptionAlg}/${SPA_CONFIG.idTokenEncryptionEnc}, RSA-2048 ` +
+        `use:enc), redirection vers /login`
+    );
+    window.location.href = `${issuerOrigin()}/login?next=${encodeURIComponent(authorize)}`;
+  } catch (error) {
+    fail(error, "id_token HS*/JWE");
+  }
+}
+
 async function flowProtectedApi() {
   try {
     store.set("api_pending", "1");
@@ -580,6 +757,7 @@ function renderFlows() {
     ["Appareil", "Device Authorization Grant (RFC 8628)", flowDevice],
     ["Client Credentials", "RFC 6749 §4.4 (machine à machine)", flowClientCredentials],
     ["API protégée", "Appel de l'API échantillon (scope api.read, aud sample-api)", flowProtectedApi],
+    ["id_token HS*/JWE", "Registration RFC 7591 + code flow, id_token chiffré JWE (issue #47)", flowIdTokenAlgos],
     ["Rafraîchir", "Rotation du refresh_token (RFC 6749 §6)", flowRefresh],
     ["Introspection", "RFC 7662 — active/sub", flowIntrospect],
     ["Révoquer", "RFC 7009 — révoque l'access_token", flowRevoke],

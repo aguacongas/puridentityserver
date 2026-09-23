@@ -13,6 +13,7 @@ navigateur et exerce **tous** les flows du serveur PurIdentityServer :
 | Appareil | `POST /device_authorization` + sondage `/token` | RFC 8628 |
 | Client Credentials | flow machine à machine | RFC 6749 §4.4 |
 | API protégée | flow code avec scope d'API puis appel de l'API échantillon qui valide le token | ApiResources |
+| id_token HS*/JWE | registration RFC 7591 + flow code, `id_token` chiffré JWE | OIDC Core §3.1.3.6 |
 | Rafraîchir | rotation du `refresh_token` | RFC 6749 §6 |
 | Introspection | `POST /introspect` du dernier `access_token` | RFC 7662 |
 | Révoquer | `POST /revoke` du dernier `access_token` | RFC 7009 |
@@ -56,6 +57,28 @@ de login du serveur, utiliser un compte de démonstration :
 > déclarées dans `config.toml`. Pas de « redirect_uri mismatch » selon
 > l'adresse tapée dans le navigateur.
 
+### id_token HS* + JWE
+
+Le bouton **id_token HS*/JWE** exerce la feature des algorithmes d'`id_token`
+(issue #47) **depuis le navigateur** : la page génère une paire RSA-OAEP-256
+(WebCrypto), **enregistre un client à la volée** (`POST /register`, RFC 7591,
+avec le jeton d'inscription de la démo) demandant
+`id_token_signed_response_alg: HS256` +
+`id_token_encrypted_response_alg: RSA-OAEP-256` +
+`id_token_encrypted_response_enc: A256GCM`, puis joue un flow Authorization
+Code + PKCE (login inclus). Le serveur retourne un `id_token` **chiffré en
+JWE compact** (en-tête `alg=RSA-OAEP-256`, `enc=A256GCM`, `cty=JWT`) : la page
+décode et affiche l'en-tête JWE. Le **déchiffrement** et la **vérification de
+la signature HS256** (secret partagé du client) sont démontrés par le sample
+serveur [`samples/id-token-algos-client/`](../id-token-algos-client/README.md)
+(Python + `cryptography`) — l'`id_token` *ne doit pas* être inspecté dans le
+navigateur en production.
+
+Prérequis : Dynamic Client Registration activée avec le jeton d'inscription
+par défaut (`registration_enabled = true`,
+`registration_initial_access_tokens = ["dev-registrar-token"]` dans
+`config.toml`) — la configuration par défaut du dépôt les fournit.
+
 ### API protégée
 
 Le bouton **API protégée** exerce la feature ApiResources : la page lance
@@ -88,6 +111,12 @@ CORS (requête simple autorisée). Garde-fou temporel de 60 s.
 ```bash
 uv run python samples/spa-client/smoke_test.py
 ```
+
+> Le bouton **id_token HS*/JWE** relève du navigateur (WebCrypto + UI) : il
+> n'est pas couvert par ce smoke test CORS. Le flow qu'il exerce (registration
+> `HS256` + `RSA-OAEP-256`/`A256GCM`, flow code, bascule `dir`+`A256CBC-HS512`,
+> défenses) est couvert de bout en bout par
+> `uv run python samples/id-token-algos-client/smoke_test.py`.
 
 ## Quelles opérations
 
@@ -122,6 +151,10 @@ Au sommet d'`app.js`, la constante `SPA_CONFIG` :
 | `apiBaseUrl` | `http://127.0.0.1:8120` | API protégée de démonstration (voir ci-dessous) |
 | `apiResource` | `sample-api` | ApiResource attendue dans l'`aud` du token |
 | `apiScope` | `openid api.read` | Scopes demandés par le bouton API protégée |
+| `registerToken` | `dev-registrar-token` | Initial access token de `POST /register` (config.toml) |
+| `idTokenSigningAlg` | `HS256` | `id_token_signed_response_alg` du client enregistré |
+| `idTokenEncryptionAlg` | `RSA-OAEP-256` | `id_token_encrypted_response_alg` (JWE) |
+| `idTokenEncryptionEnc` | `A256GCM` | `id_token_encrypted_response_enc` (JWE) |
 
 Les endpoints sont résolus dynamiquement depuis
 `/.well-known/openid-configuration`.
@@ -132,8 +165,14 @@ Les endpoints sont résolus dynamiquement depuis
   valider le JWT contre les JWKS de l'issueur (lib du type `oidc-client-ts`).
   Ici seuls `iss`, `aud`, `nonce` et l'horodatage d'expiration des jetons
   sont contrôlés.
+- **`id_token` chiffré non déchiffré** : le bouton HS*/JWE affiche l'en-tête
+  JWE mais ne déchiffre ni ne vérifie l'`id_token` dans le navigateur (c'est
+  le rôle du sample Python `id-token-algos-client`, WebCrypto n'étant pas
+  utilisé pour la cryptographie JWE ici).
 - **Client confidentiel de démo exposé** : uniquement pour exercer
-  introspection/révocation/client_credentials dans le navigateur.
+  introspection/révocation/client_credentials dans le navigateur, et le
+  `client_secret` du client enregistré par le bouton HS*/JWE vit dans la page
+  (règle à ne pas reproduire en production).
 - Le formulaire `/login` du serveur est une page HTML de démonstration ;
   une SSO réelle branchée sur ce SPA passerait par l'authentification du
   serveur.
