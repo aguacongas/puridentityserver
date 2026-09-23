@@ -314,7 +314,9 @@ def test_authorize_hybrid_flow_puts_session_state_in_fragment() -> None:
     assert response.status_code == 302
     fragment = parse_qs(urlparse(response.headers["location"]).fragment)
     assert re.fullmatch(r"[A-Za-z0-9_\-]{43}\.[A-Za-z0-9_\-]+", fragment["session_state"][0])
-    assert "code" in fragment and "id_token" in fragment and "access_token" in fragment
+    assert "code" in fragment
+    assert "id_token" in fragment
+    assert "access_token" in fragment
 
 
 def test_authorize_omits_session_state_when_not_logged_in() -> None:
