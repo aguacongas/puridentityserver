@@ -734,15 +734,17 @@ async function flowRevoke() {
   }
 }
 
-let sessionSource = "";
 let sessionFrame = null;
+let sessionFrameSrc = "";
 let sessionFrameOrigin = "";
 let sessionTimer = null;
+let sessionListenerReady = false;
 
 function showSessionStatus(status) {
   const badge = document.getElementById("session-status");
   badge.textContent = status;
-  badge.className = status === "unchanged" ? "ok" : "error";
+  badge.className =
+    status === "unchanged" ? "ok" : status === "changed" || status === "error" ? "error" : "";
   log(`Supervision de session : ${status}`, status === "unchanged" ? "ok" : "error");
 }
 
@@ -759,7 +761,7 @@ function stopSessionMonitor() {
 
 function pollSessionState(sessionState) {
   const frame = document.createElement("iframe");
-  frame.src = sessionFrameOrigin;
+  frame.src = sessionFrameSrc;
   frame.setAttribute("aria-hidden", "true");
   frame.style.display = "none";
   document.body.appendChild(frame);
@@ -785,13 +787,17 @@ async function flowSessionMonitor() {
       );
     }
     stopSessionMonitor();
-    sessionFrameOrigin = config.check_session_iframe;
-    window.addEventListener("message", (event) => {
-      if (event.origin !== sessionFrameOrigin || event.source !== sessionFrame?.contentWindow) {
-        return;
-      }
-      showSessionStatus(typeof event.data === "string" ? event.data : "error");
-    });
+    sessionFrameSrc = config.check_session_iframe;
+    sessionFrameOrigin = new URL(config.check_session_iframe).origin;
+    if (!sessionListenerReady) {
+      window.addEventListener("message", (event) => {
+        if (event.origin !== sessionFrameOrigin || event.source !== sessionFrame?.contentWindow) {
+          return;
+        }
+        showSessionStatus(typeof event.data === "string" ? event.data : "error");
+      });
+      sessionListenerReady = true;
+    }
     showSessionStatus("supervision démarrée");
     pollSessionState(sessionState);
   } catch (error) {
