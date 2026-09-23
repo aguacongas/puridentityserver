@@ -44,8 +44,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Redéploiement de l'OP sur Render (deploy hook)
-        if: ${{ secrets.RENDER_DEPLOY_HOOK_URL != '' }}
-        run: curl -sSf -X POST "$RENDER_DEPLOY_HOOK_URL"
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+            echo "Secret RENDER_DEPLOY_HOOK_URL absent : redéploiement manuel requis."
+          else
+            curl -sSf -X POST "$RENDER_DEPLOY_HOOK_URL"
+          fi
         env:
           RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
 
