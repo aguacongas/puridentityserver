@@ -19,8 +19,11 @@ Contrats OIDC respectés :
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from uuid import uuid4
 
 from puridentityserver.domain.authorization import Client
+from puridentityserver.interfaces.domain.backchannel import BackchannelNotifier
 from puridentityserver.interfaces.domain.tokens import TokenManager
 from puridentityserver.interfaces.repositories.readers import ClientReader
 
@@ -30,6 +33,7 @@ class LogoutConfig:
     """Configuration de l'endpoint de terminaison de session."""
 
     issuer: str
+    logout_token_ttl_seconds: int = 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +43,7 @@ class LogoutRequest:
     id_token_hint: str = ""
     post_logout_redirect_uri: str = ""
     state: str = ""
+    session_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +58,7 @@ class LogoutResult:
     state: str = ""
     subject: str = ""
     client_id: str = ""
+    session_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,11 +82,13 @@ class LogoutUseCase:
         config: LogoutConfig,
         client_repository: ClientReader,
         token_manager: TokenManager,
+        backchannel_notifier: BackchannelNotifier | None = None,
     ) -> None:
         """Injection de la configuration et des dépendances du périmètre."""
         self._config = config
         self._client_repository = client_repository
         self._token_manager = token_manager
+        self._backchannel_notifier = backchannel_notifier
 
     async def execute(self, request: LogoutRequest) -> LogoutResult | LogoutError:
         """Traite une demande de RP-Initiated Logout.
@@ -110,7 +118,61 @@ class LogoutUseCase:
             state=request.state,
             subject=subject,
             client_id=client.client_id if client is not None else "",
+            session_id=request.session_id,
         )
+
+    async def frontchannel_uris(self, *, session_id: str) -> tuple[str, ...]:
+        """URIs de front-channel des clients actifs (OIDC Front-Channel Logout 1.0 §2).
+
+        Chaque client ayant enregistré une ``frontchannel_logout_uri`` est
+        chargé en iframe par la page de déconnexion ; ``sid`` (OIDC Session
+        Management §2) est ajouté en query quand
+        ``frontchannel_logout_session_required`` est vrai pour que la RP
+        corrèle la session terminée.
+        """
+        uris: list[str] = []
+        for candidate in await self._client_repository.find_all():
+            if not candidate.is_active or not candidate.frontchannel_logout_uri:
+                continue
+            uri = candidate.frontchannel_logout_uri
+            if candidate.frontchannel_logout_session_required:
+                separator = "&" if "?" in uri else "?"
+                uri = f"{uri}{separator}sid={session_id}"
+            uris.append(uri)
+        return tuple(uris)
+
+    async def broadcast_backchannel_logout(self, *, subject: str, session_id: str) -> None:
+        """Notifie chaque ``backchannel_logout_uri`` enregistrée (OIDC BCL 1.0 §3).
+
+        POST d'un ``logout_token`` (``events`` + ``sub``/``sid``, RS256
+        serveur) vers tout client actif. Best effort : aucune exception ne
+        remonte, la session est déjà terminée côté serveur.
+        """
+        if self._backchannel_notifier is None or not subject:
+            return
+        targets = [
+            candidate
+            for candidate in await self._client_repository.find_all()
+            if candidate.is_active and candidate.backchannel_logout_uri
+        ]
+        if not targets:
+            return
+        now = datetime.now(timezone.utc)
+        issued_at = int(now.timestamp())
+        expires_at = issued_at + self._config.logout_token_ttl_seconds
+        for candidate in targets:
+            logout_token = await self._token_manager.create_logout_token(
+                issuer=self._config.issuer,
+                subject=subject,
+                audience=candidate.client_id,
+                sid=session_id,
+                expires_at=expires_at,
+                issued_at=issued_at,
+                jwt_id=uuid4().hex,
+            )
+            await self._backchannel_notifier.notify(
+                url=candidate.backchannel_logout_uri, logout_token=logout_token
+            )
 
     async def _resolve_hint(
         self, id_token_hint: str

@@ -48,16 +48,15 @@ _IDENTITY_SEED = {
 
 
 def _app(**settings: object) -> FastAPI:
-    return create_app(
-        Settings(
-            issuer=_ISSUER,
-            base_url=_ISSUER,
-            jwks_algorithms=("RS256",),
-            clients_seed=(_CLIENT_JSON,),
-            identity_seed_users=_IDENTITY_SEED,
-            **settings,
-        )
-    )
+    merged: dict[str, object] = {
+        "issuer": _ISSUER,
+        "base_url": _ISSUER,
+        "jwks_algorithms": ("RS256",),
+        "clients_seed": (_CLIENT_JSON,),
+        "identity_seed_users": _IDENTITY_SEED,
+    }
+    merged.update(settings)
+    return create_app(Settings(**merged))
 
 
 def _s256_challenge(verifier: str) -> str:
@@ -78,10 +77,49 @@ class FakeTokenManager:
     def __init__(self, claims: dict[str, object] | None) -> None:
         """Mémorise les claims à renvoyer (None = jeton refusé)."""
         self._claims = claims
+        self.logout_tokens: list[dict[str, object]] = []
 
     async def validate_id_token(self, *, token: str, issuer: str) -> dict[str, object] | None:
         del token, issuer
         return None if self._claims is None else dict(self._claims)
+
+    async def create_logout_token(
+        self,
+        *,
+        issuer: str,
+        subject: str,
+        audience: str,
+        sid: str,
+        expires_at: int,
+        issued_at: int,
+        jwt_id: str,
+    ) -> str:
+        """Mémorise les arguments et renvoie un jeton factice."""
+        self.logout_tokens.append(
+            {
+                "issuer": issuer,
+                "subject": subject,
+                "audience": audience,
+                "sid": sid,
+                "expires_at": expires_at,
+                "issued_at": issued_at,
+                "jwt_id": jwt_id,
+            }
+        )
+        return f"logout-token-{audience}"
+
+
+class FakeBackchannelNotifier:
+    """Notifieur de test : enregistre les (URI, logout_token) notifiées."""
+
+    def __init__(self) -> None:
+        """Initialise la liste des notifications reçues."""
+        self.notified: list[tuple[str, str]] = []
+
+    async def notify(self, *, url: str, logout_token: str) -> None:
+        """Consigne la notification sans réseau ni échec."""
+        self.notified.append((url, logout_token))
+        return None
 
 
 class FakeClientRepository:
@@ -112,20 +150,31 @@ def _client(
     *,
     post_logout: Iterable[str] = (),
     is_active: bool = True,
+    frontchannel_logout_uri: str = "",
+    frontchannel_logout_session_required: bool = False,
+    backchannel_logout_uri: str = "",
 ) -> Client:
     return Client(
         client_id=client_id,
         redirect_uris=frozenset(),
         post_logout_redirect_uris=frozenset(post_logout),
         is_active=is_active,
+        frontchannel_logout_uri=frontchannel_logout_uri,
+        frontchannel_logout_session_required=frontchannel_logout_session_required,
+        backchannel_logout_uri=backchannel_logout_uri,
     )
 
 
-def _usecase(claims: dict[str, object] | None, clients: list[Client]) -> LogoutUseCase:
+def _usecase(
+    claims: dict[str, object] | None,
+    clients: list[Client],
+    notifier: FakeBackchannelNotifier | None = None,
+) -> LogoutUseCase:
     return LogoutUseCase(
         LogoutConfig(issuer=_ISSUER),
         FakeClientRepository(clients),
         FakeTokenManager(claims),
+        backchannel_notifier=notifier,
     )
 
 
@@ -273,6 +322,144 @@ async def test_hint_without_uri_still_ends_session() -> None:
     assert result.state == "s"
 
 
+# ───── Front/Back-Channel Logout 1.0 ──────────────────────────────────────── #
+
+
+@pytest.mark.anyio
+async def test_frontchannel_uris_with_sid_when_required() -> None:
+    """`frontchannel_logout_session_required` → `?sid=` ; sinon URI nue."""
+    usecase = _usecase(
+        None,
+        [
+            _client(
+                "session-client",
+                frontchannel_logout_uri="https://spa.example/front",
+                frontchannel_logout_session_required=True,
+            ),
+            _client(
+                "plain-client",
+                frontchannel_logout_uri="https://ssr.example/logout",
+                frontchannel_logout_session_required=False,
+            ),
+            _client("no-uri-client"),
+            _client(
+                "inactive-client",
+                frontchannel_logout_uri="https://gone.example/front",
+                is_active=False,
+            ),
+        ],
+    )
+
+    uris = await usecase.frontchannel_uris(session_id="sid-1")
+
+    assert uris == (
+        "https://spa.example/front?sid=sid-1",
+        "https://ssr.example/logout",
+    )
+
+
+@pytest.mark.anyio
+async def test_frontchannel_uris_append_sid_existing_query() -> None:
+    """Une URI avec query garde son `?` et ajoute `&sid=`."""
+    usecase = _usecase(
+        None,
+        [
+            _client(
+                "query-client",
+                frontchannel_logout_uri="https://spa.example/front?tenant=a",
+                frontchannel_logout_session_required=True,
+            )
+        ],
+    )
+
+    uris = await usecase.frontchannel_uris(session_id="sid-9")
+
+    assert uris == ("https://spa.example/front?tenant=a&sid=sid-9",)
+
+
+@pytest.mark.anyio
+async def test_backchannel_broadcast_posts_logout_token_per_client() -> None:
+    """Un logout_token par client enregistré et actif, avec sub/sid/events signalés."""
+    notifier = FakeBackchannelNotifier()
+    token_manager = FakeTokenManager(None)
+    usecase = LogoutUseCase(
+        LogoutConfig(issuer=_ISSUER),
+        FakeClientRepository(
+            [
+                _client(
+                    "bc-1",
+                    backchannel_logout_uri="https://ssr1.example/bc",
+                ),
+                _client(
+                    "bc-2",
+                    backchannel_logout_uri="https://ssr2.example/bc",
+                ),
+                _client("no-bc-client"),
+                _client(
+                    "bc-inactive", backchannel_logout_uri="https://gone.example/bc", is_active=False
+                ),
+            ]
+        ),
+        token_manager,
+        backchannel_notifier=notifier,
+    )
+
+    await usecase.broadcast_backchannel_logout(subject="u-1", session_id="sid-1")
+
+    assert notifier.notified == [
+        ("https://ssr1.example/bc", "logout-token-bc-1"),
+        ("https://ssr2.example/bc", "logout-token-bc-2"),
+    ]
+    assert token_manager.logout_tokens == [
+        {
+            "issuer": _ISSUER,
+            "subject": "u-1",
+            "audience": "bc-1",
+            "sid": "sid-1",
+            "jwt_id": token_manager.logout_tokens[0]["jwt_id"],
+            "expires_at": token_manager.logout_tokens[0]["expires_at"],
+            "issued_at": token_manager.logout_tokens[0]["issued_at"],
+        },
+        {
+            "issuer": _ISSUER,
+            "subject": "u-1",
+            "audience": "bc-2",
+            "sid": "sid-1",
+            "jwt_id": token_manager.logout_tokens[1]["jwt_id"],
+            "expires_at": token_manager.logout_tokens[1]["expires_at"],
+            "issued_at": token_manager.logout_tokens[1]["issued_at"],
+        },
+    ]
+    for issued in token_manager.logout_tokens:
+        assert issued["expires_at"] - issued["issued_at"] == 60
+
+
+@pytest.mark.anyio
+async def test_backchannel_broadcast_skips_without_subject() -> None:
+    """Sans sujet identifiable, aucune notification back-channel n'est émise."""
+    notifier = FakeBackchannelNotifier()
+    usecase = _usecase(
+        None,
+        [_client("bc-1", backchannel_logout_uri="https://ssr1.example/bc")],
+        notifier=notifier,
+    )
+
+    await usecase.broadcast_backchannel_logout(subject="", session_id="sid-1")
+
+    assert notifier.notified == []
+
+
+@pytest.mark.anyio
+async def test_backchannel_broadcast_skips_when_no_notifier() -> None:
+    """Pas de notifieur injecté → aucune notification et aucune exception."""
+    usecase = _usecase(
+        None,
+        [_client("bc-1", backchannel_logout_uri="https://ssr1.example/bc")],
+    )
+
+    await usecase.broadcast_backchannel_logout(subject="u-1", session_id="sid-1")
+
+
 # ───── Intégration HTTP : GET /end_session ───────────────────────────────── #
 
 
@@ -412,3 +599,50 @@ def test_end_session_valid_hint_without_uri_shows_page() -> None:
     assert "déconnecté" in response.text
     assert "fastapiusersauth" in response.headers.get("set-cookie", "")
     assert "Max-Age=0" in response.headers.get("set-cookie", "")
+
+
+def test_end_session_renders_frontchannel_iframe_with_sid() -> None:
+    """Client front-channel enregistré : page avec iframe `?sid=` + cookie purgé."""
+    front_client = {
+        **_CLIENT_JSON,
+        "frontchannel_logout_uri": "https://spa.example/front",
+        "frontchannel_logout_session_required": True,
+    }
+    with TestClient(_app(clients_seed=(front_client,))) as client:
+        id_token = _login_and_get_id_token(client)
+
+        response = client.get(
+            "/end_session", params={"id_token_hint": id_token}, follow_redirects=False
+        )
+
+    assert response.status_code == 200
+    assert 'src="https://spa.example/front?sid=' in response.text
+    assert 'class="secret"' in response.text
+    assert "fastapiusersauth" in response.headers.get("set-cookie", "")
+    assert "Max-Age=0" in response.headers.get("set-cookie", "")
+
+
+def test_end_session_frontchannel_page_redirects_to_registered_uri() -> None:
+    """Front-channel + URI enregistrée : page avec iframes et meta-redirect, pas de 302 direct."""
+    front_client = {
+        **_CLIENT_JSON,
+        "frontchannel_logout_uri": "https://spa.example/front",
+        "frontchannel_logout_session_required": False,
+    }
+    with TestClient(_app(clients_seed=(front_client,))) as client:
+        id_token = _login_and_get_id_token(client)
+
+        response = client.get(
+            "/end_session",
+            params={
+                "id_token_hint": id_token,
+                "post_logout_redirect_uri": _POST_LOGOUT_URI,
+                "state": "st-fc",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 200
+    assert 'src="https://spa.example/front"' in response.text
+    assert f"{_POST_LOGOUT_URI}?state=st-fc" in response.text
+    assert 'http-equiv="refresh"' in response.text

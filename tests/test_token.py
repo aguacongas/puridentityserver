@@ -804,3 +804,48 @@ class TestPyJWTTokenManager:
 
         with pytest.raises(RuntimeError, match="Aucune clé active"):
             run(create)
+
+    def test_create_logout_token_embeds_events_sub_sid_aud(self) -> None:
+        km = DefaultKeyManager(InMemoryKeyPairRepository())
+        tm = PyJWTTokenManager(km)
+
+        token = run(
+            tm.create_logout_token(
+                issuer=_ISSUER,
+                subject="u-1",
+                audience="bc-client",
+                sid="sid-1",
+                expires_at=9000000060,
+                issued_at=9000000000,
+                jwt_id="jt-abc",
+            )
+        )
+
+        claims = jwt.decode(token, options={"verify_signature": False})
+        assert claims["iss"] == _ISSUER
+        assert claims["aud"] == "bc-client"
+        assert claims["sub"] == "u-1"
+        assert claims["sid"] == "sid-1"
+        assert claims["jti"] == "jt-abc"
+        assert claims["events"] == {"http://schemas.openid.net/event/backchannel-logout": {}}
+        assert claims["exp"] - claims["iat"] == 60
+
+    def test_create_logout_token_omits_sid_when_empty(self) -> None:
+        km = DefaultKeyManager(InMemoryKeyPairRepository())
+        tm = PyJWTTokenManager(km)
+
+        token = run(
+            tm.create_logout_token(
+                issuer=_ISSUER,
+                subject="u-1",
+                audience="bc-client",
+                sid="",
+                expires_at=9000000060,
+                issued_at=9000000000,
+                jwt_id="jt-2",
+            )
+        )
+
+        claims = jwt.decode(token, options={"verify_signature": False})
+        assert "sid" not in claims
+        assert claims["sub"] == "u-1"

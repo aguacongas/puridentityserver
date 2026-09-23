@@ -50,6 +50,7 @@ from puridentityserver.identity.config import (
     register_router,
     seed_users,
 )
+from puridentityserver.infrastructure.backchannel import HTTPBackchannelNotifier
 from puridentityserver.infrastructure.bearer import build_bearer_verifier
 from puridentityserver.infrastructure.claims import UserStoreClaimsProvider
 from puridentityserver.infrastructure.client_assertions import PyJWTClientAssertionVerifier
@@ -256,6 +257,7 @@ class ProtocolDependencies:
             LogoutConfig(issuer=settings.issuer),
             self.readers.client,
             self.token_manager,
+            HTTPBackchannelNotifier(),
         )
         self.registration_usecase = RegistrationUseCase(
             RegistrationConfig(

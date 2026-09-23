@@ -79,6 +79,28 @@ class TokenManager(Protocol):
         """
         ...
 
+    async def create_logout_token(
+        self,
+        *,
+        issuer: str,
+        subject: str,
+        audience: str,
+        sid: str,
+        expires_at: int,
+        issued_at: int,
+        jwt_id: str,
+    ) -> str:
+        """Crée un ``logout_token`` (OIDC Back-Channel Logout 1.0 §2.2).
+
+        Signé côté serveur (famille ``sig``), destiné à un client
+        ``backchannel_logout_uri`` unique (``aud`` = ``client_id``).
+        ``sub`` identifie l'utilisateur déconnecté, ``sid`` sa session
+        (OIDC Session Management) ; ``jti`` rend le jeton unique. Le claim
+        ``events`` (``http://schemas.openid.net/event/backchannel-logout``)
+        marque un jeton de déconnexion — jamais un id_token.
+        """
+        ...
+
     async def validate_access_token(
         self,
         *,

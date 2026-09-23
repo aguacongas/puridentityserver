@@ -101,6 +101,37 @@ class PyJWTTokenManager:
         }
         return await self._sign(algorithm, payload)
 
+    async def create_logout_token(
+        self,
+        *,
+        issuer: str,
+        subject: str,
+        audience: str,
+        sid: str,
+        expires_at: int,
+        issued_at: int,
+        jwt_id: str,
+    ) -> str:
+        """Construit un ``logout_token`` : ``events`` + ``sub``/``sid`` + ``jti``.
+
+        Toujours signé avec la clé serveur ``sig`` (famille publiée au
+        JWKS) pour que le client puisse vérifier le jeton. Le claim
+        événementiel (OIDC Back-Channel Logout 1.0 §2.1) le distingue d'un
+        ``id_token`` ; ``sid`` n'est embarqué que lorsqu'il est renseigné.
+        """
+        payload: dict[str, object] = {
+            "iss": issuer,
+            "aud": audience,
+            "sub": subject,
+            "iat": issued_at,
+            "exp": expires_at,
+            "jti": jwt_id,
+            "events": {"http://schemas.openid.net/event/backchannel-logout": {}},
+        }
+        if sid:
+            payload["sid"] = sid
+        return await self._sign(JWTAlgorithm.RS256, payload)
+
     async def validate_access_token(
         self,
         *,
