@@ -361,7 +361,8 @@ def _encrypt_content(
         return iv, sealed[:-_GCM_TAG_SIZE], sealed[-_GCM_TAG_SIZE:]
     mac_key, enc_key = cek[: method.cek_size // 2], cek[method.cek_size // 2 :]
     iv = os.urandom(_CBC_IV_SIZE)
-    cipher = Cipher(algorithms.AES(enc_key), modes.CBC(iv))
+    # CBC-HMAC authentifié par la moitié gauche du HMAC-SHA (RFC 7518 §5.2)
+    cipher = Cipher(algorithms.AES(enc_key), modes.CBC(iv))  # NOSONAR(S5542)
     encryptor = cipher.encryptor()
     padder = PKCS7(algorithms.AES.block_size).padder()
     padded = padder.update(plaintext) + padder.finalize()
@@ -396,9 +397,9 @@ def _hmac_hash(method: JWEEncryptionMethod) -> hashes.HashAlgorithm:
 
 def _oaep(algorithm: JWEKeyManagementAlgorithm) -> OAEP:
     """Schéma de remplissage OAEP de ``RSA-OAEP`` (SHA-1) ou ``RSA-OAEP-256``."""
-    # RFC 7518 §4.3 : RSA-OAEP est défini avec SHA-1 (bandit S324)
+    # RFC 7518 §4.3 : RSA-OAEP est défini avec SHA-1 (bandit S324, exempté au niveau fichier)
     digest = (
-        hashes.SHA1()  # ruff: ignore[suspicious-insecure-hash-usage]
+        hashes.SHA1()  # NOSONAR(S4790)
         if algorithm is JWEKeyManagementAlgorithm.RSA_OAEP
         else hashes.SHA256()
     )
@@ -428,7 +429,8 @@ def _decrypt_content(
     expected = _cbc_hmac(mac_key, aad, iv, ciphertext, method)
     if not compare_digest(tag, expected):
         raise ValueError("tag JWE invalide (authentification rejetée)")
-    cipher = Cipher(algorithms.AES(enc_key), modes.CBC(iv))
+    # CBC-HMAC : le tag HMAC-SHA est vérifié avant le déchiffrement (RFC 7518 §5.2)
+    cipher = Cipher(algorithms.AES(enc_key), modes.CBC(iv))  # NOSONAR(S5542)
     decryptor = cipher.decryptor()
     unpadder = PKCS7(algorithms.AES.block_size).unpadder()
     padded = decryptor.update(ciphertext) + decryptor.finalize()

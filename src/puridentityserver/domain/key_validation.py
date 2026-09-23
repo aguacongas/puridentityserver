@@ -16,7 +16,6 @@ profondeur (``infrastructure/jwe``, assertions JWKS).
 from __future__ import annotations
 
 import base64
-import binascii
 import re
 
 from puridentityserver.domain.jwe import JWEKeyManagementAlgorithm
@@ -155,7 +154,7 @@ def _positive_int(value: object) -> int | None:
         return None
     try:
         raw = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
-    except (binascii.Error, ValueError):
+    except ValueError:
         return None
     if not raw:
         return None
