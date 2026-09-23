@@ -139,13 +139,18 @@ def test_sql_code_repo_round_trip_and_consume(tmp_path: Path) -> None:
         code="auth-code-1",
         client_id="web-app",
         redirect_uri="https://app.example/callback",
+        subject="alice-uuid",
+        session_id="sid-session-1",
         scopes=frozenset({Scope.OPENID}),
         code_challenge="challenge-bytes",
         nonce="n-42",
     )
 
     run(repo.save(code))
-    assert run(repo.find_by_code("auth-code-1")) == code
+    stored = run(repo.find_by_code("auth-code-1"))
+    assert stored == code
+    assert stored is not None
+    assert stored.session_id == "sid-session-1"
     assert run(repo.find_by_code("missing")) is None
 
     run(repo.consume("auth-code-1"))
@@ -204,9 +209,17 @@ def test_sql_code_repo_migrates_table_created_before_subject(tmp_path: Path) -> 
     code = run(repo.find_by_code("legacy-code"))
     assert code is not None
     assert code.subject == ""
+    assert code.session_id == ""
     assert run(repo.find_by_code("legacy-code")).is_consumed is False
-    run(repo.save(AuthorizationCode(code="new-code", client_id="web-app", subject="alice-uuid")))
+    run(
+        repo.save(
+            AuthorizationCode(
+                code="new-code", client_id="web-app", subject="alice-uuid", session_id="sid-new"
+            )
+        )
+    )
     assert run(repo.find_by_code("new-code")).subject == "alice-uuid"
+    assert run(repo.find_by_code("new-code")).session_id == "sid-new"
     run(repo.close())
 
 

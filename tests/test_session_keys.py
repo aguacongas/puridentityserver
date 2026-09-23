@@ -114,6 +114,23 @@ async def test_session_strategy_roundtrip() -> None:
 
 
 @pytest.mark.anyio
+async def test_session_strategy_embeds_sid_only_when_provided() -> None:
+    """Sid porté dans le cookie JWT ; absent (omis) si non fourni."""
+    strategy = _session_strategy(_session_manager())
+
+    token = await strategy.write_token(_FakeUser(), sid="sid-abc")
+    payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["RS256"])
+    assert payload["sid"] == "sid-abc"
+    assert payload["sub"] == str(_USER_ID)
+
+    token_without = await strategy.write_token(_FakeUser())
+    payload_without = jwt.decode(
+        token_without, options={"verify_signature": False}, algorithms=["RS256"]
+    )
+    assert "sid" not in payload_without
+
+
+@pytest.mark.anyio
 async def test_session_strategy_rejects_unknown_kid_and_bad_token() -> None:
     """read_token retourne None pour un kid inconnu ou un token illisible."""
     manager = _session_manager()

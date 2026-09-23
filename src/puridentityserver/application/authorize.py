@@ -90,6 +90,7 @@ class AuthorizeRequest:
     code_challenge: str = ""
     code_challenge_method: str = "S256"
     response_mode: str = ""
+    session_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,6 +321,7 @@ class AuthorizeUseCase:
             client_id=request.client_id,
             redirect_uri=request.redirect_uri,
             subject=request.subject,
+            session_id=request.session_id,
             scopes=scopes,
             code_challenge=request.code_challenge,
             code_challenge_method=request.code_challenge_method,
@@ -379,6 +381,7 @@ class AuthorizeUseCase:
                 subject=request.subject,
                 audience=client.client_id,
                 nonce=request.nonce,
+                session_id=request.session_id,
                 expires_at=expires_epoch,
                 issued_at=issued_at,
                 scopes=scopes,

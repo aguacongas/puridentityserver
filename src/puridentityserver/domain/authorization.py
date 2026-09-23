@@ -259,12 +259,16 @@ class AuthorizationCode:
 
     ``subject`` est l'identifiant de l'utilisateur authentifié (UUID UUID
     issu de FastAPI Users, stocké en chaîne pour la flexibilité).
+    ``session_id`` (OIDC Session Management §2) porte le ``sid`` de la
+    session navigateur au moment de l'émission : il relie le code au
+    ``sid`` qui sera reproduit dans l'``id_token`` à l'échange.
     """
 
     code: str = field(default_factory=lambda: f"{uuid4().hex[:16]}")
     client_id: str = ""
     redirect_uri: str = ""
     subject: str = ""
+    session_id: str = ""
     scopes: frozenset[Scope] = frozenset()
     code_challenge: str = ""
     code_challenge_method: str = "S256"

@@ -16,7 +16,7 @@ from puridentityserver.application.authorize import (
 from puridentityserver.application.consent import ConsentUseCase
 from puridentityserver.application.par import PushedAuthorizationUseCase, PushError
 from puridentityserver.domain.authorization import ResponseMode, Scope
-from puridentityserver.identity.config import CurrentUserOptional
+from puridentityserver.identity.config import CurrentUserOptional, session_sid
 from puridentityserver.interfaces.api.consent import consent_url
 from puridentityserver.interfaces.repositories.readers import ClientReader
 
@@ -110,6 +110,7 @@ def authorize_router(
                 code_challenge=auth_request.code_challenge,
                 code_challenge_method=auth_request.code_challenge_method,
                 response_mode=auth_request.response_mode,
+                session_id=await session_sid(request),
             )
         consent_redirect = await _consent_redirect_if_required(
             auth_request, consent_usecase, client_repository

@@ -37,6 +37,7 @@ class PyJWTTokenManager:
         subject: str,
         audience: str,
         nonce: str,
+        session_id: str = "",
         expires_at: int,
         issued_at: int,
         scopes: frozenset[Scope],
@@ -52,7 +53,9 @@ class PyJWTTokenManager:
         ajoutées que lorsqu'elles sont fournies (OIDC Core 1.0 §3.3.2.11).
         ``shared_secret`` porte le secret partagé du client pour les
         algorithmes symétriques HS* (OIDC Core 1.0 §3.1.3.7) ; il est
-        ignoré pour les familles asymétriques.
+        ignoré pour les familles asymétriques. ``session_id`` reproduit le
+        ``sid`` (OIDC Session Management 1.0 §2) dans le claim ``sid``
+        seulement s'il est non vide.
         """
         payload: dict[str, object] = {
             "iss": issuer,
@@ -64,6 +67,8 @@ class PyJWTTokenManager:
         }
         if nonce:
             payload["nonce"] = nonce
+        if session_id:
+            payload["sid"] = session_id
         if at_hash:
             payload["at_hash"] = at_hash
         if c_hash:

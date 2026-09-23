@@ -40,6 +40,7 @@ class TokenManager(Protocol):
         subject: str,
         audience: str,
         nonce: str,
+        session_id: str = "",
         expires_at: int,
         issued_at: int,
         scopes: frozenset[Scope],
@@ -53,6 +54,9 @@ class TokenManager(Protocol):
         ``c_hash`` (hybrid) au code d'autorisation (OIDC Core 1.0 §3.3.2.11).
         ``shared_secret`` fournit le secret partagé du client pour la
         signature symétrique HS* (OIDC Core 1.0 §3.1.3.7).
+        ``session_id`` porte le ``sid`` de la session navigateur (OIDC
+        Session Management 1.0 §2) : le claim ``sid`` est ajouté seulement
+        si non vide, pour rester stable pour les flux sans session.
         """
         ...
 

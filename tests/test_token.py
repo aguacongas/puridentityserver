@@ -163,6 +163,56 @@ class TestTokenUseCaseErrors:
 
         assert result.error == "invalid_grant"
         assert "PKCE" in result.error_description
+        assert not hasattr(result, "id_token")
+
+    def test_sid_from_code_is_carried_into_id_token(self) -> None:
+        uc, codes, _ = _make_usecase()
+        code = AuthorizationCode(
+            code="sid-code",
+            client_id="web-app",
+            redirect_uri="https://app.example/callback",
+            subject="alice-uuid",
+            session_id="sid-alice-1",
+            scopes=frozenset({Scope.OPENID}),
+            expires_at=_future_expiry(),
+        )
+        run(codes.save(code))
+
+        req = TokenRequest(
+            grant_type="authorization_code",
+            code="sid-code",
+            redirect_uri="https://app.example/callback",
+            client_id="web-app",
+            client_secret=_CLIENT_SECRET,
+        )
+        result = run(uc.execute(req))
+
+        id_claims = jwt.decode(result.id_token, options={"verify_signature": False})
+        assert id_claims["sid"] == "sid-alice-1"
+        assert id_claims["sub"] == "alice-uuid"
+
+    def test_no_sid_when_code_without_session(self) -> None:
+        uc, codes, _ = _make_usecase()
+        code = AuthorizationCode(
+            code="no-sid-code",
+            client_id="web-app",
+            redirect_uri="https://app.example/callback",
+            scopes=frozenset({Scope.OPENID}),
+            expires_at=_future_expiry(),
+        )
+        run(codes.save(code))
+
+        req = TokenRequest(
+            grant_type="authorization_code",
+            code="no-sid-code",
+            redirect_uri="https://app.example/callback",
+            client_id="web-app",
+            client_secret=_CLIENT_SECRET,
+        )
+        result = run(uc.execute(req))
+
+        id_claims = jwt.decode(result.id_token, options={"verify_signature": False})
+        assert "sid" not in id_claims
 
     def test_pkce_plain_success(self) -> None:
         uc, codes, _ = _make_usecase(_PUBLIC_CLIENT)
