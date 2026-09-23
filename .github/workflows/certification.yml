@@ -19,6 +19,16 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "0 2 * * MON"
+  # Déclencheur TEMPORAIRE pour valider la PR #66 sur la branche elle-même —
+  # à RETIRER avant le merge (main ne doit déclencher que dispatch + cron).
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "certification/**"
+      - "render.yaml"
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/certification.yml"
 
 permissions:
   contents: read
