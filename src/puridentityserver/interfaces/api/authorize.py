@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from urllib.parse import parse_qs, quote
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -48,6 +49,7 @@ def authorize_router(
     @router.get(
         "/authorize",
         summary="Endpoint d'autorisation OAuth 2.0",
+        response_model=None,
         responses={
             400: {
                 "description": "Erreur OAuth 2.0 (invalid_request, invalid_client, "
@@ -70,7 +72,7 @@ def authorize_router(
         prompt: str = Query(default=""),
         request_uri: str = Query(default=""),
         user: CurrentUserOptional = None,
-    ) -> RedirectResponse:
+    ) -> RedirectResponse | HTMLResponse:
         if request_uri:
             auth_request = await _resolve_pushed_request(
                 request, client_id, request_uri, par_usecase
@@ -96,13 +98,13 @@ def authorize_router(
                 return HTMLResponse(
                     status_code=400,
                     content=(
-                        "<!doctype html><html lang=\"fr\"><head>"
-                        "<meta charset=\"utf-8\"><title>Erreur de la demande "
+                        '<!doctype html><html lang="fr"><head>'
+                        '<meta charset="utf-8"><title>Erreur de la demande '
                         "d'autorisation</title><style>body{font-family:"
                         "sans-serif;margin:2rem;max-width:28rem}h1{font-size:"
                         "1.3rem}.hint{color:#666;font-size:0.9rem}</style>"
                         "</head><body><h1>Requête d'autorisation invalide</h1>"
-                        "<p class=\"hint\">Paramètres requis manquants : "
+                        '<p class="hint">Paramètres requis manquants : '
                         + ", ".join(html.escape(p) for p in missing)
                         + ". Conformément à la RFC 6749 §3.1.1, la demande ne "
                         "peut pas être traitée car un paramètre obligatoire "
