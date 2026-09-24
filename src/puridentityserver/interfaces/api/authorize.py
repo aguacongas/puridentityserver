@@ -5,7 +5,7 @@ from __future__ import annotations
 from urllib.parse import parse_qs, quote
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from puridentityserver.application.authorize import (
     AuthorizeError,
