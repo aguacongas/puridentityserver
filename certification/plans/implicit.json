@@ -1,5 +1,5 @@
 {
-  "alias": "puridentityserver",
+  "alias": "puridentityserver-implicit",
   "description": "PurIdentityServer - Implicit OP certification (CI)",
   "server": {
     "discoveryUrl": "{OPURL}/.well-known/openid-configuration"

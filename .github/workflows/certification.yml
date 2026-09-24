@@ -127,8 +127,17 @@ jobs:
           done
           echo "::error::L'API de certification.openid.net n'a pas répondu (token invalide ou réseau) en 10 min" && exit 1
 
-      - name: Dépendances Python du driver officiel (httpx)
-        run: python3 -m pip install --disable-pip-version-check --quiet httpx
+      - name: Patch du driver (réutilisation des plans par alias)
+        # Le script upstream recrée un plan à chaque lancement (POST /api/plan) :
+        # il accumule les plans et, surtout, re-claime l'alias alors que les
+        # modules du run précédent (ou d'un run en parallèle) portent le même
+        # alias -> la suite stoppe ou rejette ces modules. Le patch rend
+        # create_test_plan idempotent : on réutilise le plan existant du user
+        # courant quand sa config (alias/server/browser) et sa variante sont
+        # inchangées ; on ne le recrée que si la config a changé.
+        run: |
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-reuse-plan.patch"
+          grep -n "def _plan_matching_configuration" conformance-suite/scripts/conformance.py
 
       - name: Timeout par module piloté par CONFORMANCE_MODULE_TIMEOUT
         # Le driver upstream hardcode timeout=240 dans wait_for_state : on rend

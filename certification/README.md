@@ -85,6 +85,11 @@ retenue :
   du plan) avant toute émission.
 - **Plan inconnu** : la version de la suite peut renommer un plan/sélecteur ;
   l'erreur de `run-test-plan.py` liste les identifiants disponibles.
+- **Conflit d'alias entre plans** : deux plans qui partagent le même `alias`
+  s'entre-stoppent sur l'instance hébergée (ou échouent en `409 ... alias ... in
+  use`). Chaque plan doit porter un alias distinct ; le workflow applique le patch
+  `conformance-reuse-plan.patch`, qui réutilise le plan existant (même config) au
+  lieu de le recréer à chaque run.
 - **ERREUR sur Redis/nginx** : relancer ; le premier pull des images
   `registry.gitlab.com/openid/conformance-suite` est long (~10 min).
 
@@ -94,6 +99,25 @@ retenue :
 | --- | --- |
 | `render.yaml` / `Dockerfile` / `.dockerignore` | déploiement de l'OP sur Render (mémoire) |
 | `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`) |
-| `plans/basic|implicit|hybrid.json` | configs des plans Core de la suite (alias, discovery, verts navigateur login/consent) |
+| `plans/basic|implicit|hybrid.json` | configs des plans Core de la suite (alias **unique par plan**, discovery, règles navigateur login/consent) |
+| `conformance-reuse-plan.patch` | patch du driver : `create_test_plan` idempotent (réutilise le plan existant quand sa config n'a pas changé) |
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés |
 | `../.github/workflows/certification.yml` | workflow witness : deploy + suite + plans + rapport |
+
+## Alias des plans : création unique puis ré-exécution
+
+Chaque plan porte un **alias stable et distinct** : `puridentityserver-basic`,
+`puridentityserver-implicit`, `puridentityserver-hybrid`. Sur l'instance hébergée
+de la Fondation, cet alias est l'identité du test : tous les modules créés depuis
+un plan l'héritent, et la suite **stoppe (ou rejette en 409)** tout nouveau module
+qui réclame un alias déjà en cours d'utilisation. D'où la règle : les trois plans
+ne doivent jamais partager le même alias, et un plan ne doit pas être recréé à
+chaque run.
+
+Le patch `conformance-reuse-plan.patch` rend la création idempotente côté driver :
+avant de POSTER `api/plan`, il liste les plans du user courant (`GET api/plan`) et
+réutilise celui dont `planName` + config (alias, serveur, règles navigateur) **et**
+variante sont strictement identiques. Un plan n'est donc créé **qu'une seule fois**,
+puis ré-exécuté à chaque run ; il n'est recréé que si sa config a changé (ex. l'URL
+de l'OP `CERTIFICATION_OP_URL` a bougé, ou les sélecteurs navigateur du plan ont
+été modifiés), ce qui est le moyen voulu de déployer le changement.
