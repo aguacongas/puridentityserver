@@ -37,20 +37,14 @@ permissions:
 
 env:
   OP_URL: ${{ vars.CERTIFICATION_OP_URL || 'https://puridentityserver-certification.onrender.com' }}
-  CONFORMANCE_SERVER: https://localhost.emobix.co.uk:8443/
-  CONFORMANCE_SERVER_MTLS: https://localhost.emobix.co.uk:8444/
-  # instance locale en profil dev : le driver doit éviter tout header Bearer
-  # (un Bearer invalide fait échouer la requête malgré le dummy user).
-  # CONFORMANCE_DEV_MODE force dev_mode=True dans run-test-plan.py => token=None.
-  CONFORMANCE_DEV_MODE: '1'
-  # Le nginx local de la suite sert un certificat auto-signé pour
-  # localhost.emobix.co.uk : désactivation de la vérification TLS côté driver
-  # (liaison interne runner<->suite uniquement ; l'OP sur Render garde son TLS).
-  DISABLE_SSL_VERIFY: '1'
-  # Suite démarrée à froid sur le runner + OP Render en cold start : le timeout
-  # par défaut de 240 s/module (conformance.py wait_for_state) peut être dépassé
-  # sur les premiers modules (chauffe du moteur de test / egress lente).
-  # La valeur est injectée par le patch sed de l'étape dédiée.
+  # Mode witness sur l'instance HÉBERGÉE officielle (OpenID Foundation) : le
+  # driver constructeur (run-test-plan.py) ne fait que des appels API REST
+  # authenticate Bearer (CONFORMANCE_TOKEN). L'automation navigateur
+  # (WebRunner/HtmlUnit/Selenium) tourne dans l'infra stable de la Fondation,
+  # qui atteint notre OP public (Render) — aucune dépendance docker quebrada
+  # sur le runner éphémère (plus de modules bloqués en WAITING).
+  CONFORMANCE_SERVER: https://www.certification.openid.net/
+  CONFORMANCE_TOKEN: ${{ secrets.CONFORMANCE_TOKEN }}
   CONFORMANCE_MODULE_TIMEOUT: '600'
   SUITE_VERSION: release-v5.2.4
 
@@ -102,31 +96,43 @@ jobs:
             sed -i "s#{OPURL}#${OP_URL}#g" "$f"
           done
 
-      - name: Démarrage de la suite (conformance-suite + nginx + mongodb)
-        working-directory: conformance-suite
-        # IMAGE_TAG pinné sur la même release que les scripts : l'image `latest`
-        # du registre est la build de production (auth par token exigée), la
-        # release embarque le profil dev (devmode => dummy user, /api ouvert).
-        run: IMAGE_TAG="$SUITE_VERSION" docker compose -f docker-compose-prebuilt.yml up -d
-
-      - name: Attente de l'interface de la suite (https://localhost.emobix.co.uk:8443)
+      - name: Vérification de la présence du secret CONFORMANCE_TOKEN
+        # Mode witness hébergé : l'accès à l'API de certification.openid.net
+        # passe par un Bearer token délivré par l'OpenID Foundation. Un secret
+        # manquant doit échouer SEC maintenant (message clair), pas via un
+        # KeyError/traceback du driver en plein milieu du run.
         run: |
-          deadline=$((SECONDS + 900))
+          if [ -z "$CONFORMANCE_TOKEN" ]; then
+            echo "::error::Secret CONFORMANCE_TOKEN absent. Le créer ainsi :"
+            echo "::error::  gh secret set CONFORMANCE_TOKEN -R \${{ github.repository }} --body '<token OIDF>'"
+            exit 1
+          fi
+          echo "Token CONFORMANCE présent (36 caractères attendus)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Attente de l'API de certification.openid.net (Bearer $CONFORMANCE_TOKEN)
+        # L'automation navigateur (WebRunner/Selenium) tourne dans l'infra stable
+        # de l'OpenID Foundation qui atteint notre OP Render public : plus aucune
+        # suite/driver docker à démarrer sur le runner éphémère.
+        run: |
+          deadline=$((SECONDS + 600))
           until [ $SECONDS -ge $deadline ]; do
-            if curl -ksS --max-time 15 -o /dev/null "$CONFORMANCE_SERVER"; then
-              echo "Suite opérationnelle."; exit 0
+            if [ $(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' \
+                -H "Authorization: Bearer $CONFORMANCE_TOKEN" \
+                "$CONFORMANCE_SERVER"api/runner/available) = 200 ]; then
+              echo "API de certification accessible (instance hébergée) : OK"
+              exit 0
             fi
-            echo "Suite pas encore prête…"
+            echo "API de certification pas encore joignable…"
             sleep 10
           done
-          echo "::error::La suite n'a pas répondu sous 15 minutes" && exit 1
+          echo "::error::L'API de certification.openid.net n'a pas répondu (token invalide ou réseau) en 10 min" && exit 1
 
       - name: Dépendances Python du driver officiel (httpx)
         run: python3 -m pip install --disable-pip-version-check --quiet httpx
 
       - name: Timeout par module piloté par CONFORMANCE_MODULE_TIMEOUT
         # Le driver upstream hardcode timeout=240 dans wait_for_state : on rend
-        # cette valeur règlable sans dévier du script officiel (patch sémantique).
+        # cette valeur réglable sans dévier du script officiel (patch sémantique).
         working-directory: conformance-suite
         run: |
           sed -i 's/def wait_for_state(self, module_id, required_states, timeout=240):/def wait_for_state(self, module_id, required_states, timeout=int(os.getenv("CONFORMANCE_MODULE_TIMEOUT", "240"))):/' scripts/conformance.py
