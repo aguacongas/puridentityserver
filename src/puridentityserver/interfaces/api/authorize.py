@@ -87,9 +87,28 @@ def authorize_router(
                 if not value
             ]
             if missing:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Paramètres requis manquants : {', '.join(missing)}",
+                # RFC 6749 §3.1.1 / §4.1.2.1 : quand une demande d'autorisation
+                # échoue en amont de toute redirection exploitable, l'OP doit
+                # afficher une PAGE HTML d'erreur dans le navigateur de
+                # l'utilisateur (pas un JSON) — c'est cette page que la suite
+                # de certification hébergée (module ExpectResponseTypeMissing
+                # ErrorPage) capture en screenshot.
+                return HTMLResponse(
+                    status_code=400,
+                    content=(
+                        "<!doctype html><html lang=\"fr\"><head>"
+                        "<meta charset=\"utf-8\"><title>Erreur de la demande "
+                        "d'autorisation</title><style>body{font-family:"
+                        "sans-serif;margin:2rem;max-width:28rem}h1{font-size:"
+                        "1.3rem}.hint{color:#666;font-size:0.9rem}</style>"
+                        "</head><body><h1>Requête d'autorisation invalide</h1>"
+                        "<p class=\"hint\">Paramètres requis manquants : "
+                        + ", ".join(html.escape(p) for p in missing)
+                        + ". Conformément à la RFC 6749 §3.1.1, la demande ne "
+                        "peut pas être traitée car un paramètre obligatoire "
+                        "(dont <code>response_type</code>) est absent.</p>"
+                        "</body></html>"
+                    ),
                 )
             await _enforce_par_requirement(client_id, client_repository)
             auth_request = AuthorizeRequest(
