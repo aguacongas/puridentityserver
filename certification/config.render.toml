@@ -3,10 +3,13 @@
 # `.github/workflows/certification.yml`).
 #
 # Particularités vs `config.toml` :
-# - `storage_type = "memory"` : aucune persistance (disque éphémère Render,
-#   état régénéré à chaque démarrage). Un redémarrage pendant un run de
-#   certification COUPE les sessions en cours : la suite tolère les cold
-#   starts (le workflow attend que le discovery réponde à nouveau).
+# - `storage_type = "sql"` + `storage_dsn = "sqlite:///puridentityserver.db"` :
+#   persistance SQLite (fichier sur le disque éphémère Render).
+#   Les clients enregistrés dynamiquement (RFC 7591) survivent aux cold starts
+#   du plan gratuit (sommeil/proc) au sein d'un run — c'est ce qui permet au
+#   `DELETE /register/{client_id}` final (RFC 7592, unregister) de renvoyer 204
+#   au lieu d'un 404 `invalid_client`. Le workflow redéploie l'instance avant
+#   chaque run (disque recréé) : l'état reste donc vierge à chaque exécution.
 # - `registration_initial_access_token_mode = "disabled"` : enregistrement
 #   dynamique OUVERT (RFC 7591) pour que la suite puisse s'auto-enregistrer
 #   (`client_registration = dynamic_client`). À ne JAMAIS utiliser hors de
@@ -22,7 +25,8 @@ base_url = ""
 host = "0.0.0.0"
 port = 8000
 
-storage_type = "memory"
+storage_type = "sql"
+storage_dsn = "sqlite:///puridentityserver.db"
 
 registration_enabled = true
 registration_initial_access_token_mode = "disabled"

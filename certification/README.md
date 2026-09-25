@@ -9,8 +9,8 @@ redirections, des posts form_post et des appels du navigateur Selenium de la
 suite), il faut que le serveur soit joint de l'extérieur. L'architecture
 retenue :
 
-1. l'OP est déployé sur **Render** (service gratuit, `storage_type = "memory"`)
-   — configuration committée dans `render.yaml` + `Dockerfile` +
+1. l'OP est déployé sur **Render** (service gratuit, `storage_type = "sql"` /
+   SQLite) — configuration committée dans `render.yaml` + `Dockerfile` +
    `certification/config.render.toml` ;
 2. la suite de certification tourne dans le **runner GitHub** (docker) et est
    pilotée par `.github/workflows/certification.yml` via le script officiel
@@ -97,12 +97,34 @@ retenue :
 
 | Fichier | Rôle |
 | --- | --- |
-| `render.yaml` / `Dockerfile` / `.dockerignore` | déploiement de l'OP sur Render (mémoire) |
+| `render.yaml` / `Dockerfile` / `.dockerignore` | déploiement de l'OP sur Render (SQLite, disque éphémère) |
 | `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`) |
 | `plans/basic|implicit|hybrid.json` | configs des plans Core de la suite (alias **unique par plan**, discovery, règles navigateur login/consent) |
 | `conformance-reuse-plan.patch` | patch du driver : `create_test_plan` idempotent (réutilise le plan existant quand sa config n'a pas changé) |
+| `conformance-screenshots.patch` | patch du driver : remplit automatiquement les placeholders REVIEW « capture d'écran » (ex. `oidcc-response-type-missing`) avec un PNG de secours, pour que les modules Core se terminent sans intervention humaine (mode witness) |
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés |
 | `../.github/workflows/certification.yml` | workflow witness : deploy + suite + plans + rapport |
+
+## Captures d'écran des modules de relecture (mode witness)
+
+Certains modules Core (au moins `oidcc-response-type-missing`, présent dans le plan
+Basic) s'arrêtent sur un événement **REVIEW** demandant une capture d'écran :
+sans intervention, le driver attend jusqu'au timeout `CONFORMANCE_MODULE_TIMEOUT`
+puis marque le module en échec. Sur l'instance hébergée, l'« upload » se fait à la
+main via la console navigateur — impossible en CI.
+
+Le patch `conformance-screenshots.patch` couple deux points du driver :
+- `conformance.py` : nouvelle méthode `fill_required_screenshots(module_id)` qui
+  liste les placeholders en attente (`GET api/log/{id}/images`, entrées avec le
+  champ `upload`) puis les remplit (`POST api/log/{id}/images/{placeholder}`) avec
+  un **PNG 1x1 de secours** (data URI `image/png`, bien sous la limite de 500 Ko) ;
+- `run-test-plan.py` : appel systématique de cette méthode pour les modules
+  purement OP (pas de client à piloter) avant l'attente de `FINISHED`.
+
+Le remplissage déclenche `setTestReviewNeeded`, ce qui relance le module jusqu'à
+son terme. En mode witness, la capture fournie n'est pas une preuve d'exécution
+réelle du navigateur : c'est un artifice pour que la suite se termine et produise
+le rapport complet.
 
 ## Alias des plans : création unique puis ré-exécution
 

@@ -1,9 +1,13 @@
 # Render Blueprint — instance de certification publique (PurIdentityServer).
 #
-# Service web gratuit "Spark" à mémoire seule (`storage_type = "memory"` dans
-# `certification/config.render.toml`) : l'état est perdu au redémarrage et
-# rien n'est écrit sur le disque éphémère de Render. Cette instance sert de
-# cible à la suite de certification OIDC lancée par le workflow
+# Service web gratuit "Spark" avec stockage SQLite (`storage_type = "sql"` dans
+# `certification/config.render.toml`) : l'état (clients enregistrés, sessions,
+# clés) est écrit sur le disque éphémère de Render et survit aux cold starts
+# au sein d'un run de certification — indispensable pour que l'unregister
+# final de la suite (RFC 7592) renvoie 204 au lieu d'un 404. Le disque est
+# recréé à chaque déploiement : le workflow redéploie l'instance avant chaque
+# run, donc l'état reste vierge d'une exécution à l'autre. Cette instance sert
+# de cible à la suite de certification OIDC lancée par le workflow
 # `.github/workflows/certification.yml` (l'OP doit être joignable à distance
 # par la suite, qui tourne dans le runner GitHub).
 #
@@ -19,7 +23,7 @@ services:
     runtime: docker
     repo: https://github.com/aguacongas/puridentityserver
     plan: free
-    branch: main
+    branch: chore/oidc-certification-witness
     dockerfilePath: ./Dockerfile
     healthCheckPath: /.well-known/openid-configuration
     autoDeploy: false
