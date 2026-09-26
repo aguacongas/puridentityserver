@@ -4,8 +4,8 @@ index e1f3996..109051c 100644
 +++ b/scripts/conformance.py
 @@ -18,6 +18,13 @@ import traceback
  import zipfile
- 
- 
+
+
 +# Donnees (data URI) d'une capture d'ecran de secours : PNG 1x1 valide, utilise
 +# pour remplir automatiquement les placeholders 'upload' des modules de relecture
 +# (ex. oidcc-response-type-missing) afin que le test puisse se terminer sans
@@ -17,10 +17,10 @@ index e1f3996..109051c 100644
  class ServerUnavailableError(Exception):
      """Raised when the server is unreachable after exhausting retries."""
      pass
-@@ -287,6 +294,35 @@ class Conformance(object):
+@@ -338,6 +345,35 @@ class Conformance(object):
              raise Exception("get_test_log failed - HTTP {:d} {}".format(response.status_code, response.content))
          return response.json()
- 
+
 +    async def fill_required_screenshots(self, module_id):
 +        # Certains modules OpenID Core (ex. oidcc-response-type-missing) mettent le
 +        # test en pause avec un evenement de relecture REVIEW porteur d'un
@@ -60,7 +60,7 @@ index ba14e9a..580236e 100644
 @@ -377,6 +377,16 @@ async def run_test_module(moduledict, plan_id, test_info, test_time_taken, varia
                          os.environ['TEST_MODULE_NAME'] = module
                          subprocess.call(["npm", "run", "client"], cwd="./sample-openbanking-client-nodejs")
- 
+
 +                # Les tests purement OP (pas de client a piloter) s'arretent parfois
 +                # sur un evenement de relecture demandant une capture d'ecran
 +                # (ex. oidcc-response-type-missing). On remplit ces placeholders
@@ -72,5 +72,5 @@ index ba14e9a..580236e 100644
 +                        print('Automatically uploaded {:d} screenshot(s) for review placeholder(s)'.format(uploaded))
 +
                  await conformance.wait_for_state(module_id, ["FINISHED"])
- 
+
              plan_results.extend(attempt_plan_results)
