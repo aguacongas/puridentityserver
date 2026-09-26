@@ -538,7 +538,6 @@ class TokenUseCase:
             session_id=session_id,
             expires_at=expires_epoch,
             issued_at=issued_at,
-            scopes=scopes,
             auth_time=auth_time,
             shared_secret=shared_secret,
         )

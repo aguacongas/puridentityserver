@@ -40,7 +40,6 @@ class PyJWTTokenManager:
         session_id: str = "",
         expires_at: int,
         issued_at: int,
-        scopes: frozenset[Scope],
         at_hash: str = "",
         c_hash: str = "",
         auth_time: int = 0,

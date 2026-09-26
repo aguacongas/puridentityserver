@@ -394,7 +394,6 @@ class AuthorizeUseCase:
                 session_id=request.session_id,
                 expires_at=expires_epoch,
                 issued_at=issued_at,
-                scopes=scopes,
                 at_hash=at_hash,
                 c_hash=(_hash_artefact(code, id_token_algorithm) if code else ""),
                 auth_time=request.auth_time,
