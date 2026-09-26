@@ -46,6 +46,7 @@ class TokenManager(Protocol):
         scopes: frozenset[Scope],
         at_hash: str = "",
         c_hash: str = "",
+        auth_time: int = 0,
         shared_secret: str = "",
     ) -> str:
         """Crée un id_token signé JWS (JWT) pour le client ``audience``.
@@ -57,6 +58,9 @@ class TokenManager(Protocol):
         ``session_id`` porte le ``sid`` de la session navigateur (OIDC
         Session Management 1.0 §2) : le claim ``sid`` est ajouté seulement
         si non vide, pour rester stable pour les flux sans session.
+        ``auth_time`` (OIDC Core 1.0 §2) : le claim ``auth_time`` n'est
+        ajouté que s'il est non nul, pour ne pas émettre un temps
+        d'authentification invalide.
         """
         ...
 
