@@ -43,6 +43,7 @@ class PyJWTTokenManager:
         scopes: frozenset[Scope],
         at_hash: str = "",
         c_hash: str = "",
+        auth_time: int = 0,
         shared_secret: str = "",
     ) -> str:
         """Construit l'``id_token`` : identité ``sub`` + audience ``client_id``.
@@ -63,7 +64,6 @@ class PyJWTTokenManager:
             "aud": audience,
             "exp": expires_at,
             "iat": issued_at,
-            "scope": " ".join(sorted(scope.value for scope in scopes)),
         }
         if nonce:
             payload["nonce"] = nonce
@@ -73,6 +73,8 @@ class PyJWTTokenManager:
             payload["at_hash"] = at_hash
         if c_hash:
             payload["c_hash"] = c_hash
+        if auth_time:
+            payload["auth_time"] = auth_time
         return await self._sign(algorithm, payload, shared_secret)
 
     async def create_access_token(

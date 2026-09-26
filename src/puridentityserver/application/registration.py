@@ -77,7 +77,7 @@ from puridentityserver.domain.key_validation import (
 from puridentityserver.interfaces.domain.secrets import SecretCipher
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 
-_ALLOWED_GRANT_TYPES = frozenset({"authorization_code"})
+_ALLOWED_GRANT_TYPES = frozenset({"authorization_code", "refresh_token"})
 _ALLOWED_RESPONSE_TYPES = frozenset({"code"})
 _ALLOWED_AUTH_METHODS = frozenset(
     {

@@ -111,6 +111,7 @@ def _mount_authorization_routers(
     consent_usecase: ConsentUseCase,
     par_enabled: bool,
     require_login: bool,
+    base_url: str,
 ) -> None:
     """Monte ``/authorize`` (+ ``/par`` + ``/consent`` selon la configuration)."""
     app.include_router(
@@ -120,6 +121,7 @@ def _mount_authorization_routers(
             client_repository=client_reader,
             consent_usecase=consent_usecase,
             require_login=require_login,
+            base_url=base_url,
         )
     )
     app.include_router(consent_router(consent_usecase, authorize_usecase, client_reader))
@@ -374,6 +376,7 @@ class ProtocolDependencies:
             consent_usecase=self.consent_usecase,
             par_enabled=self.settings.par_enabled,
             require_login=self.settings.require_login,
+            base_url=self.settings.base_url or self.settings.issuer,
         )
         app.include_router(token_router(self.token_usecase))
         app.include_router(device_authorization_router(self.device_usecase))

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import unicodedata
 
 from fastapi import APIRouter, Form, Request, Response
 
@@ -91,13 +92,40 @@ def _success_response(result: TokenResponse) -> Response:
         payload["id_token"] = result.id_token
     if result.refresh_token:
         payload["refresh_token"] = result.refresh_token
-    return Response(content=json.dumps(payload), media_type="application/json")
+    return Response(
+        content=json.dumps(payload),
+        media_type="application/json",
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+    )
+
+
+def _ascii_error_description(value: str) -> str:
+    """Réduit ``error_description`` à l'ensemble de caractères imposé par OAuth 2.0.
+
+    La RFC 6749 §5.2 limite ``error_description`` aux caractères
+    ``%x20-21 / %x23-5B / %x5D-7E`` : les lettres accentuées y sont
+    illégitimes. Les accents sont translittérés (NFKD) puis tout caractère
+    restant hors jeu est retiré.
+    """
+    decomposed = unicodedata.normalize("NFKD", value)
+    ascii_flat = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return "".join(
+        ch
+        for ch in ascii_flat
+        if 0x20 <= ord(ch) <= 0x21 or 0x23 <= ord(ch) <= 0x5B or 0x5D <= ord(ch) <= 0x7E
+    )
 
 
 def _error_response(result: TokenError) -> Response:
     """Sérialise une réponse d'erreur au format JSON OAuth (HTTP 400)."""
     return Response(
-        content=json.dumps({"error": result.error, "error_description": result.error_description}),
+        content=json.dumps(
+            {
+                "error": result.error,
+                "error_description": _ascii_error_description(result.error_description),
+            }
+        ),
         media_type="application/json",
         status_code=400,
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
     )
