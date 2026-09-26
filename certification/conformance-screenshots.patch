@@ -11,6 +11,7 @@ index e1f3996..109051c 100644
 +# (ex. oidcc-response-type-missing) afin que le test puisse se terminer sans
 +# intervention humaine (mode witness). L'API ImageAPI n'accepte que des data URI
 +# image/png ou image/jpeg (<= 500 Ko).
++STUB_SCREENSHOT_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 +
 +
  class ServerUnavailableError(Exception):
