@@ -94,7 +94,9 @@ class AuthorizeRequest:
     code_challenge: str = ""
     code_challenge_method: str = "S256"
     response_mode: str = ""
+    prompt: str = ""
     session_id: str = ""
+    auth_time: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -333,6 +335,7 @@ class AuthorizeUseCase:
             code_challenge=request.code_challenge,
             code_challenge_method=request.code_challenge_method,
             nonce=request.nonce,
+            auth_time=request.auth_time,
             expires_at=now + timedelta(seconds=code_ttl),
         )
         await self._codes.save(code)
@@ -391,9 +394,9 @@ class AuthorizeUseCase:
                 session_id=request.session_id,
                 expires_at=expires_epoch,
                 issued_at=issued_at,
-                scopes=scopes,
                 at_hash=at_hash,
                 c_hash=(_hash_artefact(code, id_token_algorithm) if code else ""),
+                auth_time=request.auth_time,
                 shared_secret=shared_secret,
             )
             try:

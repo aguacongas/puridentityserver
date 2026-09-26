@@ -2,21 +2,23 @@
 
 from __future__ import annotations
 
+import html
 from urllib.parse import parse_qs, quote
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from puridentityserver.application.authorize import (
     AuthorizeError,
     AuthorizeRedirect,
     AuthorizeRequest,
     AuthorizeUseCase,
+    validate_authorization_request,
 )
 from puridentityserver.application.consent import ConsentUseCase
 from puridentityserver.application.par import PushedAuthorizationUseCase, PushError
 from puridentityserver.domain.authorization import ResponseMode, Scope
-from puridentityserver.identity.config import CurrentUserOptional, session_sid
+from puridentityserver.identity.config import CurrentUserOptional, session_auth_time, session_sid
 from puridentityserver.interfaces.api.consent import consent_url
 from puridentityserver.interfaces.repositories.readers import ClientReader
 
@@ -26,6 +28,9 @@ def authorize_router(
     par_usecase: PushedAuthorizationUseCase | None = None,
     client_repository: ClientReader | None = None,
     consent_usecase: ConsentUseCase | None = None,
+    *,
+    require_login: bool = False,
+    base_url: str = "",
 ) -> APIRouter:
     """Construit le routeur FastAPI exposant ``GET /authorize``.
 
@@ -36,13 +41,16 @@ def authorize_router(
     consentement. ``consent_usecase`` active l'écran de consentement
     (``require_consent``, OIDC Core 1.0 §3.1.2.2) : la demande est alors
     redirigée vers ``/consent`` quand les scopes demandés ne sont pas déjà
-    couverts par un consentement mémorisé.
+    couverts par un consentement mémorisé. ``require_login`` : la demande non
+    authentifiée est redirigée vers ``/login`` (OIDC Core 1.0 §3.1.2.1), ou
+    renvoyée en erreur ``login_required`` quand ``prompt=none`` (§3.1.2.6).
     """
     router = APIRouter(tags=["authorize"])
 
     @router.get(
         "/authorize",
         summary="Endpoint d'autorisation OAuth 2.0",
+        response_model=None,
         responses={
             400: {
                 "description": "Erreur OAuth 2.0 (invalid_request, invalid_client, "
@@ -62,41 +70,104 @@ def authorize_router(
         code_challenge: str = Query(default=""),
         code_challenge_method: str = Query(default="S256"),
         response_mode: str = Query(default=""),
+        prompt: str = Query(default=""),
         request_uri: str = Query(default=""),
         user: CurrentUserOptional = None,
-    ) -> RedirectResponse:
+    ) -> RedirectResponse | HTMLResponse:
+        params: dict[str, str] = {
+            "response_type": response_type,
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "scope": scope,
+            "state": state,
+            "nonce": nonce,
+            "code_challenge": code_challenge,
+            "code_challenge_method": code_challenge_method,
+            "response_mode": response_mode,
+            "prompt": prompt,
+            "request_uri": request_uri,
+        }
+        return await _handle_authorize(request, params, user)
+
+    @router.post(
+        "/authorize",
+        summary="Endpoint d'autorisation OAuth 2.0 (POST, RFC 6749 §4.1)",
+        response_model=None,
+        responses={
+            400: {"description": "Erreur OAuth 2.0 (invalid_request, invalid_client…)."},
+            422: {"description": "Paramètres requis manquants."},
+        },
+    )
+    async def authorize_post(
+        request: Request,
+        user: CurrentUserOptional = None,
+    ) -> RedirectResponse | HTMLResponse:
+        """Traitement d'une demande ``POST /authorize`` (corps form-urlencoded)."""
+        form = await request.form()
+        params = {name: str(value) for name, value in form.items()}
+        return await _handle_authorize(request, params, user)
+
+    async def _handle_authorize(
+        request: Request,
+        params: dict[str, str],
+        user: CurrentUserOptional,
+    ) -> RedirectResponse | HTMLResponse:
+        request_uri = params.get("request_uri", "")
         if request_uri:
             auth_request = await _resolve_pushed_request(
-                request, client_id, request_uri, par_usecase
+                request, params.get("client_id", ""), request_uri, par_usecase
             )
         else:
             missing = [
                 name
                 for name, value in (
-                    ("response_type", response_type),
-                    ("client_id", client_id),
-                    ("redirect_uri", redirect_uri),
-                    ("scope", scope),
+                    ("response_type", params.get("response_type", "")),
+                    ("client_id", params.get("client_id", "")),
+                    ("redirect_uri", params.get("redirect_uri", "")),
+                    ("scope", params.get("scope", "")),
                 )
                 if not value
             ]
             if missing:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Paramètres requis manquants : {', '.join(missing)}",
+                # RFC 6749 §3.1.1 / §4.1.2.1 : quand une demande d'autorisation
+                # échoue en amont de toute redirection exploitable, l'OP doit
+                # afficher une PAGE HTML d'erreur dans le navigateur de
+                # l'utilisateur (pas un JSON) — c'est cette page que la suite
+                # de certification hébergée (module ExpectResponseTypeMissing
+                # ErrorPage) capture en screenshot.
+                return HTMLResponse(
+                    status_code=400,
+                    content=(
+                        '<!doctype html><html lang="fr"><head>'
+                        '<meta charset="utf-8"><title>Erreur de la demande '
+                        "d'autorisation</title><style>body{font-family:"
+                        "sans-serif;margin:2rem;max-width:28rem}h1{font-size:"
+                        "1.3rem}.hint{color:#666;font-size:0.9rem}</style>"
+                        "</head><body><h1>Requête d'autorisation invalide</h1>"
+                        '<p class="hint">Paramètres requis manquants : '
+                        + ", ".join(html.escape(p) for p in missing)
+                        + ". Conformément à la RFC 6749 §3.1.1, la demande ne "
+                        "peut pas être traitée car un paramètre obligatoire "
+                        "(dont <code>response_type</code>) est absent.</p>"
+                        "</body></html>"
+                    ),
                 )
-            await _enforce_par_requirement(client_id, client_repository)
+            await _enforce_par_requirement(params.get("client_id", ""), client_repository)
             auth_request = AuthorizeRequest(
-                response_type=response_type,
-                client_id=client_id,
-                redirect_uri=redirect_uri,
-                scope=scope,
-                state=state,
-                nonce=nonce,
-                code_challenge=code_challenge,
-                code_challenge_method=code_challenge_method,
-                response_mode=response_mode,
+                response_type=params.get("response_type", ""),
+                client_id=params.get("client_id", ""),
+                redirect_uri=params.get("redirect_uri", ""),
+                scope=params.get("scope", ""),
+                state=params.get("state", ""),
+                nonce=params.get("nonce", ""),
+                code_challenge=params.get("code_challenge", ""),
+                code_challenge_method=params.get("code_challenge_method", "S256"),
+                response_mode=params.get("response_mode", ""),
+                prompt=params.get("prompt", ""),
             )
+
+        if require_login and user is None:
+            return await _login_or_error(auth_request, request, client_repository, base_url)
 
         if user is not None:
             auth_request = AuthorizeRequest(
@@ -110,7 +181,9 @@ def authorize_router(
                 code_challenge=auth_request.code_challenge,
                 code_challenge_method=auth_request.code_challenge_method,
                 response_mode=auth_request.response_mode,
+                prompt=auth_request.prompt,
                 session_id=await session_sid(request),
+                auth_time=await session_auth_time(request),
             )
         consent_redirect = await _consent_redirect_if_required(
             auth_request, consent_usecase, client_repository
@@ -123,6 +196,62 @@ def authorize_router(
         return _error_redirect(result)
 
     return router
+
+
+async def _login_or_error(
+    auth_request: AuthorizeRequest,
+    http_request: Request,
+    client_repository: ClientReader | None,
+    base_url: str = "",
+) -> RedirectResponse:
+    """Gère une demande ``/authorize`` non authentifiée (:param:`require_login`).
+
+    ``prompt=none`` (OIDC Core 1.0 §3.1.2.6) : aucune redirection vers le
+    formulaire n'est autorisée — une erreur ``login_required`` est renvoyée au
+    client via sa ``redirect_uri`` (validation préalable pour ne jamais
+    rediriger sur une URI non enregistrée). Sinon : redirection vers
+    ``/login?next=<url complète d'/authorize>`` ; après connexion le
+    ``subject`` est porté par le cookie et la demande est rejouée telle quelle.
+
+    Le ``next`` est reconstruit depuis ``base_url`` (URL externe explicite de
+    l'émetteur, jamais ``request.url`` : derrière un proxy de terminaison TLS
+    l'en-tête Host ne porte pas le port non standard, ce qui cassait la
+    redirection post-login avec e.g. ``https://host.example:8445``).
+    """
+    if "none" in auth_request.prompt.split():
+        validated = (
+            await validate_authorization_request(auth_request, client_repository)
+            if client_repository is not None
+            else None
+        )
+        if isinstance(validated, AuthorizeError):
+            return _error_redirect(validated)
+        error = AuthorizeError(
+            error="login_required",
+            error_description="Authentification requise (prompt=none)",
+            redirect_uri=auth_request.redirect_uri,
+            state=auth_request.state,
+            response_mode=validated.response_mode if validated is not None else ResponseMode.QUERY,
+        )
+        return _error_redirect(error)
+    return RedirectResponse(
+        f"/login?next={quote(_authorize_url_from_base(base_url, http_request))}",
+        status_code=302,
+    )
+
+
+def _authorize_url_from_base(base_url: str, http_request: Request) -> str:
+    """URL ``/authorize`` absolue reconstruite depuis la base explicite.
+
+    La query string brute du scope ASGI (déjà encodée) est conservée telle
+    quelle ; la base sert d'autorité (schéma + hôte + port), indépendamment
+    des en-têtes du proxy.
+    """
+    url = base_url.rstrip("/") + (http_request.scope.get("path") or "")
+    query = http_request.scope.get("query_string") or b""
+    if query:
+        url += "?" + query.decode("latin-1")
+    return url
 
 
 async def _resolve_pushed_request(

@@ -77,7 +77,7 @@ from puridentityserver.domain.key_validation import (
 from puridentityserver.interfaces.domain.secrets import SecretCipher
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 
-_ALLOWED_GRANT_TYPES = frozenset({"authorization_code"})
+_ALLOWED_GRANT_TYPES = frozenset({"authorization_code", "refresh_token"})
 _ALLOWED_RESPONSE_TYPES = frozenset({"code"})
 _ALLOWED_AUTH_METHODS = frozenset(
     {
@@ -202,6 +202,7 @@ class ClientRegistration:
     tls_client_auth_subject_dn: str = ""
     tls_client_certificate_hash: str = ""
     client_secret: str = ""
+    client_secret_expires_at: int = 0
     registration_access_token: str = ""
     registration_client_uri: str = ""
     require_pushed_authorization_requests: bool = False

@@ -603,9 +603,7 @@ def test_login_authorize_token_full_flow(
             audience="web-app",
             issuer=_ISSUER,
         )
-        assert "openid" in id_claims["scope"]
-        assert "profile" in id_claims["scope"]
-        assert "email" in id_claims["scope"]
+        assert "scope" not in id_claims
 
         sub = id_claims["sub"]
         assert sub != ""  # sub = UUID de l'utilisateur, pas vide (requête anonyme)

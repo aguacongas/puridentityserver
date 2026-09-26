@@ -220,6 +220,7 @@ class TokenUseCase:
             nonce=auth_code.nonce,
             now=now,
             session_id=auth_code.session_id,
+            auth_time=auth_code.auth_time,
         )
         if isinstance(issued, TokenError):
             return issued
@@ -514,6 +515,7 @@ class TokenUseCase:
         nonce: str,
         now: datetime,
         session_id: str = "",
+        auth_time: int = 0,
     ) -> tuple[str, str, int] | TokenError:
         """Émet et retourne l'``id_token``, l'``access_token`` et la TTL effective."""
         token_ttl = resolve_lifetime_seconds(
@@ -536,7 +538,7 @@ class TokenUseCase:
             session_id=session_id,
             expires_at=expires_epoch,
             issued_at=issued_at,
-            scopes=scopes,
+            auth_time=auth_time,
             shared_secret=shared_secret,
         )
         try:

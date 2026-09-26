@@ -1,0 +1,32 @@
+{
+  "alias": "puridentityserver-implicit",
+  "description": "PurIdentityServer - Implicit OP certification (CI)",
+  "server": {
+    "discoveryUrl": "{OPURL}/.well-known/openid-configuration"
+  },
+  "browser": [
+    {
+      "match": "{OPURL}/authorize*",
+      "tasks": [
+        {
+          "task": "Login",
+          "optional": true,
+          "match": "{OPURL}/login*",
+          "commands": [
+            ["text", "name", "username", "alice@example.com"],
+            ["text", "name", "password", "password"],
+            ["click", "css", "button[type=submit]"]
+          ]
+        },
+        {
+          "task": "Consent",
+          "optional": true,
+          "match": "{OPURL}/consent*",
+          "commands": [
+            ["click", "css", "button[name=action][value=authorize]"]
+          ]
+        }
+      ]
+    }
+  ]
+}

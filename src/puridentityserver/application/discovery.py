@@ -48,6 +48,7 @@ class DiscoveryConfig:
         "urn:ietf:params:oauth:grant-type:device_code",
         "urn:ietf:params:oauth:grant-type:jwt-bearer",
     )
+    request_object_signing_algorithms: tuple[str, ...] = ()
 
 
 class DiscoveryUseCase:
@@ -95,6 +96,18 @@ class DiscoveryUseCase:
             metadata["registration_endpoint"] = f"{base}/register"
         if self._config.par_enabled:
             metadata["pushed_authorization_request_endpoint"] = f"{base}/par"
+        # Request objects (RFC 9101 §5.2) : non supportés — liste d'algorithmes
+        # vide et indicateurs explicites pour que les clients ne les utilisent
+        # pas (l'absence du champ hériterait du défaut ['none','RS256']).
+        metadata["request_object_signing_alg_values_supported"] = list(
+            self._config.request_object_signing_algorithms
+        )
+        metadata["request_parameter_supported"] = bool(
+            self._config.request_object_signing_algorithms
+        )
+        metadata["request_uri_parameter_supported"] = bool(
+            self._config.request_object_signing_algorithms
+        )
         return metadata
 
     async def _scopes_and_claims(self) -> tuple[list[str], list[str]]:
