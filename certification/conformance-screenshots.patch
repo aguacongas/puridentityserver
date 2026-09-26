@@ -2,7 +2,7 @@ diff --git a/scripts/conformance.py b/scripts/conformance.py
 index e1f3996..109051c 100644
 --- a/scripts/conformance.py
 +++ b/scripts/conformance.py
-@@ -18,6 +18,13 @@ import traceback
+@@ -18,6 +18,14 @@ import traceback
  import zipfile
 
 
@@ -17,7 +17,7 @@ index e1f3996..109051c 100644
  class ServerUnavailableError(Exception):
      """Raised when the server is unreachable after exhausting retries."""
      pass
-@@ -338,6 +345,35 @@ class Conformance(object):
+@@ -338,6 +346,35 @@ class Conformance(object):
              raise Exception("get_test_log failed - HTTP {:d} {}".format(response.status_code, response.content))
          return response.json()
 
