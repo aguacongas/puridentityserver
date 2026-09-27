@@ -1,5 +1,5 @@
 diff --git a/scripts/conformance.py b/scripts/conformance.py
-index 03a8c6c..5a71b3c 100644
+index 03a8c6c..9e30b55 100644
 --- a/scripts/conformance.py
 +++ b/scripts/conformance.py
 @@ -346,6 +346,43 @@ class Conformance(object):
@@ -7,12 +7,12 @@ index 03a8c6c..5a71b3c 100644
          return response.json()
  
 +    async def describe_interruption(self, module_id):
-+        # Un module qui passe a INTERRUPTED juste apres sa creation (statut non
-+        # permanent attendu par wait_for_state) s'explique par un echec de
-+        # configuration/demarrage : la suite livre alors la cause dans le
-+        # journal du test et le resultat du module. Sans ce detail, la CI ne
-+        # voit qu'un « has moved to INTERRUPTED » et on ne peut pas distinguer
-+        # un conflit d'alias d'une vraie erreur de configuration du test.
++        # Detail d'un module qui ne se termine pas : INTERRUPTED juste apres sa
++        # creation (echec de configuration/demarrage, statut non permanent attendu
++        # par wait_for_state) ou timeout de module. La suite livre la cause dans le
++        # journal du test et le resultat du module ; sans ce detail, la CI ne voit
++        # qu'un « has moved to INTERRUPTED » ou un « Timed out waiting », et on ne
++        # peut pas distinguer un conflit d'alias d'une vraie erreur du test.
 +        parts = []
 +        try:
 +            info = await self.get_module_info(module_id)
@@ -46,7 +46,19 @@ index 03a8c6c..5a71b3c 100644
      async def fill_required_screenshots(self, module_id):
          # Certains modules OpenID Core (ex. oidcc-response-type-missing) mettent le
          # test en pause avec un evenement de relecture REVIEW porteur d'un
-@@ -503,7 +540,8 @@ class Conformance(object):
+@@ -447,8 +484,9 @@ class Conformance(object):
+             remaining = timeout_at - time.time()
+             if remaining <= 0:
+                 raise Exception(
+-                    "Timed out waiting for test module {} to be in one of states: {}".format(
+-                        module_id, required_states))
++                    "Timed out waiting for test module {} to be in one of states: {} - {}".format(
++                        module_id, required_states,
++                        await self.describe_interruption(module_id)))
+             # Cap each long-poll at 30s so we recover from server restarts or dropped
+             # connections without exceeding the overall budget; the server clamps to the
+             # same bound. On a per-call timeout the server returns {"timeout": true} and
+@@ -503,7 +541,8 @@ class Conformance(object):
                      if 'INTERRUPTED' in required_states:
                          print("module id {} status changed to {}".format(module_id, persisted))
                          return persisted
@@ -56,7 +68,7 @@ index 03a8c6c..5a71b3c 100644
                  # Non-terminal persisted status (RUNNING/WAITING/CONFIGURED/...): the runner
                  # lost an in-progress test, almost certainly a restart. Even if this status
                  # is in required_states, we must NOT return it — the test no longer exists in
-@@ -532,7 +570,8 @@ class Conformance(object):
+@@ -532,7 +571,8 @@ class Conformance(object):
              # sit until timeout — UNLESS the caller explicitly asked to stop on INTERRUPTED
              # (it's in required_states), in which case we return it as a normal wanted state.
              if state == 'INTERRUPTED' and 'INTERRUPTED' not in required_states:

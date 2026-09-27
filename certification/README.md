@@ -97,12 +97,14 @@ retenue :
   `conformance-alias-release.patch` fait l'inverse : le driver libère lui-même
   l'alias (`DELETE api/runner/{id}` + attente de l'état final) avant chaque
   création de module, et à la fin de chaque plan. Voir « Libération de l'alias ».
-- **« has moved to INTERRUPTED »** : un module passe en `INTERRUPTED` juste après
-  sa création (échec de *configuration/demarrage* du module, contrairement au
-  conflit d'alias où c'est le module **précédent** qui est arrêté). Le patch
-  `conformance-interrupted-diagnostics.patch` complète le message de
-  `wait_for_state` avec la cause réelle (statut, résultat, 10 dernières entrées
-  de `GET api/log/{id}`) pour la lire directement dans le log du job.
+- **« has moved to INTERRUPTED » / « Timed out waiting »** : un module ne se
+  termine pas. L'interruption vient soit d'un échec de *configuration/demarrage*
+  (contrairement au conflit d'alias, où c'est le module **précédent** qui est
+  arrêté), soit d'un module bloqué en `WAITING` (navigation/login côté navigateur
+  de la Fondation) jusqu'au timeout. Le patch `conformance-interrupted-diagnostics.patch`
+  complète le message de `wait_for_state` avec la cause réelle (statut, résultat,
+  10 dernières entrées de `GET api/log/{id}`) pour la lire directement dans le log
+  du job.
 - **ERREUR sur Redis/nginx** : relancer ; le premier pull des images
   `registry.gitlab.com/openid/conformance-suite` est long (~10 min).
 
@@ -116,7 +118,7 @@ retenue :
 | `conformance-reuse-plan.patch` | patch du driver : `create_test_plan` idempotent (réutilise le plan existant quand sa config n'a pas changé) |
 | `conformance-screenshots.patch` | patch du driver : remplit automatiquement les placeholders REVIEW « capture d'écran » (ex. `oidcc-response-type-missing`) avec un PNG de secours, pour que les modules Core se terminent sans intervention humaine (mode witness) |
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |
-| `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module passe en `INTERRUPTED`, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » |
+| `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés |
 | `../.github/workflows/certification.yml` | workflow witness : deploy + suite + plans + rapport |
 
