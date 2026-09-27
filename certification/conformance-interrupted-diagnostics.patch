@@ -1,0 +1,68 @@
+diff --git a/scripts/conformance.py b/scripts/conformance.py
+index 03a8c6c..5a71b3c 100644
+--- a/scripts/conformance.py
++++ b/scripts/conformance.py
+@@ -346,6 +346,43 @@ class Conformance(object):
+             raise Exception("get_test_log failed - HTTP {:d} {}".format(response.status_code, response.content))
+         return response.json()
+ 
++    async def describe_interruption(self, module_id):
++        # Un module qui passe a INTERRUPTED juste apres sa creation (statut non
++        # permanent attendu par wait_for_state) s'explique par un echec de
++        # configuration/demarrage : la suite livre alors la cause dans le
++        # journal du test et le resultat du module. Sans ce detail, la CI ne
++        # voit qu'un « has moved to INTERRUPTED » et on ne peut pas distinguer
++        # un conflit d'alias d'une vraie erreur de configuration du test.
++        parts = []
++        try:
++            info = await self.get_module_info(module_id)
++        except Exception as e:
++            info = {}
++            parts.append("info indisponible - {}".format(e))
++        if info:
++            if info.get('status'):
++                parts.append("statut {}".format(info.get('status')))
++            if info.get('result'):
++                parts.append("resultat {}".format(info.get('result')))
++            if info.get('summary'):
++                parts.append("resume : {}".format(info.get('summary')))
++        try:
++            log = await self.get_test_log(module_id)
++        except Exception as e:
++            log = None
++            parts.append("journal indisponible - {}".format(e))
++        if log:
++            for entry in log[-10:]:
++                if not isinstance(entry, dict):
++                    continue
++                msg = entry.get('msg')
++                if not msg:
++                    continue
++                src = entry.get('src')
++                line = "{}: {}".format(src, msg) if src else str(msg)
++                parts.append(line.replace('\n', ' ')[:400])
++        return " | ".join(parts) if parts else "aucun detail disponible"
++
+     async def fill_required_screenshots(self, module_id):
+         # Certains modules OpenID Core (ex. oidcc-response-type-missing) mettent le
+         # test en pause avec un evenement de relecture REVIEW porteur d'un
+@@ -503,7 +540,8 @@ class Conformance(object):
+                     if 'INTERRUPTED' in required_states:
+                         print("module id {} status changed to {}".format(module_id, persisted))
+                         return persisted
+-                    raise Exception("Test module {} has moved to INTERRUPTED".format(module_id))
++                    raise Exception("Test module {} has moved to INTERRUPTED - {}".format(
++                        module_id, await self.describe_interruption(module_id)))
+                 # Non-terminal persisted status (RUNNING/WAITING/CONFIGURED/...): the runner
+                 # lost an in-progress test, almost certainly a restart. Even if this status
+                 # is in required_states, we must NOT return it — the test no longer exists in
+@@ -532,7 +570,8 @@ class Conformance(object):
+             # sit until timeout — UNLESS the caller explicitly asked to stop on INTERRUPTED
+             # (it's in required_states), in which case we return it as a normal wanted state.
+             if state == 'INTERRUPTED' and 'INTERRUPTED' not in required_states:
+-                raise Exception("Test module {} has moved to INTERRUPTED".format(module_id))
++                raise Exception("Test module {} has moved to INTERRUPTED - {}".format(
++                    module_id, await self.describe_interruption(module_id)))
+             return state
+ 
+     async def _get_persisted_status(self, module_id):
