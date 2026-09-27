@@ -1,0 +1,89 @@
+diff --git a/scripts/conformance.py b/scripts/conformance.py
+index c371682..03a8c6c 100644
+--- a/scripts/conformance.py
++++ b/scripts/conformance.py
+@@ -375,6 +375,55 @@ class Conformance(object):
+             filled += 1
+         return filled
+ 
++    async def release_alias(self, alias, timeout=180):
++        # La suite reserve l'alias au moment de la CREATION du test : quand un test
++        # precedent detient encore cet alias et n'est pas a l'etat final, il est arrete
++        # avec « Stopping test due to alias conflict - before this test finished, you
++        # have started another test using the same alias ». Cela arrive des que la
++        # creation du module suivant precede la fin du precedent (module qui depasse
++        # CONFORMANCE_MODULE_TIMEOUT et reste actif, run annule en cours de route...).
++        # On libere donc l'alias nous-memes avant chaque creation : on arrete les tests
++        # non finalises qui le detiennent (DELETE api/runner/{id}) et on attend leur
++        # etat final, pour que la revendication par le nouveau test se fasse sans conflit.
++        if not alias:
++            return
++        running = await self._request(self.httpclient.get, "list_running_tests", 200,
++                                      url='{0}api/runner/running'.format(self.api_url_base))
++        stale = []
++        for module_id in running.json():
++            try:
++                info = await self.get_module_info(module_id)
++            except Exception as e:
++                print("release_alias: info {} unavailable - {}".format(module_id, e))
++                continue
++            config = info.get('config') or {}
++            if info.get('alias') != alias and config.get('alias') != alias:
++                continue
++            if info.get('status') in ('FINISHED', 'INTERRUPTED'):
++                continue
++            stale.append((module_id, info.get('testName') or module_id, info.get('status')))
++        if not stale:
++            return
++        for module_id, test_name, status in stale:
++            print("release_alias: stopping {} ({}) in state {} - alias '{}' still in use".format(
++                test_name, module_id, status, alias))
++            response = await self.httpclient.delete('{0}api/runner/{1}'.format(self.api_url_base, module_id))
++            if response.status_code not in (200, 404):
++                raise Exception("release_alias cancel failed - HTTP {:d} {}".format(response.status_code, response.content))
++        deadline = time.time() + timeout
++        for module_id, test_name, status in stale:
++            while True:
++                if time.time() >= deadline:
++                    print("release_alias: {} is not final after {}s - continuing anyway".format(test_name, timeout))
++                    break
++                try:
++                    info = await self.get_module_info(module_id)
++                except Exception:
++                    break
++                if info.get('status') in ('FINISHED', 'INTERRUPTED'):
++                    break
++                await asyncio.sleep(2)
++
+     async def start_test(self, module_id):
+         api_url = '{0}api/runner/{1}'.format(self.api_url_base, module_id)
+         response = await self._request(self.httpclient.post, "start_test", 200,
+diff --git a/scripts/run-test-plan.py b/scripts/run-test-plan.py
+index 580236e..48b1364 100755
+--- a/scripts/run-test-plan.py
++++ b/scripts/run-test-plan.py
+@@ -245,6 +245,13 @@ async def run_test_plan(test_plan_obj, config_file, output_dir, client_certs):
+         'plan_number': plan_number,
+         'export_filename': filename
+     })
++    # Les modules qui n'ont pas atteint l'etat final (timeout, revue bloquee) restent
++    # actifs sur l'instance : on les arrete pour ne pas qu'ils occupent l'alias au
++    # prochain run. Meilleur effort : une erreur de nettoyage ne fait pas echouer le plan.
++    try:
++        await conformance.release_alias(parsed_config.get('alias'))
++    except Exception as e:
++        print('release_alias at end of plan failed - {}'.format(e))
+     return plan_results
+ 
+ 
+@@ -268,6 +275,10 @@ async def run_test_module(moduledict, plan_id, test_info, test_time_taken, varia
+                 module_info = {}
+ 
+             print('Running test module: {}'.format(module_with_variants))
++            # Libere l'alias avant de creer le module : le module precedent peut encore
++            # etre actif (timeout depasse, run precedent annule) et la creation le ferait
++            # interrompre avec un conflit d'alias.
++            await conformance.release_alias(parsed_config.get('alias'))
+             test_module_info = await conformance.create_test_from_plan_with_variant(plan_id, module, moduledict.get('variant'))
+             module_id = test_module_info['id']
+             module_info['id'] = module_id

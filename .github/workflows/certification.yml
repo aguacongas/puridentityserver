@@ -50,7 +50,10 @@ env:
 
 concurrency:
   group: certification
-  cancel-in-progress: true
+  # Les runs se SERIALISENT (au lieu d'en annuler un en cours de route) : annuler un
+  # run laissait ses tests actifs sur l'instance hébergée de la Fondation, et le run
+  # suivant les interrompait alors avec « Stopping test due to alias conflict ».
+  cancel-in-progress: false
 
 jobs:
   certification:
@@ -138,11 +141,17 @@ jobs:
         #    sur un événement REVIEW « upload une capture d'écran » ; on remplit
         #    ces placeholders automatiquement côté driver pour que la suite
         #    puisse se terminer sans intervention humaine (mode witness).
+        # 3) la suite réserve l'alias à la création de chaque module : un module
+        #    encore actif (timeout dépassé, run annulé…) serait interrompu par le
+        #    module suivant (« Stopping test due to alias conflict »). Le driver
+        #    libère donc l'alias lui-même avant chaque création de module.
         run: |
           git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-reuse-plan.patch"
           grep -n "def _plan_matching_configuration" conformance-suite/scripts/conformance.py
           git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-screenshots.patch"
           grep -n "fill_required_screenshots" conformance-suite/scripts/conformance.py conformance-suite/scripts/run-test-plan.py
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-alias-release.patch"
+          grep -n "release_alias" conformance-suite/scripts/conformance.py conformance-suite/scripts/run-test-plan.py
 
       - name: Timeout par module piloté par CONFORMANCE_MODULE_TIMEOUT
         # Le driver upstream hardcode timeout=240 dans wait_for_state : on rend

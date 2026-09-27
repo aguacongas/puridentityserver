@@ -90,6 +90,13 @@ retenue :
   use`). Chaque plan doit porter un alias distinct ; le workflow applique le patch
   `conformance-reuse-plan.patch`, qui réutilise le plan existant (même config) au
   lieu de le recréer à chaque run.
+- **« Stopping test due to alias conflict »** : la suite réserve l'alias à la
+  *création* de chaque module ; si le module précédent n'est pas encore terminé
+  (timeout `CONFORMANCE_MODULE_TIMEOUT` dépassé, run annulé en cours de route…),
+  elle l'interrompt avec ce message avant de laisser place au suivant. Le patch
+  `conformance-alias-release.patch` fait l'inverse : le driver libère lui-même
+  l'alias (`DELETE api/runner/{id}` + attente de l'état final) avant chaque
+  création de module, et à la fin de chaque plan. Voir « Libération de l'alias ».
 - **ERREUR sur Redis/nginx** : relancer ; le premier pull des images
   `registry.gitlab.com/openid/conformance-suite` est long (~10 min).
 
@@ -102,6 +109,7 @@ retenue :
 | `plans/basic|implicit|hybrid.json` | configs des plans Core de la suite (alias **unique par plan**, discovery, règles navigateur login/consent) |
 | `conformance-reuse-plan.patch` | patch du driver : `create_test_plan` idempotent (réutilise le plan existant quand sa config n'a pas changé) |
 | `conformance-screenshots.patch` | patch du driver : remplit automatiquement les placeholders REVIEW « capture d'écran » (ex. `oidcc-response-type-missing`) avec un PNG de secours, pour que les modules Core se terminent sans intervention humaine (mode witness) |
+| `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés |
 | `../.github/workflows/certification.yml` | workflow witness : deploy + suite + plans + rapport |
 
@@ -143,3 +151,35 @@ variante sont strictement identiques. Un plan n'est donc créé **qu'une seule f
 puis ré-exécuté à chaque run ; il n'est recréé que si sa config a changé (ex. l'URL
 de l'OP `CERTIFICATION_OP_URL` a bougé, ou les sélecteurs navigateur du plan ont
 été modifiés), ce qui est le moyen voulu de déployer le changement.
+
+## Libération de l'alias : plus de « Stopping test due to alias conflict »
+
+La suite réserve l'alias **au moment de la création** de chaque module
+(`TestRunner.createTestAlias`) : si le test qui détient encore l'alias n'est pas
+`FINISHED` / `INTERRUPTED`, elle l'arrête avec
+*« Stopping test due to alias conflict - before this test finished, you have
+started another test using the same alias »*. Concrètement, cela se produisait
+dans deux cas :
+
+1. **un module dépasse `CONFORMANCE_MODULE_TIMEOUT`** (il reste `WAITING` /
+   `RUNNING` côté Fondation) : le driver enregistre l'échec et crée le module
+   suivant, ce qui interrompt le précédent ;
+2. **un run est annulé en cours de route** (push pendant le run, job tué) : ses
+   modules continuent de tourner sur l'instance et le run suivant les interrompt
+   dès sa première création.
+
+Le patch `conformance-alias-release.patch` ajoute `Conformance.release_alias(alias)` :
+
+- `GET api/runner/running` ne renvoie que **nos** tests (filtre côté serveur sur le
+  propriétaire) ; pour chacun, `GET api/info/{id}` donne `alias` + `status` ;
+- tout test portant notre alias et non encore finalisé est arrêté par nos soins
+  (`DELETE api/runner/{id}` → *« The test was requested to stop via the conformance
+  suite API »*) puis suivi jusqu'à `INTERRUPTED` (timeout 180 s) ;
+- l'appel est fait **avant chaque création de module** et **à la fin de chaque plan** :
+  la revendication de l'alias se fait donc toujours sur un détenteur déjà finalisé,
+  d'où plus jamais le message de conflit.
+
+Deux compléments côté workflow : `concurrency.cancel-in-progress: false` sérialise
+les runs (un run en cours n'est plus tué en laissant ses modules orphelins), et les
+modules qui restent bloqués sont arrêtés à la fin du plan plutôt que d'attendre le
+prochain run.
