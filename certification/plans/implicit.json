@@ -26,6 +26,12 @@
           "commands": [
             ["click", "css", "button[name=action][value=authorize]"]
           ]
+        },
+        {
+          "task": "Attente du chargement du callback",
+          "optional": true,
+          "match": "*callback*",
+          "commands": []
         }
       ]
     }
