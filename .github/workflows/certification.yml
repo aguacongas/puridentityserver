@@ -17,6 +17,19 @@ name: Certification OIDC
 
 on:
   workflow_dispatch:
+    inputs:
+      plan:
+        # Permet un cycle de diagnostic rapide : ne lancer qu'un seul plan au
+        # lieu des trois (~30 min au lieu de ~2 h 30).
+        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid)"
+        type: choice
+        required: false
+        default: all
+        options:
+          - all
+          - basic
+          - implicit
+          - hybrid
   schedule:
     - cron: "0 2 * * MON"
   # Déclencheur TEMPORAIRE pour valider la PR #66 sur la branche elle-même —
@@ -170,12 +183,25 @@ jobs:
       - name: Lancement des plans Core (Basic / Implicit / Hybrid)
         continue-on-error: true
         working-directory: conformance-suite
+        env:
+          # Vide sur pull_request/schedule : les trois plans sont joués.
+          PLAN_FILTER: ${{ inputs.plan || 'all' }}
         run: |
           set +e
-          for plan in \
-            "oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|basic" \
-            "oidcc-implicit-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|implicit" \
-            "oidcc-hybrid-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|hybrid" ; do
+          plans=(
+            "oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|basic"
+            "oidcc-implicit-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|implicit"
+            "oidcc-hybrid-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|hybrid"
+          )
+          if [ "$PLAN_FILTER" != "all" ]; then
+            selected=()
+            for plan in "${plans[@]}"; do
+              [ "${plan##*|}" = "$PLAN_FILTER" ] && selected+=("$plan")
+            done
+            plans=("${selected[@]}")
+            echo "Filtre de plan actif : $PLAN_FILTER"
+          fi
+          for plan in "${plans[@]}" ; do
             selector="${plan%%|*}"; name="${plan##*|}"
             echo "### Plan $name : $selector" | tee -a "$GITHUB_STEP_SUMMARY"
             python3 scripts/run-test-plan.py \

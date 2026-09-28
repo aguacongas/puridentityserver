@@ -1,8 +1,8 @@
 diff --git a/scripts/conformance.py b/scripts/conformance.py
-index 03a8c6c..9e30b55 100644
+index 03a8c6c..28a223f 100644
 --- a/scripts/conformance.py
 +++ b/scripts/conformance.py
-@@ -346,6 +346,43 @@ class Conformance(object):
+@@ -346,6 +346,49 @@ class Conformance(object):
              raise Exception("get_test_log failed - HTTP {:d} {}".format(response.status_code, response.content))
          return response.json()
  
@@ -35,18 +35,24 @@ index 03a8c6c..9e30b55 100644
 +            for entry in log[-10:]:
 +                if not isinstance(entry, dict):
 +                    continue
-+                msg = entry.get('msg')
-+                if not msg:
-+                    continue
 +                src = entry.get('src')
-+                line = "{}: {}".format(src, msg) if src else str(msg)
-+                parts.append(line.replace('\n', ' ')[:400])
++                pieces = [str(entry.get('msg'))] if entry.get('msg') else []
++                # Certains evenements portent la cause reelle dans une cle
++                # annexe (« detail » pour BROWSER, « error » pour une exception).
++                for key in ('detail', 'error', 'exception', 'cause'):
++                    value = entry.get(key)
++                    if value:
++                        pieces.append("{}={}".format(key, value))
++                if not pieces:
++                    continue
++                line = "{}: {}".format(src, " | ".join(pieces)) if src else " | ".join(pieces)
++                parts.append(line.replace('\n', ' ')[:600])
 +        return " | ".join(parts) if parts else "aucun detail disponible"
 +
      async def fill_required_screenshots(self, module_id):
          # Certains modules OpenID Core (ex. oidcc-response-type-missing) mettent le
          # test en pause avec un evenement de relecture REVIEW porteur d'un
-@@ -447,8 +484,9 @@ class Conformance(object):
+@@ -447,8 +490,9 @@ class Conformance(object):
              remaining = timeout_at - time.time()
              if remaining <= 0:
                  raise Exception(
@@ -58,7 +64,7 @@ index 03a8c6c..9e30b55 100644
              # Cap each long-poll at 30s so we recover from server restarts or dropped
              # connections without exceeding the overall budget; the server clamps to the
              # same bound. On a per-call timeout the server returns {"timeout": true} and
-@@ -503,7 +541,8 @@ class Conformance(object):
+@@ -503,7 +547,8 @@ class Conformance(object):
                      if 'INTERRUPTED' in required_states:
                          print("module id {} status changed to {}".format(module_id, persisted))
                          return persisted
@@ -68,7 +74,7 @@ index 03a8c6c..9e30b55 100644
                  # Non-terminal persisted status (RUNNING/WAITING/CONFIGURED/...): the runner
                  # lost an in-progress test, almost certainly a restart. Even if this status
                  # is in required_states, we must NOT return it — the test no longer exists in
-@@ -532,7 +571,8 @@ class Conformance(object):
+@@ -532,7 +577,8 @@ class Conformance(object):
              # sit until timeout — UNLESS the caller explicitly asked to stop on INTERRUPTED
              # (it's in required_states), in which case we return it as a normal wanted state.
              if state == 'INTERRUPTED' and 'INTERRUPTED' not in required_states:
