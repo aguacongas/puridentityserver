@@ -303,7 +303,6 @@ class TestTokenEndpointHmacSigning:
             nonce="",
             expires_at=9999999999,
             issued_at=9999990000,
-            scopes=frozenset({Scope.OPENID}),
         )
         with pytest.raises(ValueError, match="secret partagé"):
             asyncio.run(awaitable)

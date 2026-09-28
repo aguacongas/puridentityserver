@@ -405,3 +405,35 @@ def test_authorize_query_mode_with_tokens_rejected_http() -> None:
     location = response.headers["location"]
     assert urlparse(location).query == ""
     assert _fragment_params(location)["error"] == ["invalid_request"]
+
+
+def test_authorize_error_description_respects_rfc6749_charset() -> None:
+    """L'``error_description`` redirigée reste dans le jeu RFC 6749 §4.1.2.1.
+
+    La suite de certification OIDC
+    (``ValidateErrorDescriptionFromAuthorizationEndpointResponseError``)
+    rejette tout caractère hors ``%x20-21 / %x23-5B / %x5D-7E`` : le ``§``
+    et les lettres accentuées des messages d'erreur français en sont exclus.
+    """
+    with TestClient(_app()) as client:
+        response = client.get(
+            "/authorize",
+            params={
+                "response_type": "id_token",
+                "client_id": "spa",
+                "redirect_uri": _REDIRECT_URI,
+                "scope": "openid",
+                "state": "st-charset",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    fragment = _fragment_params(response.headers["location"])
+    description = fragment["error_description"][0]
+    assert description.startswith("nonce requis")
+    assert "§" not in description
+    assert all(
+        0x20 <= ord(ch) <= 0x21 or 0x23 <= ord(ch) <= 0x5B or 0x5D <= ord(ch) <= 0x7E
+        for ch in description
+    )

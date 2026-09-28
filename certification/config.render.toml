@@ -1,0 +1,102 @@
+# Configuration de l'instance Render dédiée à la certification OIDC
+# (suite officielle openid/conformance-suite pilotée par
+# `.github/workflows/certification.yml`).
+#
+# Particularités vs `config.toml` :
+# - `storage_type = "sql"` + `storage_dsn = "sqlite:///puridentityserver.db"` :
+#   persistance SQLite (fichier sur le disque éphémère Render).
+#   Les clients enregistrés dynamiquement (RFC 7591) survivent aux cold starts
+#   du plan gratuit (sommeil/proc) au sein d'un run — c'est ce qui permet au
+#   `DELETE /register/{client_id}` final (RFC 7592, unregister) de renvoyer 204
+#   au lieu d'un 404 `invalid_client`. Le workflow redéploie l'instance avant
+#   chaque run (disque recréé) : l'état reste donc vierge à chaque exécution.
+# - `registration_initial_access_token_mode = "disabled"` : enregistrement
+#   dynamique OUVERT (RFC 7591) pour que la suite puisse s'auto-enregistrer
+#   (`client_registration = dynamic_client`). À ne JAMAIS utiliser hors de
+#   cette instance de démonstration/qualité.
+# - pas de `clients_seed` : les clients des tests sont créés dynamiquement
+#   par la suite (nouvelle plané = nouveaux clients).
+# L'issuer public est surchargé par `PURIDENTITYSERVER_ISSUER` (blueprint
+# `render.yaml`) : https://puridentityserver-certification.onrender.com
+
+[settings]
+issuer = "http://127.0.0.1:8000"
+base_url = ""
+host = "0.0.0.0"
+port = 8000
+
+storage_type = "sql"
+storage_dsn = "sqlite:///puridentityserver.db"
+
+registration_enabled = true
+registration_initial_access_token_mode = "disabled"
+
+# Login obligatoire à l'endpoint /authorize (OIDC Core 1.0 §3.1.2.1) : la
+# demande non authentifiée est redirigée vers /login (refresh de session du
+# navigateur interne de la suite), `prompt=none` reçoit `login_required`.
+# Sans ce réglage l'utilisateur anonyme reçoit un code (subject vide -> `sub`
+# invalide : les modules de la certification échouent).
+require_login = true
+
+# Comptes de connexion de démo (login navigateur pilote par la suite via la
+# config `browser` des plans) — voir `certification/README.md`.
+
+[settings.users_seed.alice]
+name = "Alice Martin"
+family_name = "Martin"
+given_name = "Alice"
+middle_name = "Marie"
+nickname = "alice"
+preferred_username = "alice-martin"
+profile = "https://example.com/alice-martin"
+picture = "https://example.com/alice-martin.jpg"
+website = "https://alice.example.com"
+gender = "female"
+birthdate = "1990-04-12"
+zoneinfo = "Europe/Paris"
+locale = "fr-FR"
+updated_at = 1738000000
+email = "alice.martin@example.com"
+email_verified = true
+phone_number = "+33142000000"
+phone_number_verified = true
+
+[settings.users_seed.alice.address]
+formatted = "12 rue de la Paix, 75002 Paris, France"
+street_address = "12 rue de la Paix"
+locality = "Paris"
+postal_code = "75002"
+country = "FR"
+
+[settings.users_seed.bob]
+name = "Bob Durand"
+family_name = "Durand"
+given_name = "Bob"
+nickname = "bob"
+preferred_username = "bob-durand"
+profile = "https://example.com/bob-durand"
+picture = "https://example.com/bob-durand.jpg"
+gender = "male"
+birthdate = "1985-11-03"
+zoneinfo = "Europe/Paris"
+locale = "fr-FR"
+updated_at = 1739000000
+email = "bob.durand@example.com"
+email_verified = true
+phone_number = "+33142000001"
+phone_number_verified = true
+
+[settings.users_seed.bob.address]
+formatted = "4 avenue Jean Moulin, 75014 Paris, France"
+street_address = "4 avenue Jean Moulin"
+locality = "Paris"
+postal_code = "75014"
+country = "FR"
+
+[settings.identity_seed_users.alice]
+email = "alice@example.com"
+password = "password"
+
+[settings.identity_seed_users.bob]
+email = "bob@example.com"
+password = "password"

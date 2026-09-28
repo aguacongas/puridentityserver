@@ -142,6 +142,7 @@ class PushedAuthorizationUseCase:
             code_challenge=params.get("code_challenge", ""),
             code_challenge_method=params.get("code_challenge_method", "S256"),
             response_mode=params.get("response_mode", "query"),
+            prompt=params.get("prompt", ""),
         )
 
         validated = await validate_authorization_request(
@@ -225,4 +226,5 @@ class PushedAuthorizationUseCase:
             code_challenge=pushed.params.get("code_challenge", ""),
             code_challenge_method=pushed.params.get("code_challenge_method", "S256"),
             response_mode=pushed.params.get("response_mode", "query"),
+            prompt=pushed.params.get("prompt", ""),
         )

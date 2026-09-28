@@ -273,6 +273,7 @@ class AuthorizationCode:
     code_challenge: str = ""
     code_challenge_method: str = "S256"
     nonce: str = ""
+    auth_time: int = 0
     expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     is_consumed: bool = False
 

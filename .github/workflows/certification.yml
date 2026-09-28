@@ -1,0 +1,257 @@
+name: Certification OIDC
+
+# Suite de certification officielle OpenID Foundation (openid/conformance-suite),
+# jouée contre l'instance Render publique seedee (certification/config.render.toml).
+#
+# PR 1 : job WITNESS — non bloquant pour la CI. Déclenchement au merge sur
+# main, manuel ou hebdomadaire ; les gaps Core (modules ne passant pas encore)
+# NE font pas échouer le workflow : chaque run produit un rapport brut + une
+# page GitHub Pages. Le passage en gate bloquant (PR 2) interviendra une fois
+# les plans Core stables.
+#
+# Pré-requis :
+# - service Render libre (render.yaml) : https://puridentityserver-certification.onrender.com
+# - secret GitHub `RENDER_DEPLOY_HOOK_URL` (Render -> Service -> Settings -> Deploy Hook)
+# - variable optionnelle `CERTIFICATION_OP_URL` (URL publique de l'OP)
+# - GitHub Pages activé avec source "GitHub Actions"
+
+on:
+  workflow_dispatch:
+    inputs:
+      plan:
+        # Permet un cycle de diagnostic rapide : ne lancer qu'un seul plan au
+        # lieu des trois (~30 min au lieu de ~2 h 30).
+        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid)"
+        type: choice
+        required: false
+        default: all
+        options:
+          - all
+          - basic
+          - implicit
+          - hybrid
+  schedule:
+    - cron: "0 2 * * MON"
+  # Déclenchement UNIQUEMENT au merge sur main : aucune exécution sur les PR
+  # (la certification consomme ~1 h d'infra et doit viser le code réellement
+  # déployé sur Render, qui suit la branche main — voir render.yaml).
+  push:
+    branches: ["main"]
+    paths:
+      - "certification/**"
+      - "render.yaml"
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/certification.yml"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+env:
+  OP_URL: ${{ vars.CERTIFICATION_OP_URL || 'https://puridentityserver-certification.onrender.com' }}
+  # Mode witness sur l'instance HÉBERGÉE officielle (OpenID Foundation) : le
+  # driver constructeur (run-test-plan.py) ne fait que des appels API REST
+  # authenticate Bearer (CONFORMANCE_TOKEN). L'automation navigateur
+  # (WebRunner/HtmlUnit/Selenium) tourne dans l'infra stable de la Fondation,
+  # qui atteint notre OP public (Render) — aucune dépendance docker quebrada
+  # sur le runner éphémère (plus de modules bloqués en WAITING).
+  CONFORMANCE_SERVER: https://www.certification.openid.net/
+  CONFORMANCE_TOKEN: ${{ secrets.CONFORMANCE_TOKEN }}
+  CONFORMANCE_MODULE_TIMEOUT: '600'
+  SUITE_VERSION: release-v5.2.4
+
+concurrency:
+  group: certification
+  # Les runs se SERIALISENT (au lieu d'en annuler un en cours de route) : annuler un
+  # run laissait ses tests actifs sur l'instance hébergée de la Fondation, et le run
+  # suivant les interrompait alors avec « Stopping test due to alias conflict ».
+  cancel-in-progress: false
+
+jobs:
+  certification:
+    name: Suite de certification OIDC (witness)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Redéploiement de l'OP sur Render (deploy hook)
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+            echo "Secret RENDER_DEPLOY_HOOK_URL absent : redéploiement manuel requis."
+          else
+            curl -sSf -X POST "$RENDER_DEPLOY_HOOK_URL"
+          fi
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+
+      - name: Attente de l'OP sur $OP_URL (discovery opérationnel)
+        run: |
+          deadline=$((SECONDS + 900))
+          until [ $SECONDS -ge $deadline ]; do
+            issuer=$(curl -fsS --max-time 15 "$OP_URL/.well-known/openid-configuration" \
+              | python3 -c 'import json,sys;print(json.load(sys.stdin)["issuer"])' 2>/dev/null) \
+              && [ "$issuer" = "$OP_URL" ] && { echo "OP prêt : $issuer"; exit 0; }
+            echo "OP pas encore prêt (en attente du cold start Render)…"
+            sleep 15
+          done
+          echo "::error::L'OP $OP_URL n'a pas répondu sous 15 minutes" && exit 1
+
+      - name: Vérification de la validité des fichiers de plans
+        run: python3 -c "import json,glob; [json.load(open(p)) for p in glob.glob('certification/plans/*.json')]"
+
+      - name: Clone de la suite de certification (version pinnée)
+        run: |
+          git clone --depth 1 --branch "$SUITE_VERSION" \
+            https://gitlab.com/openid/conformance-suite.git
+
+      - name: Substitution des URLs dans les plans
+        # {OPURL} : point d'entrée de l'OP (Render) ; {SUITEURL} : base de
+        # l'instance de la suite (les tâches « attente de l'envoi implicite »
+        # ne doivent matcher QUE le callback de la suite, jamais l'URL
+        # /authorize de l'OP qui contient elle aussi « callback » dans son
+        # paramètre redirect_uri).
+        run: |
+          for f in certification/plans/*.json; do
+            sed -i "s#{OPURL}#${OP_URL}#g" "$f"
+            sed -i "s#{SUITEURL}#${CONFORMANCE_SERVER}#g" "$f"
+          done
+          grep -h '"match"' certification/plans/*.json | sort -u
+
+      - name: Vérification de la présence du secret CONFORMANCE_TOKEN
+        # Mode witness hébergé : l'accès à l'API de certification.openid.net
+        # passe par un Bearer token délivré par l'OpenID Foundation. Un secret
+        # manquant doit échouer SEC maintenant (message clair), pas via un
+        # KeyError/traceback du driver en plein milieu du run.
+        run: |
+          if [ -z "$CONFORMANCE_TOKEN" ]; then
+            echo "::error::Secret CONFORMANCE_TOKEN absent. Le créer ainsi :"
+            echo "::error::  gh secret set CONFORMANCE_TOKEN -R \${{ github.repository }} --body '<token OIDF>'"
+            exit 1
+          fi
+          echo "Token CONFORMANCE présent (36 caractères attendus)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Attente de l'API de certification.openid.net (Bearer $CONFORMANCE_TOKEN)
+        # L'automation navigateur (WebRunner/Selenium) tourne dans l'infra stable
+        # de l'OpenID Foundation qui atteint notre OP Render public : plus aucune
+        # suite/driver docker à démarrer sur le runner éphémère.
+        run: |
+          deadline=$((SECONDS + 600))
+          until [ $SECONDS -ge $deadline ]; do
+            if [ $(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' \
+                -H "Authorization: Bearer $CONFORMANCE_TOKEN" \
+                "$CONFORMANCE_SERVER"api/runner/available) = 200 ]; then
+              echo "API de certification accessible (instance hébergée) : OK"
+              exit 0
+            fi
+            echo "API de certification pas encore joignable…"
+            sleep 10
+          done
+          echo "::error::L'API de certification.openid.net n'a pas répondu (token invalide ou réseau) en 10 min" && exit 1
+
+      - name: Dépendances Python du driver officiel (httpx)
+        run: python3 -m pip install --disable-pip-version-check --quiet httpx
+
+      - name: Patch du driver (plans par alias + captures de relecture + libération d'alias + diagnostic d'interruption)
+        # 1) au lieu de recréer un plan à chaque lancement (POST /api/plan), ce
+        #    qui accumule les plans et re-claime l'alias d'un run précédent, on
+        #    réutilise le plan existant du user quand sa config est inchangée.
+        # 2) certains modules Core (ex. oidcc-response-type-missing) se bloquent
+        #    sur un événement REVIEW « upload une capture d'écran » ; on remplit
+        #    ces placeholders automatiquement côté driver pour que la suite
+        #    puisse se terminer sans intervention humaine (mode witness).
+        # 3) la suite réserve l'alias à la création de chaque module : un module
+        #    encore actif (timeout dépassé, run annulé…) serait interrompu par le
+        #    module suivant (« Stopping test due to alias conflict »). Le driver
+        #    libère donc l'alias lui-même avant chaque création de module.
+        # 4) un module qui passe en INTERRUPTED ne donne dans la CI qu'un
+        #    « has moved to INTERRUPTED » : on y ajoute la cause réelle (statut,
+        #    résultat + 10 dernières entrées de son journal) pour distinguer un
+        #    conflit d'alias d'une erreur de configuration du test.
+        run: |
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-reuse-plan.patch"
+          grep -n "def _plan_matching_configuration" conformance-suite/scripts/conformance.py
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-screenshots.patch"
+          grep -n "fill_required_screenshots" conformance-suite/scripts/conformance.py conformance-suite/scripts/run-test-plan.py
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-alias-release.patch"
+          grep -n "release_alias" conformance-suite/scripts/conformance.py conformance-suite/scripts/run-test-plan.py
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-interrupted-diagnostics.patch"
+          grep -n "describe_interruption" conformance-suite/scripts/conformance.py
+
+      - name: Timeout par module piloté par CONFORMANCE_MODULE_TIMEOUT
+        # Le driver upstream hardcode timeout=240 dans wait_for_state : on rend
+        # cette valeur réglable sans dévier du script officiel (patch sémantique).
+        working-directory: conformance-suite
+        run: |
+          sed -i 's/def wait_for_state(self, module_id, required_states, timeout=240):/def wait_for_state(self, module_id, required_states, timeout=int(os.getenv("CONFORMANCE_MODULE_TIMEOUT", "240"))):/' scripts/conformance.py
+          grep -n "CONFORMANCE_MODULE_TIMEOUT" scripts/conformance.py
+
+      - name: Lancement des plans Core (Basic / Implicit / Hybrid)
+        continue-on-error: true
+        working-directory: conformance-suite
+        env:
+          # Vide sur push/schedule : les trois plans sont joués.
+          PLAN_FILTER: ${{ inputs.plan || 'all' }}
+        run: |
+          set +e
+          # Le driver écrit les exports (.zip) dans --export-dir : le créer
+          # sinon chaque téléchargement échoue en FileNotFoundError.
+          mkdir -p "$GITHUB_WORKSPACE/results"
+          plans=(
+            "oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|basic"
+            "oidcc-implicit-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|implicit"
+            "oidcc-hybrid-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|hybrid"
+          )
+          if [ "$PLAN_FILTER" != "all" ]; then
+            selected=()
+            for plan in "${plans[@]}"; do
+              [ "${plan##*|}" = "$PLAN_FILTER" ] && selected+=("$plan")
+            done
+            plans=("${selected[@]}")
+            echo "Filtre de plan actif : $PLAN_FILTER"
+          fi
+          for plan in "${plans[@]}" ; do
+            selector="${plan%%|*}"; name="${plan##*|}"
+            echo "### Plan $name : $selector" | tee -a "$GITHUB_STEP_SUMMARY"
+            python3 scripts/run-test-plan.py \
+              --export-dir "$GITHUB_WORKSPACE/results" \
+              "$selector" \
+              "$GITHUB_WORKSPACE/certification/plans/$name.json" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+            code=${PIPESTATUS[0]}
+            echo "- exit code : $code (les gaps sont acceptés en mode witness)" | tee -a "$GITHUB_STEP_SUMMARY"
+            [ "$code" -eq 0 ] || echo "plan $name en échec partiel (witness)" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Génération du rapport statique (GitHub Pages)
+        run: python3 certification/report.py --results results --site _site
+
+      - name: Upload des artefacts (rapports bruts)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: certification-results
+          path: |
+            results/
+            _site/
+          if-no-files-found: ignore
+
+      - name: Configuration GitHub Pages
+        if: always()
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Publication du rapport sur GitHub Pages
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy GitHub Pages
+        if: always()
+        continue-on-error: true
+        id: deployment
+        uses: actions/deploy-pages@v4

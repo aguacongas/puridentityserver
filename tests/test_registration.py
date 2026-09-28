@@ -361,7 +361,7 @@ class TestRegister:
         result = run(
             usecase.register(
                 RegisterRequest(
-                    {**_REGISTRATION, "grant_types": ["implicit"]},
+                    {**_REGISTRATION, "grant_types": ["password"]},
                     initial_access_token=_INITIAL_TOKEN,
                 )
             )
@@ -377,7 +377,7 @@ class TestRegister:
         result = run(
             usecase.register(
                 RegisterRequest(
-                    {**_REGISTRATION, "response_types": ["code id_token"]},
+                    {**_REGISTRATION, "response_types": ["code bogus"]},
                     initial_access_token=_INITIAL_TOKEN,
                 )
             )
@@ -385,6 +385,46 @@ class TestRegister:
 
         assert isinstance(result, RegistrationError)
         assert result.error == "invalid_client_metadata"
+
+    def test_registers_implicit_grant(self) -> None:
+        usecase = _usecase()
+
+        result = run(
+            usecase.register(
+                RegisterRequest(
+                    {
+                        **_REGISTRATION,
+                        "grant_types": ["implicit"],
+                        "response_types": ["id_token"],
+                    },
+                    initial_access_token=_INITIAL_TOKEN,
+                )
+            )
+        )
+
+        assert not isinstance(result, RegistrationError)
+        assert result.client_id
+        assert result.redirect_uris == ["https://app.example/callback"]
+
+    def test_registers_hybrid_flow(self) -> None:
+        usecase = _usecase()
+
+        result = run(
+            usecase.register(
+                RegisterRequest(
+                    {
+                        **_REGISTRATION,
+                        "grant_types": ["authorization_code", "implicit"],
+                        "response_types": ["code id_token"],
+                    },
+                    initial_access_token=_INITIAL_TOKEN,
+                )
+            )
+        )
+
+        assert not isinstance(result, RegistrationError)
+        assert result.client_id
+        assert result.scope == "email openid profile"
 
     def test_rejects_unsupported_auth_method(self) -> None:
         usecase = _usecase()
@@ -661,6 +701,7 @@ class TestRegistrationEndpoint:
             registration = response.json()
             assert registration["client_id"]
             assert registration["client_secret"]
+            assert registration["client_secret_expires_at"] == 0
             assert registration["registration_access_token"]
             assert response.headers["location"] == registration["registration_client_uri"]
 

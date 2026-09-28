@@ -14,6 +14,7 @@ from puridentityserver.application.token import (
     TokenUseCase,
 )
 from puridentityserver.infrastructure.client_tls import extract_client_certificate
+from puridentityserver.interfaces.api.error_description import ascii_error_description
 
 
 def token_router(usecase: TokenUseCase) -> APIRouter:
@@ -91,13 +92,23 @@ def _success_response(result: TokenResponse) -> Response:
         payload["id_token"] = result.id_token
     if result.refresh_token:
         payload["refresh_token"] = result.refresh_token
-    return Response(content=json.dumps(payload), media_type="application/json")
+    return Response(
+        content=json.dumps(payload),
+        media_type="application/json",
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+    )
 
 
 def _error_response(result: TokenError) -> Response:
     """Sérialise une réponse d'erreur au format JSON OAuth (HTTP 400)."""
     return Response(
-        content=json.dumps({"error": result.error, "error_description": result.error_description}),
+        content=json.dumps(
+            {
+                "error": result.error,
+                "error_description": ascii_error_description(result.error_description),
+            }
+        ),
         media_type="application/json",
         status_code=400,
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
     )

@@ -30,6 +30,9 @@ class DiscoveryDocument(BaseModel):
     registration_endpoint: str | None = None
     device_authorization_endpoint: str | None = None
     pushed_authorization_request_endpoint: str | None = None
+    request_object_signing_alg_values_supported: list[str] = Field(default_factory=list)
+    request_parameter_supported: bool = False
+    request_uri_parameter_supported: bool = False
     scopes_supported: list[str] = Field(
         default_factory=lambda: [
             "openid",

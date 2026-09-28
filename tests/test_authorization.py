@@ -5,7 +5,7 @@ import hashlib
 from collections.abc import Awaitable
 from datetime import datetime, timezone
 from typing import TypeVar
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -541,3 +541,70 @@ def test_code_lifetime_defaults_to_server_ttl() -> None:
     delta = _authorize_code_ttl(client)
 
     assert 598 <= delta <= 602
+
+
+def _require_login_app() -> FastAPI:
+    """App avec login obligatoire à /authorize + compte seed ``alice``."""
+    return _app(
+        require_login=True,
+        identity_seed_users={"alice": {"email": "alice@example.com", "password": "password"}},
+    )
+
+
+def _authorize_login_params() -> dict[str, str]:
+    """Paramètres d'une demande valide (Authorization Code + PKCE)."""
+    return {
+        "response_type": "code",
+        "client_id": "web-app",
+        "redirect_uri": "https://app.example/callback",
+        "scope": "openid profile",
+        "state": "st-auth",
+        "code_challenge": _s256_challenge("verifier-verifier"),
+        "code_challenge_method": "S256",
+    }
+
+
+def test_require_login_redirects_anonymous_to_login_page() -> None:
+    with TestClient(_require_login_app()) as client:
+        response = client.get(
+            "/authorize", params=_authorize_login_params(), follow_redirects=False
+        )
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert location.startswith("/login?next=")
+    assert "client_id=web-app" in unquote(location)
+    assert "state=st-auth" in unquote(location)
+
+
+def test_require_login_prompt_none_returns_login_required() -> None:
+    with TestClient(_require_login_app()) as client:
+        response = client.get(
+            "/authorize",
+            params={**_authorize_login_params(), "prompt": "none"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    query = _redirect_query(response.headers["location"])
+    assert query["error"] == ["login_required"]
+    assert query["state"] == ["st-auth"]
+
+
+def test_require_login_issues_code_after_authentication() -> None:
+    with TestClient(_require_login_app()) as client:
+        login = client.post(
+            "/login",
+            data={"username": "alice@example.com", "password": "password", "next": "/"},
+            follow_redirects=False,
+        )
+        assert login.status_code == 302
+
+        response = client.get(
+            "/authorize", params=_authorize_login_params(), follow_redirects=False
+        )
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert location.startswith("https://app.example/callback?")
+    assert _redirect_query(location)["state"] == ["st-auth"]

@@ -1,0 +1,49 @@
+{
+  "alias": "puridentityserver-basic",
+  "description": "PurIdentityServer - Basic OP certification (CI)",
+  "browser_verbose": true,
+  "server": {
+    "discoveryUrl": "{OPURL}/.well-known/openid-configuration"
+  },
+  "browser": [
+    {
+      "match": "{OPURL}/authorize*",
+      "tasks": [
+        {
+          "task": "Login",
+          "optional": true,
+          "match": "{OPURL}/login*",
+          "commands": [
+            ["text", "name", "username", "alice@example.com"],
+            ["text", "name", "password", "password"],
+            ["click", "css", "button[type=submit]"]
+          ]
+        },
+        {
+          "task": "Consent",
+          "optional": true,
+          "match": "{OPURL}/consent*",
+          "commands": [
+            ["click", "css", "button[name=action][value=authorize]"]
+          ]
+        },
+        {
+          "task": "Attente de l'envoi implicite (query)",
+          "optional": true,
+          "match": "{SUITEURL}test/a/*/callback?*",
+          "commands": [
+            ["wait", "id", "submission_complete", 30]
+          ]
+        },
+        {
+          "task": "Attente de l'envoi implicite (fragment)",
+          "optional": true,
+          "match": "{SUITEURL}test/a/*/callback#*",
+          "commands": [
+            ["wait", "id", "submission_complete", 30]
+          ]
+        }
+      ]
+    }
+  ]
+}

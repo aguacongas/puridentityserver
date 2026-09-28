@@ -309,6 +309,27 @@ async def session_sid(request: Request) -> str:
     return str(sid) if sid else ""
 
 
+async def session_auth_time(request: Request) -> int:
+    """Retourne l'heure d'authentification (claim ``iat``) de la session navigateur.
+
+    Le JWT de session est signé par le ``RotatingTokenSigner`` qui pose
+    ``iat`` lors de la connexion : c'est le moment où l'utilisateur s'est
+    authentifié, reproduit ensuite dans le claim ``auth_time`` des
+    ``id_token`` (OIDC Core 1.0 §5.1). ``0`` si le cookie est absent ou
+    invalide (l'appelant émet alors un id_token sans ``auth_time``).
+    """
+    if _session_signer is None:
+        return 0
+    token = request.cookies.get(_SESSION_COOKIE_NAME)
+    if not token:
+        return 0
+    data = await _session_signer.read(token)
+    if data is None:
+        return 0
+    iat = data.get("iat")
+    return int(iat) if isinstance(iat, int) else 0
+
+
 def init_users_db() -> None:
     """Initialise le moteur (SQLite en mémoire partagée) et le session factory."""
     global _session_factory, _engine

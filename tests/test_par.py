@@ -521,10 +521,14 @@ class TestParIntegrationHTTP:
         assert resp.status_code == 400
         assert resp.json()["error"] == "invalid_request"
 
-    def test_authorize_without_params_still_422(self) -> None:
+    def test_authorize_without_params_returns_html_400(self) -> None:
+        """Sans response_type : page HTML 400 (RFC 6749 §3.1.1), plus de JSON 422."""
         with TestClient(_app()) as client:
             resp = client.get("/authorize", follow_redirects=False)
-        assert resp.status_code == 422
+        assert resp.status_code == 400
+        assert resp.headers["content-type"].startswith("text/html")
+        assert "Requête d'autorisation invalide" in resp.text
+        assert "response_type" in resp.text
 
     def test_confidential_client_with_secret_at_par(self) -> None:
         seed = (

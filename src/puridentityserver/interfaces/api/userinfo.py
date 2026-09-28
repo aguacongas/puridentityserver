@@ -23,6 +23,15 @@ def userinfo_router(usecase: UserInfoUseCase) -> APIRouter:
     async def userinfo(
         authorization: Annotated[str | None, Header()] = None,
     ) -> Response:
+        return await _handle_userinfo(authorization)
+
+    @router.post("/userinfo", summary="Endpoint UserInfo (POST, RFC 6750 §2.1)")
+    async def userinfo_post(
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> Response:
+        return await _handle_userinfo(authorization)
+
+    async def _handle_userinfo(authorization: str | None) -> Response:
         token = _extract_bearer_token(authorization)
         if token is None:
             return _bearer_error(
