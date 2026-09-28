@@ -1,11 +1,12 @@
 """Génère le rapport statique (GitHub Pages) de la suite de certification OIDC.
 
-Lit les fichiers JSON exportés par ``run-test-plan.py`` (option
-``--export-dir``) et produit une page ``index.html`` listant les plans joués
-et leurs verdicts, avec les rapports bruts re-publiés sous ``site/results/``.
-Le script reste permissif : la structure exacte de l'export étant susceptible
-d'évoluer avec la version de la suite, les extractions sont défensives et
-chaque rapport brut reste consultable tel quel.
+Lit les exports produits par ``run-test-plan.py`` (option ``--export-dir``) :
+des journaux JSON nus, ou les archives ``.zip`` rendues par l'API de la suite
+(une archive par plan, contenant un journal JSON par module de test). Le
+script produit une page ``index.html`` listant chaque module avec son verdict,
+les compteurs de conditions et les contrôles en échec, puis re-publie les
+journaux bruts sous ``site/results/``. Le script reste permissif : un export
+illisible est simplement ignoré.
 """
 
 from __future__ import annotations
@@ -14,85 +15,179 @@ import argparse
 import datetime as _dt
 import html
 import json
+import zipfile
 from collections import Counter
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
-_ALLOWED_RESULTS = frozenset({"PASSED", "FAILED", "WARNING", "REVIEW", "SKIPPED", "INTERRUPTED"})
+# Ordre d'affichage des verdicts (les échecs d'abord).
+_VERDICTS = ("FAILED", "INTERRUPTED", "REVIEW", "WARNING", "PASSED", "SKIPPED", "INCONNU")
+
 _COLORS = {
     "PASSED": "#1b7a3d",
     "FAILED": "#b00020",
+    "INTERRUPTED": "#b00020",
+    "FAILURE": "#b00020",
     "WARNING": "#9a6700",
     "REVIEW": "#2563eb",
     "SKIPPED": "#6b7280",
-    "INTERRUPTED": "#b00020",
+    "SUCCESS": "#1b7a3d",
+    "INFO": "#6b7280",
+    "FINISHED": "#6b7280",
+    "INCONNU": "#6b7280",
 }
 
+# Résultats de conditions sans intérêt pour le rapport (trop verbeux).
+_QUIET_CONDITIONS = frozenset({"SUCCESS", "INFO", "FINISHED"})
 
-def _iter_result_entries(node: object) -> Iterable[tuple[str, str]]:
-    """Énumère (libellé, résultat) portés par les entrées de test d'un rapport."""
-    if isinstance(node, Mapping):
-        result = node.get("result")
-        if isinstance(result, str) and result in _ALLOWED_RESULTS:
-            label = (
-                node.get("testName")
-                or node.get("testPlan")
-                or node.get("condition")
-                or node.get("id")
-                or node.get("module")
-                or "<inconnu>"
-            )
-            yield str(label), result
-        for value in node.values():
-            yield from _iter_result_entries(value)
-    elif isinstance(node, list):
-        for value in node:
-            yield from _iter_result_entries(value)
+_MAX_DETAILS = 50
 
 
-def _summarize(path: Path) -> tuple[str, str, dict[str, int], list[tuple[str, str]]]:
-    """Résume un rapport brut : étiquette, horodatage, compteurs, verdicts."""
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    label = (
-        raw.get("testPlanName")
-        or raw.get("planName")
-        or raw.get("testPlan")
-        or raw.get("planId")
-        or path.stem
+@dataclass(frozen=True)
+class _Module:
+    """Verdict d'un module de test extrait d'un journal d'export."""
+
+    name: str
+    variant: str
+    verdict: str
+    started: str
+    counts: dict[str, int]
+    checks: list[tuple[str, str]]
+
+
+def _variant(info: Mapping[str, object]) -> str:
+    """Formate la variante du module (paramètres du test) en texte compact."""
+    variant = info.get("variant")
+    if not isinstance(variant, Mapping):
+        return ""
+    return ", ".join(f"{key}={variant[key]}" for key in sorted(variant))
+
+
+def _checks(raw: Mapping[str, object]) -> list[tuple[str, str]]:
+    """Extrait les contrôles du journal sous forme de paires (libellé, résultat)."""
+    results = raw.get("results")
+    checks: list[tuple[str, str]] = []
+    if not isinstance(results, list):
+        return checks
+    for entry in results:
+        if not isinstance(entry, Mapping):
+            continue
+        result = entry.get("result")
+        if not isinstance(result, str) or not result:
+            continue
+        label = entry.get("msg") or entry.get("src") or entry.get("condition") or "?"
+        checks.append((str(label), result))
+    return checks
+
+
+def _load_module(name: str, payload: bytes) -> _Module | None:
+    """Interprète un journal JSON ; renvoie ``None`` s'il est illisible."""
+    try:
+        raw = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, Mapping):
+        return None
+    info = raw.get("testInfo")
+    typed_info = info if isinstance(info, Mapping) else {}
+    checks = _checks(raw)
+    return _Module(
+        name=str(typed_info.get("testName") or Path(name).stem),
+        variant=_variant(typed_info),
+        verdict=str(typed_info.get("result") or typed_info.get("status") or "INCONNU"),
+        started=str(typed_info.get("started") or raw.get("exportedAt") or ""),
+        counts=dict(Counter(result for _, result in checks)),
+        checks=[entry for entry in checks if entry[1] not in _QUIET_CONDITIONS],
     )
-    timestamp = raw.get("startedAt") or raw.get("timestamp") or ""
-    entries = list(_iter_result_entries(raw))
-    counts = Counter(result for _, result in entries)
-    ordered = sorted(_ALLOWED_RESULTS.intersection(counts), key=lambda r: -counts[r])
-    counts_dict = {name: counts[name] for name in ordered}
-    return str(label), str(timestamp), counts_dict, entries
 
 
-def _render(
-    plans: list[tuple[str, str, dict[str, int], list[tuple[str, str]]]], site: Path
-) -> None:
+def _read_archive(path: Path) -> list[tuple[str, bytes]]:
+    """Lit les journaux JSON d'une archive ; liste vide si elle est illisible."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            return [
+                (Path(member).name, archive.read(member))
+                for member in sorted(archive.namelist())
+                if member.endswith(".json")
+            ]
+    except (OSError, zipfile.BadZipFile):
+        return []
+
+
+def _read_report(path: Path) -> tuple[str, bytes] | None:
+    """Lit un journal JSON nu ; ``None`` si le fichier est illisible."""
+    try:
+        return path.name, path.read_bytes()
+    except OSError:
+        return None
+
+
+def _iter_exports(results: Path) -> Iterable[tuple[str, bytes]]:
+    """Enumère les journaux JSON d'un dossier d'exports (archives ou fichiers nus)."""
+    for archive_path in sorted(results.glob("*.zip")):
+        yield from _read_archive(archive_path)
+    for path in sorted(results.glob("*.json")):
+        report = _read_report(path)
+        if report is not None:
+            yield report
+
+
+def _badge(label: str, color: str) -> str:
+    """Colorise un libellé de verdict ou de résultat de contrôle."""
+    return f'<span style="color:{color}">{html.escape(label)}</span>'
+
+
+def _color(result: str) -> str:
+    """Renvoie la couleur associée à un verdict ou à un résultat."""
+    return _COLORS.get(result, _COLORS["INCONNU"])
+
+
+def _section(module: _Module) -> str:
+    """Rend la section HTML consacrée à un module."""
+    verdict = _badge(module.verdict, _color(module.verdict))
+    counts = " ".join(
+        _badge(f"{count} {result}", _color(result))
+        for result, count in sorted(module.counts.items(), key=lambda item: -item[1])
+    )
+    title = module.name + (f" ({module.variant})" if module.variant else "")
+    details = "".join(
+        f"<li>{html.escape(label)} - {_badge(result, _color(result))}</li>"
+        for label, result in module.checks[:_MAX_DETAILS]
+    )
+    extra = (
+        ""
+        if len(module.checks) <= _MAX_DETAILS
+        else f"<li><i>+ {len(module.checks) - _MAX_DETAILS} autres contrôles</i></li>"
+    )
+    suffix = f" — {html.escape(module.started[:19])}" if module.started else ""
+    return (
+        f"<section><h2>{html.escape(title)}{suffix} {verdict}</h2>"
+        f"<p>{counts}</p><ul>{details}{extra}</ul></section>"
+    )
+
+
+def _sort_key(module: _Module) -> tuple[int, str]:
+    """Clé de tri : verdicts les plus sévères d'abord, puis ordre alphabétique."""
+    rank = _VERDICTS.index(module.verdict) if module.verdict in _VERDICTS else len(_VERDICTS)
+    return rank, module.name
+
+
+def _summary(modules: list[_Module]) -> str:
+    """Compose la ligne de synthèse (nombre de modules par verdict)."""
+    totals = Counter(module.verdict for module in modules)
+    return " — ".join(
+        _badge(f"{totals[verdict]} {verdict}", _color(verdict))
+        for verdict in _VERDICTS
+        if totals[verdict]
+    )
+
+
+def _render(modules: list[_Module], site: Path) -> None:
     """Écrit la page index consolidée du rapport."""
     generated = _dt.datetime.now(tz=_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    rows: list[str] = []
-    for label, timestamp, counts, entries in plans:
-        badges = (
-            " ".join(
-                f'<span style="color:{_COLORS[name]}">{counts[name]} {name}</span>'
-                for name in counts
-            )
-            or "<i>aucun verdict extrait</i>"
-        )
-        details = "".join(
-            f'<li>{html.escape(lib)} - <b style="color:{_COLORS[res]}">{res}</b></li>'
-            for lib, res in entries[:200]
-        )
-        extra = "" if len(entries) <= 200 else f"<li><i>… {len(entries) - 200} autres</i></li>"
-        suffix = f" ({timestamp})" if timestamp else ""
-        rows.append(
-            f"<section><h2>{html.escape(label)}{html.escape(suffix)}</h2>"
-            f"<p>{badges}</p><ul>{details}{extra}</ul></section>"
-        )
-    body = "\n".join(rows) or "<p>Aucun résultat exporté : lancer un run du workflow.</p>"
+    body = "".join(_section(module) for module in sorted(modules, key=_sort_key))
+    body = body or "<p>Aucun résultat exporté : lancer un run du workflow.</p>"
     html_content = f"""<!doctype html>
 <html lang="fr">
 <head>
@@ -101,11 +196,13 @@ def _render(
   body {{ font-family: sans-serif; margin: 2rem; max-width: 60rem; }}
   section {{ border-top: 1px solid #ccc; padding: 1rem 0; }}
   li {{ margin: 0.2rem 0; }}
+  h2 {{ font-size: 1.05rem; }}
 </style>
 </head>
 <body>
 <h1>PurIdentityServer - attestations de conformité OIDC</h1>
 <p>Suite officielle OpenID Foundation (conformance-suite). Généré le {generated}.</p>
+<p><b>{len(modules)} modules</b> : {_summary(modules) or "<i>aucun verdict</i>"}</p>
 {body}
 </body>
 </html>
@@ -115,9 +212,9 @@ def _render(
 
 
 def main() -> None:
-    """Point d'entrée : rassemble les exports JSON puis écrit le site statique."""
+    """Point d'entrée : rassemble les exports puis écrit le site statique."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--results", default="results", help="dossier des exports JSON")
+    parser.add_argument("--results", default="results", help="dossier des exports")
     parser.add_argument("--site", default="_site", help="dossier du site statique")
     args = parser.parse_args()
 
@@ -125,14 +222,14 @@ def main() -> None:
     site = Path(args.site)
     site_results = site / "results"
     site_results.mkdir(parents=True, exist_ok=True)
-    plans: list[tuple[str, str, dict[str, int], list[tuple[str, str]]]] = []
-    for path in sorted(results.glob("*.json")):
-        try:
-            plans.append(_summarize(path))
-        except (OSError, json.JSONDecodeError):
+    modules: list[_Module] = []
+    for name, payload in _iter_exports(results):
+        module = _load_module(name, payload)
+        if module is None:
             continue
-        (site_results / path.name).write_bytes(path.read_bytes())
-    _render(plans, site)
+        modules.append(module)
+        (site_results / name).write_bytes(payload)
+    _render(modules, site)
 
 
 if __name__ == "__main__":
