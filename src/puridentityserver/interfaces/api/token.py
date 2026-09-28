@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import json
-import unicodedata
 
 from fastapi import APIRouter, Form, Request, Response
 
@@ -15,6 +14,7 @@ from puridentityserver.application.token import (
     TokenUseCase,
 )
 from puridentityserver.infrastructure.client_tls import extract_client_certificate
+from puridentityserver.interfaces.api.error_description import ascii_error_description
 
 
 def token_router(usecase: TokenUseCase) -> APIRouter:
@@ -99,30 +99,13 @@ def _success_response(result: TokenResponse) -> Response:
     )
 
 
-def _ascii_error_description(value: str) -> str:
-    """Réduit ``error_description`` à l'ensemble de caractères imposé par OAuth 2.0.
-
-    La RFC 6749 §5.2 limite ``error_description`` aux caractères
-    ``%x20-21 / %x23-5B / %x5D-7E`` : les lettres accentuées y sont
-    illégitimes. Les accents sont translittérés (NFKD) puis tout caractère
-    restant hors jeu est retiré.
-    """
-    decomposed = unicodedata.normalize("NFKD", value)
-    ascii_flat = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
-    return "".join(
-        ch
-        for ch in ascii_flat
-        if 0x20 <= ord(ch) <= 0x21 or 0x23 <= ord(ch) <= 0x5B or 0x5D <= ord(ch) <= 0x7E
-    )
-
-
 def _error_response(result: TokenError) -> Response:
     """Sérialise une réponse d'erreur au format JSON OAuth (HTTP 400)."""
     return Response(
         content=json.dumps(
             {
                 "error": result.error,
-                "error_description": _ascii_error_description(result.error_description),
+                "error_description": ascii_error_description(result.error_description),
             }
         ),
         media_type="application/json",

@@ -20,6 +20,7 @@ from puridentityserver.application.par import PushedAuthorizationUseCase, PushEr
 from puridentityserver.domain.authorization import ResponseMode, Scope
 from puridentityserver.identity.config import CurrentUserOptional, session_auth_time, session_sid
 from puridentityserver.interfaces.api.consent import consent_url
+from puridentityserver.interfaces.api.error_description import ascii_error_description
 from puridentityserver.interfaces.repositories.readers import ClientReader
 
 
@@ -359,7 +360,8 @@ def _error_redirect(result: AuthorizeError) -> RedirectResponse:
     """
     parts = [f"error={result.error}"]
     if result.error_description:
-        parts.append(f"error_description={quote(result.error_description, safe='')}")
+        description = quote(ascii_error_description(result.error_description), safe="")
+        parts.append(f"error_description={description}")
     if result.state:
         parts.append(f"state={result.state}")
     params = "&".join(parts)
