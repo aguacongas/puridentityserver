@@ -1,6 +1,7 @@
 {
   "alias": "puridentityserver-basic",
   "description": "PurIdentityServer - Basic OP certification (CI)",
+  "browser_verbose": true,
   "server": {
     "discoveryUrl": "{OPURL}/.well-known/openid-configuration"
   },
