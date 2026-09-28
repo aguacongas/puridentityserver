@@ -3,11 +3,11 @@ name: Certification OIDC
 # Suite de certification officielle OpenID Foundation (openid/conformance-suite),
 # jouée contre l'instance Render publique seedee (certification/config.render.toml).
 #
-# PR 1 : job WITNESS — non bloquant pour la CI. Déclenchement manuel ou
-# hebdomadaire ; les gaps Core (modules ne passant pas encore) NE font pas
-# échouer le workflow : chaque run produit un rapport brut + une page GitHub
-# Pages. Le passage en gate bloquant (PR 2) interviendra une fois les plans
-# Core stables.
+# PR 1 : job WITNESS — non bloquant pour la CI. Déclenchement au merge sur
+# main, manuel ou hebdomadaire ; les gaps Core (modules ne passant pas encore)
+# NE font pas échouer le workflow : chaque run produit un rapport brut + une
+# page GitHub Pages. Le passage en gate bloquant (PR 2) interviendra une fois
+# les plans Core stables.
 #
 # Pré-requis :
 # - service Render libre (render.yaml) : https://puridentityserver-certification.onrender.com
@@ -32,9 +32,10 @@ on:
           - hybrid
   schedule:
     - cron: "0 2 * * MON"
-  # Déclencheur TEMPORAIRE pour valider la PR #66 sur la branche elle-même —
-  # à RETIRER avant le merge (main ne doit déclencher que dispatch + cron).
-  pull_request:
+  # Déclenchement UNIQUEMENT au merge sur main : aucune exécution sur les PR
+  # (la certification consomme ~1 h d'infra et doit viser le code réellement
+  # déployé sur Render, qui suit la branche main — voir render.yaml).
+  push:
     branches: ["main"]
     paths:
       - "certification/**"
@@ -191,7 +192,7 @@ jobs:
         continue-on-error: true
         working-directory: conformance-suite
         env:
-          # Vide sur pull_request/schedule : les trois plans sont joués.
+          # Vide sur push/schedule : les trois plans sont joués.
           PLAN_FILTER: ${{ inputs.plan || 'all' }}
         run: |
           set +e

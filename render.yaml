@@ -23,7 +23,7 @@ services:
     runtime: docker
     repo: https://github.com/aguacongas/puridentityserver
     plan: free
-    branch: chore/oidc-certification-witness
+    branch: main
     dockerfilePath: ./Dockerfile
     healthCheckPath: /.well-known/openid-configuration
     autoDeploy: false
