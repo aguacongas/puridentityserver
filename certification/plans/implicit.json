@@ -28,9 +28,17 @@
           ]
         },
         {
-          "task": "Attente de l'envoi implicite",
+          "task": "Attente de l'envoi implicite (query)",
           "optional": true,
-          "match": "*callback*",
+          "match": "{SUITEURL}test/a/*/callback?*",
+          "commands": [
+            ["wait", "id", "submission_complete", 30]
+          ]
+        },
+        {
+          "task": "Attente de l'envoi implicite (fragment)",
+          "optional": true,
+          "match": "{SUITEURL}test/a/*/callback#*",
           "commands": [
             ["wait", "id", "submission_complete", 30]
           ]

@@ -62,9 +62,11 @@ retenue :
   # 2. cloner et démarrer la suite, comme le workflow :
   git clone --depth 1 --branch release-v5.2.4 https://gitlab.com/openid/conformance-suite.git
   cd conformance-suite && docker compose -f docker-compose-prebuilt.yml up -d
-  # 3. substituer {OPURL} dans les plans puis jouer un plan :
+  # 3. substituer {OPURL} et {SUITEURL} dans les plans puis jouer un plan :
   export CONFORMANCE_SERVER=https://localhost.emobix.co.uk:8443/
   export CONFORMANCE_SERVER_MTLS=https://localhost.emobix.co.uk:8444/
+  sed -i "s#{OPURL}#https://mon-op.example#g; s#{SUITEURL}#$CONFORMANCE_SERVER#g" \
+    ../certification/plans/*.json
   python3 scripts/run-test-plan.py \
     "oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]" \
     ../certification/plans/basic.json
@@ -85,10 +87,15 @@ retenue :
   requête **après** `document.readyState == "complete"` ; si le WebRunner ferme le
   navigateur (`driver.close()` dans son `finally`) aussitôt, la requête est
   annulée, le test instance ne reçoit rien et le module reste en attente jusqu'au
-  timeout. Chaque plan termine donc ses tâches `browser` par une tâche `*callback*`
-  qui attend le marqueur posé par la page
+  timeout. Chaque plan termine donc ses tâches `browser` par deux tâches ancrées
+  sur le callback de la suite (`{SUITEURL}test/a/*/callback?*` puis `#*`,
+  exclusives du callback d'erreur `…/callback/<aléatoire>` qui ne porte pas cette
+  page), qui attendent le marqueur posé par la page
   (`["wait", "id", "submission_complete", 30]`), ajouté une fois l'envoi effectué
-  (ou après le repli de 5 s de la page).
+  (ou après le repli de 5 s de la page). Le `match` doit rester ancré : un
+  `*callback*` matcherait aussi l'`/authorize` de l'OP (qui contient
+  `redirect_uri=…/callback` dans sa query) et ferait échouer les tests en page
+  d'erreur.
 - **`sub` vide dans l'id_token** : l'instance n'a pas `require_login = true`
   (config.render.toml) — l'utilisateur anonyme reçoit un code sans sujet ;
   activer le réglage pour forcer la page `/login` (remplie par le `browser`

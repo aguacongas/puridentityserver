@@ -106,11 +106,18 @@ jobs:
           git clone --depth 1 --branch "$SUITE_VERSION" \
             https://gitlab.com/openid/conformance-suite.git
 
-      - name: Substitution de l'URL de l'OP dans les plans
+      - name: Substitution des URLs dans les plans
+        # {OPURL} : point d'entrée de l'OP (Render) ; {SUITEURL} : base de
+        # l'instance de la suite (les tâches « attente de l'envoi implicite »
+        # ne doivent matcher QUE le callback de la suite, jamais l'URL
+        # /authorize de l'OP qui contient elle aussi « callback » dans son
+        # paramètre redirect_uri).
         run: |
           for f in certification/plans/*.json; do
             sed -i "s#{OPURL}#${OP_URL}#g" "$f"
+            sed -i "s#{SUITEURL}#${CONFORMANCE_SERVER}#g" "$f"
           done
+          grep -h '"match"' certification/plans/*.json | sort -u
 
       - name: Vérification de la présence du secret CONFORMANCE_TOKEN
         # Mode witness hébergé : l'accès à l'API de certification.openid.net
@@ -188,6 +195,9 @@ jobs:
           PLAN_FILTER: ${{ inputs.plan || 'all' }}
         run: |
           set +e
+          # Le driver écrit les exports (.zip) dans --export-dir : le créer
+          # sinon chaque téléchargement échoue en FileNotFoundError.
+          mkdir -p "$GITHUB_WORKSPACE/results"
           plans=(
             "oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|basic"
             "oidcc-implicit-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|implicit"
