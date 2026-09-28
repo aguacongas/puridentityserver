@@ -79,6 +79,16 @@ retenue :
   `log-detail.html` du module dans l'interface de la suite pendant le run
   (logs visibles dans l'étape du workflow) ; ajouter un
   `"browser": [...]` plus précis dans le plan concerné.
+- **Module en `WAITING` jusqu'au timeout (tous les plans)** : la page
+  `implicitCallback` de la suite (y compris en flux `code`) envoie la soumission
+  implicite (`implicitSubmitUrl`) au `DOMContentLoaded`, mais HtmlUnit émet cette
+  requête **après** `document.readyState == "complete"` ; si le WebRunner ferme le
+  navigateur (`driver.close()` dans son `finally`) aussitôt, la requête est
+  annulée, le test instance ne reçoit rien et le module reste en attente jusqu'au
+  timeout. Chaque plan termine donc ses tâches `browser` par une tâche `*callback*`
+  qui attend le marqueur posé par la page
+  (`["wait", "id", "submission_complete", 30]`), ajouté une fois l'envoi effectué
+  (ou après le repli de 5 s de la page).
 - **`sub` vide dans l'id_token** : l'instance n'a pas `require_login = true`
   (config.render.toml) — l'utilisateur anonyme reçoit un code sans sujet ;
   activer le réglage pour forcer la page `/login` (remplie par le `browser`

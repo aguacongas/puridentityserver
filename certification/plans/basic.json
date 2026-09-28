@@ -28,10 +28,12 @@
           ]
         },
         {
-          "task": "Attente du chargement du callback",
+          "task": "Attente de l'envoi implicite",
           "optional": true,
           "match": "*callback*",
-          "commands": []
+          "commands": [
+            ["wait", "id", "submission_complete", 30]
+          ]
         }
       ]
     }
