@@ -59,7 +59,7 @@ index c371682..03a8c6c 100644
          api_url = '{0}api/runner/{1}'.format(self.api_url_base, module_id)
          response = await self._request(self.httpclient.post, "start_test", 200,
 diff --git a/scripts/run-test-plan.py b/scripts/run-test-plan.py
-index 580236e..48b1364 100755
+index d6c7e4b..e81df1b 100755
 --- a/scripts/run-test-plan.py
 +++ b/scripts/run-test-plan.py
 @@ -245,6 +245,13 @@ async def run_test_plan(test_plan_obj, config_file, output_dir, client_certs):

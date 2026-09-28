@@ -133,7 +133,7 @@ retenue :
 | `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`) |
 | `plans/basic|implicit|hybrid.json` | configs des plans Core de la suite (alias **unique par plan**, discovery, règles navigateur login/consent) |
 | `conformance-reuse-plan.patch` | patch du driver : `create_test_plan` idempotent (réutilise le plan existant quand sa config n'a pas changé) |
-| `conformance-screenshots.patch` | patch du driver : remplit automatiquement les placeholders REVIEW « capture d'écran » (ex. `oidcc-response-type-missing`) avec un PNG de secours, pour que les modules Core se terminent sans intervention humaine (mode witness) |
+| `conformance-screenshots.patch` | patch du driver : remplit automatiquement les placeholders REVIEW « capture d'écran » (ex. `oidcc-response-type-missing`) avec un PNG de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode witness) |
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |
 | `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés |
@@ -152,13 +152,25 @@ Le patch `conformance-screenshots.patch` couple deux points du driver :
   liste les placeholders en attente (`GET api/log/{id}/images`, entrées avec le
   champ `upload`) puis les remplit (`POST api/log/{id}/images/{placeholder}`) avec
   un **PNG 1x1 de secours** (data URI `image/png`, bien sous la limite de 500 Ko) ;
-- `run-test-plan.py` : appel systématique de cette méthode pour les modules
-  purement OP (pas de client à piloter) avant l'attente de `FINISHED`.
+- `run-test-plan.py` : appel de cette méthode pour les modules purement OP
+  (pas de client à piloter), **après une période de tolérance** puis l'attente de
+  `FINISHED`.
 
 Le remplissage déclenche `setTestReviewNeeded`, ce qui relance le module jusqu'à
 son terme. En mode witness, la capture fournie n'est pas une preuve d'exécution
 réelle du navigateur : c'est un artifice pour que la suite se termine et produise
 le rapport complet.
+
+Le remplissage **immédiat** est interdit : le watcher de placeholders
+d'`AbstractTestModule` conclut le test dès que la liste est vide pendant que le
+module est `WAITING`, donc la finalisation démarre pendant que le navigateur
+scripté est encore actif — les modules qui passent ensuite par le callback
+(ex. `oidcc-ensure-request-without-nonce-fails`) échouent alors avec
+*« runInBackground called after runFinalisationTaskInBackground »*
+(module `INTERRUPTED`). Le driver attend donc d'abord `FINISHED` pendant
+`SCREENSHOT_FILL_GRACE` secondes (60 par défaut) et ne remplit les placeholders
+qu'en cas de dépassement de ce délai ; seul ce dépassement de délai est
+rattrapé silencieusement, les autres erreurs sont propagées.
 
 ## Alias des plans : création unique puis ré-exécution
 
