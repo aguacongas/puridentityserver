@@ -72,6 +72,32 @@ retenue :
     ../certification/plans/basic.json
   ```
 
+## Rejeu local sans la suite
+
+Le chantier « rejouer la certification OIDC en tests Python locaux » rejoue les
+checks des plans Core **sans docker ni suite de la Fondation** : les définitions
+des modules (`release-v5.2.4`) ont été extraites dans
+`tests/conformance/` (traçabilité complète : matrices module → test dans
+`tests/conformance/TRACEABILITY.md`).
+
+```bash
+# rejeu in-process (FastAPI via ASGITransport) — 173 scénarios :
+# 164 passed, 9 skipped, 737 deselected
+uv run --no-sync --no-build --locked python -m pytest -m conformance --no-cov -p no:cacheprovider
+
+# variante contre un VRAI serveur uvicorn (sous-processus, port 8121,
+# seeds alignés sur le harness) — même résultat, preuve du rejeu en réel
+uv run python samples/conformance-smoke/smoke_test.py
+```
+
+- Les tests sont exclus du gate (`addopts` porte `-m "not conformance"`) et
+  `--no-cov` est requis : ce sous-ensemble ne couvre pas le seuil de 80 %.
+- Les 9 skips sont fidèles à la suite : `alg=none`, `request`/`request_uri`
+  (non supportés par l'OP) et l'access_token dans le corps de `/userinfo`
+  (vérifiés dynamiquement contre le discovery) — voir issue #76.
+- Le smoke propage le code retour de pytest et borne la durée (`watchdog`) ;
+  il sert de vérification « OP réel » du même rejeu.
+
 ## Dépannage
 
 - **L'OP ne répond pas** : le service Render libre s'endort après ~15 min

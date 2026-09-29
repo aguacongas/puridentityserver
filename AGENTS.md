@@ -20,6 +20,7 @@ uv run python -m pytest -p no:cacheprovider -q   # tests + couverture >= 80 % (9
 
 ```bash
 uv run python -m pytest -m conformance --no-cov -p no:cacheprovider
+uv run python samples/conformance-smoke/smoke_test.py   # idem, contre un vrai serveur uvicorn
 ```
 
 - Exclus du gate : `addopts` porte `-m "not conformance"`, le marker `conformance`
@@ -28,6 +29,11 @@ uv run python -m pytest -m conformance --no-cov -p no:cacheprovider
   couverture est mesurée sur la suite complète par `ci.yml`).
 - Pas de `-q` : le résumé `N passed, M deselected` est la preuve visible que le
   rejeu a bien eu lieu (avec `-q`, pytest n'affiche aucune ligne de fin).
+- Le smoke (`samples/conformance-smoke/`) démarre un serveur dédié (port 8121,
+  seeds alignés sur `tests/conformance/conftest.py`), exporte
+  `PURIDENTITYSERVER_CONFORMANCE_URL` (le harness bascule sur httpx réel) et
+  relance `pytest -m conformance` en sous-processus — preuve du rejeu contre un
+  OP réel, code retour de pytest propagé.
 - Traçabilité des checks extraits de la suite `release-v5.2.4` :
   `tests/conformance/TRACEABILITY.md` ; job dédié
   `.github/workflows/conformance-tests.yml` (PR vers `main`, `workflow_dispatch`

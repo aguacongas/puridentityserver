@@ -76,16 +76,37 @@ def _render_settings_value(value: object) -> str:
     return json.dumps(value)
 
 
+def _render_toml_table(path: str, values: Mapping[str, object]) -> str:
+    """Rend la table TOML ``path`` ; les sous-dictes deviennent des sous-tables.
+
+    Les clés scalaires précèdent toujours les sous-tables (règle TOML), quel que
+    soit l'ordre des entrées de ``values``.
+    """
+    scalars = [
+        f"{key} = {_render_settings_value(value)}"
+        for key, value in values.items()
+        if not isinstance(value, Mapping)
+    ]
+    tables = [
+        _render_toml_table(f"{path}.{key}", value)
+        for key, value in values.items()
+        if isinstance(value, Mapping)
+    ]
+    return "\n\n".join(["\n".join([f"[{path}]", *scalars]), *tables])
+
+
 def render_server_config(
     *,
     port: int,
     clients: tuple[dict[str, object], ...],
     users: Mapping[str, Mapping[str, str]] | None = None,
+    users_seed: Mapping[str, Mapping[str, object]] | None = None,
     api_resources: tuple[dict[str, object], ...] = (),
     registration_enabled: bool = False,
     registration_initial_access_tokens: tuple[str, ...] = (),
     jwks_algorithms: tuple[str, ...] = _JWKS_ALGORITHMS,
     extra_settings: Mapping[str, object] | None = None,
+    issuer: str | None = None,
 ) -> str:
     """Rend le TOML d'un serveur minimal déclarant ``clients`` (+``users``) sur ``port``.
 
@@ -99,11 +120,20 @@ def render_server_config(
     ``RS256`` — un smoke test des HS* doit passer ``("RS256", "HS256", ...)``).
     ``extra_settings`` ajoute des clés ``[settings]`` arbitraires (ex.
     ``role``, ``admin_required_claim_values``, mode de registration).
+    ``issuer`` fixe ``issuer`` **et** ``base_url`` (défaut : ``issuer`` =
+    ``http://127.0.0.1:port`` et ``base_url`` vide) — nécessaire quand le
+    client attend un issuer canonique quelconque, ex. ``https://id.example``
+    pour ``tests/conformance/``.
+    ``users_seed`` déclare les profils de claims
+    (``[settings.users_seed.<subject>]``, sous-dictes = sous-tables TOML) que
+    ``/userinfo`` rend pour les scopes accordés.
     """
+    resolved_issuer = issuer or f"http://{HOST}:{port}"
+    resolved_base_url = resolved_issuer if issuer is not None else ""
     head = (
         "[settings]\n"
-        f'issuer = "http://{HOST}:{port}"\n'
-        'base_url = ""\n'
+        f'issuer = "{resolved_issuer}"\n'
+        f'base_url = "{resolved_base_url}"\n'
         f'host = "{HOST}"\n'
         f"port = {port}\n"
         f"jwks_algorithms = {json.dumps(list(jwks_algorithms))}\n"
@@ -126,6 +156,8 @@ def render_server_config(
         for key, value in credentials.items():
             lines.append(f"{key} = {json.dumps(value)}")
         blocks.append("\n".join(lines))
+    for subject, claims in (users_seed or {}).items():
+        blocks.append(_render_toml_table(f"settings.users_seed.{subject}", claims))
     return head + "\n\n".join(block for block in blocks if block) + "\n"
 
 
@@ -152,11 +184,13 @@ def run_server(
     port: int,
     clients: tuple[dict[str, object], ...],
     users: Mapping[str, Mapping[str, str]] | None = None,
+    users_seed: Mapping[str, Mapping[str, object]] | None = None,
     api_resources: tuple[dict[str, object], ...] = (),
     registration_enabled: bool = False,
     registration_initial_access_tokens: tuple[str, ...] = (),
     jwks_algorithms: tuple[str, ...] = _JWKS_ALGORITHMS,
     extra_settings: Mapping[str, object] | None = None,
+    issuer: str | None = None,
 ) -> Iterator[str]:
     """Lance un serveur dédié pour la configuration spécifique de ce test.
 
@@ -166,7 +200,9 @@ def run_server(
     access tokens, algorithmes de signature ``jwks_algorithms``, plus
     ``extra_settings``) dans un fichier temporaire, démarre le serveur uvicorn
     sur ``port`` puis fournit l'URL de base jusqu'à la sortie du bloc
-    (sous-processus terminé).
+    (sous-processus terminé). ``issuer`` fixe ``issuer``/``base_url`` (voir
+    :func:`render_server_config`) — l'URL fournie reste celle du port.
+    ``users_seed`` apporte les profils de claims rendus par ``/userinfo``.
     """
     if port_in_use(port):
         raise SystemExit(f"Port {port} occupé : arrêtez le serveur qui écoute sur {port}.")
@@ -178,11 +214,13 @@ def run_server(
                 port=port,
                 clients=clients,
                 users=users,
+                users_seed=users_seed,
                 api_resources=api_resources,
                 registration_enabled=registration_enabled,
                 registration_initial_access_tokens=registration_initial_access_tokens,
                 jwks_algorithms=jwks_algorithms,
                 extra_settings=extra_settings,
+                issuer=issuer,
             ),
             encoding="utf-8",
         )

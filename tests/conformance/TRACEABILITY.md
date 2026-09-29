@@ -1,4 +1,4 @@
-# Traçabilité des checks rejoués (PR 1/4 — #69, PR 2/4 — #70, PR 3/4 — #71)
+# Traçabilité des checks rejoués (PR 1/4 — #69, PR 2/4 — #70, PR 3/4 — #71, PR 4/4 — #72)
 
 Ce dossier rejoue localement les checks de la suite officielle
 [`openid/conformance-suite`](https://github.com/openid/conformance-suite),
@@ -21,6 +21,8 @@ et on relit les fichiers cités ci-dessous à chaque nouvelle PR.
 uv run --no-sync --no-build --locked python -m pytest -m conformance --no-cov -p no:cacheprovider
 # contre un OP réel démarré localement (le harness bascule sur httpx)
 $env:PURIDENTITYSERVER_CONFORMANCE_URL = "http://127.0.0.1:8000"
+# ou smoke complet : serveur uvicorn + rejeu des 173 scénarios (PR 4)
+uv run python samples/conformance-smoke/smoke_test.py
 ```
 
 `--no-cov` est requis : le sous-ensemble ne couvre pas le seuil de
@@ -214,5 +216,9 @@ ils passent.
   fragment, `at_hash`/`c_hash`, nonce obligatoire.
 - **PR 3 bis** : modules de compatibilité de navigateur (Login/Consent/callback,
   voir les mêmes plans).
-- **PR 4 (#72)** : smoke du serveur réel (`samples/smoke_common.run_server`) +
-  documentation du rejeu dans `AGENTS.md`.
+- **PR 4 (#72)** : **livrée** : smoke contre un vrai serveur uvicorn
+  (`samples/conformance-smoke/smoke_test.py` : serveur sous-processus aux seeds
+  du harness, `PURIDENTITYSERVER_CONFORMANCE_URL` → harness httpx, rejeu des 173
+  scénarios — **164 passed, 9 skipped**) + documentation du rejeu
+  (`certification/README.md` « Rejeu local sans la suite », `AGENTS.md`,
+  `docs/roadmap-certification.md`).
