@@ -68,8 +68,23 @@ class FlowResult:
 
     @property
     def code(self) -> str:
-        """Code d'autorisation porté par le callback, vide sinon."""
-        return self.query.get("code", "")
+        """Code d'autorisation porté par le callback (query **ou** fragment)."""
+        return self.query.get("code", "") or self.fragment.get("code", "")
+
+    @property
+    def access_token(self) -> str:
+        """Access token porté par le fragment (flux implicites/hybrides)."""
+        return self.fragment.get("access_token", "")
+
+    @property
+    def id_token(self) -> str:
+        """id_token porté par le fragment (flux implicites/hybrides)."""
+        return self.fragment.get("id_token", "")
+
+    @property
+    def returned_state(self) -> str:
+        """``state`` renvoyé par le callback (query, sinon fragment)."""
+        return self.query.get("state", "") or self.fragment.get("state", "")
 
 
 def pkce_challenge(verifier: str) -> str:
@@ -81,6 +96,20 @@ def pkce_challenge(verifier: str) -> str:
 def new_verifier() -> str:
     """Nouveau ``code_verifier`` aléatoire (43 à 128 caractères, RFC 7636 §4.1)."""
     return secrets.token_urlsafe(48)
+
+
+def decode_id_token_claims(id_token: str) -> dict[str, Any]:
+    """Décode le payload JWT d'un id_token (fragment ou réponse de ``/token``)."""
+    payload = id_token.split(".")[1]
+    payload += "=" * (-len(payload) % 4)
+    return dict(json.loads(base64.urlsafe_b64decode(payload)))
+
+
+def decode_id_token_header(id_token: str) -> dict[str, Any]:
+    """Décode le header JWT (``alg``, ``kid``) d'un id_token."""
+    header = id_token.split(".")[0]
+    header += "=" * (-len(header) % 4)
+    return dict(json.loads(base64.urlsafe_b64decode(header)))
 
 
 class ConformanceHarness:
@@ -278,9 +307,7 @@ class ConformanceHarness:
         id_token = str(token_response.get("id_token", ""))
         if not id_token:
             raise AssertionError(f"aucun id_token dans la réponse : {sorted(token_response)}")
-        header = id_token.split(".")[0]
-        header += "=" * (-len(header) % 4)
-        return dict(json.loads(base64.urlsafe_b64decode(header)))
+        return decode_id_token_header(id_token)
 
     @staticmethod
     def id_token_claims(token_response: dict[str, Any]) -> dict[str, Any]:
@@ -292,10 +319,7 @@ class ConformanceHarness:
         id_token = str(token_response.get("id_token", ""))
         if not id_token:
             raise AssertionError(f"aucun id_token dans la réponse : {sorted(token_response)}")
-        payload = id_token.split(".")[1]
-        payload += "=" * (-len(payload) % 4)
-        claims: dict[str, Any] = json.loads(base64.urlsafe_b64decode(payload))
-        return claims
+        return decode_id_token_claims(id_token)
 
     def _submit_login(self, login_location: str) -> str:
         """Soumet le formulaire de connexion et renvoie la prochaine ``/authorize``."""

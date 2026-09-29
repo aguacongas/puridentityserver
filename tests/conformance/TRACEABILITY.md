@@ -1,4 +1,4 @@
-# Traçabilité des checks rejoués (PR 1/4 — #69, PR 2/4 — #70)
+# Traçabilité des checks rejoués (PR 1/4 — #69, PR 2/4 — #70, PR 3/4 — #71)
 
 Ce dossier rejoue localement les checks de la suite officielle
 [`openid/conformance-suite`](https://github.com/openid/conformance-suite),
@@ -25,7 +25,7 @@ $env:PURIDENTITYSERVER_CONFORMANCE_URL = "http://127.0.0.1:8000"
 
 `--no-cov` est requis : le sous-ensemble ne couvre pas le seuil de
 80 % du gate (94 % sur la suite complète). Pas de `-q` non plus : le résumé
-`38 passed, 5 skipped, 737 deselected` (PR 2) est la preuve, dans les logs du
+`164 passed, 9 skipped, 737 deselected` (PR 3) est la preuve, dans les logs du
 job comme en local, que le rejeu a bien eu lieu — le rapport détaillé est aussi
 publié dans la PR (`scripts/conformance_report.py`).
 
@@ -119,6 +119,68 @@ l'OP accepte effectivement le POST.
 Rejeu PR 2 (local) : **33 passed, 5 skipped** (les 5 skips fidèles ci-dessus),
 38 modules couverts en ≈ 1 min 45.
 
+## Matrice module → test (PR 3 — issue #71)
+
+Plans `oidcc-implicit-certification-test-plan` (`OIDCCImplicitTestPlan`) et
+`oidcc-hybrid-certification-test-plan` (`OIDCCHybridTestPlan`) : **37 classes
+de modules** dans l'union des deux plans (les 31 de l'Implicit sont incluses
+dans les 37 du Hybrid — l'issue #71 parlait de 39, le décompte réel extrait des
+deux `testModulesWithVariants()` est 37), pour **162 exécutions** dans la
+suite (58 Implicit : 27 modules × 2 `response_type` + 4 ; 102 Hybrid :
+`code id_token` 36, `code token` 33, `code id_token token` 33).
+
+Le rejeu local réduit à 135 tests (49 Implicit + 86 Hybrid) en regroupant les
+variantes dont l'observable ne change pas : les nodeids ci-dessous sont réels.
+Blocs de conditions hérités identiques à la PR 2 (`[BASE]`, `[RC]`, `[UI]`,
+`[CR]`, `[SAT]`, `[GEN-ERR]`).
+
+### Plan Implicit — `test_plan_implicit.py` (31 modules)
+
+| Module | Variante(s) plan | Nodeid pytest | Assertion |
+| --- | --- | --- | --- |
+| `oidcc-server` | `id_token`, `id_token token` | `test_implicit_happy_flow[rt-*]` | `checks.expect_implicit_callback` + `checks.validate_id_token` + `checks.check_at_hash` (avec `token`) |
+| `oidcc-idtoken-signature` | idem | `test_implicit_happy_flow[rt-*]` | `checks.expect_id_token_signature` (RS256 + `kid`) |
+| `oidcc-ensure-request-without-nonce-fails` | idem (`@VariantNotApplicable` code/code token) | `test_implicit_without_nonce_is_rejected[rt-*]` | `checks.expect_authorization_error` (`invalid_request` en fragment) |
+| `oidcc-display-page`, `-popup`, `oidcc-login-hint`, `oidcc-ui-locales`, `oidcc-claims-locales`, `oidcc-ensure-request-with-unknown-parameter-succeeds`, `oidcc-ensure-request-with-acr-values-succeeds`, `oidcc-claims-essential` | les 2 | `test_implicit_authorize_parameter_is_accepted[rt-*][<alias>]` | `checks.expect_implicit_callback` + `checks.validate_id_token` |
+| `oidcc-scope-profile`/`-email`/`-address`/`-phone`/`-all` | les 2 | `test_implicit_scope_claims_returned[rt-*][<alias>]` | userinfo (`[RC]`) avec `token` ; pour `id_token` seul la suite ne fait que `VerifyScopesReturnedInAuthorizationEndpointIdToken` **(WARNING)** → callback validé |
+| `oidcc-userinfo-get`/`-post-header`/`-post-body` | `id_token token` uniquement (le plan exclut `id_token`) | `test_implicit_userinfo_endpoint_method[<alias>]` | `checks.check_userinfo_response` (post_body : skip WARNING identique) |
+| `oidcc-prompt-none-logged-in`, `oidcc-id-token-hint`, `oidcc-max-age-10000` | les 2 | `test_implicit_second_authorization[rt-*][<module>]` | `checks.check_second_id_token_consistent` (`[SAT]`) |
+| `oidcc-prompt-none-not-logged-in` | les 2 | `test_implicit_prompt_none_without_session[rt-*]` | `checks.expect_authorization_error` (`login_required` en fragment) |
+| `oidcc-ensure-registered-redirect-uri` | les 2 | `test_implicit_registered_redirect_uri_is_rejected[rt-*]` | `checks.expect_redirect_uri_error_page` |
+| `oidcc-prompt-login`, `oidcc-max-age-1` | les 2 | `test_implicit_second_login_reprompts[rt-*][<module>]` | `checks.expect_second_login_page` + `checks.check_second_auth_time_is_later` |
+| `oidcc-alternate-happy-flow` | les 2 | `test_implicit_alternate_happy_flow[rt-*]` | userinfo + `checks.check_scope_claims_returned` (`email`), id_token sans `email` |
+| `oidcc-response-type-missing` | `id_token token` | `test_plan_basic.py::test_response_type_missing_shows_error_page` | identique sans `response_type` (page 400) |
+| `oidcc-request-uri-unsigned-…`, `oidcc-unsigned-request-object-…`, `oidcc-ensure-request-object-with-redirect-uri` | les 2 | `test_plan_basic.py::test_request_object_modules_skip_without_none_support[<alias>]` | skip identique (`skipTestIfNoneUnsupported`, discovery inchangé) |
+
+### Plan Hybrid — `test_plan_hybrid.py` (37 modules)
+
+| Module | Variante(s) plan | Nodeid pytest | Assertion |
+| --- | --- | --- | --- |
+| `oidcc-server` | les 3 | `test_hybrid_happy_flow[rt-*]` | `checks.expect_hybrid_callback` + `checks.check_c_hash` + `checks.check_at_hash` (avec `token`) + `checks.validate_id_token` + userinfo |
+| `oidcc-idtoken-signature` | les 3 | `test_hybrid_happy_flow[rt-*]` | `checks.expect_id_token_signature` |
+| `oidcc-ensure-request-without-nonce-fails` | `code id_token`, `code id_token token` | `test_hybrid_without_nonce_is_rejected[rt-*]` | `checks.expect_authorization_error` (`invalid_request`) |
+| `oidcc-ensure-request-without-nonce-succeeds-for-code-flow` | `code token` | `test_hybrid_code_token_without_nonce_succeeds` | `checks.expect_hybrid_callback` sans `id_token` |
+| 8 modules paramètres (ids PR 2) | les 3 | `test_hybrid_authorize_parameter_is_accepted[rt-*][<alias>]` | `checks.expect_hybrid_callback` + `checks.validate_id_token` |
+| `oidcc-scope-*` (5) | les 3 | `test_hybrid_scope_claims_returned[rt-*][<alias>]` | `checks.check_userinfo_response` + `checks.check_scope_claims_returned` (`[RC]`) |
+| `oidcc-userinfo-*` (3) | les 3 | `test_hybrid_userinfo_endpoint_method[rt-*][<alias>]` | `checks.check_userinfo_response` (post_body : skip WARNING × 3) |
+| `oidcc-prompt-none-logged-in`, `oidcc-id-token-hint`, `oidcc-max-age-10000` | les 3 | `test_hybrid_second_authorization[rt-*][<module>]` | `checks.check_second_id_token_consistent` |
+| `oidcc-prompt-none-not-logged-in` | les 3 | `test_hybrid_prompt_none_without_session[rt-*]` | `checks.expect_authorization_error` |
+| `oidcc-ensure-registered-redirect-uri` | les 3 | `test_hybrid_registered_redirect_uri_is_rejected[rt-*]` | `checks.expect_redirect_uri_error_page` |
+| `oidcc-prompt-login`, `oidcc-max-age-1` | les 3 | `test_hybrid_second_login_reprompts[rt-*][<module>]` | `checks.expect_second_login_page` + `checks.check_second_auth_time_is_later` |
+| `oidcc-alternate-happy-flow` | `code id_token` seulement | `test_hybrid_alternate_happy_flow` | userinfo + id_token sans `email` |
+| `oidcc-codereuse` | les 3 | `test_hybrid_authorization_code_cannot_be_reused[rt-*]` | `checks.expect_invalid_grant` (`[CR]`) |
+| `oidcc-codereuse-30seconds` | les 3 → **1 portée** | `test_hybrid_authorization_code_reuse_after_30_seconds` | `checks.expect_invalid_grant` — les 2 autres instances (`code token`, `code id_token token`) ont exactement les mêmes checks (`WaitFor30Seconds` + `[CR]`) : non portées, observables identiques |
+| `oidcc-server-client-secret-post` | les 3 | `test_hybrid_client_secret_post_authentication[rt-*]` | `_exchange` en `client_secret_post` + `id_token` présent |
+| `oidcc-ensure-request-with-valid-pkce-succeeds` | `code id_token` seulement | `test_hybrid_request_with_valid_pkce_succeeds` | `checks.validate_id_token` après échange PKCE |
+| `oidcc-refresh-token` | les 3 → **1 portée** | `test_hybrid_refresh_token_grant_and_client_binding` | `checks.check_refreshed_id_token_claims` + `checks.expect_invalid_grant` croisé — les 2 autres instances diffèrent seulement par le `response_type` du premier flux (mêmes `[RT-seq]`/`[RT-err-seq]`) : non portées |
+| (qualité du code, sous-check de `oidcc-server`) | `code id_token` | `test_hybrid_authorization_code_quality` | `checks.check_authorization_code_quality` |
+| `oidcc-response-type-missing` | `code id_token` (une seule fois) | `test_plan_basic.py::test_response_type_missing_shows_error_page` | identique sans `response_type` |
+| `oidcc-request-uri-unsigned-…`, `oidcc-unsigned-request-object-…`, `oidcc-ensure-request-object-with-redirect-uri` | les 3 | `test_plan_basic.py::test_request_object_modules_skip_without_none_support[<alias>]` | skip identique (`skipTestIfNoneUnsupported`) |
+
+Rejeu PR 3 (local) : **164 passed, 9 skipped** au total
+(38 Basic + 49 Implicit + 86 Hybrid, dont 4 skips `userinfo-post-body` et
+5 skips `none`) en ≈ 6 min 45.
+
 ## Observeurs du harness
 
 Le harness (`harness.py`) reproduit le rôle du navigateur pilote des plans
@@ -140,15 +202,16 @@ Vérification du « rouge » (PR 1) : avec les 3 modules au comportement `main`
 (302 vers l'URI inconnue, code émis sans seconde connexion) ; avec le fix,
 ils passent.
 
-## Suites (issues #70 → #72)
+## Suites (issues #69 → #72)
 
+- **PR 1 (#69)** : 3 modules Basic défaillants — **livrée** (matrice PR 1
+  ci-dessus, fixs de l'OP dans #68).
 - **PR 2 (#70)** : 38 modules Basic — **livrée** : matrice complète ci-dessus,
   `test_plan_basic.py` + `checks.py` (signature `id_token`, `userinfo`,
   `refresh`, `invalid_grant`).
-
-
-- **PR 3 (#71)** : modules Implicit/Hybrid (`certification/plans/implicit.json`,
-  `hybrid.json`) — capture du fragment, `response_type` multiples.
+- **PR 3 (#71)** : plans Implicit/Hybrid — **livrée** : matrices ci-dessus,
+  `test_plan_implicit.py` (49 tests) + `test_plan_hybrid.py` (86 tests),
+  fragment, `at_hash`/`c_hash`, nonce obligatoire.
 - **PR 3 bis** : modules de compatibilité de navigateur (Login/Consent/callback,
   voir les mêmes plans).
 - **PR 4 (#72)** : smoke du serveur réel (`samples/smoke_common.run_server`) +
