@@ -27,6 +27,18 @@ _CLIENT = {
     "client_type": "confidential",
 }
 
+# Second client confiant : ``oidcc-refresh-token`` rejoue le check
+# ``CheckErrorFromTokenEndpointResponseErrorInvalidGrant`` (2ᵉ client qui
+# présente le refresh token d'un autre client) — la suite utilise un second
+# client enregistré dynamiquement.
+_CLIENT_OTHER = {
+    "client_id": "mobile-app",
+    "client_secret": "mobile-secret",
+    "redirect_uris": ["https://mobile.example/callback"],
+    "scopes": "openid profile",
+    "client_type": "confidential",
+}
+
 # Comptes de ``certification/config.render.toml`` (instances de certification
 # et local partagent les mêmes identifiants pilotes).
 _IDENTITY_USERS = {"alice": {"email": "alice@example.com", "password": "password"}}
@@ -45,7 +57,7 @@ def build_app() -> FastAPI:
             issuer=_ISSUER,
             base_url=_ISSUER,
             jwks_algorithms=("RS256",),
-            clients_seed=(_CLIENT,),
+            clients_seed=(_CLIENT, _CLIENT_OTHER),
             require_login=True,
             identity_seed_users=_IDENTITY_USERS,
         )
