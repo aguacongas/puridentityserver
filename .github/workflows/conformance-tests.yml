@@ -2,8 +2,10 @@ name: Rejeu certification OIDC (tests conformance)
 
 # Rejoue localement les checks de la suite officielle openid/conformance-suite
 # (tests marqués `conformance`, exclus du gate `ci.yml` par `-m "not conformance"`).
-# Déclenché à la demande (workflow_dispatch) et chaque nuit.
+# Déclenché sur chaque PR vers main, à la demande (workflow_dispatch) et chaque nuit.
 on:
+  pull_request:
+    branches: ["main"]
   workflow_dispatch:
   schedule:
     - cron: "0 3 * * *"
