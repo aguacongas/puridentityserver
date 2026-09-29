@@ -116,6 +116,15 @@ testpaths = ["tests"]
 markers = [
     "conformance: rejeu local des checks de la suite de certification OIDC officielle",
 ]
+# Avertissements des bibliothèques tierces émis par fastapi/starlette au
+# moment de l'import de `TestClient` (ils ne viennent pas du projet) :
+# - fastapi.testclient : `TestClient` repose encore sur httpx (`httpx2` à venir),
+# - starlette.testclient : alias `anyio.abc.BlockingPortal` déplacé.
+# Format `action:message:category:module` (champs vides = tous).
+filterwarnings = [
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:Warning:fastapi.testclient",
+    "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning:starlette.testclient",
+]
 
 [tool.coverage.run]
 source = [
