@@ -19,16 +19,19 @@ uv run python -m pytest -p no:cacheprovider -q   # tests + couverture >= 80 % (9
 ## Rejeu local de la certification OIDC (tests `conformance`)
 
 ```bash
-uv run python -m pytest -m conformance --no-cov -p no:cacheprovider -q
+uv run python -m pytest -m conformance --no-cov -p no:cacheprovider
 ```
 
 - Exclus du gate : `addopts` porte `-m "not conformance"`, le marker `conformance`
   ne s'exécute qu'à la demande (le dernier `-m` de la ligne de commande l'emporte).
 - `--no-cov` obligatoire : ce sous-ensemble ne couvre pas le seuil de 80 % (la
   couverture est mesurée sur la suite complète par `ci.yml`).
+- Pas de `-q` : le résumé `N passed, M deselected` est la preuve visible que le
+  rejeu a bien eu lieu (avec `-q`, pytest n'affiche aucune ligne de fin).
 - Traçabilité des checks extraits de la suite `release-v5.2.4` :
   `tests/conformance/TRACEABILITY.md` ; job dédié
-  `.github/workflows/conformance-tests.yml` (`workflow_dispatch` + nightly).
+  `.github/workflows/conformance-tests.yml` (PR vers `main`, `workflow_dispatch`
+  + nightly).
 
 ## Complexité cognitive (SonarCloud S3776) — piège récurrent
 

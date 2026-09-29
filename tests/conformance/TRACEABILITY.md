@@ -18,13 +18,15 @@ et on relit les fichiers cités ci-dessous à chaque nouvelle PR.
 
 ```powershell
 # rejeu (exclu du gate : addopts porte -m "not conformance")
-uv run --no-sync --no-build --locked python -m pytest -m conformance --no-cov -p no:cacheprovider -q
+uv run --no-sync --no-build --locked python -m pytest -m conformance --no-cov -p no:cacheprovider
 # contre un OP réel démarré localement (le harness bascule sur httpx)
 $env:PURIDENTITYSERVER_CONFORMANCE_URL = "http://127.0.0.1:8000"
 ```
 
 `--no-cov` est requis : les 3 tests ne couvrent évidemment pas le seuil de
-80 % du gate (94 % sur la suite complète).
+80 % du gate (94 % sur la suite complète). Pas de `-q` non plus : le résumé
+`3 passed, 737 deselected` est la preuve, dans les logs du job comme en local,
+que le rejeu a bien eu lieu.
 
 ## Matrice module → test (PR 1)
 

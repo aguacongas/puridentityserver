@@ -2,7 +2,8 @@
 
 Les tests sont exclus du gate (``-m "not conformance"`` dans ``addopts``) et
 ne s'exécutent qu'à la demande : ``uv run --no-sync --no-build --locked python
--m pytest -m conformance -p no:cacheprovider --no-cov -q``.
+-m pytest -m conformance --no-cov -p no:cacheprovider`` (sans ``-q`` : le
+résumé ``N passed, M deselected`` prouve que le rejeu a eu lieu).
 """
 
 from __future__ import annotations
