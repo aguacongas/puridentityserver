@@ -2,14 +2,18 @@
 
 Valide l'access token Bearer, récupère les claims de l'utilisateur via le
 ``ClaimsProvider`` injecté et filtre ces claims selon les scopes accordés
-au jeton (OIDC Core 1.0 §5.4).
+au jeton (OIDC Core 1.0 §5.4) élargis des claims du member ``userinfo``
+du paramètre ``claims`` porté par l'access_token (OIDC Core 1.0 §5.5).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCES
+from puridentityserver.application.claims_request import (
+    allowed_scope_claims,
+    requested_userinfo_claims,
+)
 from puridentityserver.domain.revocation import token_hash
 from puridentityserver.interfaces.domain.tokens import TokenManager
 from puridentityserver.interfaces.domain.userinfo import ClaimsProvider
@@ -91,6 +95,7 @@ class UserInfoUseCase:
             return UserInfoError(error="invalid_token", error_description="Claim 'sub' manquante")
 
         allowed = await self._allowed_claims(str(claims.get("scope", "")))
+        allowed |= requested_userinfo_claims(claims.get("claims"))
         user_claims = await self._claims_provider.get_claims(str(subject))
 
         return UserInfoResponse(
@@ -103,20 +108,13 @@ class UserInfoUseCase:
     async def _allowed_claims(self, scope: str) -> set[str]:
         """Claims autorisés par le scope accordé, dérivés des IdentityResources.
 
-        Chaque scope nommé dans ``scope`` (séparé par des espaces, RFC 6749
-        §3.3) est mis en correspondance avec une resource du registre : ses
-        claims deviennent accessibles. ``sub`` est toujours autorisé (claim
-        réservé d'OpenID Connect). En l'absence de registre injecté, les
-        resources par défaut s'appliquent.
+        Délégué à ``allowed_scope_claims`` (source partagée avec l'id_token
+        de ``/authorize``) : chaque scope nommé dans ``scope`` (séparé par
+        des espaces, RFC 6749 §3.3) est mis en correspondance avec une
+        resource du registre — ses claims deviennent accessibles. ``sub``
+        est toujours autorisé (claim réservé d'OpenID Connect). Les claims
+        du member ``userinfo`` du paramètre ``claims`` (OIDC Core 1.0 §5.5),
+        lus dans le payload de l'access_token, élargissent ensuite cet
+        ensemble.
         """
-        resources = DEFAULT_IDENTITY_RESOURCES
-        if self._identity_resources is not None:
-            stored = await self._identity_resources.find_all()
-            if stored:
-                resources = tuple(stored)
-        scope_names = set(scope.split())
-        allowed: set[str] = {"sub"}
-        for resource in resources:
-            if resource.name in scope_names:
-                allowed |= set(resource.user_claims)
-        return allowed
+        return await allowed_scope_claims(scope, self._identity_resources)

@@ -262,6 +262,11 @@ class AuthorizationCode:
     ``session_id`` (OIDC Session Management §2) porte le ``sid`` de la
     session navigateur au moment de l'émission : il relie le code au
     ``sid`` qui sera reproduit dans l'``id_token`` à l'échange.
+    ``acr`` conserve la première valeur ``acr_values`` demandée à
+    ``/authorize`` pour la reproduire dans l'id_token du token endpoint
+    (OIDC Core 1.0 §3.1.2.1) ; ``claims`` conserve le paramètre ``claims``
+    brut (OIDC Core 1.0 §5.5) pour honorer ses members ``userinfo`` /
+    ``id_token`` lors de l'échange du code.
     """
 
     code: str = field(default_factory=lambda: f"{uuid4().hex[:16]}")
@@ -274,6 +279,8 @@ class AuthorizationCode:
     code_challenge_method: str = "S256"
     nonce: str = ""
     auth_time: int = 0
+    acr: str = ""
+    claims: str = ""
     expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     is_consumed: bool = False
 

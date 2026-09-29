@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,6 +37,8 @@ class AuthorizationCodeRow(PersistenceBase):
     code_challenge_method: Mapped[str] = mapped_column(String(8), default="S256")
     nonce: Mapped[str] = mapped_column(String(256), default="")
     auth_time: Mapped[int] = mapped_column(Integer, default=0)
+    acr: Mapped[str] = mapped_column(String(256), default="")
+    claims: Mapped[str] = mapped_column(Text, default="")
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     is_consumed: Mapped[bool] = mapped_column(Boolean, default=False)
 
@@ -103,6 +105,8 @@ def _to_row(code: AuthorizationCode) -> AuthorizationCodeRow:
         code_challenge_method=code.code_challenge_method,
         nonce=code.nonce,
         auth_time=code.auth_time,
+        acr=code.acr,
+        claims=code.claims,
         expires_at=code.expires_at,
         is_consumed=code.is_consumed,
     )
@@ -124,6 +128,8 @@ def _from_row(row: AuthorizationCodeRow) -> AuthorizationCode:
         code_challenge_method=row.code_challenge_method,
         nonce=row.nonce,
         auth_time=row.auth_time or 0,
+        acr=row.acr or "",
+        claims=row.claims or "",
         expires_at=expires_at,
         is_consumed=row.is_consumed,
     )

@@ -7,6 +7,7 @@ les implémentations concrètes vivent dans l'infrastructure (PyJWT /
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Protocol
 
 from puridentityserver.domain.authorization import Client, Scope
@@ -47,6 +48,8 @@ class TokenManager(Protocol):
         c_hash: str = "",
         auth_time: int = 0,
         shared_secret: str = "",
+        acr: str = "",
+        additional_claims: Mapping[str, object] | None = None,
     ) -> str:
         """Crée un id_token signé JWS (JWT) pour le client ``audience``.
 
@@ -60,6 +63,13 @@ class TokenManager(Protocol):
         ``auth_time`` (OIDC Core 1.0 §2) : le claim ``auth_time`` n'est
         ajouté que s'il est non nul, pour ne pas émettre un temps
         d'authentification invalide.
+        ``acr`` (OIDC Core 1.0 §2, §3.1.2.1) : le claim ``acr`` n'est ajouté
+        que s'il est non vide — la valeur est celle demandée par le client
+        via ``acr_values``.
+        ``additional_claims`` complète le payload (claims des scopes en
+        ``response_type=id_token``, member ``id_token`` du paramètre
+        ``claims``) ; les claims standards ci-dessus priment en cas de
+        collision de nom.
         """
         ...
 
@@ -73,12 +83,16 @@ class TokenManager(Protocol):
         expires_at: int,
         issued_at: int,
         scopes: frozenset[Scope],
+        additional_claims: Mapping[str, object] | None = None,
     ) -> str:
         """Crée un access_token signé JWS (JWT) pour ``audience``.
 
         L'audience est le ``client_id`` émetteur, ou le(s) nom(s) des
         ``ApiResource`` dont des scopes ont été accordés au jeton (RFC
         7519 §4.1.3 : ``aud`` peut être une chaîne ou une liste).
+        ``additional_claims`` complète le payload (ex. les noms de claims
+        du member ``userinfo`` du paramètre ``claims``, lus par
+        ``/userinfo``) ; les claims standards priment en cas de collision.
         """
         ...
 

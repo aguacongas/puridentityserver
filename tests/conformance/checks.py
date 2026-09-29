@@ -20,10 +20,27 @@ from harness import FlowResult
 
 _MAX_SKEW_SECONDS = 300
 _MIN_CODE_LENGTH = 16
-# Claims rendus par scope (OIDC Core 1.0 §5.1.2 / §5.1.3) : objet du check
-# ``VerifyScopesReturnedInUserInfoClaims``.
+# Claims rendus par scope (OIDC Core 1.0 §5.1.2 / §5.1.3) : objet des checks
+# ``VerifyScopesReturnedInUserInfoClaims`` et
+# ``VerifyScopesReturnedInAuthorizationEndpointIdToken`` — la table complète
+# ``AbstractVerifyScopesReturnedInClaims.SCOPE_STANDARD_CLAIMS`` de la suite.
 _SCOPE_CLAIMS: dict[str, tuple[str, ...]] = {
-    "profile": ("name", "family_name", "given_name", "preferred_username"),
+    "profile": (
+        "name",
+        "given_name",
+        "family_name",
+        "middle_name",
+        "nickname",
+        "profile",
+        "picture",
+        "website",
+        "gender",
+        "birthdate",
+        "zoneinfo",
+        "locale",
+        "updated_at",
+        "preferred_username",
+    ),
     "email": ("email", "email_verified"),
     "address": ("address",),
     "phone": ("phone_number", "phone_number_verified"),
@@ -338,6 +355,50 @@ def check_scope_claims_returned(userinfo: dict[str, Any], requested_scope: str) 
         if scope in _SCOPE_CLAIMS:
             missing = [claim for claim in _SCOPE_CLAIMS[scope] if claim not in userinfo]
             assert not missing, f"claims du scope {scope!r} absents du userinfo : {missing}"
+
+
+def check_scope_claims_in_id_token(claims: dict[str, Any], requested_scope: str) -> None:
+    """``VerifyScopesReturnedInAuthorizationEndpointIdToken``.
+
+    Flux ``response_type=id_token`` (sans access_token) : les claims des
+    scopes demandés doivent figurer dans l'id_token émis par le endpoint
+    d'autorisation (OIDC Core 1.0 §5.4 — sans UserInfo possible, c'est la
+    seule source). Même table ``SCOPE_STANDARD_CLAIMS`` que le userinfo.
+    """
+    for scope in requested_scope.split():
+        if scope in _SCOPE_CLAIMS:
+            missing = [claim for claim in _SCOPE_CLAIMS[scope] if claim not in claims]
+            assert not missing, f"claims du scope {scope!r} absents de l'id_token : {missing}"
+
+
+def check_scope_claims_absent_from_id_token(claims: dict[str, Any], requested_scope: str) -> None:
+    """``EnsureIdTokenDoesNotContain*`` (OIDCC-5.1.1 / ``oidcc-scope-*``).
+
+    Hors ``response_type=id_token`` pur, l'id_token ne doit pas porter les
+    claims des scopes accordés : ils sont rendus par ``/userinfo``, et leur
+    présence ici exposerait les identifiants au-delà du canal prévu.
+    """
+    for scope in requested_scope.split():
+        if scope in _SCOPE_CLAIMS:
+            leaked = [claim for claim in _SCOPE_CLAIMS[scope] if claim in claims]
+            assert not leaked, (
+                f"claims du scope {scope!r} ne doivent pas figurer dans l'id_token : {leaked}"
+            )
+
+
+def check_acr_claim(claims: dict[str, Any], requested_acr_values: str) -> None:
+    """``ValidateIdTokenACRClaimAgainstAcrValuesRequest`` (``oidcc-*-acr-values-*``).
+
+    ``acr`` doit être présent dans l'id_token **et** être l'une des valeurs
+    de la ``acr_values`` demandée (OIDC Core 1.0 §3.1.2.1 / §2 — la suite
+    exige membership, pas égalité stricte à la liste entière).
+    """
+    acr = claims.get("acr")
+    assert acr is not None and acr != "", (
+        f"acr absent de l'id_token alors que acr_values={requested_acr_values!r} : {sorted(claims)}"
+    )
+    allowed = requested_acr_values.split()
+    assert acr in allowed, f"acr={acr!r} hors des valeurs demandées {allowed}"
 
 
 def expect_invalid_grant(response: httpx.Response) -> None:

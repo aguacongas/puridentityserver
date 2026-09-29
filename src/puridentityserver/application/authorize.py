@@ -29,6 +29,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
 
+from puridentityserver.application.claims_request import (
+    ClaimsRequest,
+    parse_claims_parameter,
+    requested_userinfo_payload,
+    resolve_requested_claims,
+    scope_claims_for_subject,
+)
 from puridentityserver.application.id_token_encryption import encrypt_id_token_for_client
 from puridentityserver.application.id_token_material import resolve_id_token_material
 from puridentityserver.application.scope_registry import ScopeRegistry
@@ -50,10 +57,11 @@ from puridentityserver.interfaces.domain.tokens import (
     JWEUnavailableError,
     TokenManager,
 )
+from puridentityserver.interfaces.domain.userinfo import ClaimsProvider
 from puridentityserver.interfaces.repositories.authorization_code_repository import (
     AuthorizationCodeRepository,
 )
-from puridentityserver.interfaces.repositories.readers import ClientReader
+from puridentityserver.interfaces.repositories.readers import ClientReader, IdentityResourceReader
 
 _VALID_RESPONSE_TYPES = frozenset(
     (
@@ -98,6 +106,8 @@ class AuthorizeRequest:
     max_age: int = -1  # -1 absent, -2 invalide, sinon âge max en secondes (§3.1.2.1)
     session_id: str = ""
     auth_time: int = 0
+    acr_values: str = ""  # valeurs ACR demandées, séparées par des espaces (§3.1.2.1)
+    claims: str = ""  # paramètre claims brut (OIDC Core 1.0 §5.5)
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +155,31 @@ class ValidatedAuthorization:
     wants_id_token: bool
     wants_token: bool
     response_mode: ResponseMode
+
+
+def _parameter_error(
+    request: AuthorizeRequest, response_mode: ResponseMode
+) -> AuthorizeError | None:
+    """Rejette ``max_age`` négatif et ``claims`` malformé, ou ``None``.
+
+    ``claims`` doit être un objet JSON (OIDC Core 1.0 §5.5.1) ; toute autre
+    forme — tableau, scalaire, JSON invalide — vaut ``invalid_request``.
+    """
+    if request.max_age < -1:
+        return _authorize_error(
+            "invalid_request",
+            request,
+            description="max_age doit être un entier positif (OIDC Core 1.0 §3.1.2.1)",
+            response_mode=response_mode,
+        )
+    if request.claims and parse_claims_parameter(request.claims) is None:
+        return _authorize_error(
+            "invalid_request",
+            request,
+            description="claims doit être un objet JSON valide (OIDC Core 1.0 §5.5.1)",
+            response_mode=response_mode,
+        )
+    return None
 
 
 async def validate_authorization_request(
@@ -200,13 +235,9 @@ async def validate_authorization_request(
             redirectable=False,
         )
 
-    if request.max_age < -1:
-        return _authorize_error(
-            "invalid_request",
-            request,
-            description="max_age doit être un entier positif (OIDC Core 1.0 §3.1.2.1)",
-            response_mode=response_mode,
-        )
+    param_error = _parameter_error(request, response_mode)
+    if param_error is not None:
+        return param_error
 
     scopes = Scope.from_space_separated(request.scope)
     if Scope.OPENID not in scopes:
@@ -298,14 +329,27 @@ class AuthorizeUseCase:
         token_manager: TokenManager,
         scope_registry: ScopeRegistry | None = None,
         session_management: SessionManagementUseCase | None = None,
+        *,
+        claims_provider: ClaimsProvider | None = None,
+        identity_resources: IdentityResourceReader | None = None,
     ) -> None:
-        """Injection de la configuration, des repositories et de l'émetteur de jetons."""
+        """Injection de la configuration, des repositories et de l'émetteur de jetons.
+
+        ``claims_provider`` / ``identity_resources`` alimentent les claims
+        ajoutés à l'id_token : les claims des scopes accordés en
+        ``response_type=id_token`` (OIDC Core 1.0 §5.4 — aucun UserInfo
+        possible sans access_token) et le member ``id_token`` du paramètre
+        ``claims`` (§5.5). Sans injection, l'id_token garde son payload
+        standard minimal.
+        """
         self._config = config
         self._clients = client_repository
         self._codes = code_repository
         self._token_manager = token_manager
         self._scope_registry = scope_registry
         self._session_management = session_management
+        self._claims_provider = claims_provider
+        self._identity_resources = identity_resources
 
     async def execute(self, request: AuthorizeRequest) -> AuthorizeResult:
         """Traite la demande d'autorisation et retourne le redirect ou l'erreur."""
@@ -376,6 +420,8 @@ class AuthorizeUseCase:
             code_challenge_method=request.code_challenge_method,
             nonce=request.nonce,
             auth_time=request.auth_time,
+            acr=first_acr_value(request.acr_values),
+            claims=request.claims,
             expires_at=now + timedelta(seconds=code_ttl),
         )
         await self._codes.save(code)
@@ -390,7 +436,21 @@ class AuthorizeUseCase:
         wants_id_token: bool,
         wants_token: bool,
     ) -> tuple[str, str, int] | AuthorizeError:
-        """Émet id_token et/ou access token depuis ``/authorize`` (implicit/hybrid)."""
+        """Émet id_token et/ou access token depuis ``/authorize`` (implicit/hybrid).
+
+        L'id_token reprend le claim ``acr`` (première valeur ``acr_values``
+        demandée) et, selon le ``response_type`` :
+
+        - ``response_type=id_token`` seul : les claims des scopes accordés
+          sont ajoutés au payload — sans access_token, aucun UserInfo ne
+          rendra ces claims (OIDC Core 1.0 §5.4) ;
+        - tout type contenant ``id_token`` : les claims du member
+          ``id_token`` du paramètre ``claims`` (§5.5) ;
+
+        l'access_token embarque les noms de claims du member ``userinfo``
+        (§5.5) que ``/userinfo`` relira pour élargir son filtrage.
+        """
+        claims_request = parse_claims_parameter(request.claims) if request.claims else None
         token_ttl = resolve_lifetime_seconds(
             client.access_token_lifetime_seconds, self._config.access_token_ttl_seconds
         )
@@ -410,6 +470,9 @@ class AuthorizeUseCase:
                 expires_at=expires_epoch,
                 issued_at=issued_at,
                 scopes=scopes,
+                additional_claims=(
+                    requested_userinfo_payload(claims_request) if claims_request else None
+                ),
             )
             at_hash = _hash_artefact(access_token, self._config.signing_algorithm)
 
@@ -438,6 +501,10 @@ class AuthorizeUseCase:
                 c_hash=(_hash_artefact(code, id_token_algorithm) if code else ""),
                 auth_time=request.auth_time,
                 shared_secret=shared_secret,
+                acr=first_acr_value(request.acr_values),
+                additional_claims=await self._additional_id_token_claims(
+                    request, code=code, wants_token=wants_token, claims_request=claims_request
+                ),
             )
             try:
                 id_token = await encrypt_id_token_for_client(
@@ -453,6 +520,41 @@ class AuthorizeUseCase:
                     description="Matériel de chiffrement d'id_token indisponible",
                 )
         return id_token, access_token, token_ttl
+
+    async def _additional_id_token_claims(
+        self,
+        request: AuthorizeRequest,
+        *,
+        code: str,
+        wants_token: bool,
+        claims_request: ClaimsRequest | None,
+    ) -> dict[str, object] | None:
+        """Claims complémentaires de l'id_token émis par ``/authorize``.
+
+        Fusionne les claims du member ``id_token`` du paramètre ``claims``
+        (OIDC Core 1.0 §5.5.1) avec, pour un ``response_type=id_token``
+        **seul** — ni code ni access_token, donc sans UserInfo possible —,
+        les claims des scopes accordés (OIDC Core 1.0 §5.4). ``None`` quand
+        rien n'est à ajouter, pour ne pas altérer le payload standard.
+        """
+        additional: dict[str, object] = {}
+        if claims_request is not None:
+            additional.update(
+                await resolve_requested_claims(
+                    claims_request.id_token, request.subject, self._claims_provider
+                )
+            )
+        pure_id_token = not code and not wants_token
+        if pure_id_token:
+            additional.update(
+                await scope_claims_for_subject(
+                    request.scope,
+                    request.subject,
+                    self._claims_provider,
+                    self._identity_resources,
+                )
+            )
+        return additional or None
 
     async def _resolve_audience(self, client: Client, scopes: frozenset[Scope]) -> str | list[str]:
         """Audience d'un access token : resources protégées accordées, sinon client."""
@@ -582,3 +684,16 @@ def parse_max_age(value: str) -> int:
     except ValueError:
         return -2
     return parsed if parsed >= 0 else -2
+
+
+def first_acr_value(acr_values: str) -> str:
+    """Première valeur ``acr_values`` demandée (OIDC Core 1.0 §3.1.2.1).
+
+    Le paramètre porte une liste de valeurs séparées par des espaces ;
+    l'OP retourne dans le claim ``acr`` celle qu'il déclare atteinte, ici
+    la première demandée — le check ``ValidateIdTokenACRClaimAgainstAcrValuesRequest``
+    de la suite exige une valeur **appartenant** à la liste demandée.
+    Retourne ``""`` si le paramètre est absent : aucun claim ``acr`` n'est
+    alors émis.
+    """
+    return next(iter(acr_values.split()), "")

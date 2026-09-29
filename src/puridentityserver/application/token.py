@@ -40,6 +40,11 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
 
+from puridentityserver.application.claims_request import (
+    parse_claims_parameter,
+    requested_userinfo_payload,
+    resolve_requested_claims,
+)
 from puridentityserver.application.client_auth import (
     CLIENT_UNKNOWN_ERROR,
     verify_client_secret,
@@ -73,6 +78,7 @@ from puridentityserver.interfaces.domain.tokens import (
     JWEUnavailableError,
     TokenManager,
 )
+from puridentityserver.interfaces.domain.userinfo import ClaimsProvider
 from puridentityserver.interfaces.repositories.authorization_code_repository import (
     AuthorizationCodeRepository,
 )
@@ -156,8 +162,16 @@ class TokenUseCase:
         device_codes: DeviceAuthorizationRepository | None = None,
         scope_registry: ScopeRegistry | None = None,
         client_assertions: ClientAssertionVerifier | None = None,
+        *,
+        claims_provider: ClaimsProvider | None = None,
     ) -> None:
-        """Injection de la configuration, des repositories et de l'émetteur de jetons."""
+        """Injection de la configuration, des repositories et de l'émetteur de jetons.
+
+        ``claims_provider`` résout les valeurs du member ``id_token`` du
+        paramètre ``claims`` (OIDC Core 1.0 §5.5) pour compléter l'id_token
+        émis à l'échange du code ; sans injection, seul le payload standard
+        est signé.
+        """
         self._config = config
         self._clients = client_repository
         self._codes = code_repository
@@ -166,6 +180,7 @@ class TokenUseCase:
         self._device_codes = device_codes
         self._scope_registry = scope_registry
         self._client_assertions = client_assertions
+        self._claims_provider = claims_provider
 
     async def execute(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Traite le grant type demandé et retourne les jetons ou une erreur."""
@@ -221,6 +236,8 @@ class TokenUseCase:
             now=now,
             session_id=auth_code.session_id,
             auth_time=auth_code.auth_time,
+            acr=auth_code.acr,
+            claims=auth_code.claims,
         )
         if isinstance(issued, TokenError):
             return issued
@@ -516,8 +533,18 @@ class TokenUseCase:
         now: datetime,
         session_id: str = "",
         auth_time: int = 0,
+        acr: str = "",
+        claims: str = "",
     ) -> tuple[str, str, int] | TokenError:
-        """Émet et retourne l'``id_token``, l'``access_token`` et la TTL effective."""
+        """Émet et retourne l'``id_token``, l'``access_token`` et la TTL effective.
+
+        ``acr`` (première valeur ``acr_values`` conservée sur le code,
+        OIDC Core 1.0 §3.1.2.1) complète l'id_token du claim ``acr`` ;
+        ``claims`` porte le paramètre ``claims`` (§5.5) : son member
+        ``id_token`` est résolu dans l'id_token et son member ``userinfo``
+        voyage dans l'access_token, relu par ``/userinfo``.
+        """
+        claims_request = parse_claims_parameter(claims) if claims else None
         token_ttl = resolve_lifetime_seconds(
             client.access_token_lifetime_seconds, self._config.access_token_ttl_seconds
         )
@@ -540,6 +567,14 @@ class TokenUseCase:
             issued_at=issued_at,
             auth_time=auth_time,
             shared_secret=shared_secret,
+            acr=acr,
+            additional_claims=(
+                await resolve_requested_claims(
+                    claims_request.id_token, subject, self._claims_provider
+                )
+                if claims_request is not None
+                else None
+            ),
         )
         try:
             id_token = await encrypt_id_token_for_client(
@@ -559,6 +594,9 @@ class TokenUseCase:
             expires_at=expires_epoch,
             issued_at=issued_at,
             scopes=scopes,
+            additional_claims=(
+                requested_userinfo_payload(claims_request) if claims_request else None
+            ),
         )
         return id_token, access_token, token_ttl
 

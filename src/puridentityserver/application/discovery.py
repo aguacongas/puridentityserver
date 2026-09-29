@@ -92,6 +92,9 @@ class DiscoveryUseCase:
             "grant_types_supported": list(self._config.grant_types_supported),
             "scopes_supported": scopes_supported,
             "claims_supported": claims_supported,
+            # Paramètre claims (OIDC Core 1.0 §5.5) : parsé, validé et honoré
+            # sur /authorize — les members userinfo/id_token sont rendus.
+            "claims_parameter_supported": True,
         }
         if self._config.registration_enabled:
             metadata["registration_endpoint"] = f"{base}/register"

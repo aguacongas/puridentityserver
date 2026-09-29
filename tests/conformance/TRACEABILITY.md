@@ -64,14 +64,14 @@ callback + `PerformStandardIdTokenChecks` + échange du code, voir
 | `oidcc-ui-locales` | `OIDCCUiLocales.java` → `AddUiLocalesFromConfigurationToAuthorizationEndpointRequest`, [BASE] | idem |
 | `oidcc-claims-locales` | `OIDCCClaimsLocales.java` → `AddClaimsLocalesSeToAuthorizationEndpointRequest`, [BASE] | idem |
 | `oidcc-ensure-request-with-unknown-parameter-succeeds` | `OIDCCEnsureRequestWithUnknownParameterSucceeds.java` → `AddExtraFoobarToAuthorizationEndpointRequest`, [BASE] | idem |
-| `oidcc-ensure-request-with-acr-values-succeeds` | `OIDCCEnsureRequestWithAcrValuesSucceeds.java` → `OIDCCAddAcrValuesToAuthorizationEndpointRequest`, `ValidateIdTokenACRClaimAgainstAcrValuesRequest` **(WARNING si `acr` absent)**, [BASE] | idem |
-| `oidcc-claims-essential` | `OIDCCClaimsEssential.java` → `AddUserInfoEssentialNameClaimToAuthorizationEndpointRequest`, `EnsureUserInfoContainsName` **(WARNING)**, `[RC]` | idem |
+| `oidcc-ensure-request-with-acr-values-succeeds` | `OIDCCEnsureRequestWithAcrValuesSucceeds.java` → `OIDCCAddAcrValuesToAuthorizationEndpointRequest`, `ValidateIdTokenACRClaimAgainstAcrValuesRequest` **(WARNING si `acr` absent)**, [BASE] | `checks.check_acr_claim` — `acr_values=1 2` et `scope=openid` repris des logs de certification, `acr` ∈ valeurs demandées dans l'id_token du token endpoint (#80) |
+| `oidcc-claims-essential` | `OIDCCClaimsEssential.java` → `AddUserInfoEssentialNameClaimToAuthorizationEndpointRequest`, `EnsureUserInfoContainsName` **(WARNING)**, `EnsureIdTokenDoesNotContainName` **(WARNING)**, `[RC]` | `name` présent du userinfo + absent de l'id_token (`scope=openid` seul, fidèle aux logs) (#80) |
 
 ### Scopes (5 modules — test paramétré `test_scope_claims_returned_in_userinfo`)
 
 | Module | Check Java lu dans le clone | Assertion |
 | --- | --- | --- |
-| `oidcc-scope-profile` / `-email` / `-address` / `-phone` / `-all` | `OIDCCScope*.java` → `SetScopeInClientConfigurationToOpenIdX` + `skipTestIfScopesNotSupported` (**skip** si le scope est absent du discovery), `[RC]` (`CallUserInfoEndpoint`, `EnsureHttpStatusCodeIs200`, `ValidateUserInfoStandardClaims`, `EnsureUserInfoContainsSub`, `VerifyScopesReturnedInUserInfoClaims` **(WARNING)**) | `checks.check_scope_claims_returned` (userinfo 200 + claims du scope) |
+| `oidcc-scope-profile` / `-email` / `-address` / `-phone` / `-all` | `OIDCCScope*.java` → `SetScopeInClientConfigurationToOpenIdX` + `skipTestIfScopesNotSupported` (**skip** si le scope est absent du discovery), `[RC]` (`CallUserInfoEndpoint`, `EnsureHttpStatusCodeIs200`, `ValidateUserInfoStandardClaims`, `EnsureUserInfoContainsSub`, `VerifyScopesReturnedInUserInfoClaims` **(WARNING)**) ; `OIDCCScopeEmail` ajoute `EnsureIdTokenDoesNotContainEmailForScopeEmail` | `checks.check_scope_claims_returned` (userinfo 200 + claims du scope) ; pour `-email`, `checks.check_scope_claims_absent_from_id_token` (#80) |
 
 ### Endpoint userinfo (3 modules — test paramétré `test_userinfo_endpoint_method`)
 
@@ -143,14 +143,14 @@ Blocs de conditions hérités identiques à la PR 2 (`[BASE]`, `[RC]`, `[UI]`,
 | `oidcc-server` | `id_token`, `id_token token` | `test_implicit_happy_flow[rt-*]` | `checks.expect_implicit_callback` + `checks.validate_id_token` + `checks.check_at_hash` (avec `token`) |
 | `oidcc-idtoken-signature` | idem | `test_implicit_happy_flow[rt-*]` | `checks.expect_id_token_signature` (RS256 + `kid`) |
 | `oidcc-ensure-request-without-nonce-fails` | idem (`@VariantNotApplicable` code/code token) | `test_implicit_without_nonce_is_rejected[rt-*]` | `checks.expect_authorization_error` (`invalid_request` en fragment) |
-| `oidcc-display-page`, `-popup`, `oidcc-login-hint`, `oidcc-ui-locales`, `oidcc-claims-locales`, `oidcc-ensure-request-with-unknown-parameter-succeeds`, `oidcc-ensure-request-with-acr-values-succeeds`, `oidcc-claims-essential` | les 2 | `test_implicit_authorize_parameter_is_accepted[rt-*][<alias>]` | `checks.expect_implicit_callback` + `checks.validate_id_token` |
-| `oidcc-scope-profile`/`-email`/`-address`/`-phone`/`-all` | les 2 | `test_implicit_scope_claims_returned[rt-*][<alias>]` | userinfo (`[RC]`) avec `token` ; pour `id_token` seul la suite ne fait que `VerifyScopesReturnedInAuthorizationEndpointIdToken` **(WARNING)** → callback validé |
+| `oidcc-display-page`, `-popup`, `oidcc-login-hint`, `oidcc-ui-locales`, `oidcc-claims-locales`, `oidcc-ensure-request-with-unknown-parameter-succeeds`, `oidcc-ensure-request-with-acr-values-succeeds`, `oidcc-claims-essential` | les 2 | `test_implicit_authorize_parameter_is_accepted[rt-*][<alias>]` | `checks.expect_implicit_callback` + `checks.validate_id_token` ; `checks.check_acr_claim` (fragment) ; `claims` → member `id_token` pour `rt-id_token` (`EnsureIdTokenContainsName`), member `userinfo` sinon (`EnsureUserInfoContainsName` + `EnsureIdTokenDoesNotContainName`) (#80) |
+| `oidcc-scope-profile`/`-email`/`-address`/`-phone`/`-all` | les 2 | `test_implicit_scope_claims_returned[rt-*][<alias>]` | userinfo (`[RC]`) avec `token` ; pour `id_token` seul, `VerifyScopesReturnedInAuthorizationEndpointIdToken` **(WARNING)** de la suite → assertion `checks.check_scope_claims_in_id_token` (#80) |
 | `oidcc-userinfo-get`/`-post-header`/`-post-body` | `id_token token` uniquement (le plan exclut `id_token`) | `test_implicit_userinfo_endpoint_method[<alias>]` | `checks.check_userinfo_response` (post_body : skip WARNING identique) |
 | `oidcc-prompt-none-logged-in`, `oidcc-id-token-hint`, `oidcc-max-age-10000` | les 2 | `test_implicit_second_authorization[rt-*][<module>]` | `checks.check_second_id_token_consistent` (`[SAT]`) |
 | `oidcc-prompt-none-not-logged-in` | les 2 | `test_implicit_prompt_none_without_session[rt-*]` | `checks.expect_authorization_error` (`login_required` en fragment) |
 | `oidcc-ensure-registered-redirect-uri` | les 2 | `test_implicit_registered_redirect_uri_is_rejected[rt-*]` | `checks.expect_redirect_uri_error_page` |
 | `oidcc-prompt-login`, `oidcc-max-age-1` | les 2 | `test_implicit_second_login_reprompts[rt-*][<module>]` | `checks.expect_second_login_page` + `checks.check_second_auth_time_is_later` |
-| `oidcc-alternate-happy-flow` | les 2 | `test_implicit_alternate_happy_flow[rt-*]` | userinfo + `checks.check_scope_claims_returned` (`email`), id_token sans `email` |
+| `oidcc-alternate-happy-flow` | les 2 | `test_implicit_alternate_happy_flow[rt-*]` | userinfo + `checks.check_scope_claims_returned` (`email`) avec `token` ; pour `id_token` seul, `email`/`email_verified` **présents** dans l'id_token (`checks.check_scope_claims_in_id_token`) (#80) |
 | `oidcc-response-type-missing` | `id_token token` | `test_plan_basic.py::test_response_type_missing_shows_error_page` | identique sans `response_type` (page 400) |
 | `oidcc-request-uri-unsigned-…`, `oidcc-unsigned-request-object-…`, `oidcc-ensure-request-object-with-redirect-uri` | les 2 | `test_plan_basic.py::test_request_object_modules_skip_without_none_support[<alias>]` | skip identique (`skipTestIfNoneUnsupported`, discovery inchangé) |
 
@@ -162,7 +162,7 @@ Blocs de conditions hérités identiques à la PR 2 (`[BASE]`, `[RC]`, `[UI]`,
 | `oidcc-idtoken-signature` | les 3 | `test_hybrid_happy_flow[rt-*]` | `checks.expect_id_token_signature` |
 | `oidcc-ensure-request-without-nonce-fails` | `code id_token`, `code id_token token` | `test_hybrid_without_nonce_is_rejected[rt-*]` | `checks.expect_authorization_error` (`invalid_request`) |
 | `oidcc-ensure-request-without-nonce-succeeds-for-code-flow` | `code token` | `test_hybrid_code_token_without_nonce_succeeds` | `checks.expect_hybrid_callback` sans `id_token` |
-| 8 modules paramètres (ids PR 2) | les 3 | `test_hybrid_authorize_parameter_is_accepted[rt-*][<alias>]` | `checks.expect_hybrid_callback` + `checks.validate_id_token` |
+| 8 modules paramètres (ids PR 2) | les 3 | `test_hybrid_authorize_parameter_is_accepted[rt-*][<alias>]` | `checks.expect_hybrid_callback` + `checks.validate_id_token` ; `checks.check_acr_claim` sur l'id_token du fragment **et** celui du token endpoint (2 WARNING pour `code id_token token`) ; `claims` → member `userinfo` : `name` du userinfo, absent des deux id_tokens (#80) |
 | `oidcc-scope-*` (5) | les 3 | `test_hybrid_scope_claims_returned[rt-*][<alias>]` | `checks.check_userinfo_response` + `checks.check_scope_claims_returned` (`[RC]`) |
 | `oidcc-userinfo-*` (3) | les 3 | `test_hybrid_userinfo_endpoint_method[rt-*][<alias>]` | `checks.check_userinfo_response` (post_body : skip WARNING × 3) |
 | `oidcc-prompt-none-logged-in`, `oidcc-id-token-hint`, `oidcc-max-age-10000` | les 3 | `test_hybrid_second_authorization[rt-*][<module>]` | `checks.check_second_id_token_consistent` |
@@ -222,3 +222,11 @@ ils passent.
   scénarios — **164 passed, 9 skipped**) + documentation du rejeu
   (`certification/README.md` « Rejeu local sans la suite », `AGENTS.md`,
   `docs/roadmap-certification.md`).
+- **Issue #80 (18 warnings « claims OIDC »)** : familles `acr` (paramètre
+  `acr_values`, OIDCC-3.1.2.1), paramètre `claims` §5.5 (members
+  `userinfo`/`id_token`) et claims des scopes dans l'id_token de
+  `response_type=id_token` (OIDCC-5.4) — assertions renforcées :
+  `checks.check_acr_claim`, `checks.check_scope_claims_in_id_token`,
+  `checks.check_scope_claims_absent_from_id_token`, plus les asserts
+  `name` des modules `claims-essential` ; `claims_parameter_supported=true`
+  au discovery. Rejeu local **164 passed, 9 skipped** (≈ 5 min 40).

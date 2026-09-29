@@ -103,6 +103,8 @@ def authorize_router(
         prompt: str = Query(default=""),
         max_age: str = Query(default=""),
         request_uri: str = Query(default=""),
+        acr_values: str = Query(default=""),
+        claims: str = Query(default=""),
     ) -> RedirectResponse | HTMLResponse:
         params: dict[str, str] = {
             "response_type": response_type,
@@ -117,6 +119,8 @@ def authorize_router(
             "prompt": prompt,
             "max_age": max_age,
             "request_uri": request_uri,
+            "acr_values": acr_values,
+            "claims": claims,
         }
         return await _handle_authorize(context.request, params, context.user)
 
@@ -196,6 +200,8 @@ def authorize_router(
                 response_mode=params.get("response_mode", ""),
                 prompt=params.get("prompt", ""),
                 max_age=parse_max_age(params.get("max_age", "")),
+                acr_values=params.get("acr_values", ""),
+                claims=params.get("claims", ""),
             )
 
         pre = await _pre_execution_response(
@@ -261,6 +267,8 @@ async def _with_authenticated_subject(
         max_age=auth_request.max_age,
         session_id=await session_sid(request),
         auth_time=await session_auth_time(request),
+        acr_values=auth_request.acr_values,
+        claims=auth_request.claims,
     )
 
 
