@@ -16,6 +16,20 @@ uv run python -m pytest -p no:cacheprovider -q   # tests + couverture >= 80 % (9
 - SonarCloud analyse le diff de chaque PR : **aucune nouvelle issue acceptée** (DoD).
 - Windows/PowerShell : pas de heredoc shell ; utiliser `--body-file` pour les loads dans gh.
 
+## Rejeu local de la certification OIDC (tests `conformance`)
+
+```bash
+uv run python -m pytest -m conformance --no-cov -p no:cacheprovider -q
+```
+
+- Exclus du gate : `addopts` porte `-m "not conformance"`, le marker `conformance`
+  ne s'exécute qu'à la demande (le dernier `-m` de la ligne de commande l'emporte).
+- `--no-cov` obligatoire : ce sous-ensemble ne couvre pas le seuil de 80 % (la
+  couverture est mesurée sur la suite complète par `ci.yml`).
+- Traçabilité des checks extraits de la suite `release-v5.2.4` :
+  `tests/conformance/TRACEABILITY.md` ; job dédié
+  `.github/workflows/conformance-tests.yml` (`workflow_dispatch` + nightly).
+
 ## Complexité cognitive (SonarCloud S3776) — piège récurrent
 
 Le linter SonarCompute Python `python:S3776` compte la complexité cognitive de chaque

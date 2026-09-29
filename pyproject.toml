@@ -108,8 +108,14 @@ disallow_untyped_defs = false
 # pytest + couverture
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
-addopts = "-q --cov=puridentityserver --cov=puridentityprotocol --cov=puridentityadmin --cov=puridentityfull --cov-report=term-missing"
+# `-m "not conformance"` exclut le rejeu local de la certification OIDC du gate
+# : les tests marqués `conformance` ne s'exécutent qu'à la demande (`pytest -m
+# conformance`, écrase l'addopts car le dernier `-m` l'emporte).
+addopts = "-q --cov=puridentityserver --cov=puridentityprotocol --cov=puridentityadmin --cov=puridentityfull --cov-report=term-missing -m \"not conformance\""
 testpaths = ["tests"]
+markers = [
+    "conformance: rejeu local des checks de la suite de certification OIDC officielle",
+]
 
 [tool.coverage.run]
 source = [
