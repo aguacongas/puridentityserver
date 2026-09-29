@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from pydantic import BaseModel, ConfigDict
 
 from puridentityserver.application.authorize import (
     AuthorizeError,
@@ -53,6 +54,34 @@ def _authorize_context(request: Request, user: CurrentUserOptional = None) -> _A
     return _AuthorizeContext(request=request, user=user)
 
 
+class AuthorizeQueryParams(BaseModel):
+    """Query parameters de ``GET /authorize`` (RFC 6749 §4.1, OIDC Core 1.0 §3.1.2.1).
+
+    Regroupés en modèle Pydantic injecté comme dépendance ``Query()`` : la
+    route ne porte plus que ce modèle et son contexte (S107), chaque champ
+    restant un query parameter distinct dans l'OpenAPI. Les paramètres
+    inconnus sont ignorés (RFC 6749 §3.1 : « no constraints ») — des
+    propriétés non standard ne doivent pas produire d'erreur 422.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    response_type: str = ""
+    client_id: str = ""
+    redirect_uri: str = ""
+    scope: str = ""
+    state: str = ""
+    nonce: str = ""
+    code_challenge: str = ""
+    code_challenge_method: str = "S256"
+    response_mode: str = ""
+    prompt: str = ""
+    max_age: str = ""
+    request_uri: str = ""
+    acr_values: str = ""
+    claims: str = ""
+
+
 def authorize_router(
     usecase: AuthorizeUseCase,
     par_usecase: PushedAuthorizationUseCase | None = None,
@@ -91,38 +120,9 @@ def authorize_router(
     )
     async def authorize(
         context: Annotated[_AuthorizeContext, Depends(_authorize_context)],
-        response_type: str = Query(default=""),
-        client_id: str = Query(default=""),
-        redirect_uri: str = Query(default=""),
-        scope: str = Query(default=""),
-        state: str = Query(default=""),
-        nonce: str = Query(default=""),
-        code_challenge: str = Query(default=""),
-        code_challenge_method: str = Query(default="S256"),
-        response_mode: str = Query(default=""),
-        prompt: str = Query(default=""),
-        max_age: str = Query(default=""),
-        request_uri: str = Query(default=""),
-        acr_values: str = Query(default=""),
-        claims: str = Query(default=""),
+        query: Annotated[AuthorizeQueryParams, Query()],
     ) -> RedirectResponse | HTMLResponse:
-        params: dict[str, str] = {
-            "response_type": response_type,
-            "client_id": client_id,
-            "redirect_uri": redirect_uri,
-            "scope": scope,
-            "state": state,
-            "nonce": nonce,
-            "code_challenge": code_challenge,
-            "code_challenge_method": code_challenge_method,
-            "response_mode": response_mode,
-            "prompt": prompt,
-            "max_age": max_age,
-            "request_uri": request_uri,
-            "acr_values": acr_values,
-            "claims": claims,
-        }
-        return await _handle_authorize(context.request, params, context.user)
+        return await _handle_authorize(context.request, query.model_dump(), context.user)
 
     @router.post(
         "/authorize",

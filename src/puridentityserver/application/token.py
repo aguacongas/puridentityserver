@@ -556,6 +556,15 @@ class TokenUseCase:
         if isinstance(material, TokenError):
             return material
         id_token_algorithm, shared_secret = material
+        additional: dict[str, object] = {}
+        if acr:
+            additional["acr"] = acr
+        if claims_request is not None:
+            additional.update(
+                await resolve_requested_claims(
+                    claims_request.id_token, subject, self._claims_provider
+                )
+            )
         id_token = await self._token_manager.create_id_token(
             algorithm=id_token_algorithm,
             issuer=self._config.issuer,
@@ -567,14 +576,7 @@ class TokenUseCase:
             issued_at=issued_at,
             auth_time=auth_time,
             shared_secret=shared_secret,
-            acr=acr,
-            additional_claims=(
-                await resolve_requested_claims(
-                    claims_request.id_token, subject, self._claims_provider
-                )
-                if claims_request is not None
-                else None
-            ),
+            additional_claims=additional or None,
         )
         try:
             id_token = await encrypt_id_token_for_client(
