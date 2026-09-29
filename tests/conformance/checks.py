@@ -9,6 +9,8 @@ rester traçable d'un test Python à l'autre.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import time
 from typing import Any
@@ -106,10 +108,67 @@ def expect_callback_success(result: FlowResult, state: str) -> None:
     assert result.error == "", (
         f"aucune erreur d'autorisation attendue : {result.error!r} ({result.hops})"
     )
-    assert result.query.get("state") == state, (
-        f"state renvoyé ({result.query.get('state')!r}) != state envoyé ({state!r})"
+    assert result.returned_state == state, (
+        f"state renvoyé ({result.returned_state!r}) != state envoyé ({state!r})"
     )
     assert result.code, f"code d'autorisation absent du callback : {result.callback_url!r}"
+
+
+def expect_implicit_callback(result: FlowResult, state: str, *, with_token: bool) -> None:
+    """Callback heureux des flux implicites (``OIDCCServerTest``, PR 3).
+
+    ``response_type=id_token`` / ``id_token token`` : tout arrive en **fragment**
+    (RFC 6749 §4.2.2.1), sans code — ``CheckMatchingCallbackParameters`` +
+    ``CheckStateInAuthorizationResponse`` + ``ExtractIdTokenFromAuthorizationResponse``,
+    l'id_token y compris, et ``ExtractAccessTokenFromTokenResponse`` injecté par
+    le fragment quand ``token`` est demandé (``with_token``).
+    """
+    assert result.error == "", (
+        f"aucune erreur d'autorisation attendue : {result.error!r} ({result.hops})"
+    )
+    assert result.returned_state == state, (
+        f"state renvoyé ({result.returned_state!r}) != state envoyé ({state!r})"
+    )
+    assert not result.code, f"aucun code en flux implicite : {result.callback_url!r}"
+    assert result.id_token, f"id_token absent du fragment : {result.callback_url!r}"
+    if with_token:
+        assert result.access_token, f"access_token absent du fragment : {result.callback_url!r}"
+    else:
+        assert not result.access_token, (
+            f"access_token ne doit pas être émis : {result.callback_url!r}"
+        )
+
+
+def expect_hybrid_callback(
+    result: FlowResult, state: str, *, with_id_token: bool, with_token: bool
+) -> None:
+    """Callback heureux des flux hybrides (``OIDCCServerTest``, PR 3).
+
+    ``response_type=code id_token`` / ``code token`` / ``code id_token token`` :
+    ``response_mode`` par défaut est le fragment (OIDC Core 1.0 §3.3.2.1) : le
+    code, l'id_token et l'access_token éventuels y figurent —
+    ``CheckMatchingCallbackParameters``, ``CheckStateInAuthorizationResponse``,
+    ``ExtractAuthorizationCodeFromAuthorizationResponse``,
+    ``ExtractIdTokenFromAuthorizationResponse`` et
+    ``ExtractAccessTokenFromAuthorizationResponse``.
+    """
+    assert result.error == "", (
+        f"aucune erreur d'autorisation attendue : {result.error!r} ({result.hops})"
+    )
+    assert result.returned_state == state, (
+        f"state renvoyé ({result.returned_state!r}) != state envoyé ({state!r})"
+    )
+    assert result.code, f"code absent du fragment : {result.callback_url!r}"
+    if with_id_token:
+        assert result.id_token, f"id_token absent du fragment : {result.callback_url!r}"
+    else:
+        assert not result.id_token, f"id_token ne doit pas être émis : {result.callback_url!r}"
+    if with_token:
+        assert result.access_token, f"access_token absent du fragment : {result.callback_url!r}"
+    else:
+        assert not result.access_token, (
+            f"access_token ne doit pas être émis : {result.callback_url!r}"
+        )
 
 
 def expect_authorization_error(
@@ -131,8 +190,8 @@ def expect_authorization_error(
         f"error={result.error!r} hors {allowed_errors} (OIDC Core 1.0 §3.1.2.6)"
     )
     assert not result.code, f"aucun code ne doit accompagner l'erreur : {result.callback_url!r}"
-    assert result.query.get("state") == state, (
-        f"state renvoyé ({result.query.get('state')!r}) != state envoyé ({state!r})"
+    assert result.returned_state == state, (
+        f"state renvoyé ({result.returned_state!r}) != state envoyé ({state!r})"
     )
 
 
@@ -210,6 +269,39 @@ def check_authorization_code_quality(code: str) -> None:
     assert len(code) >= _MIN_CODE_LENGTH, f"code trop court : {len(code)} < {_MIN_CODE_LENGTH}"
     assert len(set(code)) >= _MIN_CODE_LENGTH // 2, (
         f"entropie trop faible pour un code de {len(code)} caractères : {code[:8]!r}…"
+    )
+
+
+def _left_half_hash(value: str) -> str:
+    """Left-most half of the hash de ``value`` en base64url sans padding (RS256 → SHA-256)."""
+    digest = hashlib.sha256(value.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest[: len(digest) // 2]).rstrip(b"=").decode("ascii")
+
+
+def check_at_hash(claims: dict[str, Any], access_token: str) -> None:
+    """``ValidateAtHash`` (``at_hash`` de ``OIDCCServerTest``, flux avec access_token).
+
+    OIDC Core 1.0 §3.3.2.1 : le claim ``at_hash`` est la gauche du hash SHA-256
+    de l'access_token (algorithme de signature RS256), encodée base64url.
+    """
+    assert claims.get("at_hash"), f"at_hash absent : {sorted(claims)}"
+    expected = _left_half_hash(access_token)
+    assert claims["at_hash"] == expected, (
+        f"at_hash={claims['at_hash']!r} != left-half-SHA256(access_token)={expected!r}"
+    )
+
+
+def check_c_hash(claims: dict[str, Any], code: str) -> None:
+    """``ValidateCHash`` (``c_hash`` de ``OIDCCServerTest``, flux hybrides).
+
+    OIDC Core 1.0 §3.3.2.1 : ``c_hash`` = gauche du hash SHA-256 du code
+    d'autorisation (RS256), encodée base64url — obligatoire dès que le code et
+    un id_token sont renvoyés ensemble.
+    """
+    assert claims.get("c_hash"), f"c_hash absent : {sorted(claims)}"
+    expected = _left_half_hash(code)
+    assert claims["c_hash"] == expected, (
+        f"c_hash={claims['c_hash']!r} != left-half-SHA256(code)={expected!r}"
     )
 
 
