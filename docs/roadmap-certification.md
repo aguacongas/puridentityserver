@@ -39,6 +39,7 @@ Ordre d'implémentation conseillé : **#44 → #45 → #46 → #47** (terminés 
 | # | Feature |
 |---|---|
 | [#51](https://github.com/aguacongas/puridentityserver/issues/51) | Automatiser la **suite de certification OIDC officielle** (OpenID Certification / `oidc-certification`) en CI + autoriser le gate |
+| [#69](https://github.com/aguacongas/puridentityserver/issues/69) → [#72](https://github.com/aguacongas/puridentityserver/issues/72) ✅ | **Rejeu local des plans Core** : 173 tests `conformance` (Basic/Implicit/Hybrid) extraits de `release-v5.2.4` + smoke contre un vrai serveur uvicorn (`samples/conformance-smoke/`) — traçabilité `tests/conformance/TRACEABILITY.md`, doc « Rejeu local sans la suite » dans `certification/README.md` ; skips restants suivis par [#76](https://github.com/aguacongas/puridentityserver/issues/76) |
 
 ---
 
