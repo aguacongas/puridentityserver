@@ -197,6 +197,7 @@ class ProtocolDependencies:
             self.readers.identity_resource, self.readers.api_resource
         )
         self.session_management = SessionManagementUseCase()
+        self.claims_provider = UserStoreClaimsProvider(self.readers.user)
 
         self.authorize_usecase = AuthorizeUseCase(
             AuthorizeConfig(
@@ -212,6 +213,8 @@ class ProtocolDependencies:
             self.token_manager,
             self.scope_registry,
             session_management=self.session_management,
+            claims_provider=self.claims_provider,
+            identity_resources=self.readers.identity_resource,
         )
         self.token_usecase = TokenUseCase(
             TokenConfig(
@@ -230,6 +233,7 @@ class ProtocolDependencies:
             stores.device,
             self.scope_registry,
             self.client_assertions,
+            claims_provider=self.claims_provider,
         )
         self.device_usecase = DeviceAuthorizationUseCase(
             DeviceConfig(
@@ -245,7 +249,7 @@ class ProtocolDependencies:
         self.userinfo_usecase = UserInfoUseCase(
             UserInfoConfig(issuer=settings.issuer),
             self.token_manager,
-            UserStoreClaimsProvider(self.readers.user),
+            self.claims_provider,
             stores.revoked,
             self.readers.identity_resource,
         )

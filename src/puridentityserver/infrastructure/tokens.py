@@ -7,6 +7,7 @@ le jeton avec le ``kid`` correspondant (JWS compact, RFC 7519).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import cast
 
 import jwt as pyjwt
@@ -44,6 +45,8 @@ class PyJWTTokenManager:
         c_hash: str = "",
         auth_time: int = 0,
         shared_secret: str = "",
+        acr: str = "",
+        additional_claims: Mapping[str, object] | None = None,
     ) -> str:
         """Construit l'``id_token`` : identité ``sub`` + audience ``client_id``.
 
@@ -55,7 +58,10 @@ class PyJWTTokenManager:
         algorithmes symétriques HS* (OIDC Core 1.0 §3.1.3.7) ; il est
         ignoré pour les familles asymétriques. ``session_id`` reproduit le
         ``sid`` (OIDC Session Management 1.0 §2) dans le claim ``sid``
-        seulement s'il est non vide.
+        seulement s'il est non vide. ``acr`` complète le payload avec le
+        claim ``acr`` seulement s'il est non vide (OIDC Core 1.0 §2).
+        ``additional_claims`` est fusionné sans jamais écraser les claims
+        standards ci-dessous.
         """
         payload: dict[str, object] = {
             "iss": issuer,
@@ -74,6 +80,10 @@ class PyJWTTokenManager:
             payload["c_hash"] = c_hash
         if auth_time:
             payload["auth_time"] = auth_time
+        if acr:
+            payload["acr"] = acr
+        for name, value in (additional_claims or {}).items():
+            payload.setdefault(name, value)
         return await self._sign(algorithm, payload, shared_secret)
 
     async def create_access_token(
@@ -86,11 +96,15 @@ class PyJWTTokenManager:
         expires_at: int,
         issued_at: int,
         scopes: frozenset[Scope],
+        additional_claims: Mapping[str, object] | None = None,
     ) -> str:
         """Construit l'access_token : identité ``sub`` + scopes accordés.
 
         ``aud`` porte le ``client_id`` ou les noms des ressources
         protégées dont des scopes ont été accordés (chaîne ou liste).
+        ``additional_claims`` complète le payload sans jamais écraser les
+        claims standards (ex. le claim ``claims`` portant les noms de
+        claims userinfo demandés, relus par ``/userinfo``).
         """
         payload: dict[str, object] = {
             "iss": issuer,
@@ -100,6 +114,8 @@ class PyJWTTokenManager:
             "iat": issued_at,
             "scope": " ".join(sorted(scope.value for scope in scopes)),
         }
+        for name, value in (additional_claims or {}).items():
+            payload.setdefault(name, value)
         return await self._sign(algorithm, payload)
 
     async def create_logout_token(

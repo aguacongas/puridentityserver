@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 from checks import (
+    check_acr_claim,
     check_at_hash,
     check_authorization_code_quality,
     check_c_hash,
@@ -73,10 +74,13 @@ _PARAMETER_MODULES: tuple[tuple[str, dict[str, str]], ...] = (
     ("oidcc-ui-locales", {"ui_locales": "fr"}),
     ("oidcc-claims-locales", {"claims_locales": "se"}),
     ("oidcc-ensure-request-with-unknown-parameter-succeeds", {"extra": "foobar"}),
-    ("oidcc-ensure-request-with-acr-values-succeeds", {"acr_values": "1"}),
+    ("oidcc-ensure-request-with-acr-values-succeeds", {"acr_values": "1 2", "scope": "openid"}),
     (
         "oidcc-claims-essential",
-        {"claims": json.dumps({"userinfo": {"name": {"essential": True}}})},
+        {
+            "claims": json.dumps({"userinfo": {"name": {"essential": True}}}),
+            "scope": "openid",
+        },
     ),
 )
 
@@ -246,9 +250,32 @@ def test_hybrid_authorize_parameter_is_accepted(
     Même observable que Basic/Implicite mais **en fragment** : le serveur
     accepte le paramètre et le flux se termine sur un callback valide puis un
     code échangeable.
+
+    ``acr_values`` → ``ValidateIdTokenACRClaimAgainstAcrValuesRequest`` sur
+    l'id_token du fragment **et** celui du token endpoint (2 WARNING pour
+    ``code id_token token``). ``claims`` → member ``userinfo`` (le
+    ``response_type`` n'est jamais un id_token pur) : ``name`` exigé par
+    ``EnsureUserInfoContainsName``, interdit dans les deux id_tokens par
+    ``EnsureIdTokenDoesNotContainName``.
     """
     outcome = _hybrid_flow(harness, response_type, **extra)
     assert outcome.claims["sub"], f"sub absent pour {alias}"
+    if "acr_values" in extra:
+        if "id_token" in response_type.split():
+            check_acr_claim(outcome.claims, extra["acr_values"])
+        check_acr_claim(ConformanceHarness.id_token_claims(outcome.payload), extra["acr_values"])
+    if alias == "oidcc-claims-essential":
+        userinfo = check_userinfo_response(
+            harness.userinfo("get", outcome.access_token), str(outcome.claims["sub"])
+        )
+        assert "name" in userinfo, "EnsureUserInfoContainsName : name absent du userinfo"
+        assert "name" not in outcome.claims, (
+            "EnsureIdTokenDoesNotContainName : name ne doit pas figurer dans l'id_token (fragment)"
+        )
+        endpoint_claims = ConformanceHarness.id_token_claims(outcome.payload)
+        assert "name" not in endpoint_claims, (
+            "EnsureIdTokenDoesNotContainName : name ne doit pas figurer dans l'id_token (/token)"
+        )
 
 
 @pytest.mark.conformance

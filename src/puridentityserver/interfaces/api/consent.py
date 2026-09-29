@@ -97,6 +97,8 @@ def _consent_params(request: AuthorizeRequest) -> dict[str, str]:
         "code_challenge": request.code_challenge,
         "code_challenge_method": request.code_challenge_method,
         "response_mode": request.response_mode,
+        "acr_values": request.acr_values,
+        "claims": request.claims,
     }
 
 
@@ -130,6 +132,8 @@ def consent_router(
         code_challenge: Annotated[str, Query()] = "",
         code_challenge_method: Annotated[str, Query()] = "S256",
         response_mode: Annotated[str, Query()] = "",
+        acr_values: Annotated[str, Query()] = "",
+        claims: Annotated[str, Query()] = "",
         user: CurrentUserOptional = None,
     ) -> RedirectResponse | HTMLResponse | str:
         request = AuthorizeRequest(
@@ -142,6 +146,8 @@ def consent_router(
             code_challenge=code_challenge,
             code_challenge_method=code_challenge_method,
             response_mode=response_mode,
+            acr_values=acr_values,
+            claims=claims,
         )
         if user is None:
             return RedirectResponse(f"/login?next={quote(consent_url(request))}", status_code=302)
@@ -166,6 +172,8 @@ def consent_router(
         code_challenge: Annotated[str, Form()] = "",
         code_challenge_method: Annotated[str, Form()] = "S256",
         response_mode: Annotated[str, Form()] = "",
+        acr_values: Annotated[str, Form()] = "",
+        claims: Annotated[str, Form()] = "",
         action: Annotated[str, Form()] = "authorize",
         user: CurrentUserOptional = None,
     ) -> RedirectResponse | HTMLResponse:
@@ -179,6 +187,8 @@ def consent_router(
             code_challenge=code_challenge,
             code_challenge_method=code_challenge_method,
             response_mode=response_mode,
+            acr_values=acr_values,
+            claims=claims,
         )
         if user is None:
             return RedirectResponse(f"/login?next={quote(consent_url(request))}", status_code=302)
@@ -211,6 +221,8 @@ def consent_router(
                 code_challenge=request.code_challenge,
                 code_challenge_method=request.code_challenge_method,
                 response_mode=request.response_mode,
+                acr_values=request.acr_values,
+                claims=request.claims,
             ),
         )
 
@@ -247,6 +259,8 @@ async def _handle_consent(
         code_challenge=request.code_challenge,
         code_challenge_method=request.code_challenge_method,
         response_mode=request.response_mode,
+        acr_values=request.acr_values,
+        claims=request.claims,
     )
     if not await consent_usecase.is_required(validated.client, subject, _requested_scopes(request)):
         return await _execution_redirect(authorize_usecase, request)

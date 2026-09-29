@@ -145,6 +145,8 @@ class PushedAuthorizationUseCase:
             response_mode=params.get("response_mode", "query"),
             prompt=params.get("prompt", ""),
             max_age=parse_max_age(params.get("max_age", "")),
+            acr_values=params.get("acr_values", ""),
+            claims=params.get("claims", ""),
         )
 
         validated = await validate_authorization_request(
@@ -230,4 +232,6 @@ class PushedAuthorizationUseCase:
             response_mode=pushed.params.get("response_mode", "query"),
             prompt=pushed.params.get("prompt", ""),
             max_age=parse_max_age(pushed.params.get("max_age", "")),
+            acr_values=pushed.params.get("acr_values", ""),
+            claims=pushed.params.get("claims", ""),
         )

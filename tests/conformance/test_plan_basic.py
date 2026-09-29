@@ -19,8 +19,10 @@ import time
 
 import pytest
 from checks import (
+    check_acr_claim,
     check_authorization_code_quality,
     check_refreshed_id_token_claims,
+    check_scope_claims_absent_from_id_token,
     check_scope_claims_returned,
     check_second_id_token_consistent,
     check_token_endpoint_success,
@@ -48,6 +50,9 @@ _PROMPT_NONE_ERRORS = (
 
 # Modules dont le seul check est « ce paramètre ne casse pas le flux happy » :
 # le serveur doit l'accepter ou l'ignorer (RFC 6749 §3.1, OIDC Core 1.0 §3.1.2.1).
+# La suite n'annonce aucun ``acr_values_supported`` ni ``claims`` supplémentaire
+# : ``acr_values=1 2`` et ``scope=openid`` seul sont repris des logs de
+# certification (OIDCC-3.1.2.1 / OIDCC-5.5).
 _PARAMETER_MODULES: tuple[tuple[str, dict[str, str]], ...] = (
     ("oidcc-display-page", {"display": "page"}),
     ("oidcc-display-popup", {"display": "popup"}),
@@ -55,10 +60,13 @@ _PARAMETER_MODULES: tuple[tuple[str, dict[str, str]], ...] = (
     ("oidcc-ui-locales", {"ui_locales": "fr"}),
     ("oidcc-claims-locales", {"claims_locales": "se"}),
     ("oidcc-ensure-request-with-unknown-parameter-succeeds", {"extra": "foobar"}),
-    ("oidcc-ensure-request-with-acr-values-succeeds", {"acr_values": "1"}),
+    ("oidcc-ensure-request-with-acr-values-succeeds", {"acr_values": "1 2", "scope": "openid"}),
     (
         "oidcc-claims-essential",
-        {"claims": json.dumps({"userinfo": {"name": {"essential": True}}})},
+        {
+            "claims": json.dumps({"userinfo": {"name": {"essential": True}}}),
+            "scope": "openid",
+        },
     ),
 )
 
@@ -135,11 +143,28 @@ def test_authorize_parameter_is_accepted(
     ``oidcc-display-page``, ``oidcc-display-popup``, ``oidcc-login-hint``,
     ``oidcc-ui-locales``, ``oidcc-claims-locales``,
     ``oidcc-ensure-request-with-unknown-parameter-succeeds``,
-    ``oidcc-ensure-request-with-acr-values-succeeds``, ``oidcc-claims-essential``.
+    ``oidcc-ensure-request-with-acr-values-succeeds``,
+    ``oidcc-claims-essential``.
+
+    ``acr_values`` → ``ValidateIdTokenACRClaimAgainstAcrValuesRequest`` :
+    l'id_token du token endpoint porte un ``acr`` ∈ valeurs demandées.
+    ``claims`` → ``EnsureUserInfoContainsName`` (WARNING de la suite) :
+    le member ``userinfo`` de ``claims`` élargit le filtrage de ``/userinfo`` ;
+    ``EnsureIdTokenDoesNotContainName`` interdit ``name`` dans l'id_token.
     """
     tokens, claims = _happy_flow(harness, **extra)
     assert tokens["id_token"], "id_token absent"
     assert claims["sub"], f"sub absent pour {alias}"
+    if "acr_values" in extra:
+        check_acr_claim(claims, extra["acr_values"])
+    if alias == "oidcc-claims-essential":
+        userinfo = check_userinfo_response(
+            harness.userinfo("get", str(tokens["access_token"])), str(claims["sub"])
+        )
+        assert "name" in userinfo, "EnsureUserInfoContainsName : name absent du userinfo"
+        assert "name" not in claims, (
+            "EnsureIdTokenDoesNotContainName : name ne doit pas figurer dans l'id_token"
+        )
 
 
 @pytest.mark.conformance
@@ -153,12 +178,16 @@ def test_scope_claims_returned_in_userinfo(
 
     ``CallUserInfoEndpoint`` + ``ValidateUserInfoStandardClaims`` +
     ``VerifyScopesReturnedInUserInfoClaims`` (WARNING dans la suite, assertion
-    ici : le rendu effectif doit être prouvé au rejeu).
+    ici : le rendu effectif doit être prouvé au rejeu). Pour ``oidcc-scope-email``,
+    ``OIDCCScopeEmail`` ajoute ``EnsureIdTokenDoesNotContainEmailForScopeEmail`` :
+    avec un code, l'email va au userinfo, jamais dans l'id_token (OIDCC-5.4).
     """
     tokens, claims = _happy_flow(harness, scope=scope)
     response = harness.userinfo("get", str(tokens["access_token"]))
     userinfo = check_userinfo_response(response, str(claims["sub"]))
     check_scope_claims_returned(userinfo, scope)
+    if alias == "oidcc-scope-email":
+        check_scope_claims_absent_from_id_token(claims, "email")
 
 
 @pytest.mark.conformance

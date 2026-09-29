@@ -21,7 +21,9 @@ from typing import Any
 
 import pytest
 from checks import (
+    check_acr_claim,
     check_at_hash,
+    check_scope_claims_in_id_token,
     check_scope_claims_returned,
     check_second_auth_time_is_later,
     check_second_id_token_consistent,
@@ -59,6 +61,9 @@ _PROMPT_NONE_ERRORS = (
 )
 
 # Modules dont le seul check FAILURE est « ce paramètre ne casse pas le flux ».
+# ``acr_values=1 2`` + ``scope=openid`` sont repris des logs de certification
+# (OIDCC-3.1.2.1 / OIDCC-5.5) ; le member ``claims`` passe en ``id_token``
+# quand ``response_type`` vaut exactement ``id_token`` (OIDCCClaimsEssential).
 _PARAMETER_MODULES: tuple[tuple[str, dict[str, str]], ...] = (
     ("oidcc-display-page", {"display": "page"}),
     ("oidcc-display-popup", {"display": "popup"}),
@@ -66,10 +71,13 @@ _PARAMETER_MODULES: tuple[tuple[str, dict[str, str]], ...] = (
     ("oidcc-ui-locales", {"ui_locales": "fr"}),
     ("oidcc-claims-locales", {"claims_locales": "se"}),
     ("oidcc-ensure-request-with-unknown-parameter-succeeds", {"extra": "foobar"}),
-    ("oidcc-ensure-request-with-acr-values-succeeds", {"acr_values": "1"}),
+    ("oidcc-ensure-request-with-acr-values-succeeds", {"acr_values": "1 2", "scope": "openid"}),
     (
         "oidcc-claims-essential",
-        {"claims": json.dumps({"userinfo": {"name": {"essential": True}}})},
+        {
+            "claims": json.dumps({"userinfo": {"name": {"essential": True}}}),
+            "scope": "openid",
+        },
     ),
 )
 
@@ -178,9 +186,31 @@ def test_implicit_authorize_parameter_is_accepted(
     ``oidcc-claims-locales``, ``oidcc-ensure-request-with-unknown-parameter-succeeds``,
     ``oidcc-ensure-request-with-acr-values-succeeds``, ``oidcc-claims-essential`` :
     le serveur accepte le paramètre et le flux se termine sur un callback valide.
+
+    ``acr_values`` → ``ValidateIdTokenACRClaimAgainstAcrValuesRequest`` (id_token
+    du fragment). ``claims`` → member ``id_token`` pour ``response_type=id_token``
+    (``EnsureIdTokenContainsName``), member ``userinfo`` sinon
+    (``EnsureUserInfoContainsName`` + ``EnsureIdTokenDoesNotContainName``).
     """
-    _params_used, _result, claims = _implicit_flow(harness, response_type, **extra)
+    extra = dict(extra)
+    if alias == "oidcc-claims-essential":
+        member = "id_token" if response_type == "id_token" else "userinfo"
+        extra["claims"] = json.dumps({member: {"name": {"essential": True}}})
+    _params_used, result, claims = _implicit_flow(harness, response_type, **extra)
     assert claims["sub"], f"sub absent pour {alias}"
+    if "acr_values" in extra:
+        check_acr_claim(claims, extra["acr_values"])
+    if alias == "oidcc-claims-essential":
+        if response_type == "id_token":
+            assert "name" in claims, "EnsureIdTokenContainsName : name absent de l'id_token"
+        else:
+            userinfo = check_userinfo_response(
+                harness.userinfo("get", result.access_token), str(claims["sub"])
+            )
+            assert "name" in userinfo, "EnsureUserInfoContainsName : name absent du userinfo"
+            assert "name" not in claims, (
+                "EnsureIdTokenDoesNotContainName : name ne doit pas figurer dans l'id_token"
+            )
 
 
 @pytest.mark.conformance
@@ -197,11 +227,13 @@ def test_implicit_scope_claims_returned(
     ``response_type`` contenant ``code`` ou ``token`` → ``CallUserInfoEndpoint``
     + ``ValidateUserInfoStandardClaims`` + ``VerifyScopesReturnedInUserInfoClaims`` ;
     pour ``response_type=id_token`` seul → ``VerifyScopesReturnedInAuthorizationEndpointIdToken``
-    en **WARNING** — le rejeu se limite alors au callback + id_token valides.
+    en **WARNING** de la suite, assertion ici : les claims des scopes doivent
+    figurer dans l'id_token du fragment (OIDC Core 1.0 §5.4, sans UserInfo).
     """
     _params_used, result, claims = _implicit_flow(harness, response_type, scope=scope)
     if "token" not in response_type.split():
         assert claims["sub"], f"sub absent pour {alias}"
+        check_scope_claims_in_id_token(claims, scope)
         return
     response = harness.userinfo("get", result.access_token)
     userinfo = check_userinfo_response(response, str(claims["sub"]))
@@ -332,11 +364,16 @@ def test_implicit_alternate_happy_flow(harness: ConformanceHarness, response_typ
     doit rien changer — avec ``token``, les checks ``oidcc-scope-email``
     (userinfo + ``EnsureIdTokenDoesNotContainEmailForScopeEmail``) ; pour
     ``response_type=id_token`` seul, ``VerifyScopesReturnedInAuthorizationEndpointIdToken``
-    reste au niveau WARNING de la suite.
+    exige l'email dans l'id_token (OIDC Core 1.0 §5.4 : sans access_token,
+    ``/userinfo`` n'est pas joignable).
     """
     _params_used, result, claims = _implicit_flow(harness, response_type, scope="email openid")
     if "token" not in response_type.split():
-        assert "email" not in claims, "email ne doit pas figurer dans l'id_token (OIDC-5.1)"
+        assert "email" in claims, (
+            "VerifyScopesReturnedInAuthorizationEndpointIdToken : email absent de l'id_token "
+            f"(claims : {sorted(claims)})"
+        )
+        assert "email_verified" in claims, f"email_verified absent de l'id_token : {sorted(claims)}"
         return
     userinfo = check_userinfo_response(
         harness.userinfo("get", result.access_token), str(claims["sub"])
