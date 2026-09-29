@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import html
 import time
+from dataclasses import dataclass
+from typing import Annotated
 from urllib.parse import parse_qs, quote
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from puridentityserver.application.authorize import (
@@ -31,6 +33,24 @@ from puridentityserver.identity.config import (
 from puridentityserver.interfaces.api.authorize_error import error_response
 from puridentityserver.interfaces.api.consent import consent_url
 from puridentityserver.interfaces.repositories.readers import ClientReader
+
+
+@dataclass
+class _AuthorizeContext:
+    """Contexte de ``GET /authorize`` : requête HTTP et utilisateur courant.
+
+    Regroupé en dépendance : la route ne porte plus que ce contexte en plus
+    de ses query parameters (S107), l'utilisateur étant déjà résolu par la
+    chaîne de dépendances FastAPI Users.
+    """
+
+    request: Request
+    user: CurrentUserOptional = None
+
+
+def _authorize_context(request: Request, user: CurrentUserOptional = None) -> _AuthorizeContext:
+    """Résout le couple (requête, utilisateur) injecté dans la route GET."""
+    return _AuthorizeContext(request=request, user=user)
 
 
 def authorize_router(
@@ -70,7 +90,7 @@ def authorize_router(
         },
     )
     async def authorize(
-        request: Request,
+        context: Annotated[_AuthorizeContext, Depends(_authorize_context)],
         response_type: str = Query(default=""),
         client_id: str = Query(default=""),
         redirect_uri: str = Query(default=""),
@@ -83,7 +103,6 @@ def authorize_router(
         prompt: str = Query(default=""),
         max_age: str = Query(default=""),
         request_uri: str = Query(default=""),
-        user: CurrentUserOptional = None,
     ) -> RedirectResponse | HTMLResponse:
         params: dict[str, str] = {
             "response_type": response_type,
@@ -99,7 +118,7 @@ def authorize_router(
             "max_age": max_age,
             "request_uri": request_uri,
         }
-        return await _handle_authorize(request, params, user)
+        return await _handle_authorize(context.request, params, context.user)
 
     @router.post(
         "/authorize",
@@ -287,7 +306,7 @@ async def _authentication_gate(
     if user is not None and await _reauthentication_required(auth_request, request, base_url):
         if "none" in auth_request.prompt.split():
             return await _login_or_error(auth_request, request, client_repository, base_url)
-        return _login_redirect(auth_request, request, base_url)
+        return _login_redirect(request, base_url)
     if user is None and (require_login or "login" in auth_request.prompt.split()):
         return await _login_or_error(auth_request, request, client_repository, base_url)
     return None
@@ -321,10 +340,8 @@ async def _reauthentication_required(
     return False
 
 
-def _login_redirect(
-    auth_request: AuthorizeRequest, request: Request, base_url: str
-) -> RedirectResponse:
-    """Redirige vers ``/login`` en conservant la demande d'autorisation."""
+def _login_redirect(request: Request, base_url: str) -> RedirectResponse:
+    """Redirige vers ``/login`` en portant l'URL d'autorisation complète en ``next``."""
     return RedirectResponse(
         f"/login?next={quote(_authorize_url_from_base(base_url, request))}",
         status_code=302,
@@ -367,7 +384,7 @@ async def _login_or_error(
             response_mode=validated.response_mode if validated is not None else ResponseMode.QUERY,
         )
         return error_response(error)
-    return _login_redirect(auth_request, http_request, base_url)
+    return _login_redirect(http_request, base_url)
 
 
 def _authorize_url_from_base(base_url: str, http_request: Request) -> str:
