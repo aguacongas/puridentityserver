@@ -3,6 +3,8 @@ name: Rejeu certification OIDC (tests conformance)
 # Rejoue localement les checks de la suite officielle openid/conformance-suite
 # (tests marqués `conformance`, exclus du gate `ci.yml` par `-m "not conformance"`).
 # Déclenché sur chaque PR vers main, à la demande (workflow_dispatch) et chaque nuit.
+# Le détail du rejeu est publié dans la PR (commentaire unique mis à jour et
+# résumé du workflow), sur le modèle du Quality Gate SonarCloud.
 on:
   pull_request:
     branches: ["main"]
@@ -12,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   conformance:
@@ -35,8 +38,41 @@ jobs:
       # `--no-cov` : le sous-ensemble conformance ne couvre pas le seuil de
       # 80 % du gate (la couverture est mesurée par `ci.yml` sur la suite
       # complète). Pas de `-q` : le résumé `N passed, M deselected` est la
-      # preuve visible que les checks ont bien été rejoués.
+      # preuve visible que les checks ont bien été rejoués. `--junitxml`
+      # produit le détail par check publié plus bas dans la PR.
       - name: Tests conformance
         run: >-
           uv run --no-sync --no-build --locked pytest -m conformance
-          --no-cov -p no:cacheprovider
+          --no-cov -p no:cacheprovider --junitxml=junit-conformance.xml
+
+      # `if: always()` : le rapport est publié même quand un check échoue —
+      # c'est précisément ce qu'il faut voir sans ouvrir les logs.
+      - name: Rapport du rejeu
+        if: always()
+        run: >-
+          uv run --no-sync --no-build --locked python
+          scripts/conformance_report.py junit-conformance.xml
+          --markdown conformance-report.md
+
+      # Commentaire unique de la PR (créé puis mis à jour à chaque run) :
+      # `pull-requests: write` au niveau workflow, `continue-on-error` pour
+      # les PRs de fork où le token reste en lecture seule.
+      - name: Publier le rapport dans la PR
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          marker='<!-- conformance-report -->'
+          comment_id=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq "[.[] | select(.body | startswith(\"$marker\")) | .id][0] // empty")
+          if [ -n "$comment_id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$comment_id" \
+              -F body=@conformance-report.md > /dev/null
+          else
+            gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" \
+              -F body=@conformance-report.md > /dev/null
+          fi
+          echo "Rapport publié dans la PR #$PR_NUMBER (commentaire $comment_id)" >> "$GITHUB_STEP_SUMMARY"
