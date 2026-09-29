@@ -34,3 +34,6 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+# Rapports du rejeu conformance (generes par le workflow et en local)
+junit-conformance.xml
+conformance-report.md

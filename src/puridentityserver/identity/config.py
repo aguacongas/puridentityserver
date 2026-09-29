@@ -24,6 +24,7 @@ partagée ``STORAGE_DSN``).
 
 from __future__ import annotations
 
+import hashlib
 import html
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
@@ -330,6 +331,38 @@ async def session_auth_time(request: Request) -> int:
     return int(iat) if isinstance(iat, int) else 0
 
 
+def reauth_context(url: str) -> str:
+    """Empreinte de l'URL de retour d'un formulaire de login (``next``).
+
+    Posée dans le claim ``reauth`` de la session à chaque connexion, elle
+    permet à ``/authorize`` de savoir si la session courante résulte d'une
+    connexion **déclenchée par cette demande** : la condition pour satisfaire
+    ``prompt=login`` / ``max_age`` (OIDC Core 1.0 §3.1.2.1) sans boucle de
+    reconnexion — un login avec ``next`` = X valide toujours la requête
+    reprenant exactement X.
+    """
+    return hashlib.sha256(url.encode("utf-8")).hexdigest()[:32]
+
+
+async def session_reauth(request: Request) -> str:
+    """Retourne l'empreinte ``reauth`` de la session, ou ``""`` si absente.
+
+    Absente pour une session antérieure au dernier ``POST /login`` (cookie
+    posé par ``/auth/cookie/login`` par exemple) : ``prompt=login`` devra
+    alors imposer une nouvelle connexion.
+    """
+    if _session_signer is None:
+        return ""
+    token = request.cookies.get(_SESSION_COOKIE_NAME)
+    if not token:
+        return ""
+    data = await _session_signer.read(token)
+    if data is None:
+        return ""
+    reauth = data.get("reauth")
+    return reauth if isinstance(reauth, str) else ""
+
+
 def init_users_db() -> None:
     """Initialise le moteur (SQLite en mémoire partagée) et le session factory."""
     global _session_factory, _engine
@@ -481,7 +514,9 @@ def login_router(
             )
 
             strategy = _session_strategy(lifetime_seconds=lifetime)
-            token = await strategy.write_token(user, sid=uuid.uuid4().hex)
+            token = await strategy.write_token(
+                user, sid=uuid.uuid4().hex, reauth=reauth_context(next_url)
+            )
             login_response = await CookieTransport(
                 cookie_secure=False, cookie_max_age=lifetime
             ).get_login_response(token)

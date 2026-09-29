@@ -32,9 +32,9 @@ from puridentityserver.application.authorize import (
     validate_authorization_request,
 )
 from puridentityserver.application.consent import ConsentUseCase
-from puridentityserver.domain.authorization import ResponseMode, Scope
+from puridentityserver.domain.authorization import Scope
 from puridentityserver.identity.config import CurrentUserOptional
-from puridentityserver.interfaces.api.error_description import ascii_error_description
+from puridentityserver.interfaces.api.authorize_error import error_response
 from puridentityserver.interfaces.repositories.readers import ClientReader
 
 _SCOPE_LABELS = {
@@ -131,7 +131,7 @@ def consent_router(
         code_challenge_method: Annotated[str, Query()] = "S256",
         response_mode: Annotated[str, Query()] = "",
         user: CurrentUserOptional = None,
-    ) -> RedirectResponse | str:
+    ) -> RedirectResponse | HTMLResponse | str:
         request = AuthorizeRequest(
             response_type=response_type,
             client_id=client_id,
@@ -168,7 +168,7 @@ def consent_router(
         response_mode: Annotated[str, Form()] = "",
         action: Annotated[str, Form()] = "authorize",
         user: CurrentUserOptional = None,
-    ) -> RedirectResponse:
+    ) -> RedirectResponse | HTMLResponse:
         request = AuthorizeRequest(
             response_type=response_type,
             client_id=client_id,
@@ -186,9 +186,9 @@ def consent_router(
             raise HTTPException(status_code=400, detail="redirect_uri requis")
         validated = await validate_authorization_request(request, client_repository)
         if isinstance(validated, AuthorizeError):
-            return _error_redirect(validated)
+            return error_response(validated)
         if action == "deny":
-            return _error_redirect(
+            return error_response(
                 AuthorizeError(
                     error="access_denied",
                     error_description="L'utilisateur a refusé l'accès",
@@ -223,7 +223,7 @@ async def _handle_consent(
     client_repository: ClientReader,
     request: AuthorizeRequest,
     subject: str,
-) -> RedirectResponse | str:
+) -> RedirectResponse | HTMLResponse | str:
     """Affiche la page ou court-circuite quand le consentement est déjà couvert.
 
     Réutilisée par ``GET /consent`` : la demande est re-validée (URIs et
@@ -235,7 +235,7 @@ async def _handle_consent(
         raise HTTPException(status_code=400, detail="redirect_uri requis")
     validated = await validate_authorization_request(request, client_repository)
     if isinstance(validated, AuthorizeError):
-        return _error_redirect(validated)
+        return error_response(validated)
     request = AuthorizeRequest(
         response_type=request.response_type,
         client_id=request.client_id,
@@ -283,27 +283,9 @@ def _render_page(request: AuthorizeRequest) -> str:
 
 async def _execution_redirect(
     usecase: AuthorizeUseCase, request: AuthorizeRequest
-) -> RedirectResponse:
+) -> RedirectResponse | HTMLResponse:
     """Exécute la demande d'autorisation et redirige vers ``redirect_uri``."""
     result = await usecase.execute(request)
     if isinstance(result, AuthorizeError):
-        return _error_redirect(result)
+        return error_response(result)
     return RedirectResponse(result.redirect_uri, status_code=302)
-
-
-def _error_redirect(result: AuthorizeError) -> RedirectResponse:
-    """Construit le redirect d'erreur vers ``redirect_uri`` (RF 6749 §4.1.2.1).
-
-    Les erreurs des flows retournant des jetons (implicit/hybrid) sont
-    placées dans le fragment de l'URL, les autres dans la query string —
-    même comportement que ``/authorize``.
-    """
-    parts = [f"error={result.error}"]
-    if result.error_description:
-        description = quote(ascii_error_description(result.error_description), safe="")
-        parts.append(f"error_description={description}")
-    if result.state:
-        parts.append(f"state={result.state}")
-    params = "&".join(parts)
-    separator = "#" if result.response_mode is ResponseMode.FRAGMENT else "?"
-    return RedirectResponse(f"{result.redirect_uri}{separator}{params}", status_code=302)

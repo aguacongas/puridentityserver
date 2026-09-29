@@ -103,8 +103,11 @@ def test_authorize_rejects_unknown_client() -> None:
             follow_redirects=False,
         )
 
-    assert response.status_code == 302
-    assert _redirect_query(response.headers["location"])["error"] == ["invalid_client"]
+    # RFC 6749 §4.1.2.1 : un client inconnu interdit toute redirection —
+    # la page d'erreur est servie au lieu d'un 302 vers l'URI fournie.
+    assert response.status_code == 400
+    assert "location" not in response.headers
+    assert "invalid_client" in response.text
 
 
 def test_authorize_rejects_unregistered_redirect_uri() -> None:
@@ -120,9 +123,11 @@ def test_authorize_rejects_unregistered_redirect_uri() -> None:
             follow_redirects=False,
         )
 
-    assert response.status_code == 302
-    query = _redirect_query(response.headers["location"])
-    assert query["error"] == ["invalid_redirect_uri"]
+    # RFC 6749 §4.1.2.1 : rediriger vers une URI non enregistrée détournerait
+    # la réponse — page d'erreur, jamais un 302 (OIDCC-3.1.2.1).
+    assert response.status_code == 400
+    assert "location" not in response.headers
+    assert "invalid_redirect_uri" in response.text
 
 
 def test_authorize_rejects_missing_openid_scope() -> None:
@@ -169,8 +174,8 @@ def test_authorize_error_redirect_includes_state() -> None:
         response = client.get(
             "/authorize",
             params={
-                "response_type": "code",
-                "client_id": "unknown",
+                "response_type": "foo",
+                "client_id": "web-app",
                 "redirect_uri": "https://app.example/callback",
                 "scope": "openid",
                 "state": "some-state",
@@ -180,7 +185,7 @@ def test_authorize_error_redirect_includes_state() -> None:
 
     assert response.status_code == 302
     query = _redirect_query(response.headers["location"])
-    assert query["error"] == ["invalid_client"]
+    assert query["error"] == ["unsupported_response_type"]
     assert query["state"] == ["some-state"]
 
 

@@ -81,7 +81,7 @@ max-complexity = 10
 "tests/**" = ["assert", "undocumented-public-module", "undocumented-public-class", "undocumented-public-method", "undocumented-public-function", "hardcoded-password-string", "hardcoded-password-func-arg"]  # assert + docstrings non requis dans les tests, S105/S106 pour valeurs de référence (jetons, secrets) dans les assertions
 "src/puridentityserver/infrastructure/jwe.py" = ["suspicious-insecure-hash-usage"]  # SHA-1 imposé par RFC 7518 §4.3 pour RSA-OAEP (cf. NOSONAR(S4790) in situ)
 "src/puridentityserver/infrastructure/backchannel.py" = ["suspicious-url-open-usage"]  # urllib POST form des logout_tokens : les URIs proviennent de l'enregistrement client (http/https contraint), échecs tolérés (# NOSONAR(S310) in situ)
-"scripts/**" = ["print", "suspicious-subprocess-import", "subprocess-without-shell-equals-true"]  # script de dev : print + subprocess ok
+"scripts/**" = ["print", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "suspicious-xml-etree-import", "suspicious-xml-element-tree-usage"]  # script de dev : print + subprocess ok ; le rapport JUnit de conformance_report.py vient de pytest (données locales, pas de XML non fiable)
 "samples/**/smoke_test.py" = ["assert", "print", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "try-except-in-loop", "hardcoded-password-string", "hardcoded-password-func-arg", "weak-cryptographic-key"]  # smoke test : print + assert + subprocess + polling retries + valeurs de référence (token/secret client démo) + clé RSA 1024 bits volontaire pour prouver la défense du serveur (RFC 7518 §4.3)
 "samples/smoke_common.py" = ["print", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "try-except-in-loop"]  # helper des smoke tests : affiche l'état, lance le serveur en sous-processus (liste d'arguments, pas de shell), sonde le port
 "samples/**/client.py" = ["print", "weak-cryptographic-key"]  # démo CLI : affichage de résultats ; clé RSA 1024 bits volontaire pour prouver le rejet d'une clé courte
@@ -108,8 +108,23 @@ disallow_untyped_defs = false
 # pytest + couverture
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
-addopts = "-q --cov=puridentityserver --cov=puridentityprotocol --cov=puridentityadmin --cov=puridentityfull --cov-report=term-missing"
+# `-m "not conformance"` exclut le rejeu local de la certification OIDC du gate
+# : les tests marqués `conformance` ne s'exécutent qu'à la demande (`pytest -m
+# conformance`, écrase l'addopts car le dernier `-m` l'emporte).
+addopts = "-q --cov=puridentityserver --cov=puridentityprotocol --cov=puridentityadmin --cov=puridentityfull --cov-report=term-missing -m \"not conformance\""
 testpaths = ["tests"]
+markers = [
+    "conformance: rejeu local des checks de la suite de certification OIDC officielle",
+]
+# Avertissements des bibliothèques tierces émis par fastapi/starlette au
+# moment de l'import de `TestClient` (ils ne viennent pas du projet) :
+# - fastapi.testclient : `TestClient` repose encore sur httpx (`httpx2` à venir),
+# - starlette.testclient : alias `anyio.abc.BlockingPortal` déplacé.
+# Format `action:message:category:module` (champs vides = tous).
+filterwarnings = [
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:Warning:fastapi.testclient",
+    "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning:starlette.testclient",
+]
 
 [tool.coverage.run]
 source = [
