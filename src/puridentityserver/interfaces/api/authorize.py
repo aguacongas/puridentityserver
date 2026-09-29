@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import time
 from urllib.parse import parse_qs, quote
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -13,14 +14,22 @@ from puridentityserver.application.authorize import (
     AuthorizeRedirect,
     AuthorizeRequest,
     AuthorizeUseCase,
+    parse_max_age,
     validate_authorization_request,
 )
 from puridentityserver.application.consent import ConsentUseCase
 from puridentityserver.application.par import PushedAuthorizationUseCase, PushError
 from puridentityserver.domain.authorization import ResponseMode, Scope
-from puridentityserver.identity.config import CurrentUserOptional, session_auth_time, session_sid
+from puridentityserver.identity.config import (
+    CurrentUser,
+    CurrentUserOptional,
+    reauth_context,
+    session_auth_time,
+    session_reauth,
+    session_sid,
+)
+from puridentityserver.interfaces.api.authorize_error import error_response
 from puridentityserver.interfaces.api.consent import consent_url
-from puridentityserver.interfaces.api.error_description import ascii_error_description
 from puridentityserver.interfaces.repositories.readers import ClientReader
 
 
@@ -72,6 +81,7 @@ def authorize_router(
         code_challenge_method: str = Query(default="S256"),
         response_mode: str = Query(default=""),
         prompt: str = Query(default=""),
+        max_age: str = Query(default=""),
         request_uri: str = Query(default=""),
         user: CurrentUserOptional = None,
     ) -> RedirectResponse | HTMLResponse:
@@ -86,6 +96,7 @@ def authorize_router(
             "code_challenge_method": code_challenge_method,
             "response_mode": response_mode,
             "prompt": prompt,
+            "max_age": max_age,
             "request_uri": request_uri,
         }
         return await _handle_authorize(request, params, user)
@@ -165,27 +176,17 @@ def authorize_router(
                 code_challenge_method=params.get("code_challenge_method", "S256"),
                 response_mode=params.get("response_mode", ""),
                 prompt=params.get("prompt", ""),
+                max_age=parse_max_age(params.get("max_age", "")),
             )
 
-        if require_login and user is None:
-            return await _login_or_error(auth_request, request, client_repository, base_url)
+        pre = await _pre_execution_response(
+            auth_request, request, user, client_repository, require_login, base_url
+        )
+        if pre is not None:
+            return pre
 
         if user is not None:
-            auth_request = AuthorizeRequest(
-                response_type=auth_request.response_type,
-                client_id=auth_request.client_id,
-                redirect_uri=auth_request.redirect_uri,
-                scope=auth_request.scope,
-                subject=str(user.id),
-                state=auth_request.state,
-                nonce=auth_request.nonce,
-                code_challenge=auth_request.code_challenge,
-                code_challenge_method=auth_request.code_challenge_method,
-                response_mode=auth_request.response_mode,
-                prompt=auth_request.prompt,
-                session_id=await session_sid(request),
-                auth_time=await session_auth_time(request),
-            )
+            auth_request = await _with_authenticated_subject(auth_request, request, user)
         consent_redirect = await _consent_redirect_if_required(
             auth_request, consent_usecase, client_repository
         )
@@ -194,9 +195,140 @@ def authorize_router(
         result = await usecase.execute(auth_request)
         if isinstance(result, AuthorizeRedirect):
             return RedirectResponse(result.redirect_uri, status_code=302)
-        return _error_redirect(result)
+        return error_response(result)
 
     return router
+
+
+async def _pre_execution_response(
+    auth_request: AuthorizeRequest,
+    request: Request,
+    user: CurrentUserOptional,
+    client_repository: ClientReader | None,
+    require_login: bool,
+    base_url: str,
+) -> RedirectResponse | HTMLResponse | None:
+    """Réponses possibles **avant** émission : page d'erreur, reconnexion, ``prompt``.
+
+    Regroupe ``_non_redirectable_error`` (la ``redirect_uri`` doit être
+    vérifiée avant toute redirection sortante) puis ``_authentication_gate``
+    (reconnexion exigée par ``prompt=login`` / ``max_age``). ``None`` : la
+    demande peut être exécutée.
+    """
+    error_page = await _non_redirectable_error(auth_request, client_repository)
+    if error_page is not None:
+        return error_page
+    return await _authentication_gate(
+        auth_request, request, user, client_repository, require_login, base_url
+    )
+
+
+async def _with_authenticated_subject(
+    auth_request: AuthorizeRequest, request: Request, user: CurrentUser
+) -> AuthorizeRequest:
+    """Rejoue la demande en portant ``subject``, ``auth_time`` et ``session_id``."""
+    return AuthorizeRequest(
+        response_type=auth_request.response_type,
+        client_id=auth_request.client_id,
+        redirect_uri=auth_request.redirect_uri,
+        scope=auth_request.scope,
+        subject=str(user.id),
+        state=auth_request.state,
+        nonce=auth_request.nonce,
+        code_challenge=auth_request.code_challenge,
+        code_challenge_method=auth_request.code_challenge_method,
+        response_mode=auth_request.response_mode,
+        prompt=auth_request.prompt,
+        max_age=auth_request.max_age,
+        session_id=await session_sid(request),
+        auth_time=await session_auth_time(request),
+    )
+
+
+async def _non_redirectable_error(
+    auth_request: AuthorizeRequest, client_repository: ClientReader | None
+) -> RedirectResponse | HTMLResponse | None:
+    """Affiche la page d'erreur pour les erreurs qui interdisent la redirection.
+
+    ``redirect_uri`` non enregistrée ou ``client_id`` invalide ne doivent
+    jamais repartir en redirection (RFC 6749 §4.1.2.1) : la validation est
+    menée **avant** toute redirection vers ``/login`` ou ``/consent`` pour
+    que l'utilisateur voie immédiatement la page d'erreur. ``None`` quand
+    rien n'empêche de poursuivre (demande valide ou erreur redirigeable,
+    traitée plus loin après l'éventuelle reconnexion).
+    """
+    if client_repository is None:
+        return None
+    validated = await validate_authorization_request(auth_request, client_repository)
+    if isinstance(validated, AuthorizeError) and not validated.redirectable:
+        return error_response(validated)
+    return None
+
+
+async def _authentication_gate(
+    auth_request: AuthorizeRequest,
+    request: Request,
+    user: CurrentUserOptional,
+    client_repository: ClientReader | None,
+    require_login: bool,
+    base_url: str,
+) -> RedirectResponse | HTMLResponse | None:
+    """Contrôle d'accès avant émission : reconnexion, ``prompt``, ``max_age``.
+
+    - ``prompt=login`` ou ``max_age`` expiré impose une authentification plus
+      récente que la demande (OIDC Core 1.0 §3.1.2.1) : l'utilisateur connecté
+      est renvoyé vers ``/login`` même s'il a déjà une session, la reconnexion
+      rafraîchissant ``auth_time`` ;
+    - ``prompt=none`` dans ce cas renvoie ``login_required`` au client plutôt
+      que l'écran de connexion (§3.1.2.6) ;
+    - non connecté : ``prompt=login`` ou ``require_login`` déclenchent le
+      formulaire de connexion, ``prompt=none`` renvoie ``login_required``.
+    """
+    if user is not None and await _reauthentication_required(auth_request, request, base_url):
+        if "none" in auth_request.prompt.split():
+            return await _login_or_error(auth_request, request, client_repository, base_url)
+        return _login_redirect(auth_request, request, base_url)
+    if user is None and (require_login or "login" in auth_request.prompt.split()):
+        return await _login_or_error(auth_request, request, client_repository, base_url)
+    return None
+
+
+async def _reauthentication_required(
+    auth_request: AuthorizeRequest, request: Request, base_url: str
+) -> bool:
+    """Indique si ``prompt=login`` / ``max_age`` exigent une reconnexion.
+
+    ``prompt=login`` (et ``max_age=0``) est satisfait par une session issue
+    d'un ``POST /login`` dont le ``next`` était **cette** URL d'autorisation :
+    le claim ``reauth`` de la session porte son empreinte, ce qui évite toute
+    boucle de reconnexion — un login déclenché par la demande la valide
+    toujours. ``max_age`` strictement positif compare l'âge de la session à
+    la valeur demandée ; l'``auth_time`` est lu sur la session courante (le
+    ``auth_time`` de la demande n'est renseigné qu'après le contrôle, au
+    moment de l'émission) — sans quoi tout ``max_age`` paraîtrait dépassé et
+    la reconnexion tournerait en boucle.
+    """
+    session_reauth_hash = await session_reauth(request)
+    url_hash = reauth_context(_authorize_url_from_base(base_url, request))
+    tokens = auth_request.prompt.split()
+    if ("login" in tokens or auth_request.max_age == 0) and session_reauth_hash != url_hash:
+        return True
+    if auth_request.max_age > 0:
+        auth_time = await session_auth_time(request)
+        if auth_time == 0:
+            return True
+        return (int(time.time()) - auth_time) > auth_request.max_age
+    return False
+
+
+def _login_redirect(
+    auth_request: AuthorizeRequest, request: Request, base_url: str
+) -> RedirectResponse:
+    """Redirige vers ``/login`` en conservant la demande d'autorisation."""
+    return RedirectResponse(
+        f"/login?next={quote(_authorize_url_from_base(base_url, request))}",
+        status_code=302,
+    )
 
 
 async def _login_or_error(
@@ -204,13 +336,13 @@ async def _login_or_error(
     http_request: Request,
     client_repository: ClientReader | None,
     base_url: str = "",
-) -> RedirectResponse:
-    """Gère une demande ``/authorize`` non authentifiée (:param:`require_login`).
+) -> RedirectResponse | HTMLResponse:
+    """Gère une demande ``/authorize`` non réauthentifiée (``prompt``/``require_login``).
 
     ``prompt=none`` (OIDC Core 1.0 §3.1.2.6) : aucune redirection vers le
     formulaire n'est autorisée — une erreur ``login_required`` est renvoyée au
-    client via sa ``redirect_uri`` (validation préalable pour ne jamais
-    rediriger sur une URI non enregistrée). Sinon : redirection vers
+    client via sa ``redirect_uri`` (la ``redirect_uri`` a déjà été validée en
+    amont par ``_non_redirectable_error``). Sinon : redirection vers
     ``/login?next=<url complète d'/authorize>`` ; après connexion le
     ``subject`` est porté par le cookie et la demande est rejouée telle quelle.
 
@@ -226,7 +358,7 @@ async def _login_or_error(
             else None
         )
         if isinstance(validated, AuthorizeError):
-            return _error_redirect(validated)
+            return error_response(validated)
         error = AuthorizeError(
             error="login_required",
             error_description="Authentification requise (prompt=none)",
@@ -234,11 +366,8 @@ async def _login_or_error(
             state=auth_request.state,
             response_mode=validated.response_mode if validated is not None else ResponseMode.QUERY,
         )
-        return _error_redirect(error)
-    return RedirectResponse(
-        f"/login?next={quote(_authorize_url_from_base(base_url, http_request))}",
-        status_code=302,
-    )
+        return error_response(error)
+    return _login_redirect(auth_request, http_request, base_url)
 
 
 def _authorize_url_from_base(base_url: str, http_request: Request) -> str:
@@ -349,22 +478,3 @@ async def _consent_redirect_if_required(
     if client is not None and await consent_usecase.is_required(client, request.subject, scopes):
         return RedirectResponse(consent_url(request), status_code=302)
     return None
-
-
-def _error_redirect(result: AuthorizeError) -> RedirectResponse:
-    """Construit le redirect d'erreur vers ``redirect_uri``.
-
-    Les erreurs des flows retournant des jetons (implicit/hybrid) sont
-    placées dans le fragment de l'URL (RFC 6749 §4.2.2.1), les autres dans
-    la query string (RFC 6749 §4.1.2.1).
-    """
-    parts = [f"error={result.error}"]
-    if result.error_description:
-        description = quote(ascii_error_description(result.error_description), safe="")
-        parts.append(f"error_description={description}")
-    if result.state:
-        parts.append(f"state={result.state}")
-    params = "&".join(parts)
-    separator = "#" if result.response_mode is ResponseMode.FRAGMENT else "?"
-    location = f"{result.redirect_uri}{separator}{params}"
-    return RedirectResponse(location, status_code=302)

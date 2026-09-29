@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from puridentityserver.application.authorize import (
     AuthorizeError,
     AuthorizeRequest,
+    parse_max_age,
     validate_authorization_request,
 )
 from puridentityserver.application.client_auth import CLIENT_UNKNOWN_ERROR, verify_client_secret
@@ -143,6 +144,7 @@ class PushedAuthorizationUseCase:
             code_challenge_method=params.get("code_challenge_method", "S256"),
             response_mode=params.get("response_mode", "query"),
             prompt=params.get("prompt", ""),
+            max_age=parse_max_age(params.get("max_age", "")),
         )
 
         validated = await validate_authorization_request(
@@ -227,4 +229,5 @@ class PushedAuthorizationUseCase:
             code_challenge_method=pushed.params.get("code_challenge_method", "S256"),
             response_mode=pushed.params.get("response_mode", "query"),
             prompt=pushed.params.get("prompt", ""),
+            max_age=parse_max_age(pushed.params.get("max_age", "")),
         )

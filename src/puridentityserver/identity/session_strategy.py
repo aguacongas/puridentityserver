@@ -30,17 +30,25 @@ class SessionJWTStrategy(Strategy[models.UP, models.ID]):
         self._signer = signer
         self._lifetime_seconds = lifetime_seconds
 
-    async def write_token(self, user: models.UP, sid: str = "") -> str:
+    async def write_token(self, user: models.UP, sid: str = "", reauth: str = "") -> str:
         """Signe le JWT de session (``sub``/``aud``) avec la clé active, ``kid`` inclus.
 
         ``sid`` (OIDC Session Management 1.0 §2) identifie la session
         navigateur du ``sub`` : il est émis au login par l'OP et reproduit
         dans l'``id_token`` (claim ``sid``) ainsi que dans les notifications
         front/back-channel de ``/end_session``. Absent (``""``) : claim omis.
+
+        ``reauth`` mémorise l'empreinte de l'URL de retour (``next``) du
+        formulaire de login : ``prompt=login`` / ``max_age`` s'en servent
+        pour savoir si la session courante résulte d'une connexion déclenchée
+        par **cette** demande d'autorisation (OIDC Core 1.0 §3.1.2.1).
+        Absent (``""``) : claim omis.
         """
         data: dict[str, object] = {"sub": str(user.id), "aud": self._signer.audience}
         if sid:
             data["sid"] = sid
+        if reauth:
+            data["reauth"] = reauth
         return await self._signer.write(data, self._lifetime_seconds)
 
     async def read_token(

@@ -95,6 +95,7 @@ class AuthorizeRequest:
     code_challenge_method: str = "S256"
     response_mode: str = ""
     prompt: str = ""
+    max_age: int = -1  # -1 absent, -2 invalide, sinon âge max en secondes (§3.1.2.1)
     session_id: str = ""
     auth_time: int = 0
 
@@ -114,13 +115,20 @@ class AuthorizeRedirect:
 
 @dataclass(frozen=True, slots=True)
 class AuthorizeError:
-    """Erreur communiquée au client dans la redirection ``redirect_uri``."""
+    """Erreur communiquée au client dans la redirection ``redirect_uri``.
+
+    ``redirectable`` à ``False`` signale une erreur qui ne doit **jamais**
+    repartir en redirection : ``redirect_uri`` non enregistrée ou
+    ``client_id`` invalide, que la RFC 6749 §4.1.2.1 interdit de suivre au
+    profit d'une information affichée à l'utilisateur par le user agent.
+    """
 
     error: str
     error_description: str
     redirect_uri: str = ""
     state: str = ""
     response_mode: ResponseMode = ResponseMode.QUERY
+    redirectable: bool = True
 
 
 AuthorizeResult = AuthorizeRedirect | AuthorizeError
@@ -159,7 +167,7 @@ async def validate_authorization_request(
     has_tokens = bool(response_types & frozenset(("id_token", "token")))
     error_mode = _error_response_mode(request.response_mode, has_tokens)
 
-    if not response_types or response_types not in _VALID_RESPONSE_TYPES:
+    if response_types not in _VALID_RESPONSE_TYPES:
         return _authorize_error(
             "unsupported_response_type",
             request,
@@ -171,26 +179,32 @@ async def validate_authorization_request(
     wants_token = "token" in response_types
     response_mode = _resolve_response_mode(request.response_mode, has_tokens)
     if response_mode is None:
-        return _authorize_error(
-            "invalid_request",
-            request,
-            description="'query' est interdit quand des jetons sont retournés "
-            "(OIDC Core 1.0 §3.1.2.1)",
-            response_mode=error_mode,
-        )
+        return _query_mode_forbidden_error(request, error_mode)
 
     client = await client_repository.find_by_id(request.client_id)
     if client is None or not client.is_active:
+        # client_id absent/inconnu : la redirect_uri ne peut pas être
+        # vérifiée, donc aucune redirection n'est de confiance (RFC 6749 §4.1.2.1)
         return _authorize_error(
             "invalid_client",
             request,
             response_mode=response_mode,
+            redirectable=False,
         )
 
     if request.redirect_uri not in client.redirect_uris:
         return _authorize_error(
             "invalid_redirect_uri",
             request,
+            response_mode=response_mode,
+            redirectable=False,
+        )
+
+    if request.max_age < -1:
+        return _authorize_error(
+            "invalid_request",
+            request,
+            description="max_age doit être un entier positif (OIDC Core 1.0 §3.1.2.1)",
             response_mode=response_mode,
         )
 
@@ -203,15 +217,9 @@ async def validate_authorization_request(
             response_mode=response_mode,
         )
 
-    if scope_registry is not None:
-        unknown = await scope_registry.unknown_scopes(scopes)
-        if unknown:
-            return _authorize_error(
-                "invalid_scope",
-                request,
-                description="Scope(s) non enregistré(s) : " + ", ".join(unknown),
-                response_mode=response_mode,
-            )
+    scope_error = await _unknown_scope_error(scopes, scope_registry, request, response_mode)
+    if scope_error is not None:
+        return scope_error
 
     if request.code_challenge and request.code_challenge_method not in ("S256", "plain"):
         return _authorize_error(
@@ -236,6 +244,38 @@ async def validate_authorization_request(
         wants_code=wants_code,
         wants_id_token=wants_id_token,
         wants_token=wants_token,
+        response_mode=response_mode,
+    )
+
+
+def _query_mode_forbidden_error(
+    request: AuthorizeRequest, error_mode: ResponseMode
+) -> AuthorizeError:
+    """``response_mode=query`` interdit dès qu'un jeton est retourné (§3.1.2.1)."""
+    return _authorize_error(
+        "invalid_request",
+        request,
+        description="'query' est interdit quand des jetons sont retournés (OIDC Core 1.0 §3.1.2.1)",
+        response_mode=error_mode,
+    )
+
+
+async def _unknown_scope_error(
+    scopes: frozenset[Scope],
+    scope_registry: ScopeRegistry | None,
+    request: AuthorizeRequest,
+    response_mode: ResponseMode,
+) -> AuthorizeError | None:
+    """Scopes tous enregistrés au registre (IdentityResource/ApiResource)."""
+    if scope_registry is None:
+        return None
+    unknown = await scope_registry.unknown_scopes(scopes)
+    if not unknown:
+        return None
+    return _authorize_error(
+        "invalid_scope",
+        request,
+        description="Scope(s) non enregistré(s) : " + ", ".join(unknown),
         response_mode=response_mode,
     )
 
@@ -502,6 +542,7 @@ def _authorize_error(
     request: AuthorizeRequest,
     description: str = "",
     response_mode: ResponseMode = ResponseMode.QUERY,
+    redirectable: bool = True,
 ) -> AuthorizeError:
     """Construit une réponse d'erreur OAuth (RFC 6749 §4.1.2.1, §4.2.2.1)."""
     return AuthorizeError(
@@ -510,6 +551,7 @@ def _authorize_error(
         redirect_uri=request.redirect_uri,
         state=request.state,
         response_mode=response_mode,
+        redirectable=redirectable,
     )
 
 
@@ -522,3 +564,21 @@ def _hash_artefact(value: str, algorithm: JWTAlgorithm) -> str:
     """
     digest = hashlib.new(f"sha{algorithm.value[-3:]}", value.encode("ascii")).digest()
     return base64.urlsafe_b64encode(digest[: len(digest) // 2]).rstrip(b"=").decode("ascii")
+
+
+def parse_max_age(value: str) -> int:
+    """Parse le paramètre ``max_age`` (OIDC Core 1.0 §3.1.2.1).
+
+    ``-1`` : paramètre absent (aucune contrainte) ; ``-2`` : valeur non
+    entière ou négative, à laquelle ``validate_authorization_request``
+    répond par ``invalid_request`` ; ``0`` et plus : l'âge maximal accepté
+    de la dernière authentification (``0`` impose une reconnexion
+    immédiate, quel que soit l'âge de la session).
+    """
+    if not value:
+        return -1
+    try:
+        parsed = int(value)
+    except ValueError:
+        return -2
+    return parsed if parsed >= 0 else -2
