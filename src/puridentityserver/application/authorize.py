@@ -501,7 +501,6 @@ class AuthorizeUseCase:
                 c_hash=(_hash_artefact(code, id_token_algorithm) if code else ""),
                 auth_time=request.auth_time,
                 shared_secret=shared_secret,
-                acr=first_acr_value(request.acr_values),
                 additional_claims=await self._additional_id_token_claims(
                     request, code=code, wants_token=wants_token, claims_request=claims_request
                 ),
@@ -531,13 +530,18 @@ class AuthorizeUseCase:
     ) -> dict[str, object] | None:
         """Claims complémentaires de l'id_token émis par ``/authorize``.
 
-        Fusionne les claims du member ``id_token`` du paramètre ``claims``
+        Porte d'abord le claim ``acr`` (première valeur ``acr_values``
+        demandée, OIDC Core 1.0 §2) quand elle est non vide, puis fusionne
+        les claims du member ``id_token`` du paramètre ``claims``
         (OIDC Core 1.0 §5.5.1) avec, pour un ``response_type=id_token``
         **seul** — ni code ni access_token, donc sans UserInfo possible —,
         les claims des scopes accordés (OIDC Core 1.0 §5.4). ``None`` quand
         rien n'est à ajouter, pour ne pas altérer le payload standard.
         """
         additional: dict[str, object] = {}
+        acr = first_acr_value(request.acr_values)
+        if acr:
+            additional["acr"] = acr
         if claims_request is not None:
             additional.update(
                 await resolve_requested_claims(

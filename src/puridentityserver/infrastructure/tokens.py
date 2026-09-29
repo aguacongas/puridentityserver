@@ -45,7 +45,6 @@ class PyJWTTokenManager:
         c_hash: str = "",
         auth_time: int = 0,
         shared_secret: str = "",
-        acr: str = "",
         additional_claims: Mapping[str, object] | None = None,
     ) -> str:
         """Construit l'``id_token`` : identité ``sub`` + audience ``client_id``.
@@ -58,10 +57,9 @@ class PyJWTTokenManager:
         algorithmes symétriques HS* (OIDC Core 1.0 §3.1.3.7) ; il est
         ignoré pour les familles asymétriques. ``session_id`` reproduit le
         ``sid`` (OIDC Session Management 1.0 §2) dans le claim ``sid``
-        seulement s'il est non vide. ``acr`` complète le payload avec le
-        claim ``acr`` seulement s'il est non vide (OIDC Core 1.0 §2).
-        ``additional_claims`` est fusionné sans jamais écraser les claims
-        standards ci-dessous.
+        seulement s'il est non vide. ``additional_claims`` est fusionné sans
+        jamais écraser les claims standards ci-dessous (ex. ``acr`` fourni
+        par l'appelant seulement quand ``acr_values`` est non vide).
         """
         payload: dict[str, object] = {
             "iss": issuer,
@@ -80,8 +78,6 @@ class PyJWTTokenManager:
             payload["c_hash"] = c_hash
         if auth_time:
             payload["auth_time"] = auth_time
-        if acr:
-            payload["acr"] = acr
         for name, value in (additional_claims or {}).items():
             payload.setdefault(name, value)
         return await self._sign(algorithm, payload, shared_secret)
