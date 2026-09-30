@@ -79,7 +79,7 @@ callback + `PerformStandardIdTokenChecks` + échange du code, voir
 | --- | --- | --- |
 | `oidcc-userinfo-get` | `OIDCCUserInfoGet.java` (classe vide) → `[UI]` | `checks.check_userinfo_response` (200 + `content-type` JSON + `sub`) |
 | `oidcc-userinfo-post-header` | `OIDCCUserInfoPostHeader.java` → `SetResourceMethodToPost`, `[UI]` | idem (POST Bearer) |
-| `oidcc-userinfo-post-body` | `OIDCCUserInfoPostBody.java` → `CallUserInfoEndpointWithBearerTokenInBody`, `UserInfoEndpointWithAccessTokenInBodyNotSupported` **(WARNING → skip)** | skip fidèle (401 sur notre OP, mode non exigé) |
+| `oidcc-userinfo-post-body` | `OIDCCUserInfoPostBody.java` → `CallUserInfoEndpointWithBearerTokenInBody`, `UserInfoEndpointWithAccessTokenInBodyNotSupported` **(WARNING évité)** | `checks.check_userinfo_response` — token en corps form accepté par l'OP (RFC 6750 §2.1.2, #83) |
 
 ### Double autorisation (3 modules)
 
@@ -145,7 +145,7 @@ Blocs de conditions hérités identiques à la PR 2 (`[BASE]`, `[RC]`, `[UI]`,
 | `oidcc-ensure-request-without-nonce-fails` | idem (`@VariantNotApplicable` code/code token) | `test_implicit_without_nonce_is_rejected[rt-*]` | `checks.expect_authorization_error` (`invalid_request` en fragment) |
 | `oidcc-display-page`, `-popup`, `oidcc-login-hint`, `oidcc-ui-locales`, `oidcc-claims-locales`, `oidcc-ensure-request-with-unknown-parameter-succeeds`, `oidcc-ensure-request-with-acr-values-succeeds`, `oidcc-claims-essential` | les 2 | `test_implicit_authorize_parameter_is_accepted[rt-*][<alias>]` | `checks.expect_implicit_callback` + `checks.validate_id_token` ; `checks.check_acr_claim` (fragment) ; `claims` → member `id_token` pour `rt-id_token` (`EnsureIdTokenContainsName`), member `userinfo` sinon (`EnsureUserInfoContainsName` + `EnsureIdTokenDoesNotContainName`) (#80) |
 | `oidcc-scope-profile`/`-email`/`-address`/`-phone`/`-all` | les 2 | `test_implicit_scope_claims_returned[rt-*][<alias>]` | userinfo (`[RC]`) avec `token` ; pour `id_token` seul, `VerifyScopesReturnedInAuthorizationEndpointIdToken` **(WARNING)** de la suite → assertion `checks.check_scope_claims_in_id_token` (#80) |
-| `oidcc-userinfo-get`/`-post-header`/`-post-body` | `id_token token` uniquement (le plan exclut `id_token`) | `test_implicit_userinfo_endpoint_method[<alias>]` | `checks.check_userinfo_response` (post_body : skip WARNING identique) |
+| `oidcc-userinfo-get`/`-post-header`/`-post-body` | `id_token token` uniquement (le plan exclut `id_token`) | `test_implicit_userinfo_endpoint_method[<alias>]` | `checks.check_userinfo_response` (post_body : token en corps, #83) |
 | `oidcc-prompt-none-logged-in`, `oidcc-id-token-hint`, `oidcc-max-age-10000` | les 2 | `test_implicit_second_authorization[rt-*][<module>]` | `checks.check_second_id_token_consistent` (`[SAT]`) |
 | `oidcc-prompt-none-not-logged-in` | les 2 | `test_implicit_prompt_none_without_session[rt-*]` | `checks.expect_authorization_error` (`login_required` en fragment) |
 | `oidcc-ensure-registered-redirect-uri` | les 2 | `test_implicit_registered_redirect_uri_is_rejected[rt-*]` | `checks.expect_redirect_uri_error_page` |
@@ -164,7 +164,7 @@ Blocs de conditions hérités identiques à la PR 2 (`[BASE]`, `[RC]`, `[UI]`,
 | `oidcc-ensure-request-without-nonce-succeeds-for-code-flow` | `code token` | `test_hybrid_code_token_without_nonce_succeeds` | `checks.expect_hybrid_callback` sans `id_token` |
 | 8 modules paramètres (ids PR 2) | les 3 | `test_hybrid_authorize_parameter_is_accepted[rt-*][<alias>]` | `checks.expect_hybrid_callback` + `checks.validate_id_token` ; `checks.check_acr_claim` sur l'id_token du fragment **et** celui du token endpoint (2 WARNING pour `code id_token token`) ; `claims` → member `userinfo` : `name` du userinfo, absent des deux id_tokens (#80) |
 | `oidcc-scope-*` (5) | les 3 | `test_hybrid_scope_claims_returned[rt-*][<alias>]` | `checks.check_userinfo_response` + `checks.check_scope_claims_returned` (`[RC]`) |
-| `oidcc-userinfo-*` (3) | les 3 | `test_hybrid_userinfo_endpoint_method[rt-*][<alias>]` | `checks.check_userinfo_response` (post_body : skip WARNING × 3) |
+| `oidcc-userinfo-*` (3) | les 3 | `test_hybrid_userinfo_endpoint_method[rt-*][<alias>]` | `checks.check_userinfo_response` (post_body : token en corps × 3, #83) |
 | `oidcc-prompt-none-logged-in`, `oidcc-id-token-hint`, `oidcc-max-age-10000` | les 3 | `test_hybrid_second_authorization[rt-*][<module>]` | `checks.check_second_id_token_consistent` |
 | `oidcc-prompt-none-not-logged-in` | les 3 | `test_hybrid_prompt_none_without_session[rt-*]` | `checks.expect_authorization_error` |
 | `oidcc-ensure-registered-redirect-uri` | les 3 | `test_hybrid_registered_redirect_uri_is_rejected[rt-*]` | `checks.expect_redirect_uri_error_page` |
@@ -230,3 +230,8 @@ ils passent.
   `checks.check_scope_claims_absent_from_id_token`, plus les asserts
   `name` des modules `claims-essential` ; `claims_parameter_supported=true`
   au discovery. Rejeu local **164 passed, 9 skipped** (≈ 5 min 40).
+- **Issue #83 (warning « access_token en corps POST `/userinfo` »)** :
+  `POST /userinfo` accepte le paramètre `access_token` du corps form
+  (RFC 6750 §2.1.2) en plus de l'en-tête `Authorization` (priorité en-tête) ;
+  les 5 skips `oidcc-userinfo-post-body` (basic 1, implicit 1, hybride 3)
+  redeviennent des rejeux réels → **169 passed, 4 skipped**.

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Response
+from fastapi import APIRouter, Header, Request, Response
 
 from puridentityserver.application.userinfo import (
     UserInfoError,
@@ -23,20 +23,31 @@ def userinfo_router(usecase: UserInfoUseCase) -> APIRouter:
     async def userinfo(
         authorization: Annotated[str | None, Header()] = None,
     ) -> Response:
-        return await _handle_userinfo(authorization)
+        return await _handle_userinfo(_extract_bearer_token(authorization))
 
     @router.post("/userinfo", summary="Endpoint UserInfo (POST, RFC 6750 §2.1)")
     async def userinfo_post(
+        request: Request,
         authorization: Annotated[str | None, Header()] = None,
     ) -> Response:
-        return await _handle_userinfo(authorization)
+        """POST /userinfo : Bearer en en-tête (§2.1.1) ou en corps form (§2.1.2).
 
-    async def _handle_userinfo(authorization: str | None) -> Response:
+        L'en-tête ``Authorization`` prime ; à défaut, le paramètre
+        ``access_token`` du corps ``application/x-www-form-urlencoded`` est
+        lu (RFC 6750 §2.1, méthode 2).
+        """
         token = _extract_bearer_token(authorization)
         if token is None:
+            body_token = (await request.form()).get("access_token")
+            token = body_token if isinstance(body_token, str) and body_token else None
+        return await _handle_userinfo(token)
+
+    async def _handle_userinfo(token: str | None) -> Response:
+        if not token:
             return _bearer_error(
                 "invalid_request",
-                "En-tête Authorization 'Bearer' absent ou mal formé",
+                "Token absent : en-tête Authorization 'Bearer' ou "
+                "access_token en corps form attendu",
             )
         result = await usecase.execute(UserInfoRequest(access_token=token))
         if isinstance(result, UserInfoError):
