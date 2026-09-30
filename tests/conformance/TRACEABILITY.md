@@ -21,7 +21,7 @@ et on relit les fichiers cités ci-dessous à chaque nouvelle PR.
 uv run --no-sync --no-build --locked python -m pytest -m conformance --no-cov -p no:cacheprovider
 # contre un OP réel démarré localement (le harness bascule sur httpx)
 $env:PURIDENTITYSERVER_CONFORMANCE_URL = "http://127.0.0.1:8000"
-# ou smoke complet : serveur uvicorn + rejeu des 173 scénarios (PR 4)
+# ou smoke complet : serveur uvicorn + rejeu des 188 scénarios (PR 4)
 uv run python samples/conformance-smoke/smoke_test.py
 ```
 
@@ -102,8 +102,8 @@ callback + `PerformStandardIdTokenChecks` + échange du code, voir
 | `oidcc-server` | `OIDCCServerTest.java` → `EnsureMinimumAuthorizationCodeLength`, `EnsureMinimumAuthorizationCodeEntropy`, `ExtractAtHash`/`ValidateAtHash`, `ExtractCHash`/`ValidateCHash`, [BASE] | `test_authorization_code_has_minimum_quality` | `checks.check_authorization_code_quality` (≥ 16 caractères) + `checks.validate_id_token` |
 | `oidcc-server-client-secret-post` | `OIDCCServerTestClientSecretPost.java` → `AddFormBasedClientSecretToRequest` + configuration `client_secret_post`, [BASE] | `test_client_secret_post_authentication` | `checks.check_token_endpoint_success` (échange en `client_secret_post`) + `checks.validate_id_token` |
 | `oidcc-idtoken-signature` | `OIDCCIdTokenSignature.java` → `EnsureIdTokenContainsKid`, `EnsureIdTokenSignatureIsRS256`, `PerformStandardIdTokenChecks` | `test_id_token_signature_is_rs256_with_kid` | `checks.expect_id_token_signature` (header `alg=RS256` + `kid`) |
-| `oidcc-idtoken-unsigned` | `OIDCCIdTokenUnsigned.java` → `skipTestIfSigningAlgorithmNotSupported` (**skip** si `none` absent du discovery) | `test_id_token_alg_none_not_supported_skips` | `pytest.skip` fidèle (notre OP : RS256 seul) |
-| `oidcc-request-uri-unsigned-…`, `oidcc-unsigned-request-object-…`, `oidcc-ensure-request-object-with-redirect-uri` | `OIDCCRequestUriUnsignedSupportedCorrectlyOrRejectedAsUnsupported.java` → `skipTestIfNoneUnsupported` (`none` absent de `request_object_signing_alg_values_supported`), idem pour `OIDCCUnsignedRequestObject…` (`CheckDiscEndpointRequestParameterSupported` **(WARNING)**) et `OIDCCEnsureRequestObjectWithRedirectUri.java` | `test_request_object_modules_skip_without_none_support[<alias>]` | `pytest.skip` fidèle (discovery : `request_parameter_supported=false`) |
+| `oidcc-idtoken-unsigned` | `OIDCCIdTokenUnsigned.java` → `skipTestIfSigningAlgorithmNotSupported` (levé : `none` annoncé) + `AddIdTokenSigningAlgNoneToDynamicRegistrationRequest` → `CheckIdTokenSignatureAlgorithm` (`header.alg == "none"`), `PlainJWT.serialize()` | `test_id_token_alg_none_is_issued` | `checks.expect_callback_success` + `checks.check_token_endpoint_success`, puis en-tête `alg=none`, segment de signature vide et `checks.validate_id_token` |
+| `oidcc-request-uri-unsigned-…`, `oidcc-unsigned-request-object-…`, `oidcc-ensure-request-object-with-redirect-uri` | `skipTestIfNoneUnsupported` (levé : `none` dans `request_object_signing_alg_values_supported`) ; `AbstractAuthorizationCodeTest.buildRedirect` (doublons `response_type`/`client_id`/`scope`/`redirect_uri` en query, `state`/`nonce` dans le JWT), `OIDCCEnsureRequestObjectWithRedirectUri` → `AddInvalidRedirectUriToAuthorizationRequest`, `handleRequestUriRequest` en `Content-Type: application/jwt` | `test_request_object_module_completes[rt-*][<kind>]` (6 `ResponseType` × 3 modules) | `checks.expect_*_callback` + `checks.validate_id_token` : `state`/`nonce` ne venant que du request object, leur présence prouve son traitement ; `redirect_uri` du jeton prioritaire sur celle de la query |
 | `oidcc-codereuse` | `OIDCCAuthCodeReuse.java` → `[CR]` (`CheckErrorFromTokenEndpointResponseErrorInvalidGrant`), `ServerAllowedReusingAuthorizationCode` **(WARNING)** | `test_authorization_code_cannot_be_reused` | `checks.expect_invalid_grant` + `checks.expect_access_token_refused` (`CallProtectedResource`, #85) |
 | `oidcc-codereuse-30seconds` | `OIDCCAuthCodeReuseAfter30Seconds.java` → `WaitFor30Seconds`, `CallProtectedResource` + `EnsureHttpStatusCodeIs4xx` **(WARNING)**, `[CR]` | `test_authorization_code_reuse_after_30_seconds` | `checks.expect_invalid_grant` + `checks.expect_access_token_refused` + refresh `invalid_grant` (`scope=… offline_access` ajouté pour émettre le refresh, #85) |
 | `oidcc-refresh-token` | `OIDCCRefreshToken.java` → séquence `RefreshTokenRequestSteps` (`WaitForOneSecond`, `EnsureAccessTokenValuesAreDifferent` **(INFO)**, `CompareIdTokenClaims` : `iss`/`sub`/`aud` égaux, `iat` différent) + `RefreshTokenRequestExpectingErrorSteps` chez le 2ᵉ client (`AbstractOIDCCMultipleClient`), skip si aucun refresh émis | `test_refresh_token_grant_and_client_binding` | `checks.check_token_endpoint_success` + `checks.check_refreshed_id_token_claims` + `checks.expect_invalid_grant` (jeton d'un autre client) |
@@ -157,7 +157,7 @@ Blocs de conditions hérités identiques à la PR 2 (`[BASE]`, `[RC]`, `[UI]`,
 | `oidcc-prompt-login`, `oidcc-max-age-1` | les 2 | `test_implicit_second_login_reprompts[rt-*][<module>]` | `checks.expect_second_login_page` + `checks.check_second_auth_time_is_later` |
 | `oidcc-alternate-happy-flow` | les 2 | `test_implicit_alternate_happy_flow[rt-*]` | userinfo + `checks.check_scope_claims_returned` (`email`) avec `token` ; pour `id_token` seul, `email`/`email_verified` **présents** dans l'id_token (`checks.check_scope_claims_in_id_token`) (#80) |
 | `oidcc-response-type-missing` | `id_token token` | `test_plan_basic.py::test_response_type_missing_shows_error_page` | identique sans `response_type` (page 400) |
-| `oidcc-request-uri-unsigned-…`, `oidcc-unsigned-request-object-…`, `oidcc-ensure-request-object-with-redirect-uri` | les 2 | `test_plan_basic.py::test_request_object_modules_skip_without_none_support[<alias>]` | skip identique (`skipTestIfNoneUnsupported`, discovery inchangé) |
+| `oidcc-request-uri-unsigned-…`, `oidcc-unsigned-request-object-…`, `oidcc-ensure-request-object-with-redirect-uri` | les 2 | `test_plan_basic.py::test_request_object_module_completes[rt-*][<kind>]` | rejeu réel (les 6 `ResponseType` couvrent les 2 implicites) : `checks.expect_implicit_callback` + `checks.validate_id_token` (#76) |
 
 ### Plan Hybrid — `test_plan_hybrid.py` (37 modules)
 
@@ -182,7 +182,7 @@ Blocs de conditions hérités identiques à la PR 2 (`[BASE]`, `[RC]`, `[UI]`,
 | `oidcc-refresh-token` | les 3 → **1 portée** | `test_hybrid_refresh_token_grant_and_client_binding` | `checks.check_refreshed_id_token_claims` + `checks.expect_invalid_grant` croisé — les 2 autres instances diffèrent seulement par le `response_type` du premier flux (mêmes `[RT-seq]`/`[RT-err-seq]`) : non portées |
 | (qualité du code, sous-check de `oidcc-server`) | `code id_token` | `test_hybrid_authorization_code_quality` | `checks.check_authorization_code_quality` |
 | `oidcc-response-type-missing` | `code id_token` (une seule fois) | `test_plan_basic.py::test_response_type_missing_shows_error_page` | identique sans `response_type` |
-| `oidcc-request-uri-unsigned-…`, `oidcc-unsigned-request-object-…`, `oidcc-ensure-request-object-with-redirect-uri` | les 3 | `test_plan_basic.py::test_request_object_modules_skip_without_none_support[<alias>]` | skip identique (`skipTestIfNoneUnsupported`) |
+| `oidcc-request-uri-unsigned-…`, `oidcc-unsigned-request-object-…`, `oidcc-ensure-request-object-with-redirect-uri` | les 3 | `test_plan_basic.py::test_request_object_module_completes[rt-*][<kind>]` | rejeu réel (les 6 `ResponseType` couvrent les 3 hybrides) : `checks.expect_hybrid_callback` + échange du code + `checks.validate_id_token` (#76) |
 
 Rejeu PR 3 (local) : **164 passed, 9 skipped** au total
 (38 Basic + 49 Implicit + 86 Hybrid, dont 4 skips `userinfo-post-body` et
@@ -250,3 +250,14 @@ ils passent.
   token dans le store de rotation. Assertions renforcées :
   `checks.expect_access_token_refused` (401 `invalid_token` sur `/userinfo`)
   et `invalid_grant` sur le refresh — rejeu local **169 passed, 4 skipped**.
+- **Issue #76 (19 skips « `alg=none` »)** : `id_token` émis sans signature
+  (`infrastructure/tokens.py` signe en `none`, `JWTAlgorithm.NONE` accepté par
+  `domain/jwks.py`, `at_hash`/`c_hash` vides) et request objects RFC 9101
+  (`application/request_object.py` : résolution `request`/`request_uri`,
+  `infrastructure/request_object.py` : fetch stdlib sur `Content-Type:
+  application/jwt`, cibles locales autorisées seulement si l'OP est en
+  loopback). Discovery : `request_object_signing_alg_values_supported=["none"]`,
+  `request_parameter_supported`/`request_uri_parameter_supported=true`. Les 4
+  skips restants redeviennent des rejeux réels (`test_id_token_alg_none_is_issued`
+  + `test_request_object_module_completes` × 18) → **188 passed, 0 skipped**
+  en ≈ 14 min 30.
