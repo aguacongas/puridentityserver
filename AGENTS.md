@@ -64,6 +64,12 @@ Règle à appliquer d'office :
   valeurs seed dans `config.toml`.
 - N'implémenter la crypto que via `PyJWT` / `cryptography` — jamais à la main.
 - Commits : style français, `feat(oidc):`, `fix:`, `chore:` — ne commit/push que si demandé.
+- **Chaque PR référence une issue** : créer l'issue d'abord (titre + corps décrivant le
+  besoin et les critères d'acceptation) avant d'ouvrir la PR ; la mentionner dans la
+  description (`Closes #NN`). Pas d'issue = pas de PR.
+- **Ne jamais merger une PR** : attendre la confirmation explicite de l'utilisateur avant
+  `gh pr merge` (créer la branche, push, ouvrir la PR et surveiller la CI sont autorisés ;
+  le merge attend toujours un feu vert de l'utilisateur).
 
 ## Échantillon de démonstration (DoD)
 
