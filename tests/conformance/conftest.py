@@ -8,7 +8,10 @@ résumé ``N passed, M deselected`` prouve que le rejeu a eu lieu).
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterator
+from dataclasses import dataclass, field
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 from fastapi import FastAPI
@@ -39,6 +42,18 @@ _CLIENT_OTHER = {
     "client_type": "confidential",
 }
 
+# Client inscrit avec ``id_token_signed_response_alg=none`` : la suite
+# ``oidcc-idtoken-unsigned`` l'enregistre dynamiquement
+# (``AddIdTokenSigningAlgNoneToDynamicRegistrationRequest``).
+_CLIENT_UNSIGNED = {
+    "client_id": "unsigned-app",
+    "client_secret": "unsigned-secret",
+    "redirect_uris": ["https://unsigned.example/callback"],
+    "scopes": "openid profile",
+    "client_type": "confidential",
+    "id_token_signed_response_alg": "none",
+}
+
 # Comptes de ``certification/config.render.toml`` (instances de certification
 # et local partagent les mêmes identifiants pilotes).
 _IDENTITY_USERS = {"alice": {"email": "alice@example.com", "password": "password"}}
@@ -57,7 +72,7 @@ def build_app() -> FastAPI:
             issuer=_ISSUER,
             base_url=_ISSUER,
             jwks_algorithms=("RS256",),
-            clients_seed=(_CLIENT, _CLIENT_OTHER),
+            clients_seed=(_CLIENT, _CLIENT_OTHER, _CLIENT_UNSIGNED),
             require_login=True,
             identity_seed_users=_IDENTITY_USERS,
         )
@@ -69,3 +84,66 @@ def harness() -> Iterator[ConformanceHarness]:
     """Harness RP d'un test : ``/authorize`` → login/consent auto → callback."""
     with ConformanceHarness(build_app()) as instance:
         yield instance
+
+
+@pytest.fixture
+def unsigned_harness() -> Iterator[ConformanceHarness]:
+    """Harness d'un client ``id_token_signed_response_alg=none``.
+
+    Module ``oidcc-idtoken-unsigned`` : ``AddIdTokenSigningAlgNoneToDynamicRegistrationRequest``
+    attend ce client seed pour rejouer le check signature.
+    """
+    with ConformanceHarness(
+        build_app(),
+        client_id=_CLIENT_UNSIGNED["client_id"],
+        client_secret=_CLIENT_UNSIGNED["client_secret"],
+        redirect_uri=_CLIENT_UNSIGNED["redirect_uris"][0],
+    ) as instance:
+        yield instance
+
+
+@dataclass
+class RequestDocumentServer:
+    """Serveur local qui héberge le document JWT d'un ``request_uri``.
+
+    La suite de certification joue ce rôle côté RP
+    (``AbstractOIDCCRequestUriServerTest.handleRequestUriRequest``) en
+    ``Content-Type: application/jwt`` — ici, sur un port libre de la machine,
+    l'OP local le lisant en ``http://127.0.0.1:<port>/…``.
+    """
+
+    url: str = ""
+    document: str = ""
+    paths: list[str] = field(default_factory=list)
+
+
+@pytest.fixture
+def request_document_server() -> Iterator[RequestDocumentServer]:
+    """Démarre le serveur de documents ``request_uri`` pour un test."""
+    state = RequestDocumentServer()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            """Répond avec le document courant et enregistre le chemin appelé."""
+            state.paths.append(self.path)
+            body = state.document.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/jwt")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            """Silence le serveur de test."""
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    state.url = f"http://127.0.0.1:{server.server_port}"
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield state
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

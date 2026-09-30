@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
 from puridentityserver.domain.authorization import ClientType
-from puridentityserver.domain.jwks import JWTAlgorithm, KeyPair
+from puridentityserver.domain.jwks import ALL_SIGNING_ALGORITHMS, JWTAlgorithm, KeyPair
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
 from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKeyPairRepository
 from puridentityserver.infrastructure.settings import Settings
@@ -68,7 +68,12 @@ def test_jwks_use_case_initialise_creates_one_active_key_per_algorithm() -> None
 def test_settings_default_to_all_supported_algorithms() -> None:
     settings = Settings()
 
-    assert settings.jwks_algorithms == tuple(algorithm.value for algorithm in JWTAlgorithm)
+    # ``none`` est une valeur d'en-tête (JWA RFC 7519 §6), pas un algorithme
+    # de clé : il ne peut pas entrer dans la dérive des paires du serveur.
+    assert settings.jwks_algorithms == tuple(
+        algorithm.value for algorithm in ALL_SIGNING_ALGORITHMS
+    )
+    assert "none" not in settings.jwks_algorithms
 
 
 def test_settings_read_algorithm_list_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:

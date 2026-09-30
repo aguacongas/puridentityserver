@@ -23,7 +23,12 @@ from puridentityserver.application.authorize import (
 )
 from puridentityserver.application.client_auth import CLIENT_UNKNOWN_ERROR, verify_client_secret
 from puridentityserver.application.scope_registry import ScopeRegistry
-from puridentityserver.domain.authorization import Client, ClientType, PushedAuthorization
+from puridentityserver.domain.authorization import (
+    PUSHED_REQUEST_URI_PREFIX,
+    Client,
+    ClientType,
+    PushedAuthorization,
+)
 from puridentityserver.interfaces.repositories.pushed_authorization_repository import (
     PushedAuthorizationRepository,
 )
@@ -160,7 +165,7 @@ class PushedAuthorizationUseCase:
             )
 
         reference = secrets.token_urlsafe(32)
-        request_uri = f"urn:ietf:params:oauth:request_uri:{reference}"
+        request_uri = f"{PUSHED_REQUEST_URI_PREFIX}{reference}"
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(seconds=self._config.ttl_seconds)
 

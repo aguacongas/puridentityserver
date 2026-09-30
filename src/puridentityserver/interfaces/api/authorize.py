@@ -22,6 +22,11 @@ from puridentityserver.application.authorize import (
 )
 from puridentityserver.application.consent import ConsentUseCase
 from puridentityserver.application.par import PushedAuthorizationUseCase, PushError
+from puridentityserver.application.request_object import (
+    RequestObjectError,
+    RequestObjectResolver,
+    is_pushed_request_uri,
+)
 from puridentityserver.domain.authorization import ResponseMode, Scope
 from puridentityserver.identity.config import (
     CurrentUser,
@@ -77,6 +82,7 @@ class AuthorizeQueryParams(BaseModel):
     response_mode: str = ""
     prompt: str = ""
     max_age: str = ""
+    request: str = ""
     request_uri: str = ""
     acr_values: str = ""
     claims: str = ""
@@ -88,13 +94,17 @@ def authorize_router(
     client_repository: ClientReader | None = None,
     consent_usecase: ConsentUseCase | None = None,
     *,
+    request_object_resolver: RequestObjectResolver,
     require_login: bool = False,
     base_url: str = "",
 ) -> APIRouter:
     """Construit le routeur FastAPI exposant ``GET /authorize``.
 
-    ``par_usecase`` active la résolution de ``request_uri`` (RFC 9126 §6.2) ;
-    ``None`` (PAR désactivé) rejette toute référence poussée.
+    ``request_object_resolver`` incorpore le request object (RFC 9101) aux
+    paramètres d'une demande non poussée, ``par_usecase`` résout au contraire
+    la référence opaque ``request_uri`` (RFC 9126 §6.2) — ``None`` (PAR
+    désactivé) rejette toute référence poussée. ``request_uris`` RFC 9101
+    pointant un document hébergé ailleurs n'ont besoin que du resolver.
     ``client_repository`` permet d'appliquer l'obligation PAR par client
     (``par_required``, RFC 9126 §6.1) et de résoudre le client pour le
     consentement. ``consent_usecase`` active l'écran de consentement
@@ -155,61 +165,17 @@ def authorize_router(
         user: CurrentUserOptional,
     ) -> RedirectResponse | HTMLResponse:
         request_uri = params.get("request_uri", "")
-        if request_uri:
+        if request_uri and is_pushed_request_uri(request_uri):
             auth_request = await _resolve_pushed_request(
                 request, params.get("client_id", ""), request_uri, par_usecase
             )
         else:
-            missing = [
-                name
-                for name, value in (
-                    ("response_type", params.get("response_type", "")),
-                    ("client_id", params.get("client_id", "")),
-                    ("redirect_uri", params.get("redirect_uri", "")),
-                    ("scope", params.get("scope", "")),
-                )
-                if not value
-            ]
-            if missing:
-                # RFC 6749 §3.1.1 / §4.1.2.1 : quand une demande d'autorisation
-                # échoue en amont de toute redirection exploitable, l'OP doit
-                # afficher une PAGE HTML d'erreur dans le navigateur de
-                # l'utilisateur (pas un JSON) — c'est cette page que la suite
-                # de certification hébergée (module ExpectResponseTypeMissing
-                # ErrorPage) capture en screenshot.
-                return HTMLResponse(
-                    status_code=400,
-                    content=(
-                        '<!doctype html><html lang="fr"><head>'
-                        '<meta charset="utf-8"><title>Erreur de la demande '
-                        "d'autorisation</title><style>body{font-family:"
-                        "sans-serif;margin:2rem;max-width:28rem}h1{font-size:"
-                        "1.3rem}.hint{color:#666;font-size:0.9rem}</style>"
-                        "</head><body><h1>Requête d'autorisation invalide</h1>"
-                        '<p class="hint">Paramètres requis manquants : '
-                        + ", ".join(html.escape(p) for p in missing)
-                        + ". Conformément à la RFC 6749 §3.1.1, la demande ne "
-                        "peut pas être traitée car un paramètre obligatoire "
-                        "(dont <code>response_type</code>) est absent.</p>"
-                        "</body></html>"
-                    ),
-                )
-            await _enforce_par_requirement(params.get("client_id", ""), client_repository)
-            auth_request = AuthorizeRequest(
-                response_type=params.get("response_type", ""),
-                client_id=params.get("client_id", ""),
-                redirect_uri=params.get("redirect_uri", ""),
-                scope=params.get("scope", ""),
-                state=params.get("state", ""),
-                nonce=params.get("nonce", ""),
-                code_challenge=params.get("code_challenge", ""),
-                code_challenge_method=params.get("code_challenge_method", "S256"),
-                response_mode=params.get("response_mode", ""),
-                prompt=params.get("prompt", ""),
-                max_age=parse_max_age(params.get("max_age", "")),
-                acr_values=params.get("acr_values", ""),
-                claims=params.get("claims", ""),
+            built = await _direct_authorize_request(
+                params, request_object_resolver, client_repository
             )
+            if isinstance(built, HTMLResponse):
+                return built
+            auth_request = built
 
         pre = await _pre_execution_response(
             auth_request, request, user, client_repository, require_login, base_url
@@ -230,6 +196,100 @@ def authorize_router(
         return error_response(result)
 
     return router
+
+
+async def _direct_authorize_request(
+    params: dict[str, str],
+    request_object_resolver: RequestObjectResolver,
+    client_repository: ClientReader | None,
+) -> AuthorizeRequest | HTMLResponse:
+    """Construit la demande d'une requête **non poussée** (RFC 6749 §3.1).
+
+    Le request object (RFC 9101) est résolu en premier : ses claims priment
+    sur la query (OIDC Core 1.0 §6.1), qui n'est plus qu'un repli. Puis les
+    paramètres requis sont contrôlés et l'obligation PAR du client appliquée
+    (RFC 9126 §6.1). Un request object refusé ou des paramètres manquants sont
+    rendus en **page HTML** : une demande écartée en amont de toute
+    redirection exploitable ne produit ni JSON ni redirection (RFC 6749
+    §4.1.2.1), c'est l'observable des checks ``ExpectResponseTypeMissing
+    ErrorPage`` et ``ExpectInvalidRequestUriErrorPage`` de la suite.
+    """
+    resolved = await request_object_resolver.resolve(params)
+    if isinstance(resolved, RequestObjectError):
+        return _request_object_error_page(resolved)
+    params = resolved
+    missing = [
+        name
+        for name, value in (
+            ("response_type", params.get("response_type", "")),
+            ("client_id", params.get("client_id", "")),
+            ("redirect_uri", params.get("redirect_uri", "")),
+            ("scope", params.get("scope", "")),
+        )
+        if not value
+    ]
+    if missing:
+        return _missing_parameters_page(missing)
+    await _enforce_par_requirement(params.get("client_id", ""), client_repository)
+    return AuthorizeRequest(
+        response_type=params.get("response_type", ""),
+        client_id=params.get("client_id", ""),
+        redirect_uri=params.get("redirect_uri", ""),
+        scope=params.get("scope", ""),
+        state=params.get("state", ""),
+        nonce=params.get("nonce", ""),
+        code_challenge=params.get("code_challenge", ""),
+        code_challenge_method=params.get("code_challenge_method", "S256"),
+        response_mode=params.get("response_mode", ""),
+        prompt=params.get("prompt", ""),
+        max_age=parse_max_age(params.get("max_age", "")),
+        acr_values=params.get("acr_values", ""),
+        claims=params.get("claims", ""),
+    )
+
+
+def _missing_parameters_page(missing: list[str]) -> HTMLResponse:
+    """Page d'erreur 400 listant les paramètres requis absents (RFC 6749 §3.1.1)."""
+    return HTMLResponse(
+        status_code=400,
+        content=(
+            '<!doctype html><html lang="fr"><head>'
+            '<meta charset="utf-8"><title>Erreur de la demande '
+            "d'autorisation</title><style>body{font-family:"
+            "sans-serif;margin:2rem;max-width:28rem}h1{font-size:"
+            "1.3rem}.hint{color:#666;font-size:0.9rem}</style>"
+            "</head><body><h1>Requête d'autorisation invalide</h1>"
+            '<p class="hint">Paramètres requis manquants : '
+            + ", ".join(html.escape(name) for name in missing)
+            + ". Conformément à la RFC 6749 §3.1.1, la demande ne "
+            "peut pas être traitée car un paramètre obligatoire "
+            "(dont <code>response_type</code>) est absent.</p>"
+            "</body></html>"
+        ),
+    )
+
+
+def _request_object_error_page(error: RequestObjectError) -> HTMLResponse:
+    """Page d'erreur 400 d'un request object refusé (RFC 9101 §6, §7).
+
+    Aucune redirection : la ``redirect_uri`` du transport n'est pas
+    exploitable tant que le request object n'a pas été accepté.
+    """
+    return HTMLResponse(
+        status_code=400,
+        content=(
+            '<!doctype html><html lang="fr"><head><meta charset="utf-8">'
+            "<title>Erreur de la demande d'autorisation</title><style>body{"
+            "font-family:sans-serif;margin:2rem;max-width:28rem}h1{font-size:"
+            "1.3rem}.hint{color:#666;font-size:0.9rem}</style></head><body>"
+            "<h1>Requête d'autorisation invalide</h1>"
+            '<p class="hint"><code>'
+            + html.escape(error.error)
+            + "</code> — "
+            + html.escape(error.error_description)
+            + "</p></body></html>"
+        ),
+    )
 
 
 async def _pre_execution_response(

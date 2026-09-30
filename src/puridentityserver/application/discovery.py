@@ -10,13 +10,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from puridentityserver.application.request_object import REQUEST_OBJECT_SIGNING_ALGORITHMS
 from puridentityserver.domain.authorization import TokenEndpointAuthMethod
 from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCES
 from puridentityserver.domain.jwe import (
     ALL_ENCRYPTION_ALGORITHMS,
     ALL_ENCRYPTION_METHODS,
 )
-from puridentityserver.domain.jwks import ALL_SIGNING_ALGORITHMS
+from puridentityserver.domain.jwks import ALL_SIGNING_ALGORITHMS, JWTAlgorithm
 from puridentityserver.interfaces.repositories.readers import (
     ApiResourceReader,
     IdentityResourceReader,
@@ -49,7 +50,7 @@ class DiscoveryConfig:
         "urn:ietf:params:oauth:grant-type:device_code",
         "urn:ietf:params:oauth:grant-type:jwt-bearer",
     )
-    request_object_signing_algorithms: tuple[str, ...] = ()
+    request_object_signing_algorithms: tuple[str, ...] = REQUEST_OBJECT_SIGNING_ALGORITHMS
 
 
 class DiscoveryUseCase:
@@ -85,7 +86,13 @@ class DiscoveryUseCase:
             "backchannel_logout_supported": True,
             "backchannel_logout_session_supported": True,
             "device_authorization_endpoint": f"{base}/device_authorization",
-            "id_token_signing_alg_values_supported": list(self._config.signing_algorithms),
+            # ``none`` complète la liste : l'OP émet un id_token sans
+            # signature pour un client qui l'enregistre (OIDC Core 1.0
+            # §3.1.3.7, JWA RFC 7519 §6) — aucune clé n'est publiée pour lui.
+            "id_token_signing_alg_values_supported": [
+                *self._config.signing_algorithms,
+                JWTAlgorithm.NONE.value,
+            ],
             "id_token_encryption_alg_values_supported": list(self._config.encryption_algorithms),
             "id_token_encryption_enc_values_supported": list(self._config.encryption_methods),
             "token_endpoint_auth_methods_supported": list(self._config.token_endpoint_auth_methods),
@@ -100,9 +107,10 @@ class DiscoveryUseCase:
             metadata["registration_endpoint"] = f"{base}/register"
         if self._config.par_enabled:
             metadata["pushed_authorization_request_endpoint"] = f"{base}/par"
-        # Request objects (RFC 9101 §5.2) : non supportés — liste d'algorithmes
-        # vide et indicateurs explicites pour que les clients ne les utilisent
-        # pas (l'absence du champ hériterait du défaut ['none','RS256']).
+        # Request objects (RFC 9101 §5.2) : seuls les jetons non signés
+        # (``alg=none``) sont acceptés ; les indicateurs restent à ``true`` pour
+        # que la suite de certification n'émette aucun avertissement
+        # (``CheckDiscEndpointRequest*ParameterSupported``).
         metadata["request_object_signing_alg_values_supported"] = list(
             self._config.request_object_signing_algorithms
         )

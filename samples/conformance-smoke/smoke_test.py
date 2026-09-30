@@ -5,12 +5,13 @@ locaux » (PR 4/4, issue #72).
 
 Le serveur PurIdentityServer est lancé en sous-processus (port 8121,
 ``config.toml`` généré reproduisant les seeds du harness : issuer/base_url
-``https://id.example``, clients ``web-app`` + ``mobile-app``, compte ``alice``,
+``https://id.example``, clients ``web-app`` + ``mobile-app`` +
+``unsigned-app`` (``id_token_signed_response_alg=none``), compte ``alice``,
 profils de claims ``users_seed`` repris du ``config.toml`` racine,
 ``require_login = true``), puis ``PURIDENTITYSERVER_CONFORMANCE_URL`` est
 exporté : le harness (``tests/conformance/harness.py``) bascule alors sur du
 httpx réel au lieu de l'ASGI in-process, et ``pytest -m conformance`` rejoue
-les 173 scénarios des plans Basic, Implicit et Hybrid contre le serveur
+les 188 scénarios des plans Basic, Implicit et Hybrid contre le serveur
 réel. Le code retour de pytest est propagé ; un garde-fou borne la durée.
 
 Usage (depuis n'importe où dans le dépôt) :
@@ -35,7 +36,12 @@ from smoke_common import run_server, watchdog  # ruff: ignore[module-import-not-
 
 sys.path.insert(0, str(REPO_ROOT / "tests" / "conformance"))
 
-from conftest import _CLIENT, _CLIENT_OTHER, _IDENTITY_USERS  # ruff: ignore[module-import-not-at-top-of-file]
+from conftest import (  # ruff: ignore[module-import-not-at-top-of-file]
+    _CLIENT,
+    _CLIENT_OTHER,
+    _CLIENT_UNSIGNED,
+    _IDENTITY_USERS,
+)
 
 SERVER_PORT = 8121
 
@@ -44,7 +50,9 @@ SERVER_PORT = 8121
 # seed pointent vers des hôtes externes (jamais suivis par le harness).
 ISSUER = "https://id.example"
 
-_DEADLINE = 1500
+# 188 scénarios contre un vrai serveur : le rejeu in-process prend déjà
+# ~14 min, HTTP réel en ajoute — le garde-fou ne doit pas tronquer un rejeu sain.
+_DEADLINE = 2400
 
 
 def _users_seed() -> dict[str, dict[str, object]]:
@@ -68,7 +76,7 @@ def main() -> int:
         watchdog(_DEADLINE),
         run_server(
             port=SERVER_PORT,
-            clients=(_CLIENT, _CLIENT_OTHER),
+            clients=(_CLIENT, _CLIENT_OTHER, _CLIENT_UNSIGNED),
             users=_IDENTITY_USERS,
             users_seed=_users_seed(),
             issuer=ISSUER,

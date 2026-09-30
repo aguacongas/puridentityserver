@@ -27,6 +27,9 @@ _ALL_ALGOS = [
     "HS256",
     "HS384",
     "HS512",
+    # ``none`` complète toujours la liste : l'OP émet un id_token non signé
+    # pour un client qui l'enregistre ainsi (OIDC Core 1.0 §3.1.3.7).
+    "none",
 ]
 
 
@@ -106,4 +109,16 @@ def test_discovery_advertises_configured_signing_algorithms() -> None:
 
     assert response.status_code == 200
     metadata = response.json()
-    assert metadata["id_token_signing_alg_values_supported"] == ["RS256", "ES256", "ES512"]
+    assert metadata["id_token_signing_alg_values_supported"] == ["RS256", "ES256", "ES512", "none"]
+
+
+def test_discovery_advertises_unsigned_request_objects() -> None:
+    usecase = DiscoveryUseCase(DiscoveryConfig(issuer=_ISSUER))
+    document = run(usecase.execute())
+
+    # RFC 9101 §5.2 : seuls les request objects non signés sont acceptés et
+    # les deux indicateurs restent vrais — la suite de certification émet un
+    # avertissement dès qu'un d'eux vaut ``false``.
+    assert document["request_object_signing_alg_values_supported"] == ["none"]
+    assert document["request_parameter_supported"] is True
+    assert document["request_uri_parameter_supported"] is True

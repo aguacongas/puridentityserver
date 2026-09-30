@@ -6,15 +6,19 @@ prompt=login, max_age=1), les 35 autres sont rejoués ici — chaque test s'appu
 sur les checks extraits des fichiers Java de la suite (``checks.py``, fiches
 dans ``TRACEABILITY.md``), jamais sur une relecture de la spécification seule.
 
-Modules explicitement sautés (``pytest.skip``) reproduisent les skips de la
-suite : ``oidcc-idtoken-unsigned`` et les 3 modules ``request``/``request_uri``
-tombent sur ``skipTestIfNoneUnsupported`` car ``none`` n'est pas dans
-``request_object_signing_alg_values_supported``.
+Les modules ``request``/``request_uri`` et ``oidcc-idtoken-unsigned`` sont
+rejoués pour de vrai (issue #76) : l'OP annonce désormais ``none`` dans
+``request_object_signing_alg_values_supported`` et
+``id_token_signing_alg_values_supported``, ce qui lève les sauts
+``skipTestIfNoneUnsupported`` / ``skipTestIfSigningAlgorithmNotSupported`` de
+la suite — plus aucun ``pytest.skip`` dans ce fichier.
 """
 
 from __future__ import annotations
 
+import base64
 import json
+import secrets
 import time
 
 import pytest
@@ -30,13 +34,15 @@ from checks import (
     expect_access_token_refused,
     expect_authorization_error,
     expect_callback_success,
+    expect_hybrid_callback,
     expect_id_token_signature,
+    expect_implicit_callback,
     expect_invalid_grant,
     expect_response_type_missing_error_page,
     validate_id_token,
 )
-from conftest import build_app
-from harness import ConformanceHarness, new_verifier
+from conftest import _CLIENT_UNSIGNED, RequestDocumentServer, build_app
+from harness import ConformanceHarness, FlowResult, decode_id_token_claims, new_verifier
 
 _ISSUER = "https://id.example"
 _CLIENT_ID = "web-app"
@@ -87,12 +93,30 @@ _USERINFO_MODULES: tuple[tuple[str, str], ...] = (
     ("oidcc-userinfo-post-body", "post_body"),
 )
 
-# Modules ``request``/``request_uri`` : la suite les saute quand ``none`` n'est
-# pas déclaré (``skipTestIfNoneUnsupported``) — c'est le cas du serveur.
-_REQUEST_OBJECT_MODULES = (
-    "oidcc-request-uri-unsigned-supported-correctly-or-rejected-as-unsupported",
-    "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
-    "oidcc-ensure-request-object-with-redirect-uri",
+# Modules ``request``/``request_uri`` (RFC 9101) et mode de transport employé :
+# la suite les applique à **toutes** les variantes ``ResponseType`` des plans
+# Basic, Implicit et Hybrid (``OIDCCBasicTestPlan``,
+# ``OIDCCImplicitTestPlan``, ``OIDCCHybridTestPlan``) — leur saut commun
+# ``skipTestIfNoneUnsupported`` est levé depuis que ``none`` est annoncé.
+_REQUEST_OBJECT_MODULES: tuple[tuple[str, str], ...] = (
+    (
+        "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
+        "request",
+    ),
+    (
+        "oidcc-request-uri-unsigned-supported-correctly-or-rejected-as-unsupported",
+        "request_uri",
+    ),
+    ("oidcc-ensure-request-object-with-redirect-uri", "redirect_uri"),
+)
+# Variantes ``ResponseType`` : ``code`` (Basic), les 2 implicites et les 3 hybrides.
+_REQUEST_OBJECT_TYPES = (
+    "code",
+    "id_token",
+    "id_token token",
+    "code id_token",
+    "code token",
+    "code id_token token",
 )
 
 
@@ -422,39 +446,183 @@ def test_id_token_signature_is_rs256_with_kid(harness: ConformanceHarness) -> No
 
 
 @pytest.mark.conformance
-def test_id_token_alg_none_not_supported_skips(harness: ConformanceHarness) -> None:
-    """``oidcc-idtoken-unsigned`` : ``skip`` car ``none`` non supporté.
+def test_id_token_alg_none_is_issued(unsigned_harness: ConformanceHarness) -> None:
+    """``oidcc-idtoken-unsigned`` : ``id_token`` émis sans signature (``alg=none``).
 
-    ``skipTestIfSigningAlgorithmNotSupported``
-    (``OIDCCCheckIdTokenSigningAlgValuesSupportedAlgNone``) : ``none`` absent
-    de ``id_token_signing_alg_values_supported`` → la suite ``fireTestSkipped``
-    — saut fidèle ici.
+    ``AddIdTokenSigningAlgNoneToDynamicRegistrationRequest`` inscrit le client
+    avec ``id_token_signed_response_alg=none`` ;
+    ``CheckIdTokenSignatureAlgorithm`` (OIDCC-3.1.3.7) exige
+    ``header.alg == "none"``. Le saut
+    ``skipTestIfSigningAlgorithmNotSupported`` n'a plus lieu d'être puisque
+    ``none`` figure dans ``id_token_signing_alg_values_supported``.
     """
-    response = harness._client.get("/.well-known/openid-configuration")
-    algs = response.json().get("id_token_signing_alg_values_supported", [])
-    if "none" not in algs:
-        pytest.skip(f"alg=none non supporté par l'OP (discovery : {algs})")
-    raise AssertionError(f"none déclaré ({algs}) : le check signature devrait être rejoué")
+    verifier = new_verifier()
+    params = unsigned_harness.authorize_params(verifier)
+    result = unsigned_harness.run_flow(**params)
+    expect_callback_success(result, params["state"])
+    tokens = unsigned_harness.exchange_code(result, verifier)
+
+    header = ConformanceHarness.id_token_header(tokens)
+    assert header["alg"] == "none", f"en-tête non signé attendu : {header!r}"
+    id_token = str(tokens["id_token"])
+    assert id_token.endswith("."), f"segment de signature vide attendu : {id_token[-24:]!r}"
+    validate_id_token(
+        ConformanceHarness.id_token_claims(tokens),
+        issuer=_ISSUER,
+        client_id=str(_CLIENT_UNSIGNED["client_id"]),
+        nonce=str(params["nonce"]),
+    )
+
+
+def _unsigned_request_object(claims: dict[str, str]) -> str:
+    """JWT compact non signé (``PlainJWT.serialize()`` de nimbus).
+
+    En-tête ``{"alg":"none"}``, payload JSON, segment de signature vide :
+    ``header.payload.`` — c'est le document que sert la suite en
+    ``Content-Type: application/jwt``.
+    """
+    header = base64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b"=").decode("ascii")
+    payload = (
+        base64.urlsafe_b64encode(json.dumps(claims, separators=(",", ":")).encode("utf-8"))
+        .rstrip(b"=")
+        .decode("ascii")
+    )
+    return f"{header}.{payload}."
+
+
+def _request_object_claims(harness: ConformanceHarness, response_type: str) -> dict[str, str]:
+    """Demande complète portée par le request object (OIDC Core 1.0 §6.1).
+
+    ``state`` et ``nonce`` n'existent que dans le jeton : un OP qui
+    ignorerait le request object échouerait sur le ``state`` attendu.
+    """
+    return {
+        "response_type": response_type,
+        "client_id": harness._client_id,
+        "redirect_uri": harness._redirect_uri,
+        "scope": "openid profile",
+        "state": secrets.token_urlsafe(8),
+        "nonce": secrets.token_urlsafe(8),
+    }
+
+
+def _request_object_query(
+    claims: dict[str, str],
+    kind: str,
+    document_server: RequestDocumentServer,
+) -> dict[str, str]:
+    """Reconstruit la query de ``AbstractAuthorizationCodeTest.buildRedirect``.
+
+    Seuls les doublons obligatoires (``response_type``, ``client_id``,
+    ``scope``, ``redirect_uri``) y figurent à côté de ``request`` /
+    ``request_uri`` ; ``redirect_uri`` choisit la variante
+    ``AddInvalidRedirectUriToAuthorizationRequest`` (URI non enregistrée en
+    query, URI valide conservée dans le jeton).
+    """
+    query = {
+        "response_type": claims["response_type"],
+        "client_id": claims["client_id"],
+        "redirect_uri": claims["redirect_uri"],
+        "scope": claims["scope"],
+    }
+    if kind == "request_uri":
+        query["request_uri"] = f"{document_server.url}{_document_path(claims)}"
+        document_server.document = _unsigned_request_object(claims)
+    else:
+        if kind == "redirect_uri":
+            query["redirect_uri"] = f"{claims['redirect_uri']}_invalid"
+        query["request"] = _unsigned_request_object(claims)
+    return query
+
+
+def _document_path(claims: dict[str, str]) -> str:
+    """Chemin ``request_uri`` dédié au test (le ``state`` le rend unique)."""
+    return f"/requesturi/{claims['state']}"
+
+
+def _expect_request_object_callback(
+    harness: ConformanceHarness,
+    claims: dict[str, str],
+    result: FlowResult,
+) -> str:
+    """Contrôle le callback selon le ``response_type`` puis rend l'id_token.
+
+    Code : échange au token endpoint (sans PKCE, la demande n'en porte pas) ;
+    flux implicites/hybrides : l'id_token arrive en fragment. ``nonce`` et
+    ``state`` ne provenant que du request object, leur présence atteste que
+    l'OP l'a réellement traité.
+    """
+    parts = claims["response_type"].split()
+    has_code = "code" in parts
+    has_id_token = "id_token" in parts
+    with_token = "token" in parts
+    if not has_code:
+        expect_implicit_callback(result, claims["state"], with_token=with_token)
+        return result.id_token
+    if has_id_token:
+        expect_hybrid_callback(result, claims["state"], with_id_token=True, with_token=with_token)
+    else:
+        expect_callback_success(result, claims["state"])
+    response = harness.token_request(
+        {
+            "grant_type": "authorization_code",
+            "code": result.code,
+            "redirect_uri": harness._redirect_uri,
+        },
+        "basic",
+    )
+    return str(check_token_endpoint_success(response)["id_token"])
 
 
 @pytest.mark.conformance
-@pytest.mark.parametrize("alias", _REQUEST_OBJECT_MODULES)
-def test_request_object_modules_skip_without_none_support(
-    harness: ConformanceHarness, alias: str
+@pytest.mark.parametrize(
+    ("alias", "kind"),
+    _REQUEST_OBJECT_MODULES,
+    ids=[kind for _alias, kind in _REQUEST_OBJECT_MODULES],
+)
+@pytest.mark.parametrize("response_type", _REQUEST_OBJECT_TYPES, ids=lambda value: f"rt-{value}")
+def test_request_object_module_completes(
+    harness: ConformanceHarness,
+    request_document_server: RequestDocumentServer,
+    alias: str,
+    kind: str,
+    response_type: str,
 ) -> None:
-    """Modules ``request``/``request_uri`` : saut fidèle à ``skipTestIfNoneUnsupported``.
+    """Module ``request``/``request_uri`` : le request object est traité, jamais ignoré.
 
-    ``none`` absent de ``request_object_signing_alg_values_supported`` (le
-    discovery déclare ``request_parameter_supported=false``) → la suite saute
-    le test — ``oidcc-request-uri-unsigned-…``,
-    ``oidcc-unsigned-request-object-…``,
-    ``oidcc-ensure-request-object-with-redirect-uri``.
+    ``skipTestIfNoneUnsupported`` est levé (``none`` annoncé dans
+    ``request_object_signing_alg_values_supported``) ; les trois modules
+    (``alias``) rejouent les 6 ``ResponseType`` des plans Basic, Implicit et
+    Hybrid : la demande portée par le JWT doit produire le callback attendu,
+    y compris ``state``/``nonce`` qui n'existent que dans le jeton.
     """
-    response = harness._client.get("/.well-known/openid-configuration")
-    algs = response.json().get("request_object_signing_alg_values_supported", [])
-    if "none" not in algs:
-        pytest.skip(f"request object alg=none non supporté (discovery : {algs})")
-    raise AssertionError(f"alg=none déclaré ({algs}) : le module devrait être rejoué ({alias})")
+    claims = _request_object_claims(harness, response_type)
+    query = _request_object_query(claims, kind, request_document_server)
+
+    result = harness.run_flow(**query)
+    try:
+        id_token = _expect_request_object_callback(harness, claims, result)
+    except AssertionError as error:
+        raise AssertionError(f"{alias} [{response_type}] : {error}") from error
+
+    if kind == "redirect_uri":
+        assert result.callback_url.startswith(harness._redirect_uri), (
+            f"{alias} (OIDCC-6.1) : la redirect_uri du request object doit "
+            f"primer sur celle de la query : {result.callback_url!r}"
+        )
+    if kind == "request_uri":
+        # La demande repart depuis ``/authorize`` après login/consent : chaque
+        # passage re-lit le document — seule l'URL exigée ne doit pas varier.
+        assert request_document_server.paths, f"{alias} : aucun document lu"
+        assert set(request_document_server.paths) == {_document_path(claims)}, (
+            f"{alias} : chemins lus inattendus : {request_document_server.paths!r}"
+        )
+    validate_id_token(
+        decode_id_token_claims(id_token),
+        issuer=_ISSUER,
+        client_id=_CLIENT_ID,
+        nonce=claims["nonce"],
+    )
 
 
 @pytest.mark.conformance

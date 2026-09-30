@@ -36,6 +36,7 @@ from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
 from puridentityserver.application.logout import LogoutConfig, LogoutUseCase
 from puridentityserver.application.par import PushedAuthorizationConfig, PushedAuthorizationUseCase
 from puridentityserver.application.registration import RegistrationConfig, RegistrationUseCase
+from puridentityserver.application.request_object import RequestObjectConfig, RequestObjectResolver
 from puridentityserver.application.revocation import RevocationConfig, RevocationUseCase
 from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.application.session_management import SessionManagementUseCase
@@ -65,6 +66,10 @@ from puridentityserver.infrastructure.persistence.stores import (
     close_resources,
     initialise_protocol_stores,
     initialise_resources,
+)
+from puridentityserver.infrastructure.request_object import (
+    HTTPRequestObjectFetcher,
+    loopback_bind,
 )
 from puridentityserver.infrastructure.secrets import AsymmetricSecretCipher, load_seal_key_pair
 from puridentityserver.infrastructure.settings import Settings
@@ -109,6 +114,7 @@ def _mount_authorization_routers(
     par_usecase: PushedAuthorizationUseCase,
     client_reader: ClientReader,
     consent_usecase: ConsentUseCase,
+    request_object_resolver: RequestObjectResolver,
     par_enabled: bool,
     require_login: bool,
     base_url: str,
@@ -120,6 +126,7 @@ def _mount_authorization_routers(
             par_usecase=par_usecase if par_enabled else None,
             client_repository=client_reader,
             consent_usecase=consent_usecase,
+            request_object_resolver=request_object_resolver,
             require_login=require_login,
             base_url=base_url,
         )
@@ -198,6 +205,10 @@ class ProtocolDependencies:
         )
         self.session_management = SessionManagementUseCase()
         self.claims_provider = UserStoreClaimsProvider(self.readers.user)
+        self.request_object_resolver = RequestObjectResolver(
+            RequestObjectConfig(),
+            HTTPRequestObjectFetcher(allow_local_targets=loopback_bind(settings.host)),
+        )
 
         self.authorize_usecase = AuthorizeUseCase(
             AuthorizeConfig(
@@ -379,6 +390,7 @@ class ProtocolDependencies:
             par_usecase=self.par_usecase,
             client_reader=self.readers.client,
             consent_usecase=self.consent_usecase,
+            request_object_resolver=self.request_object_resolver,
             par_enabled=self.settings.par_enabled,
             require_login=self.settings.require_login,
             base_url=self.settings.base_url or self.settings.issuer,

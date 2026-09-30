@@ -211,7 +211,17 @@ class PyJWTTokenManager:
     async def _sign(
         self, algorithm: JWTAlgorithm, payload: dict[str, object], shared_secret: str = ""
     ) -> str:
-        """Signe le payload avec la clé de l'algorithme (serveur ou secret client)."""
+        """Signe le payload avec la clé de l'algorithme (serveur ou secret client).
+
+        ``none`` (JWA RFC 7519 §6) émet l'en-tête et les claims sans segment
+        de signature (``base64(header).base64(payload).``) : c'est le jeton
+        demandé par un client ayant enregistré
+        ``id_token_signed_response_alg=none`` (OIDC Core 1.0 §3.1.3.7).
+        """
+        if algorithm is JWTAlgorithm.NONE:
+            # types-PyJWT limite la clé à un objet crypto : le JWT non signé
+            # n'en porte aucune (JWA RFC 7519 §6).
+            return cast(str, pyjwt.encode(payload, None, algorithm="none"))  # type: ignore[arg-type]
         if algorithm in _HMAC_ALGORITHMS:
             if not shared_secret:
                 raise ValueError(
