@@ -95,7 +95,11 @@ tests/             pytest unit + intégration (TestClient httpx)
    (RSA `RS*`/`PS*`, EC `ES*` — liste configurable via `PURIDENTITYSERVER_JWKS_ALGORITHMS`,
    **tous les algorithmes fournis par défaut**),
    rotation par algorithme, `/.well-known/*`
-3. ✅ **Authorization Code + PKCE** (grant principal, RFC 6749 + 7636)
+3. ✅ **Authorization Code + PKCE** (grant principal, RFC 6749 + 7636) —
+   code à usage unique : une réutilisation renvoie `invalid_grant` **et**
+   révoque les jetons du premier échange (RFC 6749 §4.1.2) — l'access token
+   va au denylist (`/userinfo` et `/introspect` → 401 `invalid_token`,
+   RFC 6750 §3.1) et le refresh token est consommé
 4. ✅ **ID Token + UserInfo** — émission et validation JWT via PyJWT,
    endpoint `/userinfo` (Bearer en en-tête ou access_token dans le corps
    form du POST, RFC 6750 §2.1 ; filtrage des claims par scopes accordés)

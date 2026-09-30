@@ -41,6 +41,11 @@ class AuthorizationCodeRow(PersistenceBase):
     claims: Mapped[str] = mapped_column(Text, default="")
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     is_consumed: Mapped[bool] = mapped_column(Boolean, default=False)
+    access_token_hash: Mapped[str] = mapped_column(String(64), default="")
+    access_token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    refresh_token_hash: Mapped[str] = mapped_column(String(64), default="")
 
 
 class SQLAuthorizationCodeRepository:
@@ -109,6 +114,9 @@ def _to_row(code: AuthorizationCode) -> AuthorizationCodeRow:
         claims=code.claims,
         expires_at=code.expires_at,
         is_consumed=code.is_consumed,
+        access_token_hash=code.access_token_hash,
+        access_token_expires_at=code.access_token_expires_at,
+        refresh_token_hash=code.refresh_token_hash,
     )
 
 
@@ -117,6 +125,9 @@ def _from_row(row: AuthorizationCodeRow) -> AuthorizationCode:
     expires_at = row.expires_at
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
+    access_expires = row.access_token_expires_at
+    if access_expires is not None and access_expires.tzinfo is None:
+        access_expires = access_expires.replace(tzinfo=timezone.utc)
     return AuthorizationCode(
         code=row.code,
         client_id=row.client_id,
@@ -132,4 +143,7 @@ def _from_row(row: AuthorizationCodeRow) -> AuthorizationCode:
         claims=row.claims or "",
         expires_at=expires_at,
         is_consumed=row.is_consumed,
+        access_token_hash=row.access_token_hash or "",
+        access_token_expires_at=access_expires,
+        refresh_token_hash=row.refresh_token_hash or "",
     )

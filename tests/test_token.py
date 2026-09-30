@@ -35,6 +35,9 @@ from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKey
 from puridentityserver.infrastructure.persistence.memory.refresh_tokens import (
     InMemoryRefreshTokenRepository,
 )
+from puridentityserver.infrastructure.persistence.memory.revoked_tokens import (
+    InMemoryRevokedTokenRepository,
+)
 from puridentityserver.infrastructure.persistence.sql.refresh_tokens import (
     SQLRefreshTokenRepository,
 )
@@ -75,11 +78,17 @@ def _future_expiry() -> datetime:
 
 def _make_usecase(
     client: Client | None = None, key_manager: DefaultKeyManager | None = None
-) -> tuple[TokenUseCase, InMemoryAuthorizationCodeRepository, InMemoryRefreshTokenRepository]:
+) -> tuple[
+    TokenUseCase,
+    InMemoryAuthorizationCodeRepository,
+    InMemoryRefreshTokenRepository,
+    InMemoryRevokedTokenRepository,
+]:
     """Construit un TokenUseCase avec des repos en mémoire."""
     clients = InMemoryClientRepository()
     codes = InMemoryAuthorizationCodeRepository()
     refresh_tokens = InMemoryRefreshTokenRepository()
+    revoked_tokens = InMemoryRevokedTokenRepository()
     device_codes = InMemoryDeviceAuthorizationRepository()
     km = key_manager or DefaultKeyManager(InMemoryKeyPairRepository())
     token_manager = PyJWTTokenManager(km)
@@ -87,9 +96,18 @@ def _make_usecase(
     run(clients.save(resolved_client))
     config = TokenConfig(issuer=_ISSUER, signing_algorithm=JWTAlgorithm.RS256)
     return (
-        TokenUseCase(config, clients, codes, token_manager, refresh_tokens, device_codes),
+        TokenUseCase(
+            config,
+            clients,
+            codes,
+            token_manager,
+            refresh_tokens,
+            device_codes,
+            revoked_tokens=revoked_tokens,
+        ),
         codes,
         refresh_tokens,
+        revoked_tokens,
     )
 
 
@@ -97,7 +115,7 @@ class TestTokenUseCaseErrors:
     """Couvre les branches d'erreur de TokenUseCase.execute."""
 
     def test_rejects_expired_code(self) -> None:
-        uc, codes, _ = _make_usecase()
+        uc, codes, _, _ = _make_usecase()
         expired = AuthorizationCode(
             code="expired-code",
             client_id="web-app",
@@ -120,7 +138,7 @@ class TestTokenUseCaseErrors:
         assert "expiré" in result.error_description
 
     def test_rejects_unknown_client(self) -> None:
-        uc, codes, _ = _make_usecase()
+        uc, codes, _, _ = _make_usecase()
         code = AuthorizationCode(
             code="valid-code",
             client_id="web-app",
@@ -141,7 +159,7 @@ class TestTokenUseCaseErrors:
         assert result.error == "invalid_client"
 
     def test_pkce_s256_missing_verifier(self) -> None:
-        uc, codes, _ = _make_usecase(_PUBLIC_CLIENT)
+        uc, codes, _, _ = _make_usecase(_PUBLIC_CLIENT)
         code = AuthorizationCode(
             code="pkce-code",
             client_id="spa",
@@ -166,7 +184,7 @@ class TestTokenUseCaseErrors:
         assert not hasattr(result, "id_token")
 
     def test_sid_from_code_is_carried_into_id_token(self) -> None:
-        uc, codes, _ = _make_usecase()
+        uc, codes, _, _ = _make_usecase()
         code = AuthorizationCode(
             code="sid-code",
             client_id="web-app",
@@ -192,7 +210,7 @@ class TestTokenUseCaseErrors:
         assert id_claims["sub"] == "alice-uuid"
 
     def test_no_sid_when_code_without_session(self) -> None:
-        uc, codes, _ = _make_usecase()
+        uc, codes, _, _ = _make_usecase()
         code = AuthorizationCode(
             code="no-sid-code",
             client_id="web-app",
@@ -215,7 +233,7 @@ class TestTokenUseCaseErrors:
         assert "sid" not in id_claims
 
     def test_pkce_plain_success(self) -> None:
-        uc, codes, _ = _make_usecase(_PUBLIC_CLIENT)
+        uc, codes, _, _ = _make_usecase(_PUBLIC_CLIENT)
         code = AuthorizationCode(
             code="plain-code",
             client_id="spa",
@@ -247,7 +265,7 @@ class TestTokenUseCaseErrors:
             client_type=ClientType.PUBLIC,
             access_token_lifetime_seconds=120,
         )
-        uc, codes, _ = _make_usecase(client)
+        uc, codes, _, _ = _make_usecase(client)
         code = AuthorizationCode(
             code="ttl-code",
             client_id="spa",
@@ -275,6 +293,92 @@ class TestTokenUseCaseErrors:
         assert access_claims["exp"] - access_claims["iat"] == 120
 
 
+class TestAuthorizationCodeReuse:
+    """Réutilisation d'un code d'autorisation → révocation (RFC 6749 §4.1.2)."""
+
+    def _offline_code(self, code: str, *, consumed: bool = False) -> AuthorizationCode:
+        return AuthorizationCode(
+            code=code,
+            client_id="web-app",
+            redirect_uri="https://app.example/callback",
+            subject="alice",
+            scopes=frozenset({Scope.OPENID, Scope.OFFLINE_ACCESS}),
+            expires_at=_future_expiry(),
+            is_consumed=consumed,
+        )
+
+    def _request(self, code: str) -> TokenRequest:
+        return TokenRequest(
+            grant_type="authorization_code",
+            code=code,
+            redirect_uri="https://app.example/callback",
+            client_id="web-app",
+            client_secret=_CLIENT_SECRET,
+        )
+
+    def test_rejects_unknown_code(self) -> None:
+        uc, _, _, _ = _make_usecase()
+
+        result = run(uc.execute(self._request("missing-code")))
+
+        assert result.error == "invalid_grant"
+
+    def test_reuse_revokes_access_token_and_consumes_refresh_token(self) -> None:
+        uc, codes, refresh_tokens, revoked = _make_usecase()
+        run(codes.save(self._offline_code("reuse-code")))
+
+        first = run(uc.execute(self._request("reuse-code")))
+        second = run(uc.execute(self._request("reuse-code")))
+
+        assert second.error == "invalid_grant"
+        assert run(revoked.is_revoked(token_hash(first.access_token))) is True
+        stored_refresh = run(refresh_tokens.find_by_token_hash(token_hash(first.refresh_token)))
+        assert stored_refresh is not None
+        assert stored_refresh.is_consumed is True
+
+    def test_refresh_token_of_a_reused_code_is_refused(self) -> None:
+        uc, codes, _, _ = _make_usecase()
+        run(codes.save(self._offline_code("reuse-code")))
+        first = run(uc.execute(self._request("reuse-code")))
+        run(uc.execute(self._request("reuse-code")))
+
+        refreshed = run(
+            uc.execute(
+                TokenRequest(
+                    grant_type="refresh_token",
+                    refresh_token=first.refresh_token,
+                    client_id="web-app",
+                    client_secret=_CLIENT_SECRET,
+                )
+            )
+        )
+
+        assert refreshed.error == "invalid_grant"
+
+    def test_first_exchange_records_fingerprints_without_revoking(self) -> None:
+        uc, codes, _, revoked = _make_usecase()
+        run(codes.save(self._offline_code("clean-code")))
+
+        first = run(uc.execute(self._request("clean-code")))
+        stored = run(codes.find_by_code("clean-code"))
+
+        assert first.access_token
+        assert run(revoked.is_revoked(token_hash(first.access_token))) is False
+        assert stored is not None
+        assert stored.is_consumed is True
+        assert stored.access_token_hash == token_hash(first.access_token)
+        assert stored.refresh_token_hash == token_hash(first.refresh_token)
+        assert stored.access_token_expires_at is not None
+
+    def test_reuse_of_code_without_recorded_tokens_still_rejects(self) -> None:
+        uc, codes, _, _ = _make_usecase()
+        run(codes.save(self._offline_code("legacy-code", consumed=True)))
+
+        result = run(uc.execute(self._request("legacy-code")))
+
+        assert result.error == "invalid_grant"
+
+
 class TestRefreshGrant:
     """Couvre le grant type ``refresh_token`` (RFC 6749 §6) avec rotation."""
 
@@ -300,7 +404,7 @@ class TestRefreshGrant:
         )
 
     def test_code_exchange_emits_refresh_token_with_offline_access(self) -> None:
-        uc, codes, refresh_tokens = _make_usecase()
+        uc, codes, refresh_tokens, _ = _make_usecase()
         code = AuthorizationCode(
             code="offline-code",
             client_id="web-app",
@@ -330,7 +434,7 @@ class TestRefreshGrant:
         assert Scope.OFFLINE_ACCESS in stored.scopes
 
     def test_code_exchange_omits_refresh_token_without_offline_access(self) -> None:
-        uc, codes, _ = _make_usecase()
+        uc, codes, _, _ = _make_usecase()
         code = AuthorizationCode(
             code="plain-code",
             client_id="web-app",
@@ -356,7 +460,7 @@ class TestRefreshGrant:
         assert result.refresh_token == ""
 
     def test_refresh_rotates_and_returns_new_tokens(self) -> None:
-        uc, _, refresh_tokens = _make_usecase()
+        uc, _, refresh_tokens, _ = _make_usecase()
         old = self._stored_refresh()
         run(refresh_tokens.save(old))
 
@@ -380,7 +484,7 @@ class TestRefreshGrant:
         assert run(refresh_tokens.find_by_token_hash(token_hash(result.refresh_token))) is not None
 
     def test_refresh_rejects_reused_token(self) -> None:
-        uc, _, refresh_tokens = _make_usecase()
+        uc, _, refresh_tokens, _ = _make_usecase()
         run(refresh_tokens.save(self._stored_refresh(consumed=True)))
 
         result = run(
@@ -398,7 +502,7 @@ class TestRefreshGrant:
         assert "rotation" in result.error_description
 
     def test_refresh_rejects_expired_token(self) -> None:
-        uc, _, refresh_tokens = _make_usecase()
+        uc, _, refresh_tokens, _ = _make_usecase()
         run(refresh_tokens.save(self._stored_refresh(ttl_minutes=-10)))
 
         result = run(
@@ -416,7 +520,7 @@ class TestRefreshGrant:
         assert "expiré" in result.error_description
 
     def test_refresh_rejects_unknown_token(self) -> None:
-        uc, _, _ = _make_usecase()
+        uc, _, _, _ = _make_usecase()
 
         result = run(
             uc.execute(
@@ -432,7 +536,7 @@ class TestRefreshGrant:
         assert result.error == "invalid_grant"
 
     def test_refresh_rejects_wrong_secret(self) -> None:
-        uc, _, refresh_tokens = _make_usecase()
+        uc, _, refresh_tokens, _ = _make_usecase()
         run(refresh_tokens.save(self._stored_refresh()))
 
         result = run(
@@ -449,7 +553,7 @@ class TestRefreshGrant:
         assert result.error == "invalid_client"
 
     def test_refresh_rejects_unknown_client(self) -> None:
-        uc, _, _ = _make_usecase()
+        uc, _, _, _ = _make_usecase()
 
         result = run(
             uc.execute(
@@ -465,7 +569,7 @@ class TestRefreshGrant:
         assert result.error == "invalid_client"
 
     def test_refresh_public_client_without_secret(self) -> None:
-        uc, _, refresh_tokens = _make_usecase(_PUBLIC_CLIENT)
+        uc, _, refresh_tokens, _ = _make_usecase(_PUBLIC_CLIENT)
         run(refresh_tokens.save(self._stored_refresh(client_id="spa")))
 
         result = run(
@@ -482,7 +586,7 @@ class TestRefreshGrant:
         assert result.refresh_token
 
     def test_refresh_narrows_scope(self) -> None:
-        uc, _, refresh_tokens = _make_usecase()
+        uc, _, refresh_tokens, _ = _make_usecase()
         run(refresh_tokens.save(self._stored_refresh()))
 
         result = run(
@@ -504,7 +608,7 @@ class TestRefreshGrant:
         assert stored.scopes == frozenset({Scope.OPENID, Scope.EMAIL})
 
     def test_refresh_rejects_scope_not_granted(self) -> None:
-        uc, _, refresh_tokens = _make_usecase()
+        uc, _, refresh_tokens, _ = _make_usecase()
         run(refresh_tokens.save(self._stored_refresh()))
 
         result = run(
@@ -522,7 +626,7 @@ class TestRefreshGrant:
         assert result.error == "invalid_scope"
 
     def test_refresh_rejects_missing_parameter(self) -> None:
-        uc, _, _ = _make_usecase()
+        uc, _, _, _ = _make_usecase()
 
         result = run(
             uc.execute(
@@ -597,7 +701,7 @@ class TestClientCredentialsGrant:
     """Couvre le grant type ``client_credentials`` (RFC 6749 §4.4)."""
 
     def test_issues_access_token_with_client_default_scopes(self) -> None:
-        uc, _, _ = _make_usecase()
+        uc, _, _, _ = _make_usecase()
 
         result = run(
             uc.execute(
@@ -618,7 +722,7 @@ class TestClientCredentialsGrant:
         assert claims["aud"] == "web-app"
 
     def test_requested_scope_subset_is_honoured(self) -> None:
-        uc, _, _ = _make_usecase()
+        uc, _, _, _ = _make_usecase()
 
         result = run(
             uc.execute(
@@ -636,7 +740,7 @@ class TestClientCredentialsGrant:
         assert claims["scope"] == "openid"
 
     def test_requested_scope_not_registered_is_rejected(self) -> None:
-        uc, _, _ = _make_usecase()
+        uc, _, _, _ = _make_usecase()
 
         result = run(
             uc.execute(
@@ -652,7 +756,7 @@ class TestClientCredentialsGrant:
         assert result.error == "invalid_scope"
 
     def test_rejects_wrong_secret(self) -> None:
-        uc, _, _ = _make_usecase()
+        uc, _, _, _ = _make_usecase()
 
         result = run(
             uc.execute(
@@ -667,7 +771,7 @@ class TestClientCredentialsGrant:
         assert result.error == "invalid_client"
 
     def test_rejects_public_client(self) -> None:
-        uc, _, _ = _make_usecase(_PUBLIC_CLIENT)
+        uc, _, _, _ = _make_usecase(_PUBLIC_CLIENT)
 
         result = run(
             uc.execute(
@@ -681,7 +785,7 @@ class TestClientCredentialsGrant:
         assert result.error == "invalid_client"
 
     def test_rejects_unknown_client(self) -> None:
-        uc, _, _ = _make_usecase()
+        uc, _, _, _ = _make_usecase()
 
         result = run(
             uc.execute(
@@ -704,7 +808,7 @@ class TestClientCredentialsGrant:
             client_secret_hash=hashlib.sha256(_CLIENT_SECRET.encode("utf-8")).hexdigest(),
             access_token_lifetime_seconds=120,
         )
-        uc, _, _ = _make_usecase(client)
+        uc, _, _, _ = _make_usecase(client)
 
         result = run(
             uc.execute(
