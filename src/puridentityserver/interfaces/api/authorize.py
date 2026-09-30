@@ -146,7 +146,7 @@ def authorize_router(
         # exactement les mêmes paramètres après connexion — sinon le retour
         # arrive sur /authorize nu et la suite de certification ne voit jamais
         # le callback (warning `ensure-post-request-succeeds`).
-        request.state.form_query = urlencode(params) if params else ""
+        request.state.form_query = urlencode(params)
         return await _handle_authorize(request, params, user)
 
     async def _handle_authorize(
