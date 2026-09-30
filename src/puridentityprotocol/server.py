@@ -234,6 +234,7 @@ class ProtocolDependencies:
             self.scope_registry,
             self.client_assertions,
             claims_provider=self.claims_provider,
+            revoked_tokens=stores.revoked,
         )
         self.device_usecase = DeviceAuthorizationUseCase(
             DeviceConfig(

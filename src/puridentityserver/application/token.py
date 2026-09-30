@@ -5,7 +5,8 @@ Traite cinq grant types :
 - ``authorization_code`` (RFC 6749 §4.1.3 + RFC 7636) : échange le code
   d'autorisation reçu sur ``/authorize`` ; le client confidentiel doit
   présenter son ``client_secret``, le client public son ``code_verifier``
-  PKCE.
+  PKCE. Un code déjà consommé est refusé (``invalid_grant``) **et** révoque
+  les jetons émis lors du premier échange (RFC 6749 §4.1.2).
 - ``refresh_token`` (RFC 6749 §6) : renouvelle l'access token à partir
   d'un refresh token opaque. Le jeton est **rotatif** : chaque usage
   consomme l'ancien (rejeté s'il est réutilisé) et en émet un nouveau.
@@ -66,7 +67,7 @@ from puridentityserver.domain.authorization import (
     resolve_lifetime_seconds,
 )
 from puridentityserver.domain.jwks import JWTAlgorithm
-from puridentityserver.domain.revocation import token_hash
+from puridentityserver.domain.revocation import RevokedToken, token_hash
 from puridentityserver.interfaces.domain.client_assertions import (
     CLIENT_ASSERTION_TYPE_URN,
     JWT_BEARER_GRANT_TYPE_URN,
@@ -88,6 +89,9 @@ from puridentityserver.interfaces.repositories.device_authorization_repository i
 from puridentityserver.interfaces.repositories.readers import ClientReader
 from puridentityserver.interfaces.repositories.refresh_token_repository import (
     RefreshTokenRepository,
+)
+from puridentityserver.interfaces.repositories.revoked_token_repository import (
+    RevokedTokenRepository,
 )
 
 
@@ -164,13 +168,16 @@ class TokenUseCase:
         client_assertions: ClientAssertionVerifier | None = None,
         *,
         claims_provider: ClaimsProvider | None = None,
+        revoked_tokens: RevokedTokenRepository | None = None,
     ) -> None:
         """Injection de la configuration, des repositories et de l'émetteur de jetons.
 
         ``claims_provider`` résout les valeurs du member ``id_token`` du
         paramètre ``claims`` (OIDC Core 1.0 §5.5) pour compléter l'id_token
         émis à l'échange du code ; sans injection, seul le payload standard
-        est signé.
+        est signé. ``revoked_tokens`` est le denylist sur lequel un code
+        réutilisé place l'access token du premier échange (RFC 6749 §4.1.2) ;
+        sans injection, la révocation est simplement ignorée.
         """
         self._config = config
         self._clients = client_repository
@@ -181,6 +188,7 @@ class TokenUseCase:
         self._scope_registry = scope_registry
         self._client_assertions = client_assertions
         self._claims_provider = claims_provider
+        self._revoked_tokens = revoked_tokens
 
     async def execute(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Traite le grant type demandé et retourne les jetons ou une erreur."""
@@ -199,27 +207,19 @@ class TokenUseCase:
     async def _exchange_code(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Échange un code d'autorisation à usage unique contre des jetons."""
         auth_code = await self._codes.find_by_code(request.code)
-        if auth_code is None or auth_code.is_consumed:
+        if auth_code is None:
+            return self._error("invalid_grant", "Code d'autorisation invalide ou déjà consommé")
+        if auth_code.is_consumed:
+            await self._revoke_issued_tokens(auth_code)
             return self._error("invalid_grant", "Code d'autorisation invalide ou déjà consommé")
 
         now = datetime.now(timezone.utc)
         if auth_code.expires_at < now:
             return self._error("invalid_grant", "Code d'autorisation expiré")
 
-        client = await self._clients.find_by_id(request.client_id)
-        if client is None or not client.is_active:
-            return self._error("invalid_client", CLIENT_UNKNOWN_ERROR)
-
-        if auth_code.redirect_uri != request.redirect_uri:
-            return self._error("invalid_grant", "redirect_uri ne correspond pas")
-
-        authenticated = await self._authenticate_client(client, request)
-        if authenticated is not None:
-            return authenticated
-        if client.client_type == ClientType.PUBLIC and not auth_code.code_challenge:
-            return self._error("invalid_grant", "Les clients publics doivent utiliser PKCE")
-        if auth_code.code_challenge and not self._verify_pkce(auth_code, request.code_verifier):
-            return self._error("invalid_grant", "Échec de la vérification PKCE")
+        client = await self._validate_code_exchange(auth_code, request)
+        if isinstance(client, TokenError):
+            return client
 
         await self._codes.consume(auth_code.code)
 
@@ -242,7 +242,81 @@ class TokenUseCase:
         if isinstance(issued, TokenError):
             return issued
         id_token, access_token, token_ttl = issued
+        await self._record_issued_tokens(
+            auth_code,
+            access_token=access_token,
+            access_token_ttl=token_ttl,
+            refresh_token=refresh_token,
+            now=now,
+        )
         return self._success(id_token, access_token, token_ttl, auth_code.scopes, refresh_token)
+
+    async def _validate_code_exchange(
+        self, auth_code: AuthorizationCode, request: TokenRequest
+    ) -> Client | TokenError:
+        """Contrôle client, ``redirect_uri`` et PKCE avant d'échanger le code.
+
+        RFC 6749 §4.1.3 : le code n'est consommé qu'une fois ces contrôles
+        passés ; un rejet le laisse intact.
+        """
+        client = await self._clients.find_by_id(request.client_id)
+        if client is None or not client.is_active:
+            return self._error("invalid_client", CLIENT_UNKNOWN_ERROR)
+
+        if auth_code.redirect_uri != request.redirect_uri:
+            return self._error("invalid_grant", "redirect_uri ne correspond pas")
+
+        authenticated = await self._authenticate_client(client, request)
+        if authenticated is not None:
+            return authenticated
+        if client.client_type == ClientType.PUBLIC and not auth_code.code_challenge:
+            return self._error("invalid_grant", "Les clients publics doivent utiliser PKCE")
+        if auth_code.code_challenge and not self._verify_pkce(auth_code, request.code_verifier):
+            return self._error("invalid_grant", "Échec de la vérification PKCE")
+        return client
+
+    async def _revoke_issued_tokens(self, auth_code: AuthorizationCode) -> None:
+        """Révoque les jetons issus du premier échange d'un code réutilisé.
+
+        RFC 6749 §4.1.2 : un code d'autorisation utilisé plus d'une fois doit
+        être refusé et, « quand c'est possible », les jetons déjà émis à partir
+        de ce code révoqués. L'access token part au denylist (``/userinfo`` et
+        ``/introspect`` le refuseront, RFC 6750 §3.1) et le refresh token est
+        consommé dans le store de rotation. Seules les empreintes SHA-256
+        persistées sur le code sont manipulées, jamais le jeton en clair.
+        """
+        if auth_code.access_token_hash and self._revoked_tokens is not None:
+            expires_at = auth_code.access_token_expires_at or auth_code.expires_at
+            await self._revoked_tokens.save(
+                RevokedToken(token_hash=auth_code.access_token_hash, expires_at=expires_at)
+            )
+        if auth_code.refresh_token_hash:
+            await self._refresh_tokens.consume(auth_code.refresh_token_hash)
+
+    async def _record_issued_tokens(
+        self,
+        auth_code: AuthorizationCode,
+        *,
+        access_token: str,
+        access_token_ttl: int,
+        refresh_token: str,
+        now: datetime,
+    ) -> None:
+        """Consigne sur le code l'empreinte des jetons venant d'être émis.
+
+        La persistance se fait **après** ``consume`` : le code reste marqué
+        consommé (aucune réouverture d'usage) tout en portant les références
+        que ``_revoke_issued_tokens`` lira si le code est rejoué.
+        """
+        await self._codes.save(
+            replace(
+                auth_code,
+                is_consumed=True,
+                access_token_hash=token_hash(access_token),
+                access_token_expires_at=now + timedelta(seconds=access_token_ttl),
+                refresh_token_hash=token_hash(refresh_token) if refresh_token else "",
+            )
+        )
 
     async def _refresh(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Renouvelle les jetons à partir d'un refresh token opque (rotation)."""

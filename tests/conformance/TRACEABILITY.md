@@ -104,8 +104,8 @@ callback + `PerformStandardIdTokenChecks` + échange du code, voir
 | `oidcc-idtoken-signature` | `OIDCCIdTokenSignature.java` → `EnsureIdTokenContainsKid`, `EnsureIdTokenSignatureIsRS256`, `PerformStandardIdTokenChecks` | `test_id_token_signature_is_rs256_with_kid` | `checks.expect_id_token_signature` (header `alg=RS256` + `kid`) |
 | `oidcc-idtoken-unsigned` | `OIDCCIdTokenUnsigned.java` → `skipTestIfSigningAlgorithmNotSupported` (**skip** si `none` absent du discovery) | `test_id_token_alg_none_not_supported_skips` | `pytest.skip` fidèle (notre OP : RS256 seul) |
 | `oidcc-request-uri-unsigned-…`, `oidcc-unsigned-request-object-…`, `oidcc-ensure-request-object-with-redirect-uri` | `OIDCCRequestUriUnsignedSupportedCorrectlyOrRejectedAsUnsupported.java` → `skipTestIfNoneUnsupported` (`none` absent de `request_object_signing_alg_values_supported`), idem pour `OIDCCUnsignedRequestObject…` (`CheckDiscEndpointRequestParameterSupported` **(WARNING)**) et `OIDCCEnsureRequestObjectWithRedirectUri.java` | `test_request_object_modules_skip_without_none_support[<alias>]` | `pytest.skip` fidèle (discovery : `request_parameter_supported=false`) |
-| `oidcc-codereuse` | `OIDCCAuthCodeReuse.java` → `[CR]` (`CheckErrorFromTokenEndpointResponseErrorInvalidGrant`), `ServerAllowedReusingAuthorizationCode` **(WARNING)** | `test_authorization_code_cannot_be_reused` | `checks.expect_invalid_grant` |
-| `oidcc-codereuse-30seconds` | `OIDCCAuthCodeReuseAfter30Seconds.java` → `WaitFor30Seconds`, `CallProtectedResource` + `EnsureHttpStatusCodeIs4xx` **(WARNING)**, `[CR]` | `test_authorization_code_reuse_after_30_seconds` | `checks.expect_invalid_grant` |
+| `oidcc-codereuse` | `OIDCCAuthCodeReuse.java` → `[CR]` (`CheckErrorFromTokenEndpointResponseErrorInvalidGrant`), `ServerAllowedReusingAuthorizationCode` **(WARNING)** | `test_authorization_code_cannot_be_reused` | `checks.expect_invalid_grant` + `checks.expect_access_token_refused` (`CallProtectedResource`, #85) |
+| `oidcc-codereuse-30seconds` | `OIDCCAuthCodeReuseAfter30Seconds.java` → `WaitFor30Seconds`, `CallProtectedResource` + `EnsureHttpStatusCodeIs4xx` **(WARNING)**, `[CR]` | `test_authorization_code_reuse_after_30_seconds` | `checks.expect_invalid_grant` + `checks.expect_access_token_refused` + refresh `invalid_grant` (`scope=… offline_access` ajouté pour émettre le refresh, #85) |
 | `oidcc-refresh-token` | `OIDCCRefreshToken.java` → séquence `RefreshTokenRequestSteps` (`WaitForOneSecond`, `EnsureAccessTokenValuesAreDifferent` **(INFO)**, `CompareIdTokenClaims` : `iss`/`sub`/`aud` égaux, `iat` différent) + `RefreshTokenRequestExpectingErrorSteps` chez le 2ᵉ client (`AbstractOIDCCMultipleClient`), skip si aucun refresh émis | `test_refresh_token_grant_and_client_binding` | `checks.check_token_endpoint_success` + `checks.check_refreshed_id_token_claims` + `checks.expect_invalid_grant` (jeton d'un autre client) |
 
 ### Note sur `oidcc-ensure-post-request-succeeds`
@@ -170,8 +170,8 @@ Blocs de conditions hérités identiques à la PR 2 (`[BASE]`, `[RC]`, `[UI]`,
 | `oidcc-ensure-registered-redirect-uri` | les 3 | `test_hybrid_registered_redirect_uri_is_rejected[rt-*]` | `checks.expect_redirect_uri_error_page` |
 | `oidcc-prompt-login`, `oidcc-max-age-1` | les 3 | `test_hybrid_second_login_reprompts[rt-*][<module>]` | `checks.expect_second_login_page` + `checks.check_second_auth_time_is_later` |
 | `oidcc-alternate-happy-flow` | `code id_token` seulement | `test_hybrid_alternate_happy_flow` | userinfo + id_token sans `email` |
-| `oidcc-codereuse` | les 3 | `test_hybrid_authorization_code_cannot_be_reused[rt-*]` | `checks.expect_invalid_grant` (`[CR]`) |
-| `oidcc-codereuse-30seconds` | les 3 → **1 portée** | `test_hybrid_authorization_code_reuse_after_30_seconds` | `checks.expect_invalid_grant` — les 2 autres instances (`code token`, `code id_token token`) ont exactement les mêmes checks (`WaitFor30Seconds` + `[CR]`) : non portées, observables identiques |
+| `oidcc-codereuse` | les 3 | `test_hybrid_authorization_code_cannot_be_reused[rt-*]` | `checks.expect_invalid_grant` (`[CR]`) + `checks.expect_access_token_refused` (#85) |
+| `oidcc-codereuse-30seconds` | les 3 → **1 portée** | `test_hybrid_authorization_code_reuse_after_30_seconds` | `checks.expect_invalid_grant` + `checks.expect_access_token_refused` + refresh `invalid_grant` — les 2 autres instances (`code token`, `code id_token token`) ont exactement les mêmes checks (`WaitFor30Seconds` + `[CR]`) : non portées, observables identiques |
 | `oidcc-server-client-secret-post` | les 3 | `test_hybrid_client_secret_post_authentication[rt-*]` | `_exchange` en `client_secret_post` + `id_token` présent |
 | `oidcc-ensure-request-with-valid-pkce-succeeds` | `code id_token` seulement | `test_hybrid_request_with_valid_pkce_succeeds` | `checks.validate_id_token` après échange PKCE |
 | `oidcc-refresh-token` | les 3 → **1 portée** | `test_hybrid_refresh_token_grant_and_client_binding` | `checks.check_refreshed_id_token_claims` + `checks.expect_invalid_grant` croisé — les 2 autres instances diffèrent seulement par le `response_type` du premier flux (mêmes `[RT-seq]`/`[RT-err-seq]`) : non portées |
@@ -235,3 +235,13 @@ ils passent.
   (RFC 6750 §2.1.2) en plus de l'en-tête `Authorization` (priorité en-tête) ;
   les 5 skips `oidcc-userinfo-post-body` (basic 1, implicit 1, hybride 3)
   redeviennent des rejeux réels → **169 passed, 4 skipped**.
+- **Issue #85 (4 warnings `oidcc-codereuse-30seconds`)** : réutilisation d'un
+  code d'autorisation → `invalid_grant` **et** révocation des jetons du
+  premier échange (RFC 6749 §4.1.2 « SHOULD revoke »). `AuthorizationCode`
+  porte les empreintes SHA-256 de l'access/refresh token émis (colonnes
+  `access_token_hash`, `access_token_expires_at`, `refresh_token_hash` sur
+  `authorization_codes`) ; à la détection du code consommé, `TokenUseCase`
+  pose l'access token au denylist (`RevokedToken`) et consomme le refresh
+  token dans le store de rotation. Assertions renforcées :
+  `checks.expect_access_token_refused` (401 `invalid_token` sur `/userinfo`)
+  et `invalid_grant` sur le refresh — rejeu local **169 passed, 4 skipped**.

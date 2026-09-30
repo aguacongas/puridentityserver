@@ -27,6 +27,7 @@ from checks import (
     check_second_id_token_consistent,
     check_token_endpoint_success,
     check_userinfo_response,
+    expect_access_token_refused,
     expect_authorization_error,
     expect_callback_success,
     expect_id_token_signature,
@@ -462,13 +463,15 @@ def test_authorization_code_cannot_be_reused(harness: ConformanceHarness) -> Non
     """``oidcc-codereuse`` : réutilisation immédiate du code → ``invalid_grant``.
 
     ``CallTokenEndpointAndReturnFullResponse`` avec le même code puis
-    ``CheckErrorFromTokenEndpointResponseErrorInvalidGrant`` (RFC 6749 §4.1.2).
+    ``CheckErrorFromTokenEndpointResponseErrorInvalidGrant`` (RFC 6749 §4.1.2) ;
+    l'access token du premier échange est révoqué au passage
+    (``CallProtectedResource`` + ``EnsureHttpStatusCodeIs4xx``).
     """
     verifier = new_verifier()
     params = harness.authorize_params(verifier)
     result = harness.run_flow(**params)
     expect_callback_success(result, params["state"])
-    harness.exchange_code(result, verifier)
+    tokens = harness.exchange_code(result, verifier)
     response = harness.token_request(
         {
             "grant_type": "authorization_code",
@@ -478,6 +481,7 @@ def test_authorization_code_cannot_be_reused(harness: ConformanceHarness) -> Non
         }
     )
     expect_invalid_grant(response)
+    expect_access_token_refused(harness.userinfo("get", str(tokens["access_token"])))
 
 
 @pytest.mark.conformance
@@ -485,15 +489,17 @@ def test_authorization_code_reuse_after_30_seconds(harness: ConformanceHarness) 
     """``oidcc-codereuse-30seconds`` : réutilisation après 30 s → ``invalid_grant``.
 
     ``WaitFor30Seconds`` puis ``CallTokenEndpointAndReturnFullResponse`` — le
-    code consommé reste invalide, l'access token d'origine doit être révoqué
-    (``CallProtectedResource`` + ``EnsureHttpStatusCodeIs4xx``, toléré ici :
-    non observé au rejeu local).
+    code consommé reste invalide. Les jetons du premier échange sont révoqués
+    (RFC 6749 §4.1.2) : ``CallProtectedResource`` + ``EnsureHttpStatusCodeIs4xx``
+    sur l'access token, ``invalid_grant`` sur le refresh token. ``offline_access``
+    est demandé pour que ce dernier soit émis (le plan de certification ne le
+    fait pas, l'observable lui reste identique hors refresh).
     """
     verifier = new_verifier()
-    params = harness.authorize_params(verifier)
+    params = harness.authorize_params(verifier, scope="openid profile offline_access")
     result = harness.run_flow(**params)
     expect_callback_success(result, params["state"])
-    harness.exchange_code(result, verifier)
+    tokens = harness.exchange_code(result, verifier)
     time.sleep(30)
     response = harness.token_request(
         {
@@ -504,6 +510,15 @@ def test_authorization_code_reuse_after_30_seconds(harness: ConformanceHarness) 
         }
     )
     expect_invalid_grant(response)
+    expect_access_token_refused(harness.userinfo("get", str(tokens["access_token"])))
+    expect_invalid_grant(
+        harness.token_request(
+            {
+                "grant_type": "refresh_token",
+                "refresh_token": str(tokens["refresh_token"]),
+            }
+        )
+    )
 
 
 @pytest.mark.conformance

@@ -31,6 +31,7 @@ from checks import (
     check_second_id_token_consistent,
     check_token_endpoint_success,
     check_userinfo_response,
+    expect_access_token_refused,
     expect_authorization_error,
     expect_hybrid_callback,
     expect_id_token_signature,
@@ -416,7 +417,9 @@ def test_hybrid_authorization_code_cannot_be_reused(
     """``oidcc-codereuse`` en hybride : réutilisation immédiate → ``invalid_grant``.
 
     ``CallTokenEndpointAndReturnFullResponse`` sur un code déjà échangé +
-    ``CheckErrorFromTokenEndpointResponseErrorInvalidGrant`` (RFC 6749 §4.1.2).
+    ``CheckErrorFromTokenEndpointResponseErrorInvalidGrant`` (RFC 6749 §4.1.2) ;
+    l'access token du premier échange est révoqué
+    (``CallProtectedResource`` + ``EnsureHttpStatusCodeIs4xx``).
     """
     outcome = _hybrid_flow(harness, response_type)
     assert outcome.payload.get("access_token"), "premier échange du code refusé"
@@ -428,6 +431,7 @@ def test_hybrid_authorization_code_cannot_be_reused(
         }
     )
     expect_invalid_grant(reused)
+    expect_access_token_refused(harness.userinfo("get", str(outcome.payload["access_token"])))
 
 
 @pytest.mark.conformance
@@ -451,9 +455,11 @@ def test_hybrid_authorization_code_reuse_after_30_seconds(
 
     ``WaitFor30Seconds`` puis rejeu du code (variante ``code id_token`` — le
     plan le lance aussi en ``code token`` et ``code id_token token``, observables
-    identiques : voir ``TRACEABILITY.md``).
+    identiques : voir ``TRACEABILITY.md``). Les jetons du premier échange sont
+    révoqués (RFC 6749 §4.1.2) : 401 sur l'access token, ``invalid_grant`` sur
+    le refresh token (``offline_access`` ajouté pour l'émettre).
     """
-    outcome = _hybrid_flow(harness, _PRIMARY_TYPE)
+    outcome = _hybrid_flow(harness, _PRIMARY_TYPE, scope="openid profile offline_access")
     assert outcome.payload.get("access_token"), "premier échange du code refusé"
     time.sleep(30)
     reused = harness.token_request(
@@ -464,6 +470,15 @@ def test_hybrid_authorization_code_reuse_after_30_seconds(
         }
     )
     expect_invalid_grant(reused)
+    expect_access_token_refused(harness.userinfo("get", str(outcome.payload["access_token"])))
+    expect_invalid_grant(
+        harness.token_request(
+            {
+                "grant_type": "refresh_token",
+                "refresh_token": str(outcome.payload["refresh_token"]),
+            }
+        )
+    )
 
 
 @pytest.mark.conformance

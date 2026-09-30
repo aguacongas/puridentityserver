@@ -267,6 +267,11 @@ class AuthorizationCode:
     (OIDC Core 1.0 §3.1.2.1) ; ``claims`` conserve le paramètre ``claims``
     brut (OIDC Core 1.0 §5.5) pour honorer ses members ``userinfo`` /
     ``id_token`` lors de l'échange du code.
+
+    ``access_token_hash`` / ``refresh_token_hash`` (empreintes SHA-256,
+    jamais le jeton en clair) et ``access_token_expires_at`` référencent
+    les jetons émis lors du premier échange : une réutilisation du code
+    permet alors de les révoquer (RFC 6749 §4.1.2).
     """
 
     code: str = field(default_factory=lambda: f"{uuid4().hex[:16]}")
@@ -283,6 +288,9 @@ class AuthorizationCode:
     claims: str = ""
     expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     is_consumed: bool = False
+    access_token_hash: str = ""
+    access_token_expires_at: datetime | None = None
+    refresh_token_hash: str = ""
 
 
 @dataclass(frozen=True, slots=True)

@@ -420,6 +420,24 @@ def expect_invalid_grant(response: httpx.Response) -> None:
     )
 
 
+def expect_access_token_refused(response: httpx.Response) -> None:
+    """``CallProtectedResource`` + ``EnsureHttpStatusCodeIs4xx`` (codereuse).
+
+    RFC 6749 §4.1.2 : un code réutilisé doit faire révoquer « quand c'est
+    possible » les jetons déjà émis. La suite se contente d'attendre un 4xx
+    (WARNING sinon) ; l'assertion est stricte ici : 401 ``invalid_token``
+    avec l'en-tête ``WWW-Authenticate`` (RFC 6750 §3.1).
+    """
+    assert response.status_code == 401, (
+        f"l'access token révoqué doit être refusé (401), reçu HTTP "
+        f"{response.status_code} : {response.text[:300]}"
+    )
+    payload = json.loads(response.text)
+    assert payload.get("error") == "invalid_token", (
+        f"error={payload.get('error')!r} != invalid_token : {payload}"
+    )
+
+
 def check_second_id_token_consistent(
     first_claims: dict[str, Any], second_claims: dict[str, Any]
 ) -> None:
