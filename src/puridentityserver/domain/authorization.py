@@ -367,6 +367,12 @@ class DeviceAuthorization:
     last_polled_at: datetime | None = None
 
 
+#: Préfixe URN des ``request_uri`` émis par ``POST /par`` (RFC 9126 §6.2) :
+#: une référence opaque que seul le serveur sait résoudre, à distinguer d'un
+#: ``request_uri`` RFC 9101 qui pointe vers un document JWT hébergé ailleurs.
+PUSHED_REQUEST_URI_PREFIX = "urn:ietf:params:oauth:request_uri:"
+
+
 @dataclass(frozen=True, slots=True)
 class PushedAuthorization:
     """Requête d'autorisation poussée au serveur (RFC 9126).

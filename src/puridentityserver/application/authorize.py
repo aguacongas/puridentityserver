@@ -667,7 +667,11 @@ def _hash_artefact(value: str, algorithm: JWTAlgorithm) -> str:
     Moitié gauche du digest SHA-2 (256/384/512 selon l'algorithme JWS) de la
     valeur, encodée base64url sans padding : le client peut ainsi vérifier le
     lien entre l'id_token et l'access token / le code d'autorisation.
+    ``alg=none`` n'a pas d'empreinte définie (le lien repose sur la
+    signature) : la chaîne vide fait omettre le claim.
     """
+    if algorithm is JWTAlgorithm.NONE:
+        return ""
     digest = hashlib.new(f"sha{algorithm.value[-3:]}", value.encode("ascii")).digest()
     return base64.urlsafe_b64encode(digest[: len(digest) // 2]).rstrip(b"=").decode("ascii")
 

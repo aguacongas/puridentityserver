@@ -67,10 +67,20 @@ class JWTAlgorithm(str, Enum):
     HS256 = "HS256"
     HS384 = "HS384"
     HS512 = "HS512"
+    #: JWA RFC 7519 §6 : en-tête seul, **aucune** signature — c'est
+    #: l'algorithme que porte un client inscrit avec
+    #: ``id_token_signed_response_alg=none``.
+    NONE = "none"
 
     @property
     def key_type(self) -> KeyType:
-        """Type de clé JWK (``kty``) associé à l'algorithme."""
+        """Type de clé JWK (``kty``) associé à l'algorithme.
+
+        ``none`` ne porte aucune clé : la propriété le signale plutôt que de
+        renvoyer un type erroné (une paire ``none`` serait invalide au JWKS).
+        """
+        if self is JWTAlgorithm.NONE:
+            raise ValueError("alg=none (JWA RFC 7519 §6) ne porte aucune clé de signature")
         if self in (
             JWTAlgorithm.RS256,
             JWTAlgorithm.RS384,
@@ -117,7 +127,12 @@ SYMMETRIC_ALGORITHMS: tuple[JWTAlgorithm, ...] = (
 )
 
 
-ALL_SIGNING_ALGORITHMS: tuple[JWTAlgorithm, ...] = tuple(JWTAlgorithm)
+#: Algorithmes **signants** : toutes les valeurs de l'enum sauf ``none``, qui
+#: ne possède aucune clé — la générer (paires serveur, JWKS, discovery) n'a
+#: aucun sens et planterait la dérive de clé par ``key_type``.
+ALL_SIGNING_ALGORITHMS: tuple[JWTAlgorithm, ...] = tuple(
+    algorithm for algorithm in JWTAlgorithm if algorithm is not JWTAlgorithm.NONE
+)
 
 
 @dataclass(frozen=True, slots=True)

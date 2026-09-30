@@ -1073,8 +1073,9 @@ def _parse_id_token_signing_alg(raw: dict[str, object]) -> str | RegistrationErr
     """Lit ``id_token_signed_response_alg`` (OIDC Core §3.1.3.7, RFC 7591 §2.1).
 
     Vide par défaut (algorithme principal du serveur) ; toute autre valeur
-    doit être un algorithme JWS supporté (RS*/PS*/ES*/HS*, jamais
-    ``none``, ni un algorithme JWE).
+    doit être un algorithme JWS supporté (RS*/PS*/ES*/HS*) ou ``none`` — ce
+    dernier émet un id_token sans signature (JWA RFC 7519 §6), jamais un
+    algorithme JWE.
     """
     value = raw.get("id_token_signed_response_alg")
     if value is None or value == "":
