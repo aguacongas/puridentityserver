@@ -77,17 +77,14 @@ jobs:
       - name: Checkout du dépôt
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Redéploiement de l'OP sur Render (deploy hook)
-        run: |
-          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
-            echo "Secret RENDER_DEPLOY_HOOK_URL absent : redéploiement manuel requis."
-          else
-            curl -sSf -X POST "$RENDER_DEPLOY_HOOK_URL"
-          fi
-        env:
-          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
-
       - name: Attente de l'OP sur $OP_URL (discovery opérationnel)
+        # Placé AVANT le deploy hook : le hook répond immédiatement mais le
+        # build Docker de Render est asynchrone — attendre après le hook
+        # laissait la suite démarrer contre l'ancienne instance, remplacée en
+        # plein run (disque éphémère recréé : clients dynamiquement enregistrés
+        # et clés de signature perdus → unregister RFC 7592 en 404, warning
+        # `response-type-missing`). Cet appel réveille aussi un service
+        # endormi et garantit que le relevé de `kid` du hook suivant aboutit.
         run: |
           deadline=$((SECONDS + 900))
           until [ $SECONDS -ge $deadline ]; do
@@ -98,6 +95,45 @@ jobs:
             sleep 15
           done
           echo "::error::L'OP $OP_URL n'a pas répondu sous 15 minutes" && exit 1
+
+      - name: Redéploiement de l'OP sur Render (deploy hook)
+        # Le remplacement de l'instance n'est pas observable via le discovery
+        # (ancienne et nouvelle répondent pareil) : on compare les `kid`
+        # relevés avant le hook. Le disque éphémère de Render est recréé à
+        # chaque déploiement, la nouvelle instance publie donc d'autres clés —
+        # c'est le seul signal fiable du swap. Sans lui la suite courrait le
+        # risque d'enregistrer un client sur l'instance qui s'apprête à partir.
+        run: |
+          jwks_kids() {
+            curl -fsS --max-time 15 "$OP_URL/.well-known/jwks.json" \
+              | python3 -c 'import json,sys;print(",".join(sorted(str(k.get("kid","")) for k in json.load(sys.stdin)["keys"])))' 2>/dev/null || true
+          }
+          before="$(jwks_kids)"
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+            echo "Secret RENDER_DEPLOY_HOOK_URL absent : redéploiement manuel requis."
+            exit 0
+          fi
+          if [ -z "$before" ]; then
+            echo "::warning::JWKS injoignable avant le hook : le remplacement de l'instance ne sera pas confirmé."
+            curl -sSf -X POST "$RENDER_DEPLOY_HOOK_URL"
+            exit 0
+          fi
+          curl -sSf -X POST "$RENDER_DEPLOY_HOOK_URL"
+          echo "Déploiement déclenché — kid avant : $before"
+          deadline=$((SECONDS + 900))
+          while [ $SECONDS -lt $deadline ]; do
+            after="$(jwks_kids)"
+            if [ -n "$after" ] && [ "$after" != "$before" ]; then
+              echo "Nouvelle instance en service — kid après : $after"
+              exit 0
+            fi
+            echo "Build Render en cours (l'ancienne instance sert encore)…"
+            sleep 15
+          done
+          echo "::error::L'instance n'a pas été remplacée sous 15 minutes (swap ou disque non renouvelés)"
+          exit 1
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
 
       - name: Vérification de la validité des fichiers de plans
         run: python3 -c "import json,glob; [json.load(open(p)) for p in glob.glob('certification/plans/*.json')]"
