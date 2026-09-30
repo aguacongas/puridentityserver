@@ -99,7 +99,10 @@ tests/             pytest unit + intégration (TestClient httpx)
    code à usage unique : une réutilisation renvoie `invalid_grant` **et**
    révoque les jetons du premier échange (RFC 6749 §4.1.2) — l'access token
    va au denylist (`/userinfo` et `/introspect` → 401 `invalid_token`,
-   RFC 6750 §3.1) et le refresh token est consommé
+   RFC 6750 §3.1) et le refresh token est consommé ; `POST /authorize`
+   (corps form, RFC 6749 §4.1.2 note) mémorise ses paramètres pour les
+   rejouer après `/login` (`require_login`) : la session vierge atteint
+   quand même le callback (OIDC Core 1.0 §3.1.2.1)
 4. ✅ **ID Token + UserInfo** — émission et validation JWT via PyJWT,
    endpoint `/userinfo` (Bearer en en-tête ou access_token dans le corps
    form du POST, RFC 6750 §2.1 ; filtrage des claims par scopes accordés)

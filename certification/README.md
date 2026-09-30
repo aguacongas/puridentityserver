@@ -51,8 +51,12 @@ retenue :
 ## Lancer un run
 
 - **En CI** : *Actions → Certification OIDC → Run workflow* (ou laisser le
-  cron hebdomadaire). Le workflow : redéploie Render, attend que
-  `/.well-known/openid-configuration` réponde, démarre la suite, joue chaque
+  cron hebdomadaire). Le workflow : attend que
+  `/.well-known/openid-configuration` réponde (réveil de l'instance),
+  photographie les `kid` du JWKS, déclenche le deploy hook puis patiente
+  (15 min max) jusqu'à ce que les `kid` changent — preuve que le build est
+  terminé **et** que le disque éphémère (donc l'état) a été recréé avant le
+  premier enregistrement de client ; démarre ensuite la suite, joue chaque
   plan, génère le rapport et déploie la page GitHub Pages.
 - **En local** : (optionnel) pour reproduire le même principe contre un
   serveur local :
@@ -103,6 +107,13 @@ uv run python samples/conformance-smoke/smoke_test.py
 
 - **L'OP ne répond pas** : le service Render libre s'endort après ~15 min
   d'inactivité ; le workflow patiente (cold start ~1 min) avant d'échouer.
+- **`DELETE /register/{client_id}` en 404 `invalid_client`** (module en
+  WARNING « Error when calling registration_client_uri ») : le build Render
+  démarre pendant que l'ancienne instance sert encore ; au swap, le disque
+  éphémère est recréé et les clients enregistrés par la suite disparaissent.
+  Le workflow déclenche donc le hook après le réveil (discovery) et attend le
+  changement de `kid` du JWKS avant de lancer la suite — voir le run
+  `36681480504` (`oidcc-response-type-missing`).
 - **Module en état WAITING qui ne termine pas** : c'est le navigateur Selenium
   de la suite qui exécute les tâches `browser` du plan. Consulter le
   `log-detail.html` du module dans l'interface de la suite pendant le run

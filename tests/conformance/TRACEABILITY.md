@@ -97,7 +97,7 @@ callback + `PerformStandardIdTokenChecks` + échange du code, voir
 | `oidcc-response-type-missing` | `OIDCCResponseTypeMissing.java` → `ExpectResponseTypeMissingErrorPage`, `CheckErrorFromAuthorizationEndpointErrorInvalidRequestOrUnsupportedResponseType`, `[GEN-ERR]` | `test_response_type_missing_shows_error_page` | `checks.expect_response_type_missing_error_page` |
 | `oidcc-ensure-request-without-nonce-succeeds-for-code-flow` | `OIDCCEnsureRequestWithoutNonceSucceedsForCodeFlow.java` → `.skip(AddNonceToAuthorizationEndpointRequest)`, [BASE] | `test_request_without_nonce_succeeds` | `checks.expect_callback_success` + `checks.validate_id_token` |
 | `oidcc-ensure-request-with-valid-pkce-succeeds` | `OIDCCEnsureRequestWithValidPkceSucceeds.java` → `SetupPkceAndAddToAuthorizationRequest` (`CreateRandomCodeVerifier`, `CreateS256CodeChallenge`, `AddCodeChallenge…`), `AddCodeVerifierToTokenEndpointRequest`, [BASE] | `test_request_with_valid_pkce_succeeds` | idem |
-| `oidcc-ensure-post-request-succeeds` | `OIDCCEnsurePostRequestSucceeds.java` → requête envoyée en **POST**, `ExpectRedirectUriHasBeenCalled` **(WARNING après 30 s sans callback)**, [BASE] | `test_post_authorization_request_succeeds` | `checks.expect_callback_success` — session établie au préalable (`harness.login()`) : sur session vierge l'OP renvoie vers `/login` avec un `next` sans la query string, ce que la suite n'a qu'en WARNING (voir note ci-dessous) |
+| `oidcc-ensure-post-request-succeeds` | `OIDCCEnsurePostRequestSucceeds.java` → requête envoyée en **POST**, `ExpectRedirectUriHasBeenCalled` **(WARNING après 30 s sans callback)**, [BASE] | `test_post_authorization_request_succeeds` | `checks.expect_callback_success` — POST **sur session vierge** : l'OP rejoue les paramètres du corps form dans `next` après `/login` (voir note ci-dessous) |
 | `oidcc-alternate-happy-flow` | `OIDCCAlternateHappyFlow.java` → `ReverseScopeOrderInAuthorizationEndpointRequest`, `BuildPlainRedirectToAuthorizationEndpointReorderedParams`, hérite `OIDCCScopeEmail` + `[RC]` | `test_alternate_happy_flow_with_reordered_scopes` | `checks.expect_callback_success` + `checks.check_scope_claims_returned` + id_token sans `email` |
 | `oidcc-server` | `OIDCCServerTest.java` → `EnsureMinimumAuthorizationCodeLength`, `EnsureMinimumAuthorizationCodeEntropy`, `ExtractAtHash`/`ValidateAtHash`, `ExtractCHash`/`ValidateCHash`, [BASE] | `test_authorization_code_has_minimum_quality` | `checks.check_authorization_code_quality` (≥ 16 caractères) + `checks.validate_id_token` |
 | `oidcc-server-client-secret-post` | `OIDCCServerTestClientSecretPost.java` → `AddFormBasedClientSecretToRequest` + configuration `client_secret_post`, [BASE] | `test_client_secret_post_authentication` | `checks.check_token_endpoint_success` (échange en `client_secret_post`) + `checks.validate_id_token` |
@@ -110,13 +110,18 @@ callback + `PerformStandardIdTokenChecks` + échange du code, voir
 
 ### Note sur `oidcc-ensure-post-request-succeeds`
 
-Sur session vierge, notre OP renvoie vers `/login?next=/authorize` **sans** la
+Sur session vierge, l'OP renvoyait vers `/login?next=/authorize` **sans** la
 query string (le POST porte ses paramètres dans le corps) : le retour après
-connexion arrive sur `/authorize` sans paramètres → page d'erreur, callback
+connexion arrivait sur `/authorize` sans paramètres → page d'erreur, callback
 jamais appelé. La suite n'y voit qu'un WARNING (`ExpectRedirectUriHasBeenCalled`,
-OIDCC-3.1.2.1) et conclut le module en succès avec avertissement ; le rejeu
-préfère établir la session au préalable (`harness.login()`) pour vérifier que
-l'OP accepte effectivement le POST.
+OIDCC-3.1.2.1) et conclut le module en succès avec avertissement.
+
+**Corrigé** : `authorize_post` mémorise le corps form traité
+(`request.state.form_query`), que `_authorize_url_from_base` utilise pour
+reconstruire `next` **et** le hash de réauthentification — le retour après
+connexion rejoue les mêmes paramètres. Le rejeu joue désormais le POST sur
+session vierge, à l'identique de la suite ; la couverture en gate est dans
+`tests/test_authorization.py::test_require_login_post_*`.
 
 Rejeu PR 2 (local) : **33 passed, 5 skipped** (les 5 skips fidèles ci-dessus),
 38 modules couverts en ≈ 1 min 45.
