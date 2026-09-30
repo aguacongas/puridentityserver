@@ -28,6 +28,9 @@ retenue :
   le détail des modules testés et leur verdict (PASSED / FAILED / WARNING /
   REVIEW / SKIPPED) dans le résumé du run ;
 - l'artefact `certification-results` contient les JSON exportés ;
+- l'artefact `certification-screenshots` contient les captures d'écran réelles
+  téléversées aux modules de relecture (voir
+  « Captures d'écran des modules de relecture ») ;
 - une page `https://<owner>.github.io/puridentityserver/certification/`
   consolide les derniers résultats.
 
@@ -172,7 +175,8 @@ uv run python samples/conformance-smoke/smoke_test.py
 | `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`) |
 | `plans/basic|implicit|hybrid.json` | configs des plans Core de la suite (alias **unique par plan**, discovery, règles navigateur login/consent) |
 | `conformance-reuse-plan.patch` | patch du driver : `create_test_plan` idempotent (réutilise le plan existant quand sa config n'a pas changé) |
-| `conformance-screenshots.patch` | patch du driver : remplit automatiquement les placeholders REVIEW « capture d'écran » (ex. `oidcc-response-type-missing`) avec un PNG de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode witness) |
+| `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) ou, à défaut, un PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode witness) |
+| `capture_screenshots.py` | rejoue les 4 scénarios de relecture contre l'OP déployé (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver |
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |
 | `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés |
@@ -180,25 +184,51 @@ uv run python samples/conformance-smoke/smoke_test.py
 
 ## Captures d'écran des modules de relecture (mode witness)
 
-Certains modules Core (au moins `oidcc-response-type-missing`, présent dans le plan
-Basic) s'arrêtent sur un événement **REVIEW** demandant une capture d'écran :
-sans intervention, le driver attend jusqu'au timeout `CONFORMANCE_MODULE_TIMEOUT`
-puis marque le module en échec. Sur l'instance hébergée, l'« upload » se fait à la
-main via la console navigateur — impossible en CI.
+Certains modules Core s'arrêtent sur un événement **REVIEW** demandant une capture
+d'écran : sans intervention, le driver attend jusqu'au timeout
+`CONFORMANCE_MODULE_TIMEOUT` puis marque le module en échec. Sur l'instance hébergée,
+l'« upload » se fait à la main via la console navigateur — impossible en CI. Les
+quatre modules concernés (verdicts `review` du run de référence) captent chacun une
+page différente de l'OP :
 
-Le patch `conformance-screenshots.patch` couple deux points du driver :
-- `conformance.py` : nouvelle méthode `fill_required_screenshots(module_id)` qui
-  liste les placeholders en attente (`GET api/log/{id}/images`, entrées avec le
-  champ `upload`) puis les remplit (`POST api/log/{id}/images/{placeholder}`) avec
-  un **PNG 1x1 de secours** (data URI `image/png`, bien sous la limite de 500 Ko) ;
-- `run-test-plan.py` : appel de cette méthode pour les modules purement OP
-  (pas de client à piloter), **après une période de tolérance** puis l'attente de
-  `FINISHED`.
+| Module | Page capturée |
+| --- | --- |
+| `oidcc-response-type-missing` | erreur 400 « Paramètres requis manquants : `response_type` » (avant login) |
+| `oidcc-ensure-registered-redirect-uri` | erreur 400 `invalid_redirect_uri`, servie **après** login/consentement |
+| `oidcc-prompt-login` | second formulaire de connexion (`prompt=login`) |
+| `oidcc-max-age-1` | second formulaire de connexion (`max_age=1`, une seconde après le premier) |
+
+Deux étapes couvrent ce besoin :
+
+1. **`capture_screenshots.py`** (étape « Captures d'écran réelles des modules de
+   relecture », `continue-on-error`) : enregistre un client via RFC 7591, rejoue les
+   4 scénarios avec chromium headless contre `$OP_URL`, **contrôle chaque page avant
+   export** (statut 400 + marqueur `<code>` du motif, ou titre et
+   `form[action="/login"]`, sans redirection de l'erreur) puis dépose
+   `screenshots/<testName>.png` — PNG sous les 500 Ko imposés par l'ImageAPI de la
+   suite. Le callback des clients de capture est `https://rp.example.invalid/callback`
+   (RFC 2606) : la navigation finale échoue au DNS, erreur que le script absorbe.
+   Un échec (installation du navigateur, OP indisponible…) sort avec un code non nul,
+   l'étape passe en warning et aucun PNG n'est produit : le run n'est jamais arrêté
+   pour une capture.
+2. **`conformance-screenshots.patch`** couple deux points du driver :
+   - `conformance.py` : `screenshot_data_uri(test_name)` lit
+     `SCREENSHOTS_DIR/<testName>.png` (répertoire fourni à l'étape des plans) ;
+     `fill_required_screenshots(module_id, test_name)` liste les placeholders en
+     attente (`GET api/log/{id}/images`, entrées avec le champ `upload`) puis les
+     remplit (`POST api/log/{id}/images/{placeholder}`) avec cette **capture réelle**
+     ou, si le fichier est absent/invalide, avec le **PNG 1x1 de secours** (data URI
+     `image/png`) ;
+   - `run-test-plan.py` : appel de cette méthode pour les modules purement OP
+     (pas de client à piloter), **après une période de tolérance** puis l'attente de
+     `FINISHED`.
 
 Le remplissage déclenche `setTestReviewNeeded`, ce qui relance le module jusqu'à
-son terme. En mode witness, la capture fournie n'est pas une preuve d'exécution
-réelle du navigateur : c'est un artifice pour que la suite se termine et produise
-le rapport complet.
+son terme : le verdict reste `REVIEW` (la suite n'attend que le justificatif), mais
+la preuve exhibée est désormais la page réellement servie par l'OP, téléversée dans
+le même run et conservée dans l'artefact `certification-screenshots`. Sans capture
+réelle, la capture de secours reste ce qu'elle était : un artifice pour que la suite
+se termine et produise le rapport complet.
 
 Le remplissage **immédiat** est interdit : le watcher de placeholders
 d'`AbstractTestModule` conclut le test dès que la liste est vide pendant que le

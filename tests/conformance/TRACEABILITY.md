@@ -199,8 +199,17 @@ code (PKCE) et décode les claims de l'id_token pour lire `auth_time`.
 
 ## État de référence
 
-Run de certification (main, `release-v5.2.4`) : **130 passed / 18 failed /
-29 warning / 2 review / 19 skipped**. Les 18 échecs se répartissent en
+**État courant** (run `36753888937`, main @ `d571be8`, `release-v5.2.4`) :
+**177 passed / 21 review / 0 failed / 0 skipped / 0 warning** sur 198
+modules. Les 19 modules qui sautaient sur `alg=none` rejouent et passent
+(#76) ; les 21 `review` correspondent aux 4 modules qui exigent une capture
+d'écran (6 occurrences chacun) : depuis #90, le run téléverse la page
+réellement servie par l'OP (`certification/capture_screenshots.py`, voir
+« Captures d'écran des modules de relecture » dans
+`certification/README.md`), le PNG de secours restant le repli.
+
+Run d'origine (main, avant #68) : **130 passed / 18 failed / 29 warning /
+2 review / 19 skipped**. Les 18 échecs se répartissent en
 3 × 6 variantes des modules ci-dessus (8 redirect-uri + 6 max-age-1 + 6
 prompt-login) — #68.
 

@@ -40,6 +40,7 @@ Ordre d'implémentation conseillé : **#44 → #45 → #46 → #47** (terminés 
 |---|---|
 | [#51](https://github.com/aguacongas/puridentityserver/issues/51) | Automatiser la **suite de certification OIDC officielle** (OpenID Certification / `oidc-certification`) en CI + autoriser le gate |
 | [#69](https://github.com/aguacongas/puridentityserver/issues/69) → [#72](https://github.com/aguacongas/puridentityserver/issues/72) ✅ | **Rejeu local des plans Core** : 188 tests `conformance` (Basic/Implicit/Hybrid) extraits de `release-v5.2.4` + smoke contre un vrai serveur uvicorn (`samples/conformance-smoke/`) — traçabilité `tests/conformance/TRACEABILITY.md`, doc « Rejeu local sans la suite » dans `certification/README.md` ; plus aucun skip depuis [#76](https://github.com/aguacongas/puridentityserver/issues/76) ✅ (`alg=none` + request objects RFC 9101) |
+| [#90](https://github.com/aguacongas/puridentityserver/issues/90) | **Captures d'écran réelles des verdicts `review`** (21 occurrences = 4 modules Core) : `certification/capture_screenshots.py` rejoue les scénarios contre l'OP déployé (Playwright/chromium headless) en CI, `conformance-screenshots.patch` téléverse ce PNG à la place du PNG 1x1 de secours, artefact `certification-screenshots` |
 
 ---
 

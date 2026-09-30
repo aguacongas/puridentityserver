@@ -224,12 +224,33 @@ jobs:
           sed -i 's/def wait_for_state(self, module_id, required_states, timeout=240):/def wait_for_state(self, module_id, required_states, timeout=int(os.getenv("CONFORMANCE_MODULE_TIMEOUT", "240"))):/' scripts/conformance.py
           grep -n "CONFORMANCE_MODULE_TIMEOUT" scripts/conformance.py
 
+      - name: Captures d'écran réelles des modules de relecture (Playwright)
+        # Les modules Core en verdict REVIEW (oidcc-response-type-missing,
+        # oidcc-ensure-registered-redirect-uri, oidcc-prompt-login,
+        # oidcc-max-age-1) exigent une capture téléversée via l'ImageAPI de la
+        # suite : ce script rejoue ces 4 scénarios contre l'OP déposé avec
+        # chromium headless et dépose <testName>.png dans screenshots/. Une
+        # échec (installation navigateur, OP indisponible…) laisse le
+        # répertoire vide : conformance-screenshots.patch retombe alors sur son
+        # PNG de secours et le run se poursuit — étape non bloquante.
+        continue-on-error: true
+        run: |
+          python3 -m pip install --disable-pip-version-check --quiet playwright
+          python3 -m playwright install --with-deps chromium
+          python3 certification/capture_screenshots.py \
+            --base-url "$OP_URL" \
+            --out "$GITHUB_WORKSPACE/screenshots"
+          ls -l "$GITHUB_WORKSPACE/screenshots"
+
       - name: Lancement des plans Core (Basic / Implicit / Hybrid)
         continue-on-error: true
         working-directory: conformance-suite
         env:
           # Vide sur push/schedule : les trois plans sont joués.
           PLAN_FILTER: ${{ inputs.plan || 'all' }}
+          # Captures réelles produites par l'étape Playwright : le driver les
+          # téléverse à la place du PNG de secours (absence = secours).
+          SCREENSHOTS_DIR: ${{ github.workspace }}/screenshots
         run: |
           set +e
           # Le driver écrit les exports (.zip) dans --export-dir : le créer
@@ -271,6 +292,17 @@ jobs:
           path: |
             results/
             _site/
+          if-no-files-found: ignore
+
+      - name: Upload des captures d'écran réelles
+        # Les PNG téléversés aux modules de relecture (ImageAPI) sont gardés
+        # sous la main pour contrôle humain : c'est la preuve visible des
+        # verdicts REVIEW, au même titre que le rapport sur GitHub Pages.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: certification-screenshots
+          path: screenshots/
           if-no-files-found: ignore
 
       - name: Configuration GitHub Pages
