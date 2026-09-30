@@ -250,15 +250,12 @@ def test_implicit_userinfo_endpoint_method(
     """``oidcc-userinfo-*`` en ``id_token token`` : access_token du fragment.
 
     ``CallUserInfoEndpoint`` / ``SetResourceMethodToPost`` /
-    ``CallUserInfoEndpointWithBearerTokenInBody`` (WARNING → skip si non 2xx).
+    ``CallUserInfoEndpointWithBearerTokenInBody`` (token en corps form —
+    RFC 6750 §2.1.2 ; WARNING `UserInfoEndpointWithAccessTokenInBodyNotSupported`
+    évité, assertion ici).
     """
     _params_used, result, claims = _implicit_flow(harness, _TOKEN_TYPE)
     response = harness.userinfo(method, result.access_token)
-    if method == "post_body" and response.status_code >= 300:
-        pytest.skip(
-            "mode access_token dans le corps non supporté (la suite émet un "
-            f"WARNING `UserInfoEndpointWithAccessTokenInBodyNotSupported`) : {response.status_code}"
-        )
     check_userinfo_response(response, str(claims["sub"]))
 
 

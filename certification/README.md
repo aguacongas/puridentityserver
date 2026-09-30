@@ -82,7 +82,7 @@ des modules (`release-v5.2.4`) ont été extraites dans
 
 ```bash
 # rejeu in-process (FastAPI via ASGITransport) — 173 scénarios :
-# 164 passed, 9 skipped, 737 deselected
+# 169 passed, 4 skipped, 772 deselected
 uv run --no-sync --no-build --locked python -m pytest -m conformance --no-cov -p no:cacheprovider
 
 # variante contre un VRAI serveur uvicorn (sous-processus, port 8121,
@@ -92,9 +92,10 @@ uv run python samples/conformance-smoke/smoke_test.py
 
 - Les tests sont exclus du gate (`addopts` porte `-m "not conformance"`) et
   `--no-cov` est requis : ce sous-ensemble ne couvre pas le seuil de 80 %.
-- Les 9 skips sont fidèles à la suite : `alg=none`, `request`/`request_uri`
-  (non supportés par l'OP) et l'access_token dans le corps de `/userinfo`
-  (vérifiés dynamiquement contre le discovery) — voir issue #76.
+- Les 4 skips sont fidèles à la suite : `alg=none` et `request`/`request_uri`
+  (non supportés par l'OP, vérifiés dynamiquement contre le discovery) —
+  voir issue #76. L'access_token dans le corps de `/userinfo` est désormais
+  accepté : les modules `oidcc-userinfo-post-body` rejouent (#83).
 - Le smoke propage le code retour de pytest et borne la durée (`watchdog`) ;
   il sert de vérification « OP réel » du même rejeu.
 

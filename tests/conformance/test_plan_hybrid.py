@@ -307,14 +307,9 @@ def test_hybrid_scope_claims_returned(
 def test_hybrid_userinfo_endpoint_method(
     harness: ConformanceHarness, response_type: str, alias: str, method: str
 ) -> None:
-    """``oidcc-userinfo-*`` en hybride : GET, POST Bearer, POST corps (skip)."""
+    """``oidcc-userinfo-*`` en hybride : GET, POST Bearer, POST token en corps."""
     outcome = _hybrid_flow(harness, response_type)
     response = harness.userinfo(method, outcome.access_token)
-    if method == "post_body" and response.status_code >= 300:
-        pytest.skip(
-            "mode access_token dans le corps non supporté (la suite émet un "
-            f"WARNING `UserInfoEndpointWithAccessTokenInBodyNotSupported`) : {response.status_code}"
-        )
     check_userinfo_response(response, str(outcome.claims["sub"]))
 
 

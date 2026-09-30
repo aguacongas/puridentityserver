@@ -314,7 +314,7 @@ class TestUserInfoUseCase:
 
 
 class TestUserInfoEndpoint:
-    """Couvre l'endpoint HTTP ``GET /userinfo`` (RFC 6750)."""
+    """Couvre les endpoints HTTP ``GET``/``POST /userinfo`` (RFC 6750)."""
 
     def _app(self) -> FastAPI:
         return create_app(
@@ -391,6 +391,36 @@ class TestUserInfoEndpoint:
 
         assert response.status_code == 401
         assert response.json()["error"] == "invalid_token"
+
+    def test_post_accepts_access_token_in_body(self) -> None:
+        """RFC 6750 §2.1.2 : POST form avec ``access_token`` en corps, sans en-tête."""
+        with TestClient(self._app()) as client:
+            token = self._access_token(client)
+            response = client.post("/userinfo", data={"access_token": token})
+
+        assert response.status_code == 200
+        assert response.json()["sub"] == ""
+
+    def test_post_header_takes_precedence_over_body(self) -> None:
+        """L'en-tête ``Authorization`` prime sur le corps form (RFC 6750 §2.1)."""
+        with TestClient(self._app()) as client:
+            token = self._access_token(client)
+            response = client.post(
+                "/userinfo",
+                data={"access_token": "token-du-corps"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["sub"] == ""
+
+    def test_post_rejects_missing_token_in_header_and_body(self) -> None:
+        with TestClient(self._app()) as client:
+            response = client.post("/userinfo")
+
+        assert response.status_code == 401
+        assert response.json()["error"] == "invalid_request"
+        assert response.headers["www-authenticate"].startswith("Bearer error=")
 
     def test_discovery_advertises_supported_claims_and_scopes(self) -> None:
         with TestClient(self._app()) as client:

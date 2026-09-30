@@ -97,7 +97,8 @@ tests/             pytest unit + intégration (TestClient httpx)
    rotation par algorithme, `/.well-known/*`
 3. ✅ **Authorization Code + PKCE** (grant principal, RFC 6749 + 7636)
 4. ✅ **ID Token + UserInfo** — émission et validation JWT via PyJWT,
-   endpoint `/userinfo` (Bearer, filtrage des claims par scopes accordés)
+   endpoint `/userinfo` (Bearer en en-tête ou access_token dans le corps
+   form du POST, RFC 6750 §2.1 ; filtrage des claims par scopes accordés)
 5. ✅ **Refresh tokens** — rotation, expiration, rejeu
 6. ✅ **Client Credentials** (RFC 6749 §4.4)
 7. ✅ **Device Authorization Grant** (RFC 8628)

@@ -64,9 +64,14 @@ pytest                       # tests + couverture (min 80 %)
 
 ## Processus
 
-1. Prendre une **branch** par feature (`feat/`, `fix/`, `chore/`).
-2. `ruff check . && ruff format . && mypy src && pytest` doivent passer **en local**.
-3. Ouvrir une PR vers `main` — les mêmes checks tournent en CI.
+1. Ouvrir (ou réutiliser) une **issue** décrivant le besoin et les critères
+   d'acceptation : **toute PR doit référencer au moins une issue** — PR sans issue =
+   fermée/retournée. L'issue est créée *avant* la branche.
+2. Prendre une **branch** par feature (`feat/`, `fix/`, `chore/`).
+3. `ruff check . && ruff format . && mypy src && pytest` doivent passer **en local**.
+4. Ouvrir une PR vers `main` en référençant l'issue (`Closes #NN` dans la description) —
+   les mêmes checks tournent en CI. Le merge n'intervient qu'après confirmation
+   explicite de l'auteur/mainteneur.
 
 ## Definition of Done
 

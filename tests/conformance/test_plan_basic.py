@@ -199,15 +199,11 @@ def test_userinfo_endpoint_method(harness: ConformanceHarness, alias: str, metho
 
     ``CallUserInfoEndpoint`` (GET + Bearer), ``SetResourceMethodToPost`` (POST +
     Bearer) ou ``CallUserInfoEndpointWithBearerTokenInBody`` (POST form sans
-    header — la suite n'exige pas ce mode : absence de 2xx = skip).
+    header, token en corps — RFC 6750 §2.1.2 ; la suite y voyait un WARNING
+    `UserInfoEndpointWithAccessTokenInBodyNotSupported`, assertion ici).
     """
     tokens, claims = _happy_flow(harness)
     response = harness.userinfo(method, str(tokens["access_token"]))
-    if method == "post_body" and response.status_code >= 300:
-        pytest.skip(
-            "mode access_token dans le corps non supporté (la suite émet un "
-            f"WARNING `UserInfoEndpointWithAccessTokenInBodyNotSupported`) : {response.status_code}"
-        )
     check_userinfo_response(response, str(claims["sub"]))
 
 
