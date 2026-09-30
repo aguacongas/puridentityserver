@@ -613,3 +613,86 @@ def test_require_login_issues_code_after_authentication() -> None:
     location = response.headers["location"]
     assert location.startswith("https://app.example/callback?")
     assert _redirect_query(location)["state"] == ["st-auth"]
+
+
+def test_require_login_post_keeps_parameters_in_login_next() -> None:
+    """RFC 6749 §4.1.2 note : le POST ne doit pas perdre ses paramètres au login.
+
+    La demande arrive dans le corps form, la redirection vers ``/login`` part
+    en query string : sans mémorisation du corps, ``next`` vaut ``/authorize``
+    et le retour après connexion produit une page d'erreur (warning
+    ``oidcc-ensure-post-request-succeeds``).
+    """
+    with TestClient(_require_login_app()) as client:
+        response = client.post(
+            "/authorize",
+            data=_authorize_login_params(),
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert location.startswith("/login?next=")
+    target = urlparse(_redirect_query(location)["next"][0])
+    assert (target.scheme, target.netloc, target.path) == ("https", "id.example", "/authorize")
+    assert "client_id=web-app" in target.query
+    assert "state=st-auth" in target.query
+
+
+def test_require_login_post_issues_code_after_authentication() -> None:
+    """Le POST d'un utilisateur anonyme finit sur le callback après connexion."""
+    with TestClient(_require_login_app()) as client:
+        post = client.post(
+            "/authorize",
+            data=_authorize_login_params(),
+            follow_redirects=False,
+        )
+        assert post.status_code == 302
+        next_target = _redirect_query(post.headers["location"])["next"][0]
+
+        login = client.post(
+            "/login",
+            data={
+                "username": "alice@example.com",
+                "password": "password",
+                "next": next_target,
+            },
+            follow_redirects=False,
+        )
+        assert login.status_code == 302
+        assert login.headers["location"] == next_target
+
+        # Même hôte que la session : `next` porte l'autorité explicite, la
+        # suite rejoue en chemin relatif (le cookie de session la suit).
+        target = urlparse(next_target)
+        response = client.get(
+            f"{target.path}?{target.query}" if target.query else target.path,
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert location.startswith("https://app.example/callback?")
+    assert _redirect_query(location)["state"] == ["st-auth"]
+
+
+def test_authorize_post_issues_code_for_authenticated_user() -> None:
+    """``POST /authorize`` d'un utilisateur déjà connecté part au callback."""
+    with TestClient(_require_login_app()) as client:
+        login = client.post(
+            "/login",
+            data={"username": "alice@example.com", "password": "password", "next": "/"},
+            follow_redirects=False,
+        )
+        assert login.status_code == 302
+
+        response = client.post(
+            "/authorize",
+            data=_authorize_login_params(),
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert location.startswith("https://app.example/callback?")
+    assert _redirect_query(location)["state"] == ["st-auth"]

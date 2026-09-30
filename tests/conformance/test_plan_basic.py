@@ -341,14 +341,13 @@ def test_request_with_valid_pkce_succeeds(harness: ConformanceHarness) -> None:
 def test_post_authorization_request_succeeds(harness: ConformanceHarness) -> None:
     """``oidcc-ensure-post-request-succeeds`` : demande d'autorisation en HTTP POST.
 
-    ``performRedirect("POST")`` : la requête part en POST et le callback doit
-    revenir (RFC 6749 §3.1.2 note). La session est établie au préalable : sur
-    une session vierge l'OP renvoie vers ``/login`` avec un ``next`` reconstruit
-    sans la query string — la suite y verrait simplement le WARNING
-    ``ExpectRedirectUriHasBeenCalled`` (OIDCC-3.1.2.1), le rejeu préfère prouver
-    l'acceptation effective du POST, voir ``TRACEABILITY.md``.
+    ``performRedirect("POST")`` : la requête part en POST **sur session
+    vierge** et le callback doit revenir (RFC 6749 §3.1.2 note). L'OP
+    mémorise le corps form pour reconstruire ``next`` après ``/login`` — sans
+    cela le retour arrive sur ``/authorize`` sans paramètres et la suite
+    conclut en WARNING ``ExpectRedirectUriHasBeenCalled`` (OIDCC-3.1.2.1).
     """
-    harness.login()
+    harness.reset_session()
     verifier = new_verifier()
     params = harness.authorize_params(verifier)
     result = harness.run_flow_post(**params)

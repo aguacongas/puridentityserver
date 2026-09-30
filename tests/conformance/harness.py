@@ -190,21 +190,6 @@ class ConformanceHarness:
         """Oublie les cookies de session : l'utilisateur est à nouveau anonyme."""
         self._client.cookies.clear()
 
-    def login(self) -> None:
-        """Établit la session utilisateur (POST ``/login`` sans ``next``).
-
-        Utilisé pour les parcours qui exigent une session **avant** la demande
-        d'autorisation (ex. ``oidcc-ensure-post-request-succeeds``).
-        """
-        self._client.get("/login")
-        response = self._client.post(
-            "/login", data={"username": self._username, "password": self._password}
-        )
-        if response.status_code != 302:
-            raise AssertionError(
-                f"connexion refusée ({response.status_code}) : {response.text[:300]}"
-            )
-
     def _navigate(self, method: str, params: dict[str, str]) -> FlowResult:
         """Boucle de redirections ; la première requête utilise ``method``."""
         result = FlowResult()

@@ -6,7 +6,7 @@ import html
 import time
 from dataclasses import dataclass
 from typing import Annotated
-from urllib.parse import parse_qs, quote
+from urllib.parse import parse_qs, quote, urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -140,6 +140,13 @@ def authorize_router(
         """Traitement d'une demande ``POST /authorize`` (corps form-urlencoded)."""
         form = await request.form()
         params = {name: str(value) for name, value in form.items()}
+        # RFC 6749 §4.1.2 note : la demande voyage dans le corps, mais la
+        # redirection vers /login part en query string. On mémorise le corps
+        # traité pour que `next` (et le hash de réauthentification) rejoue
+        # exactement les mêmes paramètres après connexion — sinon le retour
+        # arrive sur /authorize nu et la suite de certification ne voit jamais
+        # le callback (warning `ensure-post-request-succeeds`).
+        request.state.form_query = urlencode(params) if params else ""
         return await _handle_authorize(request, params, user)
 
     async def _handle_authorize(
@@ -398,14 +405,19 @@ async def _login_or_error(
 def _authorize_url_from_base(base_url: str, http_request: Request) -> str:
     """URL ``/authorize`` absolue reconstruite depuis la base explicite.
 
-    La query string brute du scope ASGI (déjà encodée) est conservée telle
-    quelle ; la base sert d'autorité (schéma + hôte + port), indépendamment
-    des en-têtes du proxy.
+    La query string de référence est celle que la demande a **traitée** : la
+    query string ASGI d'un GET, sinon le corps form d'un POST (mémorisé par
+    ``authorize_post``) — sans quoi la redirection vers ``/login`` perd les
+    paramètres et le retour après connexion arrive sur ``/authorize`` nu.
+    Elle est conservée brute (déjà encodée) ; la base sert d'autorité
+    (schéma + hôte + port), indépendamment des en-têtes du proxy.
     """
     url = base_url.rstrip("/") + (http_request.scope.get("path") or "")
-    query = http_request.scope.get("query_string") or b""
+    query = getattr(http_request.state, "form_query", "") or (
+        http_request.scope.get("query_string") or b""
+    ).decode("latin-1")
     if query:
-        url += "?" + query.decode("latin-1")
+        url += "?" + query
     return url
 
 
