@@ -5,8 +5,14 @@ des journaux JSON nus, ou les archives ``.zip`` rendues par l'API de la suite
 (une archive par plan, contenant un journal JSON par module de test). Le
 script produit une page ``index.html`` listant chaque module avec son verdict,
 les compteurs de conditions et les contrôles en échec, puis re-publie les
-journaux bruts sous ``site/results/``. Le script reste permissif : un export
-illisible est simplement ignoré.
+journaux bruts sous ``site/results/``.
+
+Les captures d'écran réelles des modules de relecture
+(``certification/capture_screenshots.py``, voir ``--screenshots``) sont
+recopiées sous ``site/screenshots/`` et affichées **dans la section du module**
+correspondant (la valeur du verdict ``REVIEW`` est un lien vers l'image). Le
+script reste permissif : un export illisible est simplement ignoré, et un
+répertoire de captures absent ne produit aucune image.
 """
 
 from __future__ import annotations
@@ -143,8 +149,13 @@ def _color(result: str) -> str:
     return _COLORS.get(result, _COLORS["INCONNU"])
 
 
-def _section(module: _Module) -> str:
-    """Rend la section HTML consacrée à un module."""
+def _section(module: _Module, captures: frozenset[str]) -> str:
+    """Rend la section HTML consacrée à un module.
+
+    ``captures`` est l'ensemble des noms de modules (``testName``) pour
+    lesquels une capture d'écran réelle est publiée : la section affiche alors
+    l'image, en lien cliquable, sous le verdict.
+    """
     verdict = _badge(module.verdict, _color(module.verdict))
     counts = " ".join(
         _badge(f"{count} {result}", _color(result))
@@ -161,9 +172,17 @@ def _section(module: _Module) -> str:
         else f"<li><i>+ {len(module.checks) - _MAX_DETAILS} autres contrôles</i></li>"
     )
     suffix = f" — {html.escape(module.started[:19])}" if module.started else ""
+    capture = ""
+    if module.name in captures:
+        url = f"screenshots/{html.escape(module.name)}.png"
+        capture = (
+            f'<p class="capture"><a href="{url}">'
+            f'<img src="{url}" alt="Capture de l\'OP pour {html.escape(module.name)}">'
+            f"</a></p>"
+        )
     return (
         f"<section><h2>{html.escape(title)}{suffix} {verdict}</h2>"
-        f"<p>{counts}</p><ul>{details}{extra}</ul></section>"
+        f"<p>{counts}</p><ul>{details}{extra}</ul>{capture}</section>"
     )
 
 
@@ -183,10 +202,31 @@ def _summary(modules: list[_Module]) -> str:
     )
 
 
-def _render(modules: list[_Module], site: Path) -> None:
+def _publish_captures(captures_dir: Path, site: Path) -> frozenset[str]:
+    """Publie les captures d'écran réelles sous ``site/screenshots/``.
+
+    Renvoie l'ensemble des ``testName`` (sans extension) réellement copiés ;
+    un répertoire absent, illisible ou vide donne un ensemble vide et le
+    rapport est publié sans image.
+    """
+    if not captures_dir.is_dir():
+        return frozenset()
+    target = site / "screenshots"
+    published: set[str] = set()
+    for path in sorted(captures_dir.glob("*.png")):
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            (target / path.name).write_bytes(path.read_bytes())
+        except OSError:
+            continue
+        published.add(path.stem)
+    return frozenset(published)
+
+
+def _render(modules: list[_Module], site: Path, captures: frozenset[str]) -> None:
     """Écrit la page index consolidée du rapport."""
     generated = _dt.datetime.now(tz=_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    body = "".join(_section(module) for module in sorted(modules, key=_sort_key))
+    body = "".join(_section(module, captures) for module in sorted(modules, key=_sort_key))
     body = body or "<p>Aucun résultat exporté : lancer un run du workflow.</p>"
     html_content = f"""<!doctype html>
 <html lang="fr">
@@ -197,6 +237,7 @@ def _render(modules: list[_Module], site: Path) -> None:
   section {{ border-top: 1px solid #ccc; padding: 1rem 0; }}
   li {{ margin: 0.2rem 0; }}
   h2 {{ font-size: 1.05rem; }}
+  img {{ max-width: 100%; border: 1px solid #ccc; margin-top: 0.5rem; }}
 </style>
 </head>
 <body>
@@ -216,6 +257,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results", default="results", help="dossier des exports")
     parser.add_argument("--site", default="_site", help="dossier du site statique")
+    parser.add_argument(
+        "--screenshots",
+        default="screenshots",
+        help="dossier des captures d'écran réelles (PNG <testName>.png)",
+    )
     args = parser.parse_args()
 
     results = Path(args.results)
@@ -229,7 +275,8 @@ def main() -> None:
             continue
         modules.append(module)
         (site_results / name).write_bytes(payload)
-    _render(modules, site)
+    captures = _publish_captures(Path(args.screenshots), site)
+    _render(modules, site, captures)
 
 
 if __name__ == "__main__":

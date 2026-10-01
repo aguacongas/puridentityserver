@@ -1,8 +1,16 @@
 diff --git a/scripts/conformance.py b/scripts/conformance.py
-index 6bc2841..c371682 100644
+index e1f3996..790f826 100644
 --- a/scripts/conformance.py
 +++ b/scripts/conformance.py
-@@ -18,6 +18,14 @@ import traceback
+@@ -7,6 +7,7 @@ from __future__ import division
+ from __future__ import print_function
+ 
+ import asyncio
++import base64
+ import json
+ import random
+ import re
+@@ -18,6 +19,44 @@ import traceback
  import zipfile
  
  
@@ -13,35 +21,75 @@ index 6bc2841..c371682 100644
 +# image/png ou image/jpeg (<= 500 Ko).
 +STUB_SCREENSHOT_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 +
++# Repertoire des captures reelles deposees par certification/capture_screenshots.py
++# (PNG nommes <testName>.png) ; variable d'environnement SCREENSHOTS_DIR, vide par
++# defaut.
++SCREENSHOTS_DIR_ENV = 'SCREENSHOTS_DIR'
++
++# Meme bornee que l'ImageAPI de la suite (data URI <= 500 Ko).
++MAX_SCREENSHOT_BYTES = 500 * 1024
++
++
++def screenshot_data_uri(test_name):
++    """Data URI (image/png) de la capture reelle d'un module, ou None.
++
++    Lit ``SCREENSHOTS_DIR/<testName>.png`` (variable SCREENSHOTS_DIR) ; renvoie
++    None si le repertoire n'est pas configure, si le fichier est absent ou
++    s'il depasse la limite de l'ImageAPI : l'appelant retombe alors sur le PNG
++    de secours, le deroulement n'est jamais interrompu pour une capture.
++    """
++    directory = os.getenv(SCREENSHOTS_DIR_ENV)
++    if not directory:
++        return None
++    path = os.path.join(directory, str(test_name) + '.png')
++    try:
++        with open(path, 'rb') as screenshot:
++            payload = screenshot.read()
++    except (IOError, OSError):
++        return None
++    if not payload or len(payload) > MAX_SCREENSHOT_BYTES:
++        return None
++    return 'data:image/png;base64,' + base64.b64encode(payload).decode('ascii')
++
 +
  class ServerUnavailableError(Exception):
      """Raised when the server is unreachable after exhausting retries."""
      pass
-@@ -338,6 +346,35 @@ class Conformance(object):
+@@ -287,6 +326,45 @@ class Conformance(object):
              raise Exception("get_test_log failed - HTTP {:d} {}".format(response.status_code, response.content))
          return response.json()
  
-+    async def fill_required_screenshots(self, module_id):
++    async def fill_required_screenshots(self, module_id, test_name):
 +        # Certains modules OpenID Core (ex. oidcc-response-type-missing) mettent le
 +        # test en pause avec un evenement de relecture REVIEW porteur d'un
 +        # placeholder 'upload' : un humain doit televerser une capture d'ecran dans
 +        # la console du navigateur, sinon wait_for_state reste bloque jusqu'au
 +        # timeout (CONFORMANCE_MODULE_TIMEOUT). On liste ces placeholders via
 +        # GET /api/log/{id}/images puis on les remplit via
-+        # POST /api/log/{id}/images/{placeholder} avec un PNG de secours valide
-+        # afin que le test se termine tout seul (mode witness : la capture fournie
-+        # n'est pas une preuve d'execution reelle du navigateur).
++        # POST /api/log/{id}/images/{placeholder} avec la capture reelle du module
++        # (SCREENSHOTS_DIR/<testName>.png, deposee avant le deroulement par
++        # certification/capture_screenshots.py) ou, a defaut, avec le PNG de
++        # secours valide afin que le test se termine tout seul (mode witness : le
++        # PNG de secours n'est pas une preuve d'execution reelle du navigateur).
 +        api_url = '{0}api/log/{1}/images'.format(self.api_url_base, module_id)
 +        response = await self.httpclient.get(api_url)
 +        if response.status_code != 200:
 +            raise Exception("fill_required_screenshots list failed - HTTP {:d} {}".format(response.status_code, response.content))
 +        placeholders = [entry.get('upload') for entry in response.json() if isinstance(entry, dict) and entry.get('upload')]
++        if not placeholders:
++            return 0
++        content = screenshot_data_uri(test_name)
++        if content is None:
++            content = STUB_SCREENSHOT_DATA_URI
++            print('fill_required_screenshots {} : capture reelle absente, PNG de secours utilise'.format(test_name))
++        else:
++            print('fill_required_screenshots {} : capture reelle utilisee'.format(test_name))
 +        filled = 0
 +        for placeholder in placeholders:
 +            upload_url = '{0}api/log/{1}/images/{2}'.format(self.api_url_base, module_id, placeholder)
 +            upload = await self.httpclient.post(
 +                upload_url,
-+                content=STUB_SCREENSHOT_DATA_URI,
++                content=content,
 +                headers={'Content-Type': 'text/plain; charset=UTF-8'},
 +            )
 +            if upload.status_code != 200:
@@ -54,10 +102,10 @@ index 6bc2841..c371682 100644
          api_url = '{0}api/runner/{1}'.format(self.api_url_base, module_id)
          response = await self._request(self.httpclient.post, "start_test", 200,
 diff --git a/scripts/run-test-plan.py b/scripts/run-test-plan.py
-index ba14e9a..d6c7e4b 100755
+index ba14e9a..d0d7229 100755
 --- a/scripts/run-test-plan.py
 +++ b/scripts/run-test-plan.py
-@@ -377,6 +377,35 @@ async def run_test_module(moduledict, plan_id, test_info, test_time_taken, varia
+@@ -377,6 +377,37 @@ async def run_test_module(moduledict, plan_id, test_info, test_time_taken, varia
                          os.environ['TEST_MODULE_NAME'] = module
                          subprocess.call(["npm", "run", "client"], cwd="./sample-openbanking-client-nodejs")
  
@@ -65,7 +113,9 @@ index ba14e9a..d6c7e4b 100755
 +                # sur un evenement de relecture demandant une capture d'ecran
 +                # (ex. oidcc-response-type-missing). On remplit ces placeholders
 +                # automatiquement pour laisser la certification se terminer toute
-+                # seule (mode witness).
++                # seule : avec SCREENSHOTS_DIR, la capture reelle du module
++                # (PNG depose par certification/capture_screenshots.py) est
++                # telechargee ; sans elle, le PNG de secours (mode witness).
 +                # On laisse d'abord une periode de tolerance pour que le module se
 +                # termine de lui-meme : un remplissage immediat declenche le watcher
 +                # de placeholders d'AbstractTestModule, qui conclut le test pendant
@@ -86,7 +136,7 @@ index ba14e9a..d6c7e4b 100755
 +                        if not str(grace_error).startswith("Timed out waiting for test module"):
 +                            raise
 +                    if state is None:
-+                        uploaded = await conformance.fill_required_screenshots(module_id)
++                        uploaded = await conformance.fill_required_screenshots(module_id, module)
 +                        if uploaded > 0:
 +                            print('Automatically uploaded {:d} screenshot(s) for review placeholder(s)'.format(uploaded))
 +

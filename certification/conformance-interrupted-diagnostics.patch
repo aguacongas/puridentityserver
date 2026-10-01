@@ -1,8 +1,8 @@
 diff --git a/scripts/conformance.py b/scripts/conformance.py
-index 03a8c6c..94b68c6 100644
+index f9afc73..f0f7ced 100644
 --- a/scripts/conformance.py
 +++ b/scripts/conformance.py
-@@ -346,6 +346,56 @@ class Conformance(object):
+@@ -377,6 +377,56 @@ class Conformance(object):
              raise Exception("get_test_log failed - HTTP {:d} {}".format(response.status_code, response.content))
          return response.json()
  
@@ -56,10 +56,10 @@ index 03a8c6c..94b68c6 100644
 +                parts.append(line.replace('\n', ' ')[:600])
 +        return " | ".join(parts) if parts else "aucun detail disponible"
 +
-     async def fill_required_screenshots(self, module_id):
+     async def fill_required_screenshots(self, module_id, test_name):
          # Certains modules OpenID Core (ex. oidcc-response-type-missing) mettent le
          # test en pause avec un evenement de relecture REVIEW porteur d'un
-@@ -447,8 +497,9 @@ class Conformance(object):
+@@ -488,8 +538,9 @@ class Conformance(object):
              remaining = timeout_at - time.time()
              if remaining <= 0:
                  raise Exception(
@@ -71,7 +71,7 @@ index 03a8c6c..94b68c6 100644
              # Cap each long-poll at 30s so we recover from server restarts or dropped
              # connections without exceeding the overall budget; the server clamps to the
              # same bound. On a per-call timeout the server returns {"timeout": true} and
-@@ -503,7 +554,8 @@ class Conformance(object):
+@@ -544,7 +595,8 @@ class Conformance(object):
                      if 'INTERRUPTED' in required_states:
                          print("module id {} status changed to {}".format(module_id, persisted))
                          return persisted
@@ -81,7 +81,7 @@ index 03a8c6c..94b68c6 100644
                  # Non-terminal persisted status (RUNNING/WAITING/CONFIGURED/...): the runner
                  # lost an in-progress test, almost certainly a restart. Even if this status
                  # is in required_states, we must NOT return it — the test no longer exists in
-@@ -532,7 +584,8 @@ class Conformance(object):
+@@ -573,7 +625,8 @@ class Conformance(object):
              # sit until timeout — UNLESS the caller explicitly asked to stop on INTERRUPTED
              # (it's in required_states), in which case we return it as a normal wanted state.
              if state == 'INTERRUPTED' and 'INTERRUPTED' not in required_states:
