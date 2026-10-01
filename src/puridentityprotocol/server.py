@@ -416,6 +416,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version=_PACKAGE_VERSION,
         description="Serveur OpenID Connect conforme aux specs OIDC Core 1.0 (protocole).",
         lifespan=deps.lifespan,
+        openapi_url="/openapi.json" if settings.docs_enabled else None,
+        docs_url="/docs" if settings.docs_enabled else None,
+        redoc_url="/redoc" if settings.docs_enabled else None,
     )
     app.add_middleware(DynamicCORSMiddleware, client_repository=deps.readers.client)
     deps.mount(app)

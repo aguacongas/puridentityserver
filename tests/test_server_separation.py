@@ -13,9 +13,11 @@ Couvre la frontière définie pour la refonte des packages :
 """
 
 import asyncio
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import TypeVar
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -62,6 +64,21 @@ _T = TypeVar("_T")
 _ISSUER = "https://id.example"
 
 _ORIGIN = "https://app.example"
+
+_AppFactory = Callable[[Settings | None], FastAPI]
+
+# Trois points d'entrée couverts par les tests d'exposition de la documentation
+# OpenAPI : (nom, fabrique `create_app`, chemin « vivant » qui doit continuer de
+# répondre que la documentation soit exposée ou masquée).
+_ENTRY_POINTS: tuple[tuple[str, _AppFactory, str], ...] = (
+    ("protocol", puridentityprotocol.server.create_app, "/.well-known/openid-configuration"),
+    ("admin", puridentityadmin.server.create_app, "/api-resources"),
+    ("full", puridentityfull.server.create_app, "/.well-known/openid-configuration"),
+)
+
+_DOCS_CASES = [(factory, probe) for _, factory, probe in _ENTRY_POINTS]
+
+_DOCS_IDS = [name for name, _, _ in _ENTRY_POINTS]
 
 
 def run(awaitable: Awaitable[_T]) -> _T:
@@ -205,6 +222,51 @@ class TestServerPackages:
         assert puridentityprotocol.app.title == "PurIdentityServer — protocole"
         assert puridentityadmin.app.title == "PurIdentityServer — administration"
         assert puridentityfull.app.title == "PurIdentityServer"
+
+
+class TestDocsExposure:
+    """Couvre le réglage ``docs_enabled`` : exposition ou masquage des docs OpenAPI."""
+
+    @pytest.mark.parametrize(("factory", "probe"), _DOCS_CASES, ids=_DOCS_IDS)
+    def test_documentation_is_exposed_by_default(self, factory: _AppFactory, probe: str) -> None:
+        settings = _settings(admin_required_claim_values=())
+        with TestClient(factory(settings)) as client:
+            assert client.get("/openapi.json").status_code == 200
+            assert client.get("/docs").status_code == 200
+            assert client.get("/redoc").status_code == 200
+            assert client.get(probe).status_code == 200
+
+    @pytest.mark.parametrize(("factory", "probe"), _DOCS_CASES, ids=_DOCS_IDS)
+    def test_documentation_can_be_masked(self, factory: _AppFactory, probe: str) -> None:
+        settings = _settings(admin_required_claim_values=(), docs_enabled=False)
+        with TestClient(factory(settings)) as client:
+            assert client.get("/openapi.json").status_code == 404
+            assert client.get("/docs").status_code == 404
+            assert client.get("/redoc").status_code == 404
+            assert client.get(probe).status_code == 200
+
+    def test_documentation_toggle_reads_config_toml(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config = tmp_path / "config.toml"
+        config.write_text("[settings]\ndocs_enabled = false\n", encoding="utf-8")
+        monkeypatch.setenv("PURIDENTITYSERVER_SETTINGS_FILE", str(config))
+
+        assert Settings(_env_file=None).docs_enabled is False
+
+        monkeypatch.setenv("PURIDENTITYSERVER_DOCS_ENABLED", "true")
+
+        assert Settings(_env_file=None).docs_enabled is True
+
+    def test_documentation_toggle_reads_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("PURIDENTITYSERVER_DOCS_ENABLED", "false")
+        settings = Settings(_env_file=None)
+
+        assert settings.docs_enabled is False
+
+        with TestClient(puridentityadmin.server.create_app(settings)) as client:
+            assert client.get("/docs").status_code == 404
+            assert client.get("/openapi.json").status_code == 404
 
 
 class TestSharedStores:

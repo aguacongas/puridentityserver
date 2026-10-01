@@ -314,6 +314,13 @@ class Settings(BaseSettings):
     # processus déployés séparément partagent le même état via `storage_type=sql`.
     role: str = "full"
 
+    # Exposition de la documentation OpenAPI : Swagger UI (`/docs`), ReDoc
+    # (`/redoc`) et le schéma JSON (`/openapi.json`). `docs_enabled = false`
+    # retire les trois routes et empêche la génération du schéma (réponse 404) :
+    # recommandé pour un serveur `admin` déployé séparément, qui ne doit pas
+    # publier en clair le schéma de ses CRUD. Défaut inchangé : tout est exposé.
+    docs_enabled: bool = True
+
     # Authentification JWT des endpoints de gestion (CRUD resources) et, en
     # mode `jwt`, de la création de client. Le JWT est validé contre l'issuer
     # de gestion (signature JWKS, `iss`, `exp`) puis un claim configurable est
