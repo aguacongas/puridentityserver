@@ -14,6 +14,7 @@ Couvre la frontière définie pour la refonte des packages :
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import TypeVar
 
 import pytest
@@ -243,6 +244,19 @@ class TestDocsExposure:
             assert client.get("/docs").status_code == 404
             assert client.get("/redoc").status_code == 404
             assert client.get(probe).status_code == 200
+
+    def test_documentation_toggle_reads_config_toml(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config = tmp_path / "config.toml"
+        config.write_text("[settings]\ndocs_enabled = false\n", encoding="utf-8")
+        monkeypatch.setenv("PURIDENTITYSERVER_SETTINGS_FILE", str(config))
+
+        assert Settings(_env_file=None).docs_enabled is False
+
+        monkeypatch.setenv("PURIDENTITYSERVER_DOCS_ENABLED", "true")
+
+        assert Settings(_env_file=None).docs_enabled is True
 
     def test_documentation_toggle_reads_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("PURIDENTITYSERVER_DOCS_ENABLED", "false")
