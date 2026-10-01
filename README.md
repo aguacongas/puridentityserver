@@ -241,12 +241,17 @@ tests/             pytest unit + intégration (TestClient httpx)
 ## Développement local
 
 ```sh
-uv sync                    # installe les dépendances (prod + dev)
+uv sync --extra dev --extra sql   # dépendances : serveur + sql (aiosqlite) + dev (ruff/mypy/pytest)
 uv run python -m puridentityserver    # lance le serveur sur http://127.0.0.1:8000
 
 uv run python scripts/check.py   # vérification locale complète : ruff + mypy + pytest
 uv run python scripts/check.py lint format type test  # ou une sous-sélection
 ```
+
+Les deux extras sont nécessaires pour démarrer : `sql` fournit `aiosqlite`,
+utilisé par la couche identité **même en mémoire** (sinon
+`ModuleNotFoundError: No module named 'aiosqlite'`), `dev` les outils de
+qualité — voir [Installation](docs/installation.md).
 
 Config via variables d'environnement `PURIDENTITYSERVER_*` (`PURIDENTITYSERVER_ISSUER`, `PURIDENTITYSERVER_HOST`,
 `PURIDENTITYSERVER_PORT`, `PURIDENTITYSERVER_JWKS_ALGORITHMS`, ...).

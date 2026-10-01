@@ -16,14 +16,36 @@ cd PurIdentityServer
 ## 2. Installer les dépendances
 
 ```sh
-uv sync          # dépendances de production
-uv sync --extra dev   # + outils de qualité (ruff, mypy, pytest…) pour le développement
+uv sync --extra dev --extra sql
+```
+
+- **`sql`** : indispensable **même pour un démarrage local en mémoire** — la
+  couche identité (comptes de connexion, sessions) crée un SQLite en mémoire via
+  `aiosqlite` au démarrage, quel que soit `storage_type`. Sans lui, le serveur
+  s'arrête sur `ModuleNotFoundError: No module named 'aiosqlite'` ;
+- **`dev`** : outils de qualité (ruff, mypy, pytest…) pour le développement.
+
+Pour un simple lancement sans outillage : `uv sync --extra sql`.
+
+Les extras ne sont **pas** installés par défaut (`uv sync` seul ne suffit pas à
+démarrer le serveur). Si un import manque plus tard, relancer la commande
+ci-dessus, ou lancer directement avec l'extra :
+
+```sh
+uv run --extra sql python -m puridentityserver
 ```
 
 ## 3. Lancer le serveur
 
 ```sh
 uv run python -m puridentityserver
+```
+
+À l'issue du démarrage, la dernière ligne indique l'adresse d'écoute :
+
+```text
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
 ```
 
 Le serveur écoute sur `http://127.0.0.1:8000` (surchargeable via `PURIDENTITYSERVER_HOST` / `PURIDENTITYSERVER_PORT`).
@@ -147,5 +169,6 @@ server {
 
 | Symptôme | Cause probable |
 | --- | --- |
-| `No module named puridentityserver` | commande lancée hors du répertoire du projet, ou `uv sync` non exécuté |
+| `No module named puridentityserver` | commande lancée hors du répertoire du projet (ancien clone sans `pyproject.toml` ?), ou `uv sync` non exécuté |
+| `ModuleNotFoundError: No module named 'aiosqlite'` | extras non installés : relancer `uv sync --extra dev --extra sql` (l'identité utilise SQLite en mémoire même sans `storage_type = "sql"`) |
 | Le CI Sonar échoue | secret `SONAR_SECRET` non défini sur le dépôt GitHub (voir `docs/configuration.md`) |
