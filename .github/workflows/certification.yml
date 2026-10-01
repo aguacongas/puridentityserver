@@ -282,7 +282,14 @@ jobs:
           done
 
       - name: Génération du rapport statique (GitHub Pages)
-        run: python3 certification/report.py --results results --site _site
+        # --screenshots : les captures réelles des modules de relecture sont
+        # copiées dans _site/screenshots/ et affichées dans la section du
+        # module correspondant (répertoire absent = rapport sans image).
+        run: |
+          python3 certification/report.py \
+            --results results \
+            --site _site \
+            --screenshots "$GITHUB_WORKSPACE/screenshots"
 
       - name: Upload des artefacts (rapports bruts)
         if: always()

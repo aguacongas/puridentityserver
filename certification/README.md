@@ -32,7 +32,9 @@ retenue :
   téléversées aux modules de relecture (voir
   « Captures d'écran des modules de relecture ») ;
 - une page `https://<owner>.github.io/puridentityserver/certification/`
-  consolide les derniers résultats.
+  consolide les derniers résultats **et affiche, dans la section du module,
+  la capture d'écran réelle téléversée** (fichiers aussi disponibles sous
+  `<page>/screenshots/<testName>.png`).
 
 ## Mise en place (une fois)
 
@@ -179,7 +181,7 @@ uv run python samples/conformance-smoke/smoke_test.py
 | `capture_screenshots.py` | rejoue les 4 scénarios de relecture contre l'OP déployé (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver |
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |
 | `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
-| `report.py` | génère la page statique GH Pages à partir des JSON exportés |
+| `report.py` | génère la page statique GH Pages à partir des JSON exportés ; recopie les captures réelles dans `_site/screenshots/` (`--screenshots`) et les affiche dans la section du module correspondant |
 | `../.github/workflows/certification.yml` | workflow witness : deploy + suite + plans + rapport |
 
 ## Captures d'écran des modules de relecture (mode witness)
@@ -226,9 +228,12 @@ Deux étapes couvrent ce besoin :
 Le remplissage déclenche `setTestReviewNeeded`, ce qui relance le module jusqu'à
 son terme : le verdict reste `REVIEW` (la suite n'attend que le justificatif), mais
 la preuve exhibée est désormais la page réellement servie par l'OP, téléversée dans
-le même run et conservée dans l'artefact `certification-screenshots`. Sans capture
-réelle, la capture de secours reste ce qu'elle était : un artifice pour que la suite
-se termine et produise le rapport complet.
+le même run. Le rapport la rend visible aux deux endroits où l'on regarde un run :
+la **page GitHub Pages** (`report.py --screenshots` recopie les PNG dans
+`_site/screenshots/` et les affiche dans la section du module) et l'artefact
+`certification-screenshots`. Sans capture réelle, la capture de secours reste ce
+qu'elle était : un artifice pour que la suite se termine et produise le rapport
+complet.
 
 Le remplissage **immédiat** est interdit : le watcher de placeholders
 d'`AbstractTestModule` conclut le test dès que la liste est vide pendant que le
