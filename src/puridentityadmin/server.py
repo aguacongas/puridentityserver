@@ -98,6 +98,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version=_PACKAGE_VERSION,
         description="Gestion des IdentityResources et ApiResources de PurIdentityServer.",
         lifespan=deps.lifespan,
+        openapi_url="/openapi.json" if settings.docs_enabled else None,
+        docs_url="/docs" if settings.docs_enabled else None,
+        redoc_url="/redoc" if settings.docs_enabled else None,
     )
     app.add_middleware(DynamicCORSMiddleware, client_repository=deps.stores.client)
     deps.mount(app)
