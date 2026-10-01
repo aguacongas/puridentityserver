@@ -248,10 +248,11 @@ uv run python scripts/check.py   # vérification locale complète : ruff + mypy 
 uv run python scripts/check.py lint format type test  # ou une sous-sélection
 ```
 
-Les deux extras sont nécessaires pour démarrer : `sql` fournit `aiosqlite`,
-utilisé par la couche identité **même en mémoire** (sinon
-`ModuleNotFoundError: No module named 'aiosqlite'`), `dev` les outils de
-qualité — voir [Installation](docs/installation.md).
+Stockages **en mémoire par défaut** (`storage_type` et `identity_storage_type`) :
+`uv sync` seul suffit à démarrer le serveur, sans aucun driver SQL. L'extra
+`sql` n'est requis que pour un backend SQL (`storage_type = "sql"` ou
+`identity_storage_type = "sql"`) ; l'extra `dev` apporte les outils de qualité —
+voir [Installation](docs/installation.md).
 
 Config via variables d'environnement `PURIDENTITYSERVER_*` (`PURIDENTITYSERVER_ISSUER`, `PURIDENTITYSERVER_HOST`,
 `PURIDENTITYSERVER_PORT`, `PURIDENTITYSERVER_JWKS_ALGORITHMS`, ...).

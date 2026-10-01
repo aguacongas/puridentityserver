@@ -90,6 +90,12 @@ port = 8000
 # `PURIDENTITYSERVER_JWKS_ROTATION_DAYS`, `PURIDENTITYSERVER_JWKS_GRACE_PERIOD_DAYS`.
 storage_type = "memory"
 storage_dsn = "sqlite:///puridentityserver.db"
+# Backend des comptes de connexion (FastAPI Users) : "memory" (défaut — dict
+# éphémère, aucun driver SQL : `uv sync` seul suffit à démarrer) ou "sql"
+# (table `user` en SQLite mémoire via aiosqlite, extra `sql` requis).
+# Indépendant de `storage_type` ci-dessus (stores OIDC/admin) ; surchargeable
+# via `PURIDENTITYSERVER_IDENTITY_STORAGE_TYPE`.
+identity_storage_type = "memory"
 jwks_key_size = 4096
 # Algorithmes de signature d'id_token/access_token annoncés au discovery
 # (RS*/PS*/ES* signent avec une clé de serveur publiée au JWKS ; HS* signe

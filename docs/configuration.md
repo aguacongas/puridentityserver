@@ -34,6 +34,7 @@ Elle est lue au démarrage par [pydantic-settings](https://docs.pydantic.dev/lat
 | `PURIDENTITYSERVER_API_RESOURCES_SEED` | *(config.toml)* | ApiResources (ressources protégées) : registre des audiences API et de leurs scopes d'API, liste JSON (format `[{"name":"sample-api","display_name":"API de démonstration","scopes":["api.read","api.write"],"allowed_access_token_signing_algos":["ES256"]}]`). Champs d'une entrée : `name` (nom court de la resource, c'est l'`aud` de l'access token quand des scopes lui sont accordés), `display_name` (libellé humain, facultatif), `scopes` (liste des scopes d'API exposés, caractères alphanumériques + `.`/`-`/`_`), `allowed_access_token_signing_algos` (facultatif : restriction des algorithmes de signature acceptables pour cette resource ; vide = algorithmes configurés du serveur). Les scopes d'API complètent `scopes_supported` du discovery ; tout scope non enregistré (standard ou API) est refusé en `invalid_scope` à l'émission (`/authorize`, `/par`, `/token`, `/device_authorization`) et à la registration dynamique (`scope` de RFC 7591). L'`aud` d'un access token porte le nom unique ou la liste triée des resources dont des scopes ont été accordés, sinon le `client_id` émetteur. Gestion en cours de vie via l'API CRUD `GET/POST /api-resources` et `GET/PUT/DELETE /api-resources/{name}`. |
 | `PURIDENTITYSERVER_IDENTITY_SEED_USERS` | *(config.toml)* | Comptes de connexion du login navigateur (FastAPI Users) : objet JSON mappant un `subject` à ses identifiants (format `{"alice": {"email": "alice@example.com", "password": "..."}}`). Le serveur les crée (mot de passe haché) au démarrage via `seed_users`. Par défaut `config.toml` fournit `alice` et `bob`. |
 | `PURIDENTITYSERVER_IDENTITY_JWT_LIFETIME_SECONDS` | `3600` | Durée de vie par défaut du cookie de session (surchargée par `session_lifetime_seconds` du client du flow, voir `PURIDENTITYSERVER_CLIENTS_SEED`). |
+| `PURIDENTITYSERVER_IDENTITY_STORAGE_TYPE` | `memory` | Backend des comptes de connexion (FastAPI Users) : `memory` (défaut — dict éphémère en mémoire, **aucun driver SQL** : `uv sync` seul suffit à démarrer) ou `sql` (table `user` en SQLite mémoire via `aiosqlite`, extra `sql` requis). Distinct de `PURIDENTITYSERVER_STORAGE_TYPE`, qui porte les stores OIDC (clients, codes, JWKS…) : les deux réglages sont indépendants. Dans les deux cas la base identité reste éphémère (perdue au redémarrage). Réglié aussi dans `config.toml` ; l'environnement l'emporte sur le fichier. |
 | `PURIDENTITYSERVER_REGISTRATION_ENABLED` | `false` | Active la Dynamic Client Registration (RFC 7591 + 7592) : endpoint `POST /register` (création de client) et `GET/PUT/DELETE /register/{client_id}` (gestion via le registration access token, RFC 7592). Active aussi la publication de `registration_endpoint` dans le document de discovery. |
 | `PURIDENTITYSERVER_REGISTRATION_REQUIRES_INITIAL_ACCESS_TOKEN` | `true` | Quand vrai, la création d'un client (`POST /register`) exige un initial access token dans l'en-tête `Authorization: Bearer <token>` ; le jeton doit figurer dans `PURIDENTITYSERVER_REGISTRATION_INITIAL_ACCESS_TOKENS` (comparaison par hash SHA-256, jamais en clair). Mettre à `false` pour un mode ouvert — réservé au développement. |
 | `PURIDENTITYSERVER_REGISTRATION_INITIAL_ACCESS_TOKENS` | *(config.toml)* | Liste (séparée par des virgules en environnement) des initial access tokens autorisés à créer des clients. Chaque jeton est stocké uniquement sous forme d'empreinte SHA-256. Exemple : `PURIDENTITYSERVER_REGISTRATION_INITIAL_ACCESS_TOKENS="dev-registrar-token,staging-registrar"`. |
@@ -94,6 +95,13 @@ plusieurs instances du serveur et de reprendre après un redémarrage.
 | `memory` | Stockage en mémoire (Process-local, sans persistance) | Développement local, tests unitaires |
 | `sql` | Stockage SQL via SQLAlchemy (SQLite, PostgreSQL, MySQL) | Production, load balancing multi-instance |
 
+**Comptes de connexion** : la couche identité (FastAPI Users — comptes de
+login, hachages de mots de passe) suit son propre réglage
+`PURIDENTITYSERVER_IDENTITY_STORAGE_TYPE` (`memory` par défaut, `sql`
+optionnel), **indépendant** de `STORAGE_TYPE` — voir le tableau des variables
+ci-dessus. Un déploiement peut donc persister l'état OIDC en SQL tout en
+gardant l'identité en mémoire, ou l'inverse.
+
 **CORS (SPA)** : un client public JavaScript (Authorization Code + PKCE,
 ex. `samples/spa-client`) peut appeler `/token`, `/par`,
 `/device_authorization`, `/introspect`, `/revoke` et `/userinfo` depuis le
@@ -148,7 +156,8 @@ arguments d'init > variables d'environnement (PURIDENTITYSERVER_*) > config.toml
 
 Le fichier contient actuellement :
 
-- le **backend de stockage** (`storage_type` / `storage_dsn`) ainsi que les
+- le **backend de stockage** (`storage_type` / `storage_dsn`) et le **backend
+  des comptes de connexion** (`identity_storage_type`) ainsi que les
   réglages serveur (`issuer`, `host`, `port`) et JWKS (`jwks_key_size`,
   `jwks_algorithms` — y compris HS* —, `jwks_rotation_days`,
   `jwks_grace_period_days`) et le **chiffrement JWE des id_token**
