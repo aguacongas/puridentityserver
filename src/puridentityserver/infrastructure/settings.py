@@ -222,6 +222,12 @@ class Settings(BaseSettings):
     storage_type: str = "memory"
     storage_dsn: str = "sqlite:///puridentityserver.db"
 
+    # Comptes de connexion (FastAPI Users) : "memory" (défaut — dict éphémère,
+    # aucun driver SQL : le serveur démarre sans l'extra `sql`) ou "sql"
+    # (SQLite en mémoire via aiosqlite, extra `sql` requis). Distinct de
+    # `storage_type`, qui porte les stores OIDC/admin (clients, codes, JWKS…).
+    identity_storage_type: str = "memory"
+
     # JWKS (RFC 7517)
     jwks_key_size: int = 4096
     jwks_algorithms: Annotated[tuple[str, ...], NoDecode] = tuple(

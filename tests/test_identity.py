@@ -106,6 +106,7 @@ def _inject_test_db(
     factory = async_sessionmaker(engine, expire_on_commit=False)
     monkeypatch.setattr(mod, "_engine", engine)
     monkeypatch.setattr(mod, "_session_factory", factory)
+    monkeypatch.setattr(mod, "_storage_type", "sql")
     return engine, factory
 
 
@@ -135,16 +136,17 @@ def _ensure_identity_configured() -> None:
 async def test_apply_schema_raises_when_engine_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """apply_schema() lève RuntimeError si _engine reste None après init."""
+    """apply_schema() lève RuntimeError si _engine reste None après init (mode sql)."""
     from puridentityserver.identity import config as mod
     from puridentityserver.identity.config import init_users_db
 
     monkeypatch.setattr(mod, "_session_factory", None)
     monkeypatch.setattr(mod, "_engine", None)
-    init_users_db()
+    monkeypatch.setattr(mod, "_storage_type", "sql")
+    init_users_db("sql")
     monkeypatch.setattr(mod, "_engine", None)
     with pytest.raises(RuntimeError, match="moteur non initialisé"):
-        await apply_schema()
+        await apply_schema("sql")
 
 
 def test_get_session_factory_raises_before_init(

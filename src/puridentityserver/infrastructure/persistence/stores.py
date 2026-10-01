@@ -98,11 +98,12 @@ def build_stores(settings: Settings) -> Stores:
 async def initialise_resources(stores: Stores, settings: Settings) -> None:
     """Ouvre les stockages des resources et applique les seeds administrés.
 
-    Commun à l'administration, au protocole et au serveur ``full`` : crée
-    le schéma utilisateur (identité), initialise les stores clients et
-    resources, puis alimente les IdentityResources/ApiResources seedées.
+    Commun à l'administration, au protocole et au serveur ``full`` : initialise
+    le backend identité (``memory`` sans driver SQL, ``sql`` avec la table
+    ``user``), initialise les stores clients et resources, puis alimente les
+    IdentityResources/ApiResources seedées.
     """
-    await apply_schema()
+    await apply_schema(settings.identity_storage_type)
     await stores.client.initialise()
     await stores.identity_resource.initialise()
     await stores.api_resource.initialise()

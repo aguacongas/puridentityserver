@@ -19,17 +19,23 @@ cd PurIdentityServer
 uv sync --extra dev --extra sql
 ```
 
-- **`sql`** : indispensable **même pour un démarrage local en mémoire** — la
-  couche identité (comptes de connexion, sessions) crée un SQLite en mémoire via
-  `aiosqlite` au démarrage, quel que soit `storage_type`. Sans lui, le serveur
-  s'arrête sur `ModuleNotFoundError: No module named 'aiosqlite'` ;
-- **`dev`** : outils de qualité (ruff, mypy, pytest…) pour le développement.
+- **`dev`** : outils de qualité (ruff, mypy, pytest…) pour le développement ;
+- **`sql`** : drivers SQL (`aiosqlite`, `asyncpg`) — requis **uniquement** si
+  un backend SQL est activé : `storage_type = "sql"` (persistance de l'état
+  OIDC) ou `identity_storage_type = "sql"` (comptes de connexion en SQLite).
 
-Pour un simple lancement sans outillage : `uv sync --extra sql`.
+Par défaut, **les deux stockages sont en mémoire** : aucun driver SQL n'est
+nécessaire et `uv sync` seul suffit à démarrer le serveur :
 
-Les extras ne sont **pas** installés par défaut (`uv sync` seul ne suffit pas à
-démarrer le serveur). Si un import manque plus tard, relancer la commande
-ci-dessus, ou lancer directement avec l'extra :
+```sh
+uv sync                              # dépendances de base uniquement
+uv run python -m puridentityserver
+```
+
+Les extras ne sont **pas** installés par défaut (les tests du dépôt, eux,
+passent par `uv sync --extra dev --extra sql`). Si un import manque — par
+exemple `aiosqlite` après activation d'un backend SQL —, relancer la première
+commande, ou lancer directement avec l'extra :
 
 ```sh
 uv run --extra sql python -m puridentityserver
@@ -170,5 +176,5 @@ server {
 | Symptôme | Cause probable |
 | --- | --- |
 | `No module named puridentityserver` | commande lancée hors du répertoire du projet (ancien clone sans `pyproject.toml` ?), ou `uv sync` non exécuté |
-| `ModuleNotFoundError: No module named 'aiosqlite'` | extras non installés : relancer `uv sync --extra dev --extra sql` (l'identité utilise SQLite en mémoire même sans `storage_type = "sql"`) |
+| `ModuleNotFoundError: No module named 'aiosqlite'` | un backend SQL est activé (`storage_type = "sql"` ou `identity_storage_type = "sql"`) sans l'extra : relancer `uv sync --extra dev --extra sql` (le mode mémoire, par défaut, n'a besoin d'aucun driver) |
 | Le CI Sonar échoue | secret `SONAR_SECRET` non défini sur le dépôt GitHub (voir `docs/configuration.md`) |

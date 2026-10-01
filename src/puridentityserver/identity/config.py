@@ -7,7 +7,7 @@ Fournit l'identité utilisateur du serveur OIDC :
 - ``login_router``           : page ``/login`` (formulaire HTML, spike navigateur)
 - ``CurrentUser``            : dependency d'utilisateur authentifié (requis)
 - ``CurrentUserOptional``    : dependency d'utilisateur authentifié (facultatif)
-- ``apply_schema``           : crée la table ``user`` (SQLite en mémoire, spike)
+- ``apply_schema``           : initialise le backend identité (dict mémoire ou table ``user``)
 - ``seed_users``             : crée les comptes décrits par ``Settings.identity_seed_users``
 - ``configure_identity``     : injecte les KeyManagers (config.toml / PURIDENTITYSERVER_* / .env)
 
@@ -17,9 +17,11 @@ Aucun secret statique ne signe les jetons : cookies de session
 signés RS256 par un ``RotatingTokenSigner`` dédié à chaque famille, sur la
 base d'un KeyManager rotatif distinct des clés de signature des tokens OIDC.
 
-Note spike : la base utilisateurs est en mémoire (``StaticPool``) ; en
-production elle sera remplacée par un vrai magasin (DSN dédié ou la base
-partagée ``STORAGE_DSN``).
+Backend identité piloté par ``Settings.identity_storage_type`` :
+``memory`` (défaut) utilise ``InMemoryUserDatabase`` — aucun driver SQL, le
+serveur démarre sans l'extra ``sql`` ; ``sql`` conserve le SQLite en mémoire
+(``StaticPool``), perdu au redémarrage comme le mode mémoire. En production
+un magasin durable (DSN dédié ou ``STORAGE_DSN``) pourra le remplacer.
 """
 
 from __future__ import annotations
@@ -27,7 +29,8 @@ from __future__ import annotations
 import hashlib
 import html
 import uuid
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager
 from typing import Annotated
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -36,7 +39,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi_users import BaseUserManager, FastAPIUsers, exceptions
 from fastapi_users.authentication import AuthenticationBackend, CookieTransport
-from fastapi_users.db import SQLAlchemyUserDatabase
+from fastapi_users.db import BaseUserDatabase, SQLAlchemyUserDatabase
 from fastapi_users.manager import (
     RESET_PASSWORD_TOKEN_AUDIENCE,
     VERIFY_USER_TOKEN_AUDIENCE,
@@ -45,6 +48,7 @@ from fastapi_users.schemas import BaseUser, BaseUserCreate
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from puridentityserver.identity.memory_db import InMemoryUserDatabase
 from puridentityserver.identity.rotating_signer import RotatingTokenSigner
 from puridentityserver.identity.session_strategy import SessionJWTStrategy
 from puridentityserver.identity.user import Base, User
@@ -63,8 +67,11 @@ _NOT_CONFIGURED = "configure_identity() n'a pas encore été appelé"
 _SESSION_COOKIE_NAME = "fastapiusersauth"
 
 # ── base de données users (async, séparée des stores OIDC) ──────────────────
+_IDENTITY_STORAGE_TYPES = ("memory", "sql")
+_storage_type: str = "memory"
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 _engine: AsyncEngine | None = None
+_memory_users: InMemoryUserDatabase | None = None
 
 
 def _get_session_factory() -> async_sessionmaker[AsyncSession]:
@@ -73,11 +80,33 @@ def _get_session_factory() -> async_sessionmaker[AsyncSession]:
     return _session_factory
 
 
-async def _manager_dependency() -> AsyncGenerator[UserManager, None]:
-    """Dependency FastAPI fournissant un user manager par requête."""
+def _memory_db() -> InMemoryUserDatabase:
+    """Retourne l'adaptateur mémoire courant, le créant au premier usage."""
+    global _memory_users
+    if _memory_users is None:
+        _memory_users = InMemoryUserDatabase()
+    return _memory_users
+
+
+@asynccontextmanager
+async def _user_db() -> AsyncIterator[BaseUserDatabase[User, uuid.UUID]]:
+    """Fournit l'adaptateur identité du mode courant pour une opération.
+
+    Mode ``memory`` : dict éphémère, créé à la volée si ``init_users_db()``
+    n'a pas encore tourné. Mode ``sql`` : session SQLite liée à l'opération,
+    fermée avec le contexte.
+    """
+    if _storage_type == "memory":
+        yield _memory_db()
+        return
     factory = _get_session_factory()
     async with factory() as session:
-        user_db: SQLAlchemyUserDatabase[User, uuid.UUID] = SQLAlchemyUserDatabase(session, User)
+        yield SQLAlchemyUserDatabase(session, User)
+
+
+async def _manager_dependency() -> AsyncGenerator[UserManager, None]:
+    """Dependency FastAPI fournissant un user manager par requête."""
+    async with _user_db() as user_db:
         yield UserManager(user_db)
 
 
@@ -363,9 +392,21 @@ async def session_reauth(request: Request) -> str:
     return reauth if isinstance(reauth, str) else ""
 
 
-def init_users_db() -> None:
-    """Initialise le moteur (SQLite en mémoire partagée) et le session factory."""
-    global _session_factory, _engine
+def init_users_db(storage_type: str | None = None) -> None:
+    """Initialise le backend identité du mode ``storage_type``.
+
+    ``memory`` (défaut) : adaptateur éphémère, aucun driver SQL ; ``sql`` :
+    moteur SQLite en mémoire et session factory. Sans argument, le mode
+    courant est conservé ; une valeur inconnue lève ``ValueError``.
+    """
+    global _storage_type, _session_factory, _engine
+    if storage_type is not None:
+        if storage_type not in _IDENTITY_STORAGE_TYPES:
+            raise ValueError(f"identity_storage_type non supporté : {storage_type}")
+        _storage_type = storage_type
+    if _storage_type == "memory":
+        _memory_db()
+        return
     if _session_factory is None:
         from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -377,9 +418,15 @@ def init_users_db() -> None:
         _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
 
-async def apply_schema() -> None:
-    """Crée la table ``user`` (SQLite en mémoire, spike)."""
-    init_users_db()
+async def apply_schema(storage_type: str | None = None) -> None:
+    """Initialise le backend identité : table ``user`` (``sql``) ou dict mémoire.
+
+    En mode ``memory``, l'adaptateur suffit : aucune table n'est créée et
+    aucun driver SQL n'est chargé. Sans argument, le mode courant est gardé.
+    """
+    init_users_db(storage_type)
+    if _storage_type == "memory":
+        return
     if _engine is None:
         raise RuntimeError("application_schema() : moteur non initialisé")
     async with _engine.begin() as conn:
@@ -396,10 +443,8 @@ async def seed_users(seed: Mapping[str, Mapping[str, str]]) -> dict[str, User]:
     """
     if not seed:
         return {}
-    factory = _get_session_factory()
     result: dict[str, User] = {}
-    async with factory() as session:
-        user_db: SQLAlchemyUserDatabase[User, uuid.UUID] = SQLAlchemyUserDatabase(session, User)
+    async with _user_db() as user_db:
         for subject, credentials in seed.items():
             email = str(credentials["email"])
             password = str(credentials["password"])
@@ -502,9 +547,7 @@ def login_router(
         configurée (sinon la durée serveur par défaut).
         """
         credentials = OAuth2PasswordRequestForm(username=username, password=password)
-        factory = _get_session_factory()
-        async with factory() as session:
-            user_db: SQLAlchemyUserDatabase[User, uuid.UUID] = SQLAlchemyUserDatabase(session, User)
+        async with _user_db() as user_db:
             user = await UserManager(user_db).authenticate(credentials)
             if user is None or not user.is_active:
                 return RedirectResponse(f"/login?next={quote(next_url, safe='')}", status_code=302)
