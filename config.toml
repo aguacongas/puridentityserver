@@ -200,6 +200,13 @@ management_jwt_audience = ""
 admin_required_claim = "scope"
 admin_required_claim_values = ["admin"]
 
+# Exposition de la documentation OpenAPI : Swagger UI (`/docs`), ReDoc
+# (`/redoc`) et schéma JSON (`/openapi.json`). `false` retire les trois routes
+# ainsi que la génération du schéma (réponse 404) — recommandé pour un
+# serveur `admin` déployé seul, qui ne doit pas publier le schéma de ses CRUD.
+# Surchargeable via `PURIDENTITYSERVER_DOCS_ENABLED` (prioritaire sur ce fichier).
+docs_enabled = true
+
 # Autorisation de `POST /register` (RFC 7591 §4.1) :
 # - "static" (défaut) : initial access tokens hachés (ci-dessus) ;
 # - "jwt" : Bearer JWT validé contre l'issuer de gestion + claim configurable
