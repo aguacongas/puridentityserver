@@ -35,6 +35,7 @@ from puridentityserver.infrastructure.tokens import PyJWTTokenManager
 from puridentityserver.interfaces.api.api_resources import api_resources_router
 from puridentityserver.interfaces.api.cors import DynamicCORSMiddleware
 from puridentityserver.interfaces.api.identity_resources import identity_resources_router
+from puridentityserver.interfaces.api.security import swagger_oauth2_dependencies
 
 _PACKAGE_VERSION = "0.1.0"
 
@@ -77,15 +78,22 @@ class AdminDependencies:
             await close_resources(self.stores)
 
     def mount(self, app: FastAPI) -> None:
-        """Monte les endpoints de gestion des resources sur ``app``."""
+        """Monte les endpoints de gestion des resources sur ``app``.
+
+        Les dépendances Swagger OAuth2 (liste vide si désactivées) déclarent le
+        schéma « Authorize » sur chaque route montée.
+        """
+        oauth2 = swagger_oauth2_dependencies(self.settings)
         app.include_router(
             identity_resources_router(
                 self.identity_resources_usecase,
                 authorizer=self.admin_authorizer,
-            )
+            ),
+            dependencies=oauth2,
         )
         app.include_router(
-            api_resources_router(self.api_resources_usecase, authorizer=self.admin_authorizer)
+            api_resources_router(self.api_resources_usecase, authorizer=self.admin_authorizer),
+            dependencies=oauth2,
         )
 
 
@@ -101,6 +109,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         openapi_url="/openapi.json" if settings.docs_enabled else None,
         docs_url="/docs" if settings.docs_enabled else None,
         redoc_url="/redoc" if settings.docs_enabled else None,
+        swagger_ui_oauth2_redirect_url=settings.swagger_ui_oauth2_redirect_url,
+        swagger_ui_init_oauth=(
+            settings.swagger_ui_init_oauth if settings.swagger_ui_oauth2_enabled else None
+        ),
     )
     app.add_middleware(DynamicCORSMiddleware, client_repository=deps.stores.client)
     deps.mount(app)

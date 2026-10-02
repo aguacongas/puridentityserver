@@ -213,6 +213,26 @@ admin_required_claim_values = ["admin"]
 # Surchargeable via `PURIDENTITYSERVER_DOCS_ENABLED` (prioritaire sur ce fichier).
 docs_enabled = true
 
+# Authentification OIDC de Swagger UI (bouton « Authorize » sur `/docs`) :
+# - swagger_ui_oauth2_enabled : déclare le schéma OAuth2 (authorization code +
+#   PKCE) sur les routes protégées (CRUD d'administration) — le bouton Authorize
+#   apparaît sur les rôles `admin` et `full` et déclenche un vrai flow OIDC
+#   contre ce serveur (/authorize puis /token).
+# - swagger_ui_oauth2_redirect_url : URL du redirect OAuth2 servi par Swagger UI
+#   ; elle doit figurer dans les `redirect_uris` du client utilisé.
+# - swagger_ui_init_oauth : configuration de la fenêtre d'autorisation (objet
+#   passé tel quel à `ui.initOAuth(...)` de Swagger UI, clés camelCase :
+#   `clientId`, `scopes`, `usePkceWithAuthorizationCodeGrant`, …).
+# Le client public `sample-swagger-client` (déclaré plus bas) est celui de cet
+# usage : PKCE obligatoire, aucun secret. `PURIDENTITYSERVER_SWAGGER_UI_OAUTH2_ENABLED=false`
+# retire le bouton (Swagger UI redevient en lecture seule).
+# Surchargeables via `PURIDENTITYSERVER_SWAGGER_UI_OAUTH2_ENABLED`,
+# `PURIDENTITYSERVER_SWAGGER_UI_OAUTH2_REDIRECT_URL` et
+# `PURIDENTITYSERVER_SWAGGER_UI_INIT_OAUTH` (objet JSON).
+swagger_ui_oauth2_enabled = true
+swagger_ui_oauth2_redirect_url = "/docs/oauth2-redirect"
+swagger_ui_init_oauth = { clientId = "sample-swagger-client", scopes = ["openid", "admin"], usePkceWithAuthorizationCodeGrant = true }
+
 # Autorisation de `POST /register` (RFC 7591 §4.1) :
 # - "static" (défaut) : initial access tokens hachés (ci-dessus) ;
 # - "jwt" : Bearer JWT validé contre l'issuer de gestion + claim configurable
@@ -396,6 +416,9 @@ client_type = "public"
 #                             `require_consent = true` : la 1re autorisation de
 #                             l'utilisateur passe par la page /consent puis est
 #                             mémorisée (scopes accordés ré-utilisés ensuite)
+# - sample-swagger-client   : flow OIDC depuis le bouton « Authorize » de
+#                             Swagger UI (/docs, client public + PKCE) —
+#                             échantillon samples/swagger-docs-client/
 # → les smokes tests de ces samples PASSERT une configuration spécifique (port
 #   dédié + ce client) via un fichier temporaire ; ici ils sont aussi enregistrés
 #   pour pouvoir lancer le serveur par défaut et tester manuellement les samples.
@@ -487,3 +510,16 @@ web_origins = [
 scopes = "openid profile email offline_access api.read"
 client_type = "public"
 require_consent = true
+
+# client public de démo pour l'authentification OIDC de Swagger UI (bouton
+# « Authorize » de `/docs` — échantillon samples/swagger-docs-client/) :
+# client public = PKCE obligatoire, aucun secret ; `redirect_uris` = l'URL de
+# redirection OAuth2 servie par Swagger UI (`swagger_ui_oauth2_redirect_url`).
+[[settings.clients_seed]]
+client_id = "sample-swagger-client"
+redirect_uris = [
+    "http://127.0.0.1:8000/docs/oauth2-redirect",
+    "http://localhost:8000/docs/oauth2-redirect",
+]
+scopes = "openid admin"
+client_type = "public"
