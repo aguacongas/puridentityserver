@@ -327,6 +327,19 @@ class Settings(BaseSettings):
     # publier en clair le schéma de ses CRUD. Défaut inchangé : tout est exposé.
     docs_enabled: bool = True
 
+    # Authentification OIDC de Swagger UI (bouton « Authorize » sur `/docs`) :
+    # `swagger_ui_oauth2_enabled` déclare le schéma OAuth2 (authorization code +
+    # PKCE) sur les routes protégées (CRUD d'administration), ce qui fait
+    # apparaître le bouton Authorize ; `swagger_ui_oauth2_redirect_url` est
+    # l'URL du redirect OAuth2 servi par Swagger UI et doit figurer dans les
+    # `redirect_uris` du client utilisé ; `swagger_ui_init_oauth` configure la
+    # fenêtre d'autorisation (objet passé tel quel à `ui.initOAuth(...)` :
+    # `clientId`, `scopes`, `usePkceWithAuthorizationCodeGrant`, …).
+    # Défaut de code inchangé : désactivé, Swagger UI reste sans bouton.
+    swagger_ui_oauth2_enabled: bool = False
+    swagger_ui_oauth2_redirect_url: str = "/docs/oauth2-redirect"
+    swagger_ui_init_oauth: Annotated[dict[str, object], NoDecode] = {}
+
     # Authentification JWT des endpoints de gestion (CRUD resources) et, en
     # mode `jwt`, de la création de client. Le JWT est validé contre l'issuer
     # de gestion (signature JWKS, `iss`, `exp`) puis un claim configurable est
@@ -474,6 +487,19 @@ class Settings(BaseSettings):
             parsed = json.loads(value)
             if not isinstance(parsed, dict):
                 raise ValueError("PURIDENTITYSERVER_IDENTITY_SEED_USERS doit être un objet JSON")
+            return parsed
+        return value
+
+    @field_validator("swagger_ui_init_oauth", mode="before")
+    @classmethod
+    def _parse_swagger_ui_init_oauth(cls, value: object) -> object:
+        """Transforme `PURIDENTITYSERVER_SWAGGER_UI_INIT_OAUTH='{...}'` (JSON) en dict."""
+        if isinstance(value, str):
+            import json
+
+            parsed = json.loads(value)
+            if not isinstance(parsed, dict):
+                raise ValueError("PURIDENTITYSERVER_SWAGGER_UI_INIT_OAUTH doit être un objet JSON")
             return parsed
         return value
 

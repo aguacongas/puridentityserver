@@ -69,7 +69,17 @@ def _render_blocks(table: str, items: tuple[dict[str, object], ...]) -> str:
 
 
 def _render_settings_value(value: object) -> str:
-    """Rend une valeur ``[settings]`` en TOML (liste JSON ou scalaire)."""
+    """Rend une valeur ``[settings]`` en TOML (scalaire, liste ou objet inline).
+
+    Les ``Mapping`` deviennent des tables inline TOML (``{ "clé" = valeur }``),
+    rendues récursivement : c'est le format de ``swagger_ui_init_oauth``.
+    """
+    if isinstance(value, Mapping):
+        rendered = ", ".join(
+            f"{json.dumps(str(key))} = {_render_settings_value(entry)}"
+            for key, entry in value.items()
+        )
+        return "{" + rendered + "}"
     if isinstance(value, (list, tuple)):
         rendered = ", ".join(json.dumps(entry) for entry in value)
         return f"[{rendered}]"

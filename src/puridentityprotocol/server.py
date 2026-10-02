@@ -419,6 +419,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         openapi_url="/openapi.json" if settings.docs_enabled else None,
         docs_url="/docs" if settings.docs_enabled else None,
         redoc_url="/redoc" if settings.docs_enabled else None,
+        swagger_ui_oauth2_redirect_url=settings.swagger_ui_oauth2_redirect_url,
+        swagger_ui_init_oauth=(
+            settings.swagger_ui_init_oauth if settings.swagger_ui_oauth2_enabled else None
+        ),
     )
     app.add_middleware(DynamicCORSMiddleware, client_repository=deps.readers.client)
     deps.mount(app)
