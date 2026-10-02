@@ -237,6 +237,18 @@ tests/             pytest unit + intégration (TestClient httpx)
     HttpOnly (jamais exposé au JS) et répond `ok` / `changed` / `error` ;
     la métadonnée `check_session_iframe` est publiée au discovery. Sample DoD :
     `samples/spa-client/` (superviseur de session dans le navigateur).
+21. ✅ **Authentification OIDC de Swagger UI** (issue #58) — le bouton
+    **Authorize** de `/docs` déclenche un vrai flow *authorization code + PKCE*
+    contre le serveur (`swagger_ui_oauth2_enabled`,
+    `swagger_ui_oauth2_redirect_url`, `swagger_ui_init_oauth`) : le schéma
+    OAuth2 `oidc` est déclaré sur les CRUD d'administration
+    (`components.securitySchemes` + `security`, rôles `admin` et `full`) et le
+    jeton obtenu porte le claim `scope=admin` exigé par les CRUD. La
+    configuration de démonstration déclare le client public
+    `sample-swagger-client` (PKCE, aucun secret, redirect `/docs/oauth2-redirect`)
+    et active la fonctionnalité — `PURIDENTITYSERVER_SWAGGER_UI_OAUTH2_ENABLED=false`
+    la retire (défaut de code : aucun bouton). Échantillon testable pas-à-pas :
+    `samples/swagger-docs-client/`.
 
 ## Développement local
 
