@@ -1,6 +1,6 @@
 """Conteneur des stores partagés et cycle de vie des stockages.
 
-``Stores`` regroupe les onze repositories de persistance du serveur,
+``Stores`` regroupe les douze repositories de persistance du serveur,
 construits une seule fois par ``build_stores`` depuis les ``Settings``.
 Le serveur ``full`` partage ces instances entre l'administration et le
 protocole ; les serveurs ``admin`` et ``protocol`` isolés les construisent
@@ -26,6 +26,7 @@ from puridentityserver.infrastructure.persistence.factory import (
     build_client_repository,
     build_consent_repository,
     build_device_authorization_repository,
+    build_dpop_replay_repository,
     build_identity_resource_repository,
     build_key_pair_repository,
     build_pushed_authorization_repository,
@@ -44,6 +45,9 @@ from puridentityserver.interfaces.repositories.client_repository import ClientRe
 from puridentityserver.interfaces.repositories.consent_repository import ConsentRepository
 from puridentityserver.interfaces.repositories.device_authorization_repository import (
     DeviceAuthorizationRepository,
+)
+from puridentityserver.interfaces.repositories.dpop_replay_repository import (
+    DpopReplayRepository,
 )
 from puridentityserver.interfaces.repositories.identity_resource_repository import (
     IdentityResourceRepository,
@@ -76,10 +80,11 @@ class Stores:
     consent: ConsentRepository
     identity_resource: IdentityResourceRepository
     api_resource: ApiResourceRepository
+    dpop_replay: DpopReplayRepository
 
 
 def build_stores(settings: Settings) -> Stores:
-    """Construit les onze repositories selon ``STORAGE_TYPE``/``STORAGE_DSN``."""
+    """Construit les douze repositories selon ``STORAGE_TYPE``/``STORAGE_DSN``."""
     return Stores(
         key_pair=build_key_pair_repository(settings),
         client=build_client_repository(settings),
@@ -92,6 +97,7 @@ def build_stores(settings: Settings) -> Stores:
         consent=build_consent_repository(settings),
         identity_resource=build_identity_resource_repository(settings),
         api_resource=build_api_resource_repository(settings),
+        dpop_replay=build_dpop_replay_repository(settings),
     )
 
 
@@ -123,6 +129,7 @@ async def initialise_protocol_stores(stores: Stores, settings: Settings) -> None
     await stores.device.initialise()
     await stores.pushed.initialise()
     await stores.consent.initialise()
+    await stores.dpop_replay.initialise()
     for client in settings.seed_clients:
         await stores.client.save(client)
 
@@ -144,3 +151,4 @@ async def close_protocol_stores(stores: Stores) -> None:
     await stores.device.close()
     await stores.pushed.close()
     await stores.consent.close()
+    await stores.dpop_replay.close()

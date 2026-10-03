@@ -148,7 +148,13 @@ class Client:
     ``token_endpoint_auth_method`` sélectionne la méthode d'authentification
     au token endpoint : à défaut (``None``), ``effective_auth_method``
     dérive ``none`` pour un client public et ``client_secret_basic`` pour un
-    client confidentiel. ``client_secret_ciphertext`` conserve le secret
+    client confidentiel. ``require_dpop`` (RFC 9449 §5.2) impose à ce
+    client de présenter une preuve ``DPoP`` à chaque appel du token
+    endpoint : toute requête sans en-tête ``DPoP`` est alors rejetée
+    ``invalid_request``, et les jetons émis sont liés à la clé de la
+    preuve (``cnf.jkt``, ``token_type=DPoP``). Le serveur accepte et lie
+    une preuve quel que soit ce drapeau — ``require_dpop`` ne fait que le
+    rendre obligatoire. ``client_secret_ciphertext`` conserve le secret
     **chiffré** (RSA-OAEP, clé de scellement ``KeyUse.SECRET`` auto-rotée) des
     clients ``client_secret_jwt`` / grant jwt-bearer ; ``jwks_uri`` /
     ``jwks`` portent les clés publiques des
@@ -191,6 +197,7 @@ class Client:
     device_code_interval_seconds: int | None = None
     par_required: bool = False
     require_consent: bool = False
+    require_dpop: bool = False
     token_endpoint_auth_method: TokenEndpointAuthMethod | None = None
     client_secret_ciphertext: str = ""
     jwks_uri: str = ""
@@ -268,6 +275,11 @@ class AuthorizationCode:
     brut (OIDC Core 1.0 §5.5) pour honorer ses members ``userinfo`` /
     ``id_token`` lors de l'échange du code.
 
+    ``dpop_jkt`` (RFC 9449 §10) porte l'empreinte RFC 7638 de la clé
+    déclarée par le paramètre ``dpop_jkt`` de la demande d'autorisation :
+    l'échange du code exige alors une preuve DPoP signée par cette clé
+    exacte, sinon le token endpoint rejette ``invalid_grant``.
+
     ``access_token_hash`` / ``refresh_token_hash`` (empreintes SHA-256,
     jamais le jeton en clair) et ``access_token_expires_at`` référencent
     les jetons émis lors du premier échange : une réutilisation du code
@@ -291,6 +303,7 @@ class AuthorizationCode:
     access_token_hash: str = ""
     access_token_expires_at: datetime | None = None
     refresh_token_hash: str = ""
+    dpop_jkt: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,6 +314,11 @@ class RefreshToken:
     la valeur en clair n'existe que dans la réponse ``/token``. Le jeton
     est lié au client, au ``subject`` et aux scopes accordés ; il est
     rotatif — chaque usage consomme l'ancien jeton et en émet un nouveau.
+    ``dpop_jkt`` (RFC 9449 §5) lie un refresh token de client public à la
+    clé DPoP de son émission : chaque renouvellement doit alors présenter
+    une preuve signée par cette même clé, sinon le token endpoint rejette
+    ``invalid_grant``. Vide pour un client confidentiel (le refresh token
+    de ces clients reste un jeton porteur, RFC 9449 §5).
     """
 
     token_hash: str
@@ -309,6 +327,7 @@ class RefreshToken:
     scopes: frozenset[Scope] = frozenset()
     expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     is_consumed: bool = False
+    dpop_jkt: str = ""
 
 
 class DeviceAuthorizationStatus(str, Enum):

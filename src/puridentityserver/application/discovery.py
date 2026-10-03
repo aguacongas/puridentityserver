@@ -17,7 +17,11 @@ from puridentityserver.domain.jwe import (
     ALL_ENCRYPTION_ALGORITHMS,
     ALL_ENCRYPTION_METHODS,
 )
-from puridentityserver.domain.jwks import ALL_SIGNING_ALGORITHMS, JWTAlgorithm
+from puridentityserver.domain.jwks import (
+    ALL_SIGNING_ALGORITHMS,
+    ASYMMETRIC_ALGORITHMS,
+    JWTAlgorithm,
+)
 from puridentityserver.interfaces.repositories.readers import (
     ApiResourceReader,
     IdentityResourceReader,
@@ -51,6 +55,9 @@ class DiscoveryConfig:
         "urn:ietf:params:oauth:grant-type:jwt-bearer",
     )
     request_object_signing_algorithms: tuple[str, ...] = REQUEST_OBJECT_SIGNING_ALGORITHMS
+    dpop_signing_algorithms: tuple[str, ...] = tuple(
+        algorithm.value for algorithm in ASYMMETRIC_ALGORITHMS
+    )
 
 
 class DiscoveryUseCase:
@@ -120,6 +127,10 @@ class DiscoveryUseCase:
         metadata["request_uri_parameter_supported"] = bool(
             self._config.request_object_signing_algorithms
         )
+        # DPoP (RFC 9449 §5.1) : algorithmes asymétriques acceptés pour
+        # signer une preuve — ``none`` et les familles symétriques HS*
+        # y sont exclus (le RS partage leur secret : preuve forgeable).
+        metadata["dpop_signing_alg_values_supported"] = list(self._config.dpop_signing_algorithms)
         return metadata
 
     async def _scopes_and_claims(self) -> tuple[list[str], list[str]]:

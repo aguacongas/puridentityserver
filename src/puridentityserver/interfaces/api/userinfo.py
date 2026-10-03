@@ -1,4 +1,4 @@
-"""Route FastAPI de l'endpoint UserInfo (RFC 6750 §2, §3)."""
+"""Route FastAPI de l'endpoint UserInfo (RFC 6750 §2, §3, RFC 9449 §7)."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from puridentityserver.application.userinfo import (
     UserInfoResponse,
     UserInfoUseCase,
 )
+from puridentityserver.interfaces.api.dpop_proof import extract_dpop_proof
 
 
 def userinfo_router(usecase: UserInfoUseCase) -> APIRouter:
@@ -21,9 +22,10 @@ def userinfo_router(usecase: UserInfoUseCase) -> APIRouter:
 
     @router.get("/userinfo", summary="Endpoint UserInfo (claims de l'utilisateur)")
     async def userinfo(
+        request: Request,
         authorization: Annotated[str | None, Header()] = None,
     ) -> Response:
-        return await _handle_userinfo(_extract_bearer_token(authorization))
+        return await _handle_userinfo(request, _split_authorization(authorization))
 
     @router.post("/userinfo", summary="Endpoint UserInfo (POST, RFC 6750 §2.1)")
     async def userinfo_post(
@@ -34,37 +36,56 @@ def userinfo_router(usecase: UserInfoUseCase) -> APIRouter:
 
         L'en-tête ``Authorization`` prime ; à défaut, le paramètre
         ``access_token`` du corps ``application/x-www-form-urlencoded`` est
-        lu (RFC 6750 §2.1, méthode 2).
+        lu (RFC 6750 §2.1, méthode 2), présenté comme un ``Bearer``.
         """
-        token = _extract_bearer_token(authorization)
+        scheme, token = _split_authorization(authorization)
         if token is None:
             body_token = (await request.form()).get("access_token")
-            token = body_token if isinstance(body_token, str) and body_token else None
-        return await _handle_userinfo(token)
+            if isinstance(body_token, str) and body_token:
+                scheme, token = "bearer", body_token
+        return await _handle_userinfo(request, (scheme, token))
 
-    async def _handle_userinfo(token: str | None) -> Response:
+    async def _handle_userinfo(request: Request, scheme_token: tuple[str, str | None]) -> Response:
+        scheme, token = scheme_token
         if not token:
             return _bearer_error(
                 "invalid_request",
-                "Token absent : en-tête Authorization 'Bearer' ou "
+                "Token absent : en-tête Authorization 'Bearer'/'DPoP' ou "
                 "access_token en corps form attendu",
             )
-        result = await usecase.execute(UserInfoRequest(access_token=token))
+        proof, proof_error = extract_dpop_proof(request.headers)
+        if proof_error is not None:
+            return _bearer_error("invalid_request", proof_error)
+        result = await usecase.execute(
+            UserInfoRequest(
+                access_token=token,
+                auth_scheme=scheme,
+                dpop_proof=proof,
+                htu=str(request.url),
+                htm=request.method,
+            )
+        )
         if isinstance(result, UserInfoError):
-            return _bearer_error(result.error, result.error_description)
+            return _bearer_error(result.error, result.error_description, result.challenge)
         return _success_response(result)
 
     return router
 
 
-def _extract_bearer_token(authorization: str | None) -> str | None:
-    """Extrait le token d'un en-tête ``Authorization: Bearer <token>`` (RFC 6750 §2.1)."""
+def _split_authorization(authorization: str | None) -> tuple[str, str | None]:
+    """Scheme et jeton d'un en-tête ``Authorization: <scheme> <token>`` (RFC 6750 §2.1).
+
+    ``bearer`` et ``dpop`` (RFC 9449 §7.1) sont reconnus ; tout autre
+    scheme produit un jeton absent, trahi par un ``invalid_request``.
+    """
     if not authorization:
-        return None
+        return "", None
     scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        return None
-    return token.strip()
+    token = token.strip()
+    scheme = scheme.lower()
+    if scheme not in ("bearer", "dpop") or not token:
+        return scheme, None
+    return scheme, token
 
 
 def _success_response(result: UserInfoResponse) -> Response:
@@ -75,15 +96,17 @@ def _success_response(result: UserInfoResponse) -> Response:
     )
 
 
-def _bearer_error(error: str, description: str) -> Response:
-    """Réponse d'erreur Bearer avec en-tête ``WWW-Authenticate`` (RFC 6750 §3).
+def _bearer_error(error: str, description: str, challenge: str = "") -> Response:
+    """Réponse d'erreur avec en-tête ``WWW-Authenticate`` (RFC 6750 §3, RFC 9449 §7).
 
     L'en-tête HTTP doit rester ASCII : seuls les codes d'erreur standard
-    y figurent ; la description lisible passe dans le corps JSON.
+    y figurent ; la description lisible passe dans le corps JSON. Un
+    ``challenge`` fourni par le cas d'utilisation (``DPoP error=…``)
+    remplace le ``Bearer`` par défaut.
     """
     return Response(
         content=json.dumps({"error": error, "error_description": description}),
         media_type="application/json",
         status_code=401,
-        headers={"WWW-Authenticate": f'Bearer error="{error}"'},
+        headers={"WWW-Authenticate": challenge or f'Bearer error="{error}"'},
     )

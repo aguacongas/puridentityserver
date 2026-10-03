@@ -270,3 +270,44 @@ ils passent.
   skips restants redeviennent des rejeux réels (`test_id_token_alg_none_is_issued`
   + `test_request_object_module_completes` × 18) → **188 passed, 0 skipped**
   en ≈ 14 min 30.
+
+## DPoP (issue #49, RFC 9449) — matrice suite → plans
+
+Relevé sur le clone local de la suite officielle (tag `release-v5.2.4`,
+`$TEMP/opencode/conformance-suite`) :
+
+| Plans contenant des checks DPoP | Modules | Dans nos playlists rejouées ? |
+| --- | --- | --- |
+| `fapi2spfinal` | preuves DPoP sur `/token` (RFC 9449 §5) | **Non** — playlist FAPI2, hors `oidcc-*` |
+| `fapi2spid2` | preuve + `dpop_jkt` au `/authorize` (§10) | **Non** — playlist FAPI2 |
+| `fapi2msg-signing` | preuves sur messages signés (PAR/request objects) | **Non** — playlist FAPI2 |
+| `oidcc-*` (Basic/Implicit/Hybrid/Form Post/Session Mgmt) | **aucun** check DPoP | — |
+
+Conséquence : aucun test `conformance` rejoué par `tests/conformance/`
+(`-m conformance`, playlists Core) n'exerce DPoP — le rejeu local n'est donc
+**pas impacté** par l'implémentation de #49. La couverture repose sur
+`tests/test_dpop.py` (50 tests) + le smoke `samples/dpop-client/smoke_test.py`
+(8 étapes de bout en bout). Points d'implémentation alignés sur la suite
+(lecture des modules FAPI2) :
+
+- **Mismatch `dpop_jkt`** : la suite accepte `invalid_request`,
+  `invalid_grant` **ou** `invalid_dpop_proof` (HTTP 400, DPOP-10.1) →
+  l'implémentation répond `invalid_grant` au `/token` (§10) et
+  `invalid_dpop_proof` au `/par` (§10.1) ;
+- **`iat`** : tolérance ±5 minutes (`DPOP_IAT_SKEW_SECONDS`, §11.1) ;
+- **`ath`** : absent exigé au token/PAR (DPOP-4.3), requis au `/userinfo`
+  (§7.1) ; **`jti`** anti-replay persistant (memory/SQL) ;
+- **nonce** : la suite émet un `WWW-Authenticate: DPoP error="use_nonce"`
+  (WARNING seulement) → pas d'émission de nonce côté serveur en v1 ;
+- **Algorithmes** : FAPI2 publie `PS256, ES256, EdDSA, Ed25519` mais
+  `JWTAlgorithm` n'a pas d'EdDSA → `dpop_signing_alg_values_supported` porte
+  les 9 algos asymétriques RS/PS/ES et rejette `none`/HS*.
+
+### Note — flows à jeton direct (implicit/hybrid) : jetons porteurs
+
+Les `response_type` sans code (`token`, `id_token token`, hybrides) émettent
+l'access token **directement au fragment d'`/authorize`** : aucune passe par
+`/token` n'a donc lieu, DPoP ne peut pas lier ce jeton — il reste porteur
+(`Bearer`). Seuls les codes d'autorisation (et les refresh tokens) sont liés,
+via le paramètre `dpop_jkt` d'`/authorize`/`/par` ou la preuve présentée à
+l'échange. Comportement documenté dans `samples/dpop-client/README.md`.
