@@ -76,11 +76,11 @@ class PyJWTDpopProofValidator:
         if not proof:
             return _reject("En-tête DPoP vide ou preuve absente")
         try:
-            header = pyjwt.get_unverified_header(proof)
+            header = pyjwt.get_unverified_header(proof)  # NOSONAR(S5659)
             claims = pyjwt.decode(
                 proof,
                 options={
-                    "verify_signature": False,
+                    "verify_signature": False,  # NOSONAR(S5659) — lecture seule
                     "verify_exp": False,
                     "verify_nbf": False,
                     "verify_aud": False,

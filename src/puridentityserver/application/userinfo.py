@@ -29,6 +29,8 @@ from puridentityserver.interfaces.repositories.revoked_token_repository import (
     RevokedTokenRepository,
 )
 
+_DPOP_CHALLENGE_INVALID = 'DPoP error="invalid_token"'
+
 
 @dataclass(frozen=True, slots=True)
 class UserInfoConfig:
@@ -158,19 +160,19 @@ class UserInfoUseCase:
             return UserInfoError(
                 error="invalid_token",
                 error_description="Jeton lié à une clé DPoP : scheme 'DPoP' exigé (RFC 9449 §7.2)",
-                challenge='DPoP error="invalid_token"',
+                challenge=_DPOP_CHALLENGE_INVALID,
             )
         if self._dpop is None:
             return UserInfoError(
                 error="invalid_token",
                 error_description="Validation DPoP indisponible : jeton lié refusé",
-                challenge='DPoP error="invalid_token"',
+                challenge=_DPOP_CHALLENGE_INVALID,
             )
         if not request.dpop_proof:
             return UserInfoError(
                 error="invalid_token",
                 error_description="Preuve DPoP requise pour ce jeton (RFC 9449 §7.1)",
-                challenge='DPoP error="invalid_token"',
+                challenge=_DPOP_CHALLENGE_INVALID,
             )
         proof = await self._dpop.validate(
             proof=request.dpop_proof,
