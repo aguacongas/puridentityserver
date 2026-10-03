@@ -154,6 +154,7 @@ class RegistrationMetadata:
     frontchannel_logout_session_required: bool = False
     backchannel_logout_uri: str = ""
     backchannel_logout_session_required: bool = False
+    dpop_bound_access_tokens: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,6 +228,7 @@ class ClientRegistration:
     frontchannel_logout_session_required: bool = False
     backchannel_logout_uri: str = ""
     backchannel_logout_session_required: bool = False
+    dpop_bound_access_tokens: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,6 +323,7 @@ class RegistrationUseCase:
             tls_client_certificate_hash=metadata.tls_client_certificate_hash,
             par_required=metadata.par_required,
             require_consent=metadata.require_consent,
+            require_dpop=metadata.dpop_bound_access_tokens,
             id_token_signed_response_alg=metadata.id_token_signed_response_alg,
             id_token_encrypted_response_alg=metadata.id_token_encrypted_response_alg,
             id_token_encrypted_response_enc=metadata.id_token_encrypted_response_enc,
@@ -410,6 +413,7 @@ class RegistrationUseCase:
             device_code_interval_seconds=client.device_code_interval_seconds,
             par_required=metadata.par_required,
             require_consent=metadata.require_consent,
+            require_dpop=metadata.dpop_bound_access_tokens,
             id_token_signed_response_alg=metadata.id_token_signed_response_alg,
             id_token_encrypted_response_alg=metadata.id_token_encrypted_response_alg,
             id_token_encrypted_response_enc=metadata.id_token_encrypted_response_enc,
@@ -743,6 +747,7 @@ class RegistrationUseCase:
             registration_client_uri=f"{self._base_url()}/register/{client.client_id}",
             require_pushed_authorization_requests=client.par_required,
             require_consent=client.require_consent,
+            dpop_bound_access_tokens=client.require_dpop,
             id_token_signed_response_alg=client.id_token_signed_response_alg,
             id_token_encrypted_response_alg=client.id_token_encrypted_response_alg,
             id_token_encrypted_response_enc=client.id_token_encrypted_response_enc,
@@ -794,6 +799,7 @@ def _parse_metadata(
         frontchannel_logout_session_required,
         backchannel_logout_uri,
         backchannel_logout_session_required,
+        dpop_bound_access_tokens,
     ) = extras
 
     client_type = ClientType.PUBLIC if auth_method == "none" else ClientType.CONFIDENTIAL
@@ -818,6 +824,7 @@ def _parse_metadata(
         frontchannel_logout_session_required=frontchannel_logout_session_required,
         backchannel_logout_uri=backchannel_logout_uri,
         backchannel_logout_session_required=backchannel_logout_session_required,
+        dpop_bound_access_tokens=dpop_bound_access_tokens,
     )
 
 
@@ -843,6 +850,7 @@ def _parse_metadata_extras(
         str,
         bool,
         str,
+        bool,
         bool,
     ]
     | RegistrationError
@@ -900,6 +908,7 @@ def _parse_metadata_extras(
             "backchannel_logout_session_required",
             lambda raw, _known: _parse_session_required(raw, "backchannel_logout_session_required"),
         ),
+        ("dpop_bound_access_tokens", lambda raw, _known: _parse_dpop_bound(raw)),
     )
     results: dict[str, object] = {}
     for name, parser in parsers:
@@ -929,6 +938,7 @@ def _assemble_extras(
     bool,
     str,
     bool,
+    bool,
 ]:
     """Recompose le tuple de métadonnées extraites (types garantis par les parseurs)."""
     return (
@@ -948,6 +958,7 @@ def _assemble_extras(
         cast(bool, results["frontchannel_logout_session_required"]),
         cast(str, results["backchannel_logout_uri"]),
         cast(bool, results["backchannel_logout_session_required"]),
+        cast(bool, results["dpop_bound_access_tokens"]),
     )
 
 
@@ -1185,6 +1196,15 @@ def _parse_require_consent(raw: dict[str, object]) -> bool | RegistrationError:
     connecté avant d'émettre le moindre code ou jeton.
     """
     return _parse_bool_flag(raw, "require_consent", default=False)
+
+
+def _parse_dpop_bound(raw: dict[str, object]) -> bool | RegistrationError:
+    """Lit ``dpop_bound_access_tokens`` (RFC 9449 §5.1, par défaut false).
+
+    ``true`` exige la présentation d'une preuve DPoP à chaque appel du
+    token endpoint pour ce client (``require_dpop`` côté serveur).
+    """
+    return _parse_bool_flag(raw, "dpop_bound_access_tokens", default=False)
 
 
 def _parse_jwks_uri(raw: dict[str, object]) -> str | RegistrationError:

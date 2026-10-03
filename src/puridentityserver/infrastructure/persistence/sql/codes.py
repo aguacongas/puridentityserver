@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -46,6 +46,7 @@ class AuthorizationCodeRow(PersistenceBase):
         DateTime(timezone=True), nullable=True
     )
     refresh_token_hash: Mapped[str] = mapped_column(String(64), default="")
+    dpop_jkt: Mapped[str] = mapped_column(String(80), default="", server_default=text("''"))
 
 
 class SQLAuthorizationCodeRepository:
@@ -117,6 +118,7 @@ def _to_row(code: AuthorizationCode) -> AuthorizationCodeRow:
         access_token_hash=code.access_token_hash,
         access_token_expires_at=code.access_token_expires_at,
         refresh_token_hash=code.refresh_token_hash,
+        dpop_jkt=code.dpop_jkt,
     )
 
 
@@ -146,4 +148,5 @@ def _from_row(row: AuthorizationCodeRow) -> AuthorizationCode:
         access_token_hash=row.access_token_hash or "",
         access_token_expires_at=access_expires,
         refresh_token_hash=row.refresh_token_hash or "",
+        dpop_jkt=row.dpop_jkt or "",
     )

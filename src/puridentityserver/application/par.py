@@ -29,6 +29,8 @@ from puridentityserver.domain.authorization import (
     ClientType,
     PushedAuthorization,
 )
+from puridentityserver.domain.dpop import DPoPProof
+from puridentityserver.interfaces.domain.dpop import DpopProofValidator, DpopValidationError
 from puridentityserver.interfaces.repositories.pushed_authorization_repository import (
     PushedAuthorizationRepository,
 )
@@ -37,9 +39,14 @@ from puridentityserver.interfaces.repositories.readers import ClientReader
 
 @dataclass(frozen=True, slots=True)
 class PushedAuthorizationConfig:
-    """Configuration des requêtes poussées (RFC 9126 §2)."""
+    """Configuration des requêtes poussées (RFC 9126 §2).
+
+    ``par_endpoint`` est l'URL du endpoint, employée comme ``htu`` de la
+    preuve DPoP éventuellement présentée au push (RFC 9449 §10.1).
+    """
 
     ttl_seconds: int = 90
+    par_endpoint: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,12 +80,20 @@ class PushedAuthorizationUseCase:
         client_repository: ClientReader,
         pushed_repository: PushedAuthorizationRepository,
         scope_registry: ScopeRegistry | None = None,
+        *,
+        dpop: DpopProofValidator | None = None,
     ) -> None:
-        """Prépare le use case avec ses dépendances de configuration et stockage."""
+        """Prépare le use case avec ses dépendances de configuration et stockage.
+
+        ``dpop`` (RFC 9449 §10.1) vérifie la preuve présentée au push ;
+        sans injection, une preuve fournie est refusée plutôt qu'acceptée
+        sans vérification.
+        """
         self._config = par_config
         self._clients = client_repository
         self._pushed = pushed_repository
         self._scope_registry = scope_registry
+        self._dpop = dpop
 
     async def _authenticate_client(self, client_id: str, client_secret: str) -> Client | PushError:
         """Authentifie le client du push ; retourne ``PushError`` ``invalid_client`` sinon.
@@ -110,7 +125,7 @@ class PushedAuthorizationUseCase:
             )
         return client
 
-    async def push(self, params: dict[str, str]) -> PushResult | PushError:
+    async def push(self, params: dict[str, str], *, dpop_proof: str = "") -> PushResult | PushError:
         """Authentifie le client et persiste la requête poussée.
 
         La méthode accepte les paramètres de la demande d'autorisation
@@ -118,6 +133,10 @@ class PushedAuthorizationUseCase:
         ``client_id`` et éventuellement ``client_secret``. Le paramètre
         ``request_uri``, s'il est fourni, est rejeté conformément à la
         RFC 9126 §2 (interdiction d'inclure ``request_uri`` dans le push).
+
+        ``dpop_proof`` porte la preuve DPoP de l'en-tête (RFC 9449 §10.1) :
+        validée, elle fixe le ``dpop_jkt`` de la demande à défaut de celui
+        déclaré — tout écart entre les deux vaut ``invalid_dpop_proof``.
 
         Paramètres invalides → propagation de l'erreur du validateur
         standard (``invalid_request``, ``invalid_scope``…).
@@ -138,6 +157,12 @@ class PushedAuthorizationUseCase:
         if isinstance(authenticated, PushError):
             return authenticated
 
+        proof = await self._check_dpop_proof(params, dpop_proof)
+        if isinstance(proof, PushError):
+            return proof
+        if proof is not None and "dpop_jkt" not in params:
+            params = {**params, "dpop_jkt": proof.jkt}
+
         authorize_request = AuthorizeRequest(
             response_type=params.get("response_type", ""),
             client_id=client_id,
@@ -152,6 +177,7 @@ class PushedAuthorizationUseCase:
             max_age=parse_max_age(params.get("max_age", "")),
             acr_values=params.get("acr_values", ""),
             claims=params.get("claims", ""),
+            dpop_jkt=params.get("dpop_jkt", ""),
         )
 
         validated = await validate_authorization_request(
@@ -181,6 +207,38 @@ class PushedAuthorizationUseCase:
             request_uri=request_uri,
             expires_in=self._config.ttl_seconds,
         )
+
+    async def _check_dpop_proof(
+        self, params: dict[str, str], dpop_proof: str
+    ) -> DPoPProof | PushError | None:
+        """Valide la preuve DPoP du push et sa cohérence avec ``dpop_jkt`` (§10.1).
+
+        Sans preuve : ``None`` (aucune exigence DPoP au push — le lien
+        s'appliquera au token endpoint). Preuve fournie : elle doit être
+        valide pour l'URL de ``/par`` (``htu``/``htm``, ``ath`` absent)
+        et son empreinte doit égaler un ``dpop_jkt`` déjà déclaré.
+        """
+        if not dpop_proof:
+            return None
+        if self._dpop is None:
+            return PushError(
+                error="invalid_dpop_proof",
+                error_description="Validation DPoP indisponible : preuve refusée",
+            )
+        result = await self._dpop.validate(
+            proof=dpop_proof,
+            htu=self._config.par_endpoint,
+            method="POST",
+        )
+        if isinstance(result, DpopValidationError):
+            return PushError(error="invalid_dpop_proof", error_description=result.error_description)
+        declared = params.get("dpop_jkt", "")
+        if declared and declared != result.jkt:
+            return PushError(
+                error="invalid_dpop_proof",
+                error_description="dpop_jkt ne correspond pas à la preuve DPoP (RFC 9449 §10.1)",
+            )
+        return result
 
     async def resolve(self, request_uri: str, client_id: str) -> AuthorizeRequest | PushError:
         """Résout le ``request_uri`` pour ``/authorize`` (consommation unique).
@@ -239,4 +297,5 @@ class PushedAuthorizationUseCase:
             max_age=parse_max_age(pushed.params.get("max_age", "")),
             acr_values=pushed.params.get("acr_values", ""),
             claims=pushed.params.get("claims", ""),
+            dpop_jkt=pushed.params.get("dpop_jkt", ""),
         )

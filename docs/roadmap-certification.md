@@ -31,7 +31,7 @@ Ordre d'implémentation conseillé : **#44 → #45 → #46 → #47** (terminés 
 
 | # | Feature | Référence |
 |---|---|---|
-| [#49](https://github.com/aguacongas/puridentityserver/issues/49) | **DPoP** (RFC 9449) — proof-of-possession du token | authorization/token/introspection |
+| [#49](https://github.com/aguacongas/puridentityserver/issues/49) ✅ | **DPoP** (RFC 9449) — proof-of-possession du token | `cnf.jkt` des access_tokens + `token_type: DPoP` (§5.1), preuve exigée par client (`require_dpop`, §5.2), anti-replay `jti` (§11), `/userinfo` scheme `DPoP` (§7), `dpop_jkt` à l'authorization + PAR (§10), annonce `dpop_signing_alg_values_supported` — livré avec sample DoD `samples/dpop-client/` |
 | [#50](https://github.com/aguacongas/puridentityserver/issues/50) | **CIBA** (Client-Initiated Backchannel Authentication) — modes poll/ping | OIDC CIBA |
 
 ## Certification — automatisation (P2, bouteille finale)

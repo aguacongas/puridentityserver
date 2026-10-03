@@ -23,6 +23,11 @@
 #                    page /consent (OIDC Core 1.0 §3.1.2.2) avant d'émettre le
 #                    moindre code ou jeton — les scopes déjà consentis pour ce
 #                    client sont ré-utilisés (auto-approbation)
+# - require_dpop    : exiger une preuve DPoP (`en-tête DPoP`) à chaque appel au
+#                    token endpoint pour ce client (RFC 9449 §5.2) — sans
+#                    preuve, l'échange est refusé `invalid_request` ; défaut
+#                    `false` (le serveur lie quand même les jetons dès qu'une
+#                    preuve est présentée)
 # - client_secret  : secret du client (haché SHA-256 en base, jamais stocké
 #                    en clair) — facultatif pour un client "public" ; un client
 #                    confidentiel sans redirect_uris est adapté au flow
@@ -523,3 +528,15 @@ redirect_uris = [
 ]
 scopes = "openid admin"
 client_type = "public"
+
+# client public de démo pour l'extension DPoP (RFC 9449, proof-of-possession
+# du token — échantillon samples/dpop-client/) : `require_dpop = true` impose
+# une preuve DPoP (en-tête `DPoP`) à chaque appel au token endpoint pour ce
+# client (RFC 9449 §5.2) ; sans preuve, l'échange est refusé
+# `invalid_request`. Client public = PKCE obligatoire à l'échange du code.
+[[settings.clients_seed]]
+client_id = "sample-dpop-client"
+redirect_uris = ["http://127.0.0.1:8110/callback"]
+scopes = "openid profile email offline_access"
+client_type = "public"
+require_dpop = true

@@ -39,6 +39,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 - [Device Authorization Grant] (RFC 8628) — `/device_authorization` + page `/device`
 - [OAuth 2.0 JWT Access Tokens] (RFC 9068) — extension
 - [Pushed Authorization Requests] (RFC 9126) — extension
+- [OAuth 2.0 Demonstrating Proof-of-Possession] (RFC 9449) — extension DPoP : access token lié à une clé (`cnf.jkt`, `token_type: DPoP`)
 - [OpenID Connect RP-Initiated Logout] (OIDC spec) — `/end_session`
 - [OpenID Connect Front-Channel Logout] + [Back-Channel Logout] (OIDC spec) — notifications de déconnexion
 - [OpenID Connect Session Management] (OIDC Session Management 1.0) — `session_state`, iframe `check_session_iframe`
@@ -249,6 +250,22 @@ tests/             pytest unit + intégration (TestClient httpx)
     et active la fonctionnalité — `PURIDENTITYSERVER_SWAGGER_UI_OAUTH2_ENABLED=false`
     la retire (défaut de code : aucun bouton). Échantillon testable pas-à-pas :
     `samples/swagger-docs-client/`.
+22. ✅ **DPoP** (issue #49, RFC 9449) — proof-of-possession du token : le
+    serveur valide la preuve `dpop+jwt` (en-tête `DPoP`, typ/alg/jwk/htm/htu/
+    jti/iat, empreinte RFC 7638, anti-replay `jti` §11) présentée à `/token`,
+    `/par` et `/userinfo`, et **lie** l'access token à la clé de la preuve :
+    claim `cnf.jkt` + `token_type: DPoP` (§5.1) à l'échange du code comme au
+    renouvellement du refresh. Le drapeau **par client** `require_dpop`
+    (`clients_seed` / `dpop_bound_access_tokens` à la registration, §5.2)
+    rend la preuve **obligatoire** — sans elle `invalid_request` — tandis
+    qu'un client sans drapeau reçoit un jeton porteur `Bearer` par défaut ;
+    `dpop_jkt` à `/authorize` ou `/par` (§10) lie la demande d'emblée (mismatch
+    → `invalid_grant`). `/userinfo` exige le scheme `DPoP` + preuve `ath` pour
+    un jeton lié (scheme `Bearer` refusé avec challenge `DPoP error=
+    "invalid_token"`, §7) ; introspection expose le lien en `cnf` ;
+    `dpop_signing_alg_values_supported` publié au discovery (algorithmes
+    asymétriques uniquement). Échantillon testable pas-à-pas :
+    `samples/dpop-client/`.
 
 ## Développement local
 
@@ -306,6 +323,7 @@ gh secret set SONAR_SECRET
 [OAuth 2.0 Token Introspection]: https://datatracker.ietf.org/doc/html/rfc7662
 [OAuth 2.0 JWT Access Tokens]: https://datatracker.ietf.org/doc/html/rfc9068
 [Pushed Authorization Requests]: https://datatracker.ietf.org/doc/html/rfc9126
+[OAuth 2.0 Demonstrating Proof-of-Possession]: https://datatracker.ietf.org/doc/html/rfc9449
 [OpenID Connect RP-Initiated Logout]: https://openid.net/specs/openid-connect-rpinitiated-1_0.html
 [OpenID Connect Front-Channel Logout]: https://openid.net/specs/openid-connect-frontchannel-1_0.html
 [OpenID Connect Back-Channel Logout]: https://openid.net/specs/openid-connect-backchannel-1_0.html

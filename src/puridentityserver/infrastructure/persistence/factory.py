@@ -23,6 +23,9 @@ from puridentityserver.interfaces.repositories.consent_repository import Consent
 from puridentityserver.interfaces.repositories.device_authorization_repository import (
     DeviceAuthorizationRepository,
 )
+from puridentityserver.interfaces.repositories.dpop_replay_repository import (
+    DpopReplayRepository,
+)
 from puridentityserver.interfaces.repositories.identity_resource_repository import (
     IdentityResourceRepository,
 )
@@ -166,6 +169,23 @@ def build_pushed_authorization_repository(settings: Settings) -> PushedAuthoriza
         )
 
         return SQLPushedAuthorizationRepository(settings.storage_dsn)
+    raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")
+
+
+def build_dpop_replay_repository(settings: Settings) -> DpopReplayRepository:
+    """Retourne le store anti-replay DPoP selon ``storage_type``."""
+    if settings.storage_type == "memory":
+        from puridentityserver.infrastructure.persistence.memory.dpop_replays import (
+            InMemoryDpopReplayRepository,
+        )
+
+        return InMemoryDpopReplayRepository()
+    if settings.storage_type == "sql":
+        from puridentityserver.infrastructure.persistence.sql.dpop_replays import (
+            SQLDpopReplayRepository,
+        )
+
+        return SQLDpopReplayRepository(settings.storage_dsn)
     raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")
 
 

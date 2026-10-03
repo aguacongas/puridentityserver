@@ -104,7 +104,12 @@ class IntrospectUseCase:
 
     @staticmethod
     def _select_claims(claims: dict[str, object]) -> dict[str, object]:
-        """Retient les membres RFC 7662 §2.2 présents dans le JWT inspecté."""
+        """Retient les membres RFC 7662 §2.2 présents dans le JWT inspecté.
+
+        Un access token lié à une clé DPoP (claim ``cnf``, RFC 9449 §5.1)
+        est annoncé ``token_type=DPoP`` et son ``cnf`` est exposé
+        top-level (RFC 9449 §6) ; sinon ``Bearer`` reste la valeur.
+        """
         selected: dict[str, object] = {}
         for name in ("iss", "sub", "aud", "exp", "iat", "scope"):
             if name in claims:
@@ -115,5 +120,9 @@ class IntrospectUseCase:
             selected["username"] = claims["preferred_username"]
         elif "sub" in claims:
             selected["username"] = claims["sub"]
-        selected["token_type"] = "Bearer"  # ruff: ignore[hardcoded-password-string]  (RFC 6750 §5.1, pas un secret)
+        cnf = claims.get("cnf")
+        bound = isinstance(cnf, dict)
+        if bound:
+            selected["cnf"] = cnf
+        selected["token_type"] = "DPoP" if bound else "Bearer"
         return selected

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
@@ -75,6 +76,8 @@ _VALID_RESPONSE_TYPES = frozenset(
     )
 )
 
+_DP_JKT_PATTERN = re.compile(r"[A-Za-z0-9_-]{43}")  # thumbprint RFC 7638 (RFC 9449 §4.2)
+
 
 @dataclass(frozen=True, slots=True)
 class AuthorizeConfig:
@@ -108,6 +111,7 @@ class AuthorizeRequest:
     auth_time: int = 0
     acr_values: str = ""  # valeurs ACR demandées, séparées par des espaces (§3.1.2.1)
     claims: str = ""  # paramètre claims brut (OIDC Core 1.0 §5.5)
+    dpop_jkt: str = ""  # empreinte de la clé DPoP liant le code (RFC 9449 §4.2)
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,10 +164,13 @@ class ValidatedAuthorization:
 def _parameter_error(
     request: AuthorizeRequest, response_mode: ResponseMode
 ) -> AuthorizeError | None:
-    """Rejette ``max_age`` négatif et ``claims`` malformé, ou ``None``.
+    """Rejette ``max_age`` négatif, ``claims`` ou ``dpop_jkt`` malformés, ou ``None``.
 
     ``claims`` doit être un objet JSON (OIDC Core 1.0 §5.5.1) ; toute autre
     forme — tableau, scalaire, JSON invalide — vaut ``invalid_request``.
+    ``dpop_jkt`` doit être l'empreinte thumbprint RFC 7638 d'une clé publique
+    (43 caractères base64url, RFC 9449 §4.2) ; tout autre format vaut
+    ``invalid_request``.
     """
     if request.max_age < -1:
         return _authorize_error(
@@ -177,6 +184,13 @@ def _parameter_error(
             "invalid_request",
             request,
             description="claims doit être un objet JSON valide (OIDC Core 1.0 §5.5.1)",
+            response_mode=response_mode,
+        )
+    if request.dpop_jkt and not _DP_JKT_PATTERN.fullmatch(request.dpop_jkt):
+        return _authorize_error(
+            "invalid_request",
+            request,
+            description="dpop_jkt doit être une empreinte RFC 7638 (43 caractères base64url)",
             response_mode=response_mode,
         )
     return None
@@ -422,6 +436,7 @@ class AuthorizeUseCase:
             auth_time=request.auth_time,
             acr=first_acr_value(request.acr_values),
             claims=request.claims,
+            dpop_jkt=request.dpop_jkt,
             expires_at=now + timedelta(seconds=code_ttl),
         )
         await self._codes.save(code)

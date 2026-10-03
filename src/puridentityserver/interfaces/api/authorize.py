@@ -86,6 +86,7 @@ class AuthorizeQueryParams(BaseModel):
     request_uri: str = ""
     acr_values: str = ""
     claims: str = ""
+    dpop_jkt: str = ""
 
 
 def authorize_router(
@@ -245,6 +246,7 @@ async def _direct_authorize_request(
         max_age=parse_max_age(params.get("max_age", "")),
         acr_values=params.get("acr_values", ""),
         claims=params.get("claims", ""),
+        dpop_jkt=params.get("dpop_jkt", ""),
     )
 
 
@@ -336,6 +338,7 @@ async def _with_authenticated_subject(
         auth_time=await session_auth_time(request),
         acr_values=auth_request.acr_values,
         claims=auth_request.claims,
+        dpop_jkt=auth_request.dpop_jkt,
     )
 
 

@@ -42,6 +42,7 @@ from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
 
 from puridentityserver.application.claims_request import (
+    ClaimsRequest,
     parse_claims_parameter,
     requested_userinfo_payload,
     resolve_requested_claims,
@@ -49,6 +50,11 @@ from puridentityserver.application.claims_request import (
 from puridentityserver.application.client_auth import (
     CLIENT_UNKNOWN_ERROR,
     verify_client_secret,
+)
+from puridentityserver.application.dpop import (
+    DpopBinding,
+    DpopGrantGuard,
+    DpopGuardError,
 )
 from puridentityserver.application.id_token_encryption import encrypt_id_token_for_client
 from puridentityserver.application.id_token_material import resolve_id_token_material
@@ -125,6 +131,7 @@ class TokenRequest:
     client_assertion: str = ""
     assertion: str = ""
     tls_certificate: ClientCertificate | None = None
+    dpop_proof: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,7 +160,9 @@ class TokenUseCase:
     L'authentification du client suit sa ``token_endpoint_auth_method``
     (RFC 6749 §2.3, RFC 7523 §2.2, RFC 8705) ; le port ``TokenManager``
     signe ``id_token`` et ``access_token`` avec la première clé active de
-    l'algorithme.
+    l'algorithme. La preuve ``DPoP`` du client (RFC 9449), quand elle est
+    présente — ou exigée par ``require_dpop`` —, est validée par le guard
+    injecté : l'access token est alors lié (``cnf.jkt``, ``token_type=DPoP``).
     """
 
     def __init__(
@@ -169,6 +178,7 @@ class TokenUseCase:
         *,
         claims_provider: ClaimsProvider | None = None,
         revoked_tokens: RevokedTokenRepository | None = None,
+        dpop: DpopGrantGuard | None = None,
     ) -> None:
         """Injection de la configuration, des repositories et de l'émetteur de jetons.
 
@@ -177,7 +187,10 @@ class TokenUseCase:
         émis à l'échange du code ; sans injection, seul le payload standard
         est signé. ``revoked_tokens`` est le denylist sur lequel un code
         réutilisé place l'access token du premier échange (RFC 6749 §4.1.2) ;
-        sans injection, la révocation est simplement ignorée.
+        sans injection, la révocation est simplement ignorée. ``dpop``
+        applique les règles DPoP (RFC 9449) : sans injection, aucun proof
+        n'est traité et ``require_dpop`` n'est honoré que pour le rejet de
+        la requête dépourvue d'en-tête ``DPoP``.
         """
         self._config = config
         self._clients = client_repository
@@ -189,6 +202,7 @@ class TokenUseCase:
         self._client_assertions = client_assertions
         self._claims_provider = claims_provider
         self._revoked_tokens = revoked_tokens
+        self._dpop = dpop
 
     async def execute(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Traite le grant type demandé et retourne les jetons ou une erreur."""
@@ -221,12 +235,20 @@ class TokenUseCase:
         if isinstance(client, TokenError):
             return client
 
+        binding = await self._evaluate_dpop(client, request, bound_jkt=auth_code.dpop_jkt)
+        if isinstance(binding, TokenError):
+            return binding
+
         await self._codes.consume(auth_code.code)
 
         refresh_token = ""
         if Scope.OFFLINE_ACCESS in auth_code.scopes:
             refresh_token = await self._issue_refresh_token(
-                client, auth_code.subject, auth_code.scopes, now
+                client,
+                auth_code.subject,
+                auth_code.scopes,
+                now,
+                dpop_jkt=binding.jkt if binding.bound else "",
             )
         issued = await self._issue_tokens(
             client,
@@ -238,6 +260,7 @@ class TokenUseCase:
             auth_time=auth_code.auth_time,
             acr=auth_code.acr,
             claims=auth_code.claims,
+            dpop_jkt=binding.jkt if binding.bound else "",
         )
         if isinstance(issued, TokenError):
             return issued
@@ -249,7 +272,14 @@ class TokenUseCase:
             refresh_token=refresh_token,
             now=now,
         )
-        return self._success(id_token, access_token, token_ttl, auth_code.scopes, refresh_token)
+        return self._success(
+            id_token,
+            access_token,
+            token_ttl,
+            auth_code.scopes,
+            refresh_token,
+            dpop_bound=binding.bound,
+        )
 
     async def _validate_code_exchange(
         self, auth_code: AuthorizationCode, request: TokenRequest
@@ -331,6 +361,53 @@ class TokenUseCase:
         if authenticated is not None:
             return authenticated
 
+        resolved = await self._resolve_refresh_grant(request)
+        if isinstance(resolved, TokenError):
+            return resolved
+        stored, scopes = resolved
+
+        now = datetime.now(timezone.utc)
+        binding = await self._evaluate_dpop(client, request, bound_jkt=stored.dpop_jkt)
+        if isinstance(binding, TokenError):
+            return binding
+
+        await self._refresh_tokens.consume(stored.token_hash)
+        refresh_token = await self._issue_refresh_token(
+            client,
+            stored.subject,
+            scopes,
+            now,
+            dpop_jkt=self._refresh_dpop_jkt(client, stored, binding),
+        )
+        issued = await self._issue_tokens(
+            client,
+            stored.subject,
+            scopes,
+            nonce="",
+            now=now,
+            dpop_jkt=binding.jkt if binding.bound else "",
+        )
+        if isinstance(issued, TokenError):
+            return issued
+        id_token, access_token, token_ttl = issued
+        return self._success(
+            id_token,
+            access_token,
+            token_ttl,
+            scopes,
+            refresh_token,
+            dpop_bound=binding.bound,
+        )
+
+    async def _resolve_refresh_grant(
+        self, request: TokenRequest
+    ) -> tuple[RefreshToken, frozenset[Scope]] | TokenError:
+        """Charge et contrôle le refresh token, puis réduit éventuellement sa portée.
+
+        Le token doit appartenir au client, ne pas avoir été consommé
+        (rotation, RFC 6749 §6) ni expirer ; ``scope`` ne peut que
+        restreindre la portée initialement accordée (§6).
+        """
         stored = await self._refresh_tokens.find_by_token_hash(token_hash(request.refresh_token))
         if stored is None or stored.client_id != request.client_id:
             return self._error("invalid_grant", "Refresh token invalide ou d'un autre client")
@@ -338,22 +415,13 @@ class TokenUseCase:
             return self._error("invalid_grant", "Refresh token déjà utilisé (rotation)")
         if stored.expires_at < datetime.now(timezone.utc):
             return self._error("invalid_grant", "Refresh token expiré")
-
         scopes = stored.scopes
         if request.scope:
             requested = Scope.from_space_separated(request.scope)
             if requested - stored.scopes:
                 return self._error("invalid_scope", "Portée demandée jamais accordée au jeton")
             scopes = requested
-
-        now = datetime.now(timezone.utc)
-        await self._refresh_tokens.consume(stored.token_hash)
-        refresh_token = await self._issue_refresh_token(client, stored.subject, scopes, now)
-        issued = await self._issue_tokens(client, stored.subject, scopes, nonce="", now=now)
-        if isinstance(issued, TokenError):
-            return issued
-        id_token, access_token, token_ttl = issued
-        return self._success(id_token, access_token, token_ttl, scopes, refresh_token)
+        return stored, scopes
 
     async def _client_credentials(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Émet un access token au nom du client lui-même (RFC 6749 §4.4).
@@ -379,11 +447,19 @@ class TokenUseCase:
         if isinstance(scopes, TokenError):
             return scopes
 
+        binding = await self._evaluate_dpop(client, request)
+        if isinstance(binding, TokenError):
+            return binding
+
         now = datetime.now(timezone.utc)
         access_token, token_ttl = await self._issue_access_token(
-            client, subject=client.client_id, scopes=scopes, now=now
+            client,
+            subject=client.client_id,
+            scopes=scopes,
+            now=now,
+            dpop_jkt=binding.jkt if binding.bound else "",
         )
-        return self._success("", access_token, token_ttl, scopes)
+        return self._success("", access_token, token_ttl, scopes, dpop_bound=binding.bound)
 
     async def _jwt_bearer(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Émet un access token au nom du sujet d'une assertion JWT (RFC 7523 §2.1).
@@ -427,11 +503,19 @@ class TokenUseCase:
         if isinstance(scopes, TokenError):
             return scopes
 
+        binding = await self._evaluate_dpop(client, request)
+        if isinstance(binding, TokenError):
+            return binding
+
         now = datetime.now(timezone.utc)
         access_token, token_ttl = await self._issue_access_token(
-            client, subject=subject, scopes=scopes, now=now
+            client,
+            subject=subject,
+            scopes=scopes,
+            now=now,
+            dpop_jkt=binding.jkt if binding.bound else "",
         )
-        return self._success("", access_token, token_ttl, scopes)
+        return self._success("", access_token, token_ttl, scopes, dpop_bound=binding.bound)
 
     async def _device_code(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Poll l'état de la session appareil et émet les jetons une fois approuvée.
@@ -457,20 +541,43 @@ class TokenUseCase:
         if authenticated is not None:
             return authenticated
 
+        binding = await self._evaluate_dpop(client, request)
+        if isinstance(binding, TokenError):
+            return binding
+
+        stored = await self._load_device_session(request)
+        if isinstance(stored, TokenError):
+            return stored
+
+        now = datetime.now(timezone.utc)
+        if stored.status == DeviceAuthorizationStatus.APPROVED:
+            return await self._device_approved_flow(client, stored, now, binding)
+        return await self._device_pending_response(stored, now)
+
+    async def _load_device_session(self, request: TokenRequest) -> DeviceAuthorization | TokenError:
+        """Charge la session appareil : inconnue/autre client, expirée ou refusée.
+
+        L'expiration détruit la session (RFC 8628 §3.5) et le refus de
+        l'utilisateur vaut ``access_denied``.
+        """
+        if self._device_codes is None:
+            return self._error("unsupported_grant_type")
         stored = await self._device_codes.find_by_device_code_hash(token_hash(request.device_code))
         if stored is None or stored.client_id != request.client_id:
             return self._error("invalid_grant", "Device code invalide ou d'un autre client")
         if stored.expires_at < datetime.now(timezone.utc):
             await self._device_codes.delete(stored.device_code_hash)
             return self._error("expired_token", "Device code expiré")
-
         if stored.status == DeviceAuthorizationStatus.DENIED:
             return self._error("access_denied", "Appareil refusé par l'utilisateur")
+        return stored
 
-        now = datetime.now(timezone.utc)
-        if stored.status == DeviceAuthorizationStatus.APPROVED:
-            return await self._device_approved_flow(client, stored, now)
-
+    async def _device_pending_response(
+        self, stored: DeviceAuthorization, now: datetime
+    ) -> TokenResponse | TokenError:
+        """Réponse d'un poll tant que l'autorisation n'est pas tranchée (RFC 8628 §3.4)."""
+        if self._device_codes is None:
+            return self._error("unsupported_grant_type")
         if (
             stored.last_polled_at is not None
             and (now - stored.last_polled_at).total_seconds() < stored.interval
@@ -487,21 +594,32 @@ class TokenUseCase:
         client: Client,
         stored: DeviceAuthorization,
         now: datetime,
+        binding: DpopBinding,
     ) -> TokenResponse | TokenError:
         """Consomme la session appareil approuvée et émet ses jetons (RFC 8628 §3.5)."""
         if self._device_codes is None:
             return self._error("unsupported_grant_type")
         await self._device_codes.delete(stored.device_code_hash)
+        dpop_jkt = binding.jkt if binding.bound else ""
         refresh_token = ""
         if Scope.OFFLINE_ACCESS in stored.scopes:
             refresh_token = await self._issue_refresh_token(
-                client, stored.subject, stored.scopes, now
+                client, stored.subject, stored.scopes, now, dpop_jkt=dpop_jkt
             )
-        issued = await self._issue_tokens(client, stored.subject, stored.scopes, nonce="", now=now)
+        issued = await self._issue_tokens(
+            client, stored.subject, stored.scopes, nonce="", now=now, dpop_jkt=dpop_jkt
+        )
         if isinstance(issued, TokenError):
             return issued
         id_token, access_token, token_ttl = issued
-        return self._success(id_token, access_token, token_ttl, stored.scopes, refresh_token)
+        return self._success(
+            id_token,
+            access_token,
+            token_ttl,
+            stored.scopes,
+            refresh_token,
+            dpop_bound=binding.bound,
+        )
 
     async def _effective_scope(
         self, client: Client, requested: str, *, default: frozenset[Scope]
@@ -520,6 +638,48 @@ class TokenUseCase:
                     "invalid_scope", "Scope(s) non enregistré(s) : " + ", ".join(unknown)
                 )
         return scopes
+
+    async def _evaluate_dpop(
+        self, client: Client, request: TokenRequest, *, bound_jkt: str = ""
+    ) -> DpopBinding | TokenError:
+        """Valide la preuve DPoP du client et décide du lien du token (RFC 9449).
+
+        Sans guard injecté, seul ``require_dpop`` est honoré : la requête
+        dépourvue d'en-tête ``DPoP`` est refusée, aucun proof n'étant
+        traitable sans validateur. ``bound_jkt`` porte l'empreinte exigée
+        par le support en cours (code ou refresh token lié, §10).
+        """
+        if self._dpop is None:
+            if client.require_dpop and not request.dpop_proof:
+                return self._error(
+                    "invalid_request",
+                    "Ce client exige une preuve DPoP (RFC 9449 §5.2)",
+                )
+            return DpopBinding()
+        result = await self._dpop.evaluate(
+            client=client,
+            proof=request.dpop_proof,
+            htu=self._token_endpoint(),
+            bound_jkt=bound_jkt,
+        )
+        if isinstance(result, DpopGuardError):
+            return self._error(result.error, result.error_description)
+        return result
+
+    @staticmethod
+    def _refresh_dpop_jkt(client: Client, stored: RefreshToken, binding: DpopBinding) -> str:
+        """Empreinte liant le refresh token émis (RFC 9449 §5).
+
+        La liaison d'un refresh token existant est conservée telle quelle
+        (sa clé vient d'être revalidée) ; à défaut, un client **public**
+        ayant prouvé sa clé voit son nouveau refresh token lié — les
+        clients confidentiels gardent un refresh token porteur (§5).
+        """
+        if stored.dpop_jkt:
+            return stored.dpop_jkt
+        if client.client_type is ClientType.CONFIDENTIAL:
+            return ""
+        return binding.jkt if binding.bound else ""
 
     async def _authenticate_client(
         self, client: Client, request: TokenRequest
@@ -609,6 +769,7 @@ class TokenUseCase:
         auth_time: int = 0,
         acr: str = "",
         claims: str = "",
+        dpop_jkt: str = "",
     ) -> tuple[str, str, int] | TokenError:
         """Émet et retourne l'``id_token``, l'``access_token`` et la TTL effective.
 
@@ -616,7 +777,9 @@ class TokenUseCase:
         OIDC Core 1.0 §3.1.2.1) complète l'id_token du claim ``acr`` ;
         ``claims`` porte le paramètre ``claims`` (§5.5) : son member
         ``id_token`` est résolu dans l'id_token et son member ``userinfo``
-        voyage dans l'access_token, relu par ``/userinfo``.
+        voyage dans l'access_token, relu par ``/userinfo``. ``dpop_jkt``
+        (RFC 9449 §5) lie l'access token à la clé prouvée via le claim
+        ``cnf`` — chaîne vide = jeton porteur classique.
         """
         claims_request = parse_claims_parameter(claims) if claims else None
         token_ttl = resolve_lifetime_seconds(
@@ -670,9 +833,7 @@ class TokenUseCase:
             expires_at=expires_epoch,
             issued_at=issued_at,
             scopes=scopes,
-            additional_claims=(
-                requested_userinfo_payload(claims_request) if claims_request else None
-            ),
+            additional_claims=_access_token_additional_claims(claims_request, dpop_jkt),
         )
         return id_token, access_token, token_ttl
 
@@ -694,8 +855,13 @@ class TokenUseCase:
         subject: str,
         scopes: frozenset[Scope],
         now: datetime,
+        dpop_jkt: str = "",
     ) -> tuple[str, int]:
-        """Émet et retourne un ``access_token`` et sa TTL effective."""
+        """Émet et retourne un ``access_token`` et sa TTL effective.
+
+        ``dpop_jkt`` non vide lie le jeton à la clé DPoP prouvée (claim
+        ``cnf``, RFC 9449 §5.1).
+        """
         token_ttl = resolve_lifetime_seconds(
             client.access_token_lifetime_seconds, self._config.access_token_ttl_seconds
         )
@@ -711,6 +877,7 @@ class TokenUseCase:
             expires_at=expires_epoch,
             issued_at=issued_at,
             scopes=scopes,
+            additional_claims=_access_token_additional_claims(None, dpop_jkt),
         )
         return access_token, token_ttl
 
@@ -726,8 +893,15 @@ class TokenUseCase:
         subject: str,
         scopes: frozenset[Scope],
         now: datetime,
+        *,
+        dpop_jkt: str = "",
     ) -> str:
-        """Génère, persiste (empreinte) et retourne un nouveau refresh token opque."""
+        """Génère, persiste (empreinte) et retourne un nouveau refresh token opque.
+
+        ``dpop_jkt`` non vide lie le refresh token à la clé DPoP (RFC
+        9449 §5) : chaque renouvellement devra then présenter une preuve
+        signée par cette même clé.
+        """
         ttl = resolve_lifetime_seconds(
             client.refresh_token_lifetime_seconds, self._config.refresh_token_ttl_seconds
         )
@@ -739,6 +913,7 @@ class TokenUseCase:
                 subject=subject,
                 scopes=scopes,
                 expires_at=now + timedelta(seconds=ttl),
+                dpop_jkt=dpop_jkt,
             )
         )
         return value
@@ -750,11 +925,18 @@ class TokenUseCase:
         token_ttl: int,
         scopes: frozenset[Scope],
         refresh_token: str = "",
+        *,
+        dpop_bound: bool = False,
     ) -> TokenResponse:
-        """Construit une réponse de succès (avec ou sans id_token/refresh token)."""
+        """Construit une réponse de succès (avec ou sans id_token/refresh token).
+
+        Un access token lié à une clé DPoP est annoncé ``token_type=DPoP``
+        (RFC 9449 §5.1) — ``Bearer`` reste la valeur porteur classique.
+        """
         return TokenResponse(
             access_token=access_token,
             id_token=id_token,
+            token_type="DPoP" if dpop_bound else "Bearer",
             expires_in=token_ttl,
             scope=" ".join(sorted(scope.value for scope in scopes)),
             refresh_token=refresh_token,
@@ -784,7 +966,7 @@ def _unverified_assertion_claims(assertion: str) -> dict[str, object] | None:
     """Claims **non vérifiés** d'une assertion, réservés à la localisation du client.
 
     Aucune décision de sécurité n'est prise sur ces valeurs : elles ne
-    servent qu'à retrouver le candidat dans le registre, l'assertion étant
+    servent qu'à retrouver le candidat dans le registre, l'étant
     ensuite intégralement vérifiée (signature, ``iss``, ``aud``, ``exp``)
     avant tout échange.
     """
@@ -795,3 +977,22 @@ def _unverified_assertion_claims(assertion: str) -> dict[str, object] | None:
     except (ValueError, TypeError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def _access_token_additional_claims(
+    claims_request: ClaimsRequest | None, dpop_jkt: str
+) -> dict[str, object] | None:
+    """Claims additionnels de l'access token : member ``userinfo`` + lien DPoP.
+
+    Le member ``userinfo`` du paramètre ``claims`` (OIDC Core 1.0 §5.5)
+    est relu par ``/userinfo`` ; ``cnf.jkt`` (RFC 9449 §5.1) lie le jeton
+    à la clé DPoP dont la preuve a été validée. ``None`` sans rien à
+    ajouter, pour ne pas altérer le payload standard.
+    """
+    additional: dict[str, object] = {}
+    payload = requested_userinfo_payload(claims_request) if claims_request else None
+    if payload:
+        additional.update(payload)
+    if dpop_jkt:
+        additional["cnf"] = {"jkt": dpop_jkt}
+    return additional or None
