@@ -86,6 +86,7 @@ class ClientRow(PersistenceBase):
     device_code_interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     par_required: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
     require_consent: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
+    require_dpop: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
 
 
 class SQLClientRepository:
@@ -183,6 +184,7 @@ def _to_row(client: Client) -> ClientRow:
         device_code_interval_seconds=client.device_code_interval_seconds,
         par_required=client.par_required,
         require_consent=client.require_consent,
+        require_dpop=client.require_dpop,
     )
 
 
@@ -242,4 +244,5 @@ def _from_row(row: ClientRow) -> Client:
         device_code_interval_seconds=row.device_code_interval_seconds,
         par_required=row.par_required,
         require_consent=row.require_consent,
+        require_dpop=row.require_dpop,
     )

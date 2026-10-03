@@ -18,6 +18,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from puridentityserver.application.par import PushedAuthorizationUseCase, PushError
+from puridentityserver.interfaces.api.dpop_proof import extract_dpop_proof
 
 _JSON_MEDIA_TYPE = "application/json"
 
@@ -34,7 +35,10 @@ def par_router(usecase: PushedAuthorizationUseCase) -> APIRouter:
     async def push(request: Request) -> Response:
         """Pousse une demande d'autorisation et retourne un request_uri à usage unique."""
         params = await _form_body(request)
-        result = await usecase.push(params)
+        dpop_proof, dpop_error = extract_dpop_proof(request.headers)
+        if dpop_error is not None:
+            return _error_response(PushError(error="invalid_request", error_description=dpop_error))
+        result = await usecase.push(params, dpop_proof=dpop_proof)
         if isinstance(result, PushError):
             return _error_response(result)
         return Response(

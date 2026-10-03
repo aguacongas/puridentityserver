@@ -31,6 +31,7 @@ from puridentityserver.application.device_authorize import (
     DeviceConfig,
 )
 from puridentityserver.application.discovery import DiscoveryConfig, DiscoveryUseCase
+from puridentityserver.application.dpop import DpopGrantGuard
 from puridentityserver.application.introspect import IntrospectConfig, IntrospectUseCase
 from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
 from puridentityserver.application.logout import LogoutConfig, LogoutUseCase
@@ -56,6 +57,7 @@ from puridentityserver.infrastructure.backchannel import HTTPBackchannelNotifier
 from puridentityserver.infrastructure.bearer import build_bearer_verifier
 from puridentityserver.infrastructure.claims import UserStoreClaimsProvider
 from puridentityserver.infrastructure.client_assertions import PyJWTClientAssertionVerifier
+from puridentityserver.infrastructure.dpop import PyJWTDpopProofValidator
 from puridentityserver.infrastructure.jwe import JWEIdTokenEncrypter
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
 from puridentityserver.infrastructure.persistence.readers import build_readers_from_stores
@@ -187,6 +189,7 @@ class ProtocolDependencies:
         self.id_token_encrypter = JWEIdTokenEncrypter()
         self.client_assertions = PyJWTClientAssertionVerifier(self.secret_cipher)
         self.bearer_verifier = build_bearer_verifier(settings, self.token_manager)
+        self.dpop_validator = PyJWTDpopProofValidator(stores.dpop_replay)
         self.registration_authorizer = BearerClaimAuthorizer(
             self.bearer_verifier,
             ClaimRule(
@@ -246,6 +249,7 @@ class ProtocolDependencies:
             self.client_assertions,
             claims_provider=self.claims_provider,
             revoked_tokens=stores.revoked,
+            dpop=DpopGrantGuard(self.dpop_validator),
         )
         self.device_usecase = DeviceAuthorizationUseCase(
             DeviceConfig(
@@ -264,6 +268,7 @@ class ProtocolDependencies:
             self.claims_provider,
             stores.revoked,
             self.readers.identity_resource,
+            dpop=self.dpop_validator,
         )
         self.introspect_usecase = IntrospectUseCase(
             IntrospectConfig(issuer=settings.issuer),
@@ -297,10 +302,14 @@ class ProtocolDependencies:
             self.secret_cipher,
         )
         self.par_usecase = PushedAuthorizationUseCase(
-            PushedAuthorizationConfig(ttl_seconds=settings.par_ttl_seconds),
+            PushedAuthorizationConfig(
+                ttl_seconds=settings.par_ttl_seconds,
+                par_endpoint=(f"{settings.base_url or settings.issuer}".rstrip("/") + "/par"),
+            ),
             self.readers.client,
             stores.pushed,
             self.scope_registry,
+            dpop=self.dpop_validator,
         )
         self.consent_usecase = ConsentUseCase(stores.consent)
 

@@ -6,7 +6,7 @@ from puridentityserver.domain.jwe import (
     ALL_ENCRYPTION_ALGORITHMS,
     ALL_ENCRYPTION_METHODS,
 )
-from puridentityserver.domain.jwks import ALL_SIGNING_ALGORITHMS
+from puridentityserver.domain.jwks import ALL_SIGNING_ALGORITHMS, ASYMMETRIC_ALGORITHMS
 
 
 class DiscoveryDocument(BaseModel):
@@ -33,6 +33,9 @@ class DiscoveryDocument(BaseModel):
     request_object_signing_alg_values_supported: list[str] = Field(default_factory=list)
     request_parameter_supported: bool = False
     request_uri_parameter_supported: bool = False
+    dpop_signing_alg_values_supported: list[str] = Field(
+        default_factory=lambda: [algorithm.value for algorithm in ASYMMETRIC_ALGORITHMS]
+    )
     claims_parameter_supported: bool = False
     scopes_supported: list[str] = Field(
         default_factory=lambda: [

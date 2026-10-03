@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, String
+from sqlalchemy import JSON, Boolean, DateTime, String, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -33,6 +33,7 @@ class RefreshTokenRow(PersistenceBase):
     scopes: Mapped[list[str]] = mapped_column(JSON)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     is_consumed: Mapped[bool] = mapped_column(Boolean, default=False)
+    dpop_jkt: Mapped[str] = mapped_column(String(80), default="", server_default=text("''"))
 
 
 class SQLRefreshTokenRepository:
@@ -97,6 +98,7 @@ def _to_row(token: RefreshToken) -> RefreshTokenRow:
         scopes=sorted(scope.value for scope in token.scopes),
         expires_at=token.expires_at,
         is_consumed=token.is_consumed,
+        dpop_jkt=token.dpop_jkt,
     )
 
 
@@ -112,4 +114,5 @@ def _from_row(row: RefreshTokenRow) -> RefreshToken:
         scopes=frozenset(Scope(value) for value in row.scopes),
         expires_at=expires_at,
         is_consumed=row.is_consumed,
+        dpop_jkt=row.dpop_jkt or "",
     )
