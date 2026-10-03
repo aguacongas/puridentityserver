@@ -79,8 +79,8 @@ class PyJWTDpopProofValidator:
             header = pyjwt.get_unverified_header(proof)  # NOSONAR(S5659)
             claims = pyjwt.decode(
                 proof,
-                options={
-                    "verify_signature": False,  # NOSONAR(S5659) — lecture seule
+                options={  # NOSONAR(S5659) — lecture seule, vérification ensuite
+                    "verify_signature": False,
                     "verify_exp": False,
                     "verify_nbf": False,
                     "verify_aud": False,
