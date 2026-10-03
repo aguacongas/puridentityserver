@@ -43,7 +43,7 @@ jobs:
         run: uv run --no-sync --no-build --locked pytest --cov-report=xml:coverage/coverage.xml
 
       - name: SonarCloud Scan
-        uses: SonarSource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4 # v8.2.2
+        uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
         if: (github.event_name == 'push') || (github.event.pull_request.head.repo.full_name == github.repository)
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_SECRET }}
