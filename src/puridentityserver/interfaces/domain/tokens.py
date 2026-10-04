@@ -133,12 +133,15 @@ class TokenManager(Protocol):
         *,
         token: str,
         issuer: str,
+        allow_expired: bool = False,
     ) -> dict[str, object] | None:
         """Décode et valide un id_token (signature JWKS, iss, exp).
 
         Sert notamment à évaluer l'``id_token_hint`` du RP-Initiated Logout
         (OIDC Core 1.0 §5) : le claim ``aud`` n'est pas vérifié ici, sa
         résolution vers un client est laissée au cas d'utilisation appelant.
+        ``allow_expired`` accepte un id_token échu — un hint de vieillissement
+        normal (OIDC Core 1.0 §3.1.3.7, OIDC CIBA 1.0 §14).
         """
         ...
 

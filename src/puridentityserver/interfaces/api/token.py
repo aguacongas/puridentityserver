@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 
 from fastapi import APIRouter, Form, Request, Response
@@ -16,6 +15,7 @@ from puridentityserver.application.token import (
 from puridentityserver.infrastructure.client_tls import extract_client_certificate
 from puridentityserver.interfaces.api.dpop_proof import extract_dpop_proof
 from puridentityserver.interfaces.api.error_description import ascii_error_description
+from puridentityserver.interfaces.api.http_client_auth import parse_basic_auth
 
 
 def token_router(usecase: TokenUseCase) -> APIRouter:
@@ -34,6 +34,7 @@ def token_router(usecase: TokenUseCase) -> APIRouter:
         refresh_token: str = Form(default=""),
         scope: str = Form(default=""),
         device_code: str = Form(default=""),
+        auth_req_id: str = Form(default=""),
         client_assertion_type: str = Form(default=""),
         client_assertion: str = Form(default=""),
         assertion: str = Form(default=""),
@@ -42,7 +43,7 @@ def token_router(usecase: TokenUseCase) -> APIRouter:
         if dpop_error is not None:
             error = TokenError(error="invalid_request", error_description=dpop_error)
             return _error_response(error)
-        header_id, header_secret = _parse_basic_auth(request)
+        header_id, header_secret = parse_basic_auth(request)
         if not client_id:
             client_id = header_id
         if not client_secret:
@@ -57,6 +58,7 @@ def token_router(usecase: TokenUseCase) -> APIRouter:
             refresh_token=refresh_token,
             scope=scope,
             device_code=device_code,
+            auth_req_id=auth_req_id,
             client_assertion_type=client_assertion_type,
             client_assertion=client_assertion,
             assertion=assertion,
@@ -69,21 +71,6 @@ def token_router(usecase: TokenUseCase) -> APIRouter:
         return _success_response(result)
 
     return router
-
-
-def _parse_basic_auth(request: Request) -> tuple[str, str]:
-    """Identifiants client depuis l'en-tête ``Authorization: Basic`` (RFC 7617)."""
-    authorization = request.headers.get("Authorization", "")
-    if not authorization.lower().startswith("basic "):
-        return "", ""
-    try:
-        decoded = base64.b64decode(authorization.split(None, 1)[1], validate=True).decode("utf-8")
-    except ValueError:
-        return "", ""
-    username, separator, password = decoded.partition(":")
-    if not separator:
-        return "", ""
-    return username, password
 
 
 def _success_response(result: TokenResponse) -> Response:

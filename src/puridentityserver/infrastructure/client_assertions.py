@@ -13,11 +13,17 @@ Deux usages distincts du RFC 7523 :
 La vérification partagée controle la signature (HMAC avec le secret du
 client, ou clé publique de son JWKS enregistré/embarqué), ``aud`` (token
 endpoint), ``exp`` et la cohérence ``iss``/``sub`` selon l'usage.
+
+Le même port décode un ``login_hint_token`` (OIDC CIBA 1.0 §7.1.1) : jeton
+signé par le client dont les claims — déployement-spécifiques — n'exigent
+ni ``iss`` ni ``aud``, seule la signature (et l'échéance ``exp`` le cas
+échéant) est contrôlée.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from typing import cast
 
 import jwt as pyjwt
@@ -25,6 +31,7 @@ from jwt import PyJWKClient, PyJWKSet  # type: ignore[attr-defined]  # non expos
 
 from puridentityserver.domain.authorization import Client
 from puridentityserver.domain.key_validation import usable_for_signing
+from puridentityserver.interfaces.domain.client_assertions import LoginHintTokenResult
 from puridentityserver.interfaces.domain.secrets import SecretCipher
 
 _HMAC_ALGORITHMS = ("HS256", "HS384", "HS512")
@@ -50,7 +57,7 @@ class PyJWTClientAssertionVerifier:
         *,
         token: str,
         client: Client,
-        audience: str,
+        audience: str | Sequence[str],
         require_iss_eq_sub: bool,
     ) -> dict[str, object] | None:
         """Vérifie l'assertion selon l'algorithme de son en-tête (HMAC ou asymétrique)."""
@@ -78,6 +85,33 @@ class PyJWTClientAssertionVerifier:
             require_iss_eq_sub=require_iss_eq_sub,
         )
 
+    async def decode_login_hint_token(self, *, token: str, client: Client) -> LoginHintTokenResult:
+        """Décode un ``login_hint_token`` signé par le client (CIBA §7.1.1).
+
+        La signature est vérifiée avec le secret partagé (HMAC) ou les clés
+        du client (``jwks`` / ``jwks_uri``) ; ``iss`` et ``aud`` ne sont pas
+        exigés — le contenu du hint est déployement-spécifique. Un jeton
+        signé mais échu retourne ``expired`` (→ ``expired_login_hint_token``).
+        """
+        try:
+            algorithm = pyjwt.get_unverified_header(token)["alg"]  # NOSONAR(S5659)
+        except (pyjwt.PyJWTError, KeyError):
+            return LoginHintTokenResult()
+        if algorithm in _HMAC_ALGORITHMS:
+            secret = await self._hmac_secret(client)
+            if secret is None:
+                return LoginHintTokenResult()
+            return _decode_hint(token, secret.encode("utf-8"), algorithms=_HMAC_ALGORITHMS)
+        try:
+            signing_key = await asyncio.to_thread(
+                _resolve_signing_key, token, client.jwks, client.jwks_uri
+            )
+        except (pyjwt.PyJWTError, KeyError, OSError, ValueError):
+            return LoginHintTokenResult()
+        if signing_key is None:
+            return LoginHintTokenResult()
+        return _decode_hint(token, signing_key, algorithms=[algorithm])
+
     async def _hmac_secret(self, client: Client) -> str | None:
         """Déchiffre le secret du client pour la vérification HMAC, sinon ``None``."""
         if self._secret_cipher is None or not client.client_secret_ciphertext:
@@ -100,7 +134,7 @@ def verify_hmac_assertion(
     token: str,
     *,
     secret: str,
-    audience: str,
+    audience: str | Sequence[str],
     issuer: str,
     require_iss_eq_sub: bool = True,
 ) -> dict[str, object] | None:
@@ -131,7 +165,7 @@ def verify_hmac_assertion(
 async def verify_jwks_assertion(
     token: str,
     *,
-    audience: str,
+    audience: str | Sequence[str],
     issuer: str,
     jwks: tuple[dict[str, object], ...] = (),
     jwks_uri: str = "",
@@ -198,7 +232,7 @@ def _decode(
     key: object,
     *,
     algorithms: tuple[str, ...] | list[str],
-    audience: str,
+    audience: str | Sequence[str],
     issuer: str,
     require_iss_eq_sub: bool,
 ) -> dict[str, object] | None:
@@ -219,3 +253,24 @@ def _decode(
     if not claims.get("sub"):
         return None
     return claims
+
+
+def _decode_hint(
+    token: str,
+    key: object,
+    *,
+    algorithms: tuple[str, ...] | list[str],
+) -> LoginHintTokenResult:
+    """Décode un hint JWT : signature seule (+ ``exp`` si présent, CIBA §7.1.1)."""
+    try:
+        claims = pyjwt.decode(
+            token,
+            key,  # type: ignore[arg-type]  # clé JWK (types-PyJWT ne couvre pas le cas client)
+            algorithms=algorithms,
+            options={"verify_aud": False, "verify_iss": False},
+        )
+    except pyjwt.ExpiredSignatureError:
+        return LoginHintTokenResult(expired=True)
+    except pyjwt.PyJWTError:
+        return LoginHintTokenResult()
+    return LoginHintTokenResult(claims=cast(dict[str, object], claims))

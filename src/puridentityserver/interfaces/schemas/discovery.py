@@ -30,6 +30,12 @@ class DiscoveryDocument(BaseModel):
     registration_endpoint: str | None = None
     device_authorization_endpoint: str | None = None
     pushed_authorization_request_endpoint: str | None = None
+    # CIBA (OIDC CIBA 1.0 §5.1) : absents (``None`` / vide) tant que
+    # ``ciba_enabled`` est désactivé — ``backchannel_authentication_endpoint``
+    # n'est publié que couplé aux modes livrés et à l'endpoint réel.
+    backchannel_authentication_endpoint: str | None = None
+    backchannel_token_delivery_modes_supported: list[str] = Field(default_factory=list)
+    backchannel_user_code_parameter_supported: bool | None = None
     request_object_signing_alg_values_supported: list[str] = Field(default_factory=list)
     request_parameter_supported: bool = False
     request_uri_parameter_supported: bool = False

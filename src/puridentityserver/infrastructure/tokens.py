@@ -159,17 +159,21 @@ class PyJWTTokenManager:
         *,
         token: str,
         issuer: str,
+        allow_expired: bool = False,
     ) -> dict[str, object] | None:
         """Valide la signature (JWKS), l'issuer et l'expiration d'un id_token.
 
         Attention : le claim ``aud`` n'est pas contrôlé ici — l'appelant
         (typicalement le RP-Initiated Logout) résout le ``aud`` vers le
         client afin de traiter un id_token d'un autre RP comme invalide
-        (OIDC Core 1.0 §5.2).
+        (OIDC Core 1.0 §5.2). ``allow_expired`` accepte un id_token échu
+        (usage ``id_token_hint``, §14).
         """
-        return await self._validate(token, issuer)
+        return await self._validate(token, issuer, allow_expired=allow_expired)
 
-    async def _validate(self, token: str, issuer: str) -> dict[str, object] | None:
+    async def _validate(
+        self, token: str, issuer: str, *, allow_expired: bool = False
+    ) -> dict[str, object] | None:
         """Décode et valide un jeton signé par le serveur (signature, iss, exp)."""
         try:
             # Le header (alg/kid) sert uniquement à choisir la clé de vérification ;
@@ -193,7 +197,7 @@ class PyJWTTokenManager:
                     public_key,
                     algorithms=[algorithm.value],
                     issuer=issuer,
-                    options={"verify_aud": False},
+                    options={"verify_aud": False, "verify_exp": not allow_expired},
                 ),
             )
         except pyjwt.PyJWTError:

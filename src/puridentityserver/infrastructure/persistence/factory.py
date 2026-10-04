@@ -18,6 +18,9 @@ from puridentityserver.interfaces.repositories.api_resource_repository import (
 from puridentityserver.interfaces.repositories.authorization_code_repository import (
     AuthorizationCodeRepository,
 )
+from puridentityserver.interfaces.repositories.backchannel_authentication_repository import (
+    BackchannelAuthenticationRepository,
+)
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 from puridentityserver.interfaces.repositories.consent_repository import ConsentRepository
 from puridentityserver.interfaces.repositories.device_authorization_repository import (
@@ -152,6 +155,25 @@ def build_device_authorization_repository(settings: Settings) -> DeviceAuthoriza
         )
 
         return SQLDeviceAuthorizationRepository(settings.storage_dsn)
+    raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")
+
+
+def build_backchannel_authentication_repository(
+    settings: Settings,
+) -> BackchannelAuthenticationRepository:
+    """Retourne le repository des demandes CIBA selon ``storage_type``."""
+    if settings.storage_type == "memory":
+        from puridentityserver.infrastructure.persistence.memory import (
+            backchannel_authentications,
+        )
+
+        return backchannel_authentications.InMemoryBackchannelAuthenticationRepository()
+    if settings.storage_type == "sql":
+        from puridentityserver.infrastructure.persistence.sql.backchannel_authentications import (
+            SQLBackchannelAuthenticationRepository,
+        )
+
+        return SQLBackchannelAuthenticationRepository(settings.storage_dsn)
     raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")
 
 

@@ -1,6 +1,6 @@
 """Conteneur des stores partagés et cycle de vie des stockages.
 
-``Stores`` regroupe les douze repositories de persistance du serveur,
+``Stores`` regroupe les treize repositories de persistance du serveur,
 construits une seule fois par ``build_stores`` depuis les ``Settings``.
 Le serveur ``full`` partage ces instances entre l'administration et le
 protocole ; les serveurs ``admin`` et ``protocol`` isolés les construisent
@@ -23,6 +23,7 @@ from puridentityserver.identity.config import apply_schema
 from puridentityserver.infrastructure.persistence.factory import (
     build_api_resource_repository,
     build_authorization_code_repository,
+    build_backchannel_authentication_repository,
     build_client_repository,
     build_consent_repository,
     build_device_authorization_repository,
@@ -40,6 +41,9 @@ from puridentityserver.interfaces.repositories.api_resource_repository import (
 )
 from puridentityserver.interfaces.repositories.authorization_code_repository import (
     AuthorizationCodeRepository,
+)
+from puridentityserver.interfaces.repositories.backchannel_authentication_repository import (
+    BackchannelAuthenticationRepository,
 )
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 from puridentityserver.interfaces.repositories.consent_repository import ConsentRepository
@@ -76,6 +80,7 @@ class Stores:
     revoked: RevokedTokenRepository
     refresh: RefreshTokenRepository
     device: DeviceAuthorizationRepository
+    backchannel: BackchannelAuthenticationRepository
     pushed: PushedAuthorizationRepository
     consent: ConsentRepository
     identity_resource: IdentityResourceRepository
@@ -84,7 +89,7 @@ class Stores:
 
 
 def build_stores(settings: Settings) -> Stores:
-    """Construit les douze repositories selon ``STORAGE_TYPE``/``STORAGE_DSN``."""
+    """Construit les treize repositories selon ``STORAGE_TYPE``/``STORAGE_DSN``."""
     return Stores(
         key_pair=build_key_pair_repository(settings),
         client=build_client_repository(settings),
@@ -93,6 +98,7 @@ def build_stores(settings: Settings) -> Stores:
         revoked=build_revoked_token_repository(settings),
         refresh=build_refresh_token_repository(settings),
         device=build_device_authorization_repository(settings),
+        backchannel=build_backchannel_authentication_repository(settings),
         pushed=build_pushed_authorization_repository(settings),
         consent=build_consent_repository(settings),
         identity_resource=build_identity_resource_repository(settings),
@@ -127,6 +133,7 @@ async def initialise_protocol_stores(stores: Stores, settings: Settings) -> None
     await stores.revoked.initialise()
     await stores.refresh.initialise()
     await stores.device.initialise()
+    await stores.backchannel.initialise()
     await stores.pushed.initialise()
     await stores.consent.initialise()
     await stores.dpop_replay.initialise()
@@ -149,6 +156,7 @@ async def close_protocol_stores(stores: Stores) -> None:
     await stores.revoked.close()
     await stores.refresh.close()
     await stores.device.close()
+    await stores.backchannel.close()
     await stores.pushed.close()
     await stores.consent.close()
     await stores.dpop_replay.close()

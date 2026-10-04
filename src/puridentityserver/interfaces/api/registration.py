@@ -165,6 +165,11 @@ def _registration_json(result: ClientRegistration) -> str:
             "backchannel_logout_session_required",
             result.backchannel_logout_session_required,
         ),
+        ("backchannel_token_delivery_mode", result.backchannel_token_delivery_mode),
+        (
+            "backchannel_client_notification_endpoint",
+            result.backchannel_client_notification_endpoint,
+        ),
     )
     data.update({name: value for name, value in optional_fields if value})
     return json.dumps(data, separators=(",", ":"))

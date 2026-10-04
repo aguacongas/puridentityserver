@@ -24,6 +24,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from puridentityserver.application.authorize import AuthorizeConfig, AuthorizeUseCase
+from puridentityserver.application.backchannel_authorize import (
+    BackchannelAuthenticationConfig,
+    BackchannelAuthenticationUseCase,
+    CibaApprovalUseCase,
+)
 from puridentityserver.application.claim_authorizer import BearerClaimAuthorizer, ClaimRule
 from puridentityserver.application.consent import ConsentUseCase
 from puridentityserver.application.device_authorize import (
@@ -53,7 +58,10 @@ from puridentityserver.identity.config import (
     register_router,
     seed_users,
 )
-from puridentityserver.infrastructure.backchannel import HTTPBackchannelNotifier
+from puridentityserver.infrastructure.backchannel import (
+    HTTPBackchannelNotifier,
+    HTTPCibaPingNotifier,
+)
 from puridentityserver.infrastructure.bearer import build_bearer_verifier
 from puridentityserver.infrastructure.claims import UserStoreClaimsProvider
 from puridentityserver.infrastructure.client_assertions import PyJWTClientAssertionVerifier
@@ -77,6 +85,10 @@ from puridentityserver.infrastructure.secrets import AsymmetricSecretCipher, loa
 from puridentityserver.infrastructure.settings import Settings
 from puridentityserver.infrastructure.tokens import PyJWTTokenManager
 from puridentityserver.interfaces.api.authorize import authorize_router
+from puridentityserver.interfaces.api.backchannel_authorize import (
+    backchannel_authorization_router,
+    ciba_approval_router,
+)
 from puridentityserver.interfaces.api.consent import consent_router
 from puridentityserver.interfaces.api.cors import DynamicCORSMiddleware
 from puridentityserver.interfaces.api.device_authorize import device_authorization_router
@@ -170,6 +182,7 @@ class ProtocolDependencies:
             base_url=settings.base_url,
             registration_enabled=settings.registration_enabled,
             par_enabled=settings.par_enabled,
+            ciba_enabled=settings.ciba_enabled,
             signing_algorithms=settings.jwks_algorithms,
             encryption_algorithms=settings.jwks_encryption_algorithms,
             encryption_methods=settings.jwks_encryption_methods,
@@ -245,6 +258,7 @@ class ProtocolDependencies:
             self.token_manager,
             stores.refresh,
             stores.device,
+            stores.backchannel,
             self.scope_registry,
             self.client_assertions,
             claims_provider=self.claims_provider,
@@ -261,6 +275,26 @@ class ProtocolDependencies:
             self.readers.client,
             stores.device,
             self.scope_registry,
+        )
+        protocol_base_url = (settings.base_url or settings.issuer).rstrip("/")
+        self.backchannel_authorize_usecase = BackchannelAuthenticationUseCase(
+            BackchannelAuthenticationConfig(
+                issuer=settings.issuer,
+                base_url=settings.base_url,
+                ttl_seconds=settings.ciba_ttl_seconds,
+                interval_seconds=settings.ciba_interval_seconds,
+                token_endpoint=f"{protocol_base_url}/token",
+                bc_authorize_endpoint=f"{protocol_base_url}/bc-authorize",
+            ),
+            self.readers.client,
+            self.readers.user,
+            stores.backchannel,
+            self.scope_registry,
+            client_assertions=self.client_assertions,
+            token_manager=self.token_manager,
+        )
+        self.ciba_approval_usecase = CibaApprovalUseCase(
+            stores.backchannel, ping_notifier=HTTPCibaPingNotifier()
         )
         self.userinfo_usecase = UserInfoUseCase(
             UserInfoConfig(issuer=settings.issuer),
@@ -407,6 +441,10 @@ class ProtocolDependencies:
         app.include_router(token_router(self.token_usecase))
         app.include_router(device_authorization_router(self.device_usecase))
         app.include_router(device_page_router(self.device_usecase))
+        if self.settings.ciba_enabled:
+            app.include_router(backchannel_authorization_router(self.backchannel_authorize_usecase))
+        if self.settings.ciba_approval_enabled:
+            app.include_router(ciba_approval_router(self.ciba_approval_usecase))
         app.include_router(userinfo_router(self.userinfo_usecase))
         app.include_router(introspect_router(self.introspect_usecase))
         app.include_router(revocation_router(self.revocation_usecase))

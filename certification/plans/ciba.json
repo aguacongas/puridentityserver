@@ -1,0 +1,18 @@
+{
+  "alias": "puridentityserver-ciba",
+  "description": "PurIdentityServer - FAPI CIBA OP certification (CI, witness)",
+  "server": {
+    "discoveryUrl": "{OPURL}/.well-known/openid-configuration"
+  },
+  "client": {
+    "client_name": "PurIdentityServer conformance CIBA",
+    "scope": "openid profile",
+    "hint_type": "login_hint",
+    "hint_value": "alice.martin@example.com"
+  },
+  "client2": {
+    "client_name": "PurIdentityServer conformance CIBA second",
+    "scope": "openid profile"
+  },
+  "automated_ciba_approval_url": "{OPURL}/ciba/approve?token={auth_req_id}&type={action}"
+}

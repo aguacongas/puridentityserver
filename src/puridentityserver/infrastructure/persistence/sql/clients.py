@@ -75,6 +75,12 @@ class ClientRow(PersistenceBase):
     backchannel_logout_session_required: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("0")
     )
+    backchannel_token_delivery_mode: Mapped[str] = mapped_column(
+        String(16), default="", server_default=text("''")
+    )
+    backchannel_client_notification_endpoint: Mapped[str] = mapped_column(
+        String(512), default="", server_default=text("''")
+    )
     registration_access_token_hash: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -173,6 +179,8 @@ def _to_row(client: Client) -> ClientRow:
         frontchannel_logout_session_required=client.frontchannel_logout_session_required,
         backchannel_logout_uri=client.backchannel_logout_uri,
         backchannel_logout_session_required=client.backchannel_logout_session_required,
+        backchannel_token_delivery_mode=client.backchannel_token_delivery_mode,
+        backchannel_client_notification_endpoint=client.backchannel_client_notification_endpoint,
         registration_access_token_hash=client.registration_access_token_hash,
         created_at=client.created_at,
         is_active=client.is_active,
@@ -233,6 +241,10 @@ def _from_row(row: ClientRow) -> Client:
         frontchannel_logout_session_required=row.frontchannel_logout_session_required,
         backchannel_logout_uri=row.backchannel_logout_uri or "",
         backchannel_logout_session_required=row.backchannel_logout_session_required,
+        backchannel_token_delivery_mode=row.backchannel_token_delivery_mode or "",
+        backchannel_client_notification_endpoint=(
+            row.backchannel_client_notification_endpoint or ""
+        ),
         registration_access_token_hash=row.registration_access_token_hash or "",
         created_at=created_at,
         is_active=row.is_active,

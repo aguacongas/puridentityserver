@@ -20,8 +20,8 @@ on:
     inputs:
       plan:
         # Permet un cycle de diagnostic rapide : ne lancer qu'un seul plan au
-        # lieu des trois (~30 min au lieu de ~2 h 30).
-        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid)"
+        # lieu des quatre (~30 min au lieu de ~3 h).
+        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + CIBA)"
         type: choice
         required: false
         default: all
@@ -30,6 +30,7 @@ on:
           - basic
           - implicit
           - hybrid
+          - ciba
   schedule:
     - cron: "0 2 * * MON"
   # Déclenchement UNIQUEMENT au merge sur main : aucune exécution sur les PR
@@ -260,6 +261,10 @@ jobs:
             "oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|basic"
             "oidcc-implicit-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|implicit"
             "oidcc-hybrid-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|hybrid"
+            # CIBA : plan FAPI-CIBA-ID1 en mode witness (poll + Basic ne sont
+            # pas des variants valides pour ce plan : private_key_jwt exigé,
+            # JAR signé hors périmètre — issues dédiées).
+            "fapi-ciba-id1-test-plan[client_registration=dynamic_client][client_auth_type=private_key_jwt][ciba_mode=poll][fapi_ciba_profile=plain_fapi]|ciba"
           )
           if [ "$PLAN_FILTER" != "all" ]; then
             selected=()
