@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Annotated
 
 from fastapi import APIRouter, Form, Request, Response
 from starlette.datastructures import FormData
@@ -24,7 +25,7 @@ def token_router(usecase: TokenUseCase) -> APIRouter:
     router = APIRouter(tags=["token"])
 
     @router.post("/token", summary="Endpoint de jetons OAuth 2.0")
-    async def token(request: Request, grant_type: str = Form(...)) -> Response:
+    async def token(request: Request, grant_type: Annotated[str, Form(...)]) -> Response:
         dpop_proof, dpop_error = extract_dpop_proof(request.headers)
         if dpop_error is not None:
             error = TokenError(error="invalid_request", error_description=dpop_error)
