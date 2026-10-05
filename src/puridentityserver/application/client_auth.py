@@ -27,6 +27,7 @@ from puridentityserver.interfaces.domain.client_assertions import (
 from puridentityserver.interfaces.repositories.readers import ClientReader
 
 CLIENT_UNKNOWN_ERROR = "Client inconnu ou désactivé"
+ASSERTION_INVALID_ERROR = "Assertion client invalide ou expirée"
 
 
 def verify_client_secret(client: Client, secret: str) -> bool:
@@ -110,11 +111,11 @@ async def _authenticate_assertion(
 ) -> str | None:
     """Vérifie une ``client_assertion`` (RFC 7523 §2.2) ; ``None`` si absente/invalide."""
     if assertions is None:
-        return "Assertion client invalide ou expirée"
+        return ASSERTION_INVALID_ERROR
     if assertion_type and assertion_type != CLIENT_ASSERTION_TYPE_URN:
-        return "Assertion client invalide ou expirée"
+        return ASSERTION_INVALID_ERROR
     if not assertion:
-        return "Assertion client invalide ou expirée"
+        return ASSERTION_INVALID_ERROR
     claims = await assertions.verify(
         token=assertion,
         client=client,
@@ -122,7 +123,7 @@ async def _authenticate_assertion(
         require_iss_eq_sub=True,
     )
     if claims is None:
-        return "Assertion client invalide ou expirée"
+        return ASSERTION_INVALID_ERROR
     return None
 
 

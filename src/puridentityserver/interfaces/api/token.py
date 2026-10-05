@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from fastapi import APIRouter, Form, Request, Response
+from starlette.datastructures import FormData
 
 from puridentityserver.application.token import (
     TokenError,
@@ -23,45 +24,29 @@ def token_router(usecase: TokenUseCase) -> APIRouter:
     router = APIRouter(tags=["token"])
 
     @router.post("/token", summary="Endpoint de jetons OAuth 2.0")
-    async def token(
-        request: Request,
-        grant_type: str = Form(...),
-        code: str = Form(default=""),
-        redirect_uri: str = Form(default=""),
-        client_id: str = Form(default=""),
-        client_secret: str = Form(default=""),
-        code_verifier: str = Form(default=""),
-        refresh_token: str = Form(default=""),
-        scope: str = Form(default=""),
-        device_code: str = Form(default=""),
-        auth_req_id: str = Form(default=""),
-        client_assertion_type: str = Form(default=""),
-        client_assertion: str = Form(default=""),
-        assertion: str = Form(default=""),
-    ) -> Response:
+    async def token(request: Request, grant_type: str = Form(...)) -> Response:
         dpop_proof, dpop_error = extract_dpop_proof(request.headers)
         if dpop_error is not None:
             error = TokenError(error="invalid_request", error_description=dpop_error)
             return _error_response(error)
         header_id, header_secret = parse_basic_auth(request)
-        if not client_id:
-            client_id = header_id
-        if not client_secret:
-            client_secret = header_secret
+        form = await request.form()
+        client_id = _form_field(form, "client_id") or header_id
+        client_secret = _form_field(form, "client_secret") or header_secret
         token_request = TokenRequest(
             grant_type=grant_type,
-            code=code,
-            redirect_uri=redirect_uri,
+            code=_form_field(form, "code"),
+            redirect_uri=_form_field(form, "redirect_uri"),
             client_id=client_id,
             client_secret=client_secret,
-            code_verifier=code_verifier,
-            refresh_token=refresh_token,
-            scope=scope,
-            device_code=device_code,
-            auth_req_id=auth_req_id,
-            client_assertion_type=client_assertion_type,
-            client_assertion=client_assertion,
-            assertion=assertion,
+            code_verifier=_form_field(form, "code_verifier"),
+            refresh_token=_form_field(form, "refresh_token"),
+            scope=_form_field(form, "scope"),
+            device_code=_form_field(form, "device_code"),
+            auth_req_id=_form_field(form, "auth_req_id"),
+            client_assertion_type=_form_field(form, "client_assertion_type"),
+            client_assertion=_form_field(form, "client_assertion"),
+            assertion=_form_field(form, "assertion"),
             tls_certificate=extract_client_certificate(request),
             dpop_proof=dpop_proof,
         )
@@ -71,6 +56,12 @@ def token_router(usecase: TokenUseCase) -> APIRouter:
         return _success_response(result)
 
     return router
+
+
+def _form_field(form: FormData, name: str) -> str:
+    """Valeur texte d'un champ du corps form (absent ou non texte → ``""``)."""
+    value = form.get(name)
+    return str(value) if isinstance(value, str) else ""
 
 
 def _success_response(result: TokenResponse) -> Response:

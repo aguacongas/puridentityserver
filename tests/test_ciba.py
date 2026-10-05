@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar, TypeVar
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -767,11 +768,11 @@ class _PingCaptureHandler(BaseHTTPRequestHandler):
 class TestCibaPingNotifier:
     """Tests de HTTPCibaPingNotifier contre un serveur local (CIBA §10.2)."""
 
-    def test_posts_json_with_bearer_token(self) -> None:
+    def test_posts_json_with_bearer_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from puridentityserver.infrastructure.backchannel import HTTPCibaPingNotifier
 
-        _PingCaptureHandler.received = []
-        _PingCaptureHandler.redirect = False
+        monkeypatch.setattr(_PingCaptureHandler, "received", [])
+        monkeypatch.setattr(_PingCaptureHandler, "redirect", False)
         server = ThreadingHTTPServer(("127.0.0.1", 0), _PingCaptureHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -793,11 +794,11 @@ class TestCibaPingNotifier:
         assert authorization == "Bearer ntok-1"
         assert body == b'{"auth_req_id":"req-abc"}'
 
-    def test_single_attempt_on_redirect(self) -> None:
+    def test_single_attempt_on_redirect(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from puridentityserver.infrastructure.backchannel import HTTPCibaPingNotifier
 
-        _PingCaptureHandler.received = []
-        _PingCaptureHandler.redirect = True
+        monkeypatch.setattr(_PingCaptureHandler, "received", [])
+        monkeypatch.setattr(_PingCaptureHandler, "redirect", True)
         server = ThreadingHTTPServer(("127.0.0.1", 0), _PingCaptureHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
