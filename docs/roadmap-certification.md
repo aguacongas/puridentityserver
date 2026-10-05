@@ -32,7 +32,7 @@ Ordre d'implémentation conseillé : **#44 → #45 → #46 → #47** (terminés 
 | # | Feature | Référence |
 |---|---|---|
 | [#49](https://github.com/aguacongas/puridentityserver/issues/49) ✅ | **DPoP** (RFC 9449) — proof-of-possession du token | `cnf.jkt` des access_tokens + `token_type: DPoP` (§5.1), preuve exigée par client (`require_dpop`, §5.2), anti-replay `jti` (§11), `/userinfo` scheme `DPoP` (§7), `dpop_jkt` à l'authorization + PAR (§10), annonce `dpop_signing_alg_values_supported` — livré avec sample DoD `samples/dpop-client/` |
-| [#50](https://github.com/aguacongas/puridentityserver/issues/50) | **CIBA** (Client-Initiated Backchannel Authentication) — modes poll/ping | OIDC CIBA |
+| [#50](https://github.com/aguacongas/puridentityserver/issues/50) 🎯 | **CIBA** (Client-Initiated Backchannel Authentication) — modes poll/ping | OIDC CIBA 1.0 : `POST /bc-authorize` (hints `login_hint`/`login_hint_token`/`id_token_hint`), grant `urn:openid:params:grant-type:ciba` (`authorization_pending`/`slow_down`/`access_denied`), approbation démo `POST /ciba/approve` (flag `ciba_approval_enabled`), notification `ping` (POST JSON, 1 seul essai), métadonnées discovery + DCR (`backchannel_token_delivery_modes_supported`) — implémenté, PR en cours ; sample DoD `samples/ciba-client/` ; plan `fapi-ciba-id1-test-plan` en witness, découplages [#100](https://github.com/aguacongas/puridentityserver/issues/100) (JAR signé) et [#101](https://github.com/aguacongas/puridentityserver/issues/101) (Resource Indicators RFC 8707 + resource servers) |
 
 ## Certification — automatisation (P2, bouteille finale)
 

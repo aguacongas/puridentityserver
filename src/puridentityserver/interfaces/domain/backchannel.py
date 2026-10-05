@@ -26,3 +26,21 @@ class BackchannelNotifier(Protocol):
         l'utilisateur est déjà effective.
         """
         ...
+
+
+class CibaPingNotifier(Protocol):
+    """Notifie par POST JSON le ``notification endpoint`` d'un client (CIBA §10.2).
+
+    Un seul envoi est tenté, sans redirection ni reprise : le résultat de
+    la demande reste récupérable par poll (mode ``ping`` inclus).
+    """
+
+    async def notify_ping(
+        self, *, url: str, client_notification_token: str, auth_req_id: str
+    ) -> None:
+        """POST ``{"auth_req_id": ...}`` avec ``Authorization: Bearer``.
+
+        Ignore silencieusement les échecs réseau ou HTTP : la
+        notification ne conditionne jamais la décision déjà appliquée.
+        """
+        ...

@@ -1,6 +1,6 @@
-"""Cas d'utilisation : endpoint de jetons (RFC 6749, RFC 7636, RFC 7523, RFC 8628).
+"""Cas d'utilisation : endpoint de jetons (RFC 6749, RFC 7636, RFC 7523, RFC 8628, CIBA).
 
-Traite cinq grant types :
+Traite six grant types :
 
 - ``authorization_code`` (RFC 6749 §4.1.3 + RFC 7636) : échange le code
   d'autorisation reçu sur ``/authorize`` ; le client confidentiel doit
@@ -24,6 +24,10 @@ Traite cinq grant types :
   ``slow_down`` si le client pole trop vite) ; une fois approuvée, la
   session est consommée et l'access token (id/refresh selon les scopes)
   est émis pour le ``subject`` de l'utilisateur.
+- ``urn:openid:params:grant-type:ciba`` (OIDC CIBA 1.0 §10.1) : poll du
+  client sur sa demande d'authentification backchannel — mêmes états
+  ``authorization_pending`` / ``slow_down`` / ``access_denied`` /
+  ``expired_token`` (§11), ``acr`` repris dans l'``id_token``.
 
 L'authentification du client suit sa ``token_endpoint_auth_method`` :
 ``client_secret_basic`` / ``client_secret_post`` (secret en clair),
@@ -49,7 +53,7 @@ from puridentityserver.application.claims_request import (
 )
 from puridentityserver.application.client_auth import (
     CLIENT_UNKNOWN_ERROR,
-    verify_client_secret,
+    authenticate_client,
 )
 from puridentityserver.application.dpop import (
     DpopBinding,
@@ -60,7 +64,10 @@ from puridentityserver.application.id_token_encryption import encrypt_id_token_f
 from puridentityserver.application.id_token_material import resolve_id_token_material
 from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.domain.authorization import (
+    CIBA_GRANT_TYPE,
     AuthorizationCode,
+    BackchannelAuthenticationRequest,
+    BackchannelAuthenticationStatus,
     Client,
     ClientCertificate,
     ClientType,
@@ -68,14 +75,11 @@ from puridentityserver.domain.authorization import (
     DeviceAuthorizationStatus,
     RefreshToken,
     Scope,
-    TokenEndpointAuthMethod,
-    der_certificate_hash,
     resolve_lifetime_seconds,
 )
 from puridentityserver.domain.jwks import JWTAlgorithm
 from puridentityserver.domain.revocation import RevokedToken, token_hash
 from puridentityserver.interfaces.domain.client_assertions import (
-    CLIENT_ASSERTION_TYPE_URN,
     JWT_BEARER_GRANT_TYPE_URN,
     ClientAssertionVerifier,
 )
@@ -88,6 +92,9 @@ from puridentityserver.interfaces.domain.tokens import (
 from puridentityserver.interfaces.domain.userinfo import ClaimsProvider
 from puridentityserver.interfaces.repositories.authorization_code_repository import (
     AuthorizationCodeRepository,
+)
+from puridentityserver.interfaces.repositories.backchannel_authentication_repository import (
+    BackchannelAuthenticationRepository,
 )
 from puridentityserver.interfaces.repositories.device_authorization_repository import (
     DeviceAuthorizationRepository,
@@ -126,6 +133,7 @@ class TokenRequest:
     code_verifier: str = ""
     refresh_token: str = ""
     device_code: str = ""
+    auth_req_id: str = ""
     scope: str = ""
     client_assertion_type: str = ""
     client_assertion: str = ""
@@ -173,6 +181,7 @@ class TokenUseCase:
         token_manager: TokenManager,
         refresh_tokens: RefreshTokenRepository,
         device_codes: DeviceAuthorizationRepository | None = None,
+        backchannel_auth: BackchannelAuthenticationRepository | None = None,
         scope_registry: ScopeRegistry | None = None,
         client_assertions: ClientAssertionVerifier | None = None,
         *,
@@ -198,6 +207,7 @@ class TokenUseCase:
         self._token_manager = token_manager
         self._refresh_tokens = refresh_tokens
         self._device_codes = device_codes
+        self._backchannel_auth = backchannel_auth
         self._scope_registry = scope_registry
         self._client_assertions = client_assertions
         self._claims_provider = claims_provider
@@ -216,6 +226,8 @@ class TokenUseCase:
             return await self._jwt_bearer(request)
         if request.grant_type == "urn:ietf:params:oauth:grant-type:device_code":
             return await self._device_code(request)
+        if request.grant_type == CIBA_GRANT_TYPE:
+            return await self._ciba(request)
         return self._error("unsupported_grant_type")
 
     async def _exchange_code(self, request: TokenRequest) -> TokenResponse | TokenError:
@@ -621,6 +633,126 @@ class TokenUseCase:
             dpop_bound=binding.bound,
         )
 
+    async def _ciba(self, request: TokenRequest) -> TokenResponse | TokenError:
+        """Poll la demande CIBA et émet les jetons une fois approuvée (CIBA §10.1).
+
+        Tant que l'utilisateur n'a pas tranché, la réponse est
+        ``authorization_pending`` ; un poll plus rapide que l'``interval``
+        retourne ``slow_down`` et augmente l'intervalle. Une fois
+        ``APPROVED``, la demande est consommée et les jetons sont émis pour
+        le ``subject`` résolu à l'acceptation — ``DENIED``, expiration et
+        ``auth_req_id`` inconnu/d'autre client produisent respectivement
+        ``access_denied``, ``expired_token`` et ``invalid_grant`` (§11).
+        """
+        if self._backchannel_auth is None:
+            return self._error("unsupported_grant_type")
+        if not request.auth_req_id:
+            return self._error("invalid_grant", "Paramètre auth_req_id manquant")
+
+        client = await self._clients.find_by_id(request.client_id)
+        if client is None or not client.is_active:
+            return self._error("invalid_client", CLIENT_UNKNOWN_ERROR)
+
+        authenticated = await self._authenticate_client(client, request)
+        if authenticated is not None:
+            return authenticated
+
+        binding = await self._evaluate_dpop(client, request)
+        if isinstance(binding, TokenError):
+            return binding
+
+        stored = await self._load_ciba_session(request)
+        if isinstance(stored, TokenError):
+            return stored
+
+        now = datetime.now(timezone.utc)
+        if stored.status == BackchannelAuthenticationStatus.APPROVED:
+            return await self._ciba_approved_flow(client, stored, now, binding)
+        return await self._ciba_pending_response(stored, now)
+
+    async def _load_ciba_session(
+        self, request: TokenRequest
+    ) -> BackchannelAuthenticationRequest | TokenError:
+        """Charge la demande CIBA : inconnue/autre client, expirée, refusée ou push.
+
+        L'expiration détruit la demande (CIBA §11), le refus de
+        l'utilisateur vaut ``access_denied`` et un client enregistré en
+        mode push ne peut rien retirer du token endpoint (``unauthorized_client``).
+        """
+        if self._backchannel_auth is None:
+            return self._error("unsupported_grant_type")
+        stored = await self._backchannel_auth.find_by_auth_req_id_hash(
+            token_hash(request.auth_req_id)
+        )
+        if stored is None or stored.client_id != request.client_id:
+            return self._error("invalid_grant", "auth_req_id invalide ou d'un autre client")
+        if stored.expires_at < datetime.now(timezone.utc):
+            await self._backchannel_auth.delete(stored.auth_req_id_hash)
+            return self._error("expired_token", "auth_req_id expiré")
+        if stored.delivery_mode == "push":
+            return self._error(
+                "unauthorized_client",
+                "Client enregistré en mode push : résultat non délivré sur /token (CIBA §11)",
+            )
+        if stored.status == BackchannelAuthenticationStatus.DENIED:
+            return self._error("access_denied", "Demande refusée par l'utilisateur")
+        return stored
+
+    async def _ciba_pending_response(
+        self, stored: BackchannelAuthenticationRequest, now: datetime
+    ) -> TokenResponse | TokenError:
+        """Réponse d'un poll tant que l'utilisateur n'a pas tranché (CIBA §11)."""
+        if self._backchannel_auth is None:
+            return self._error("unsupported_grant_type")
+        if (
+            stored.last_polled_at is not None
+            and (now - stored.last_polled_at).total_seconds() < stored.interval
+        ):
+            await self._backchannel_auth.save(
+                replace(stored, interval=stored.interval + 5, last_polled_at=now)
+            )
+            return self._error("slow_down", "Polling trop rapide : augmentez l'intervalle")
+        await self._backchannel_auth.save(replace(stored, last_polled_at=now))
+        return self._error("authorization_pending", "En attente de l'utilisateur")
+
+    async def _ciba_approved_flow(
+        self,
+        client: Client,
+        stored: BackchannelAuthenticationRequest,
+        now: datetime,
+        binding: DpopBinding,
+    ) -> TokenResponse | TokenError:
+        """Consomme la demande CIBA approuvée et émet ses jetons (CIBA §10.1.1)."""
+        if self._backchannel_auth is None:
+            return self._error("unsupported_grant_type")
+        await self._backchannel_auth.delete(stored.auth_req_id_hash)
+        dpop_jkt = binding.jkt if binding.bound else ""
+        refresh_token = ""
+        if Scope.OFFLINE_ACCESS in stored.scopes:
+            refresh_token = await self._issue_refresh_token(
+                client, stored.subject, stored.scopes, now, dpop_jkt=dpop_jkt
+            )
+        issued = await self._issue_tokens(
+            client,
+            stored.subject,
+            stored.scopes,
+            nonce="",
+            now=now,
+            acr=stored.acr,
+            dpop_jkt=dpop_jkt,
+        )
+        if isinstance(issued, TokenError):
+            return issued
+        id_token, access_token, token_ttl = issued
+        return self._success(
+            id_token,
+            access_token,
+            token_ttl,
+            stored.scopes,
+            refresh_token,
+            dpop_bound=binding.bound,
+        )
+
     async def _effective_scope(
         self, client: Client, requested: str, *, default: frozenset[Scope]
     ) -> frozenset[Scope] | TokenError:
@@ -684,72 +816,19 @@ class TokenUseCase:
     async def _authenticate_client(
         self, client: Client, request: TokenRequest
     ) -> TokenError | None:
-        """Authentifie le client selon sa ``token_endpoint_auth_method``."""
-        method = client.effective_auth_method
-        if method in (
-            TokenEndpointAuthMethod.CLIENT_SECRET_BASIC,
-            TokenEndpointAuthMethod.CLIENT_SECRET_POST,
-        ):
-            if not verify_client_secret(client, request.client_secret):
-                return self._error("invalid_client", "Secret client invalide")
-            return None
-        if method in (
-            TokenEndpointAuthMethod.CLIENT_SECRET_JWT,
-            TokenEndpointAuthMethod.PRIVATE_KEY_JWT,
-        ):
-            if not await self._verify_client_assertion(client, request):
-                return self._error("invalid_client", "Assertion client invalide ou expirée")
-            return None
-        if method in (
-            TokenEndpointAuthMethod.TLS_CLIENT_AUTH,
-            TokenEndpointAuthMethod.SELF_SIGNED_TLS_CLIENT_AUTH,
-        ):
-            if not self._verify_tls_client(client, request.tls_certificate):
-                return self._error("invalid_client", "Certificat client invalide")
-            return None
-        if method is TokenEndpointAuthMethod.NONE:
-            return None
-        return self._error("invalid_client", "Méthode d'authentification client inconnue")
-
-    async def _verify_client_assertion(self, client: Client, request: TokenRequest) -> bool:
-        """Vérifie une ``client_assertion`` (RFC 7523 §2.2) : signature + iss==sub + aud."""
-        if self._client_assertions is None:
-            return False
-        if (
-            request.client_assertion_type
-            and request.client_assertion_type != CLIENT_ASSERTION_TYPE_URN
-        ):
-            return False
-        if not request.client_assertion:
-            return False
-        claims = await self._client_assertions.verify(
-            token=request.client_assertion,
-            client=client,
-            audience=self._token_endpoint(),
-            require_iss_eq_sub=True,
+        """Authentifie le client selon sa ``token_endpoint_auth_method`` (RFC 6749 §2.3)."""
+        detail = await authenticate_client(
+            client,
+            client_secret=request.client_secret,
+            assertions=self._client_assertions,
+            assertion_type=request.client_assertion_type,
+            assertion=request.client_assertion,
+            assertion_audience=self._token_endpoint(),
+            tls_certificate=request.tls_certificate,
         )
-        return claims is not None
-
-    @staticmethod
-    def _verify_tls_client(client: Client, presented: ClientCertificate | None) -> bool:
-        """Vérifie le certificat présenté contre le lien enregistré (RFC 8705)."""
-        if presented is None:
-            return False
-        if (
-            client.effective_auth_method is TokenEndpointAuthMethod.SELF_SIGNED_TLS_CLIENT_AUTH
-            and not presented.is_self_signed
-        ):
-            return False
-        if client.tls_client_certificate_hash:
-            return (
-                presented.der is not None
-                and der_certificate_hash(presented.der) == client.tls_client_certificate_hash
-            )
-        if client.tls_client_auth_subject_dn:
-            return bool(presented.subject_dn) and (
-                presented.subject_dn == client.tls_client_auth_subject_dn
-            )
-        return False
+        if detail is None:
+            return None
+        return self._error("invalid_client", detail)
 
     def _token_endpoint(self) -> str:
         """URL du token endpoint, valeur de ``aud`` attendue des assertions."""

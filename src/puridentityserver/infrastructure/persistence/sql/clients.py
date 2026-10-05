@@ -75,6 +75,12 @@ class ClientRow(PersistenceBase):
     backchannel_logout_session_required: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("0")
     )
+    backchannel_token_delivery_mode: Mapped[str] = mapped_column(
+        String(16), default="", server_default=text("''")
+    )
+    backchannel_client_notification_endpoint: Mapped[str] = mapped_column(
+        String(512), default="", server_default=text("''")
+    )
     registration_access_token_hash: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -173,6 +179,8 @@ def _to_row(client: Client) -> ClientRow:
         frontchannel_logout_session_required=client.frontchannel_logout_session_required,
         backchannel_logout_uri=client.backchannel_logout_uri,
         backchannel_logout_session_required=client.backchannel_logout_session_required,
+        backchannel_token_delivery_mode=client.backchannel_token_delivery_mode,
+        backchannel_client_notification_endpoint=client.backchannel_client_notification_endpoint,
         registration_access_token_hash=client.registration_access_token_hash,
         created_at=client.created_at,
         is_active=client.is_active,
@@ -203,11 +211,25 @@ def _cors_origins(row: ClientRow) -> frozenset[str]:
     return client.cors_allowed_origins()
 
 
+def _text(value: str | None) -> str:
+    """Texte optionnel d'une colonne (``None`` → ``""``)."""
+    return value or ""
+
+
+def _utc(value: datetime) -> datetime:
+    """Horodatage naïf interprété en UTC (colonnes SQLite sans fuseau)."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _auth_method(value: str | None) -> TokenEndpointAuthMethod | None:
+    """Méthode d'authentification de domaine, ``None`` si colonne vide."""
+    return TokenEndpointAuthMethod(value) if value else None
+
+
 def _from_row(row: ClientRow) -> Client:
     """Reconstruit un Client domaine depuis une ligne persistée."""
-    created_at = row.created_at
-    if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)
     return Client(
         client_id=row.client_id,
         redirect_uris=frozenset(row.redirect_uris),
@@ -216,25 +238,25 @@ def _from_row(row: ClientRow) -> Client:
         scopes=frozenset(Scope(value) for value in row.scopes),
         client_type=ClientType(row.client_type),
         client_secret_hash=row.client_secret_hash,
-        client_secret_ciphertext=row.client_secret_ciphertext or "",
-        token_endpoint_auth_method=(
-            TokenEndpointAuthMethod(row.token_endpoint_auth_method)
-            if row.token_endpoint_auth_method
-            else None
-        ),
-        jwks_uri=row.jwks_uri or "",
+        client_secret_ciphertext=_text(row.client_secret_ciphertext),
+        token_endpoint_auth_method=_auth_method(row.token_endpoint_auth_method),
+        jwks_uri=_text(row.jwks_uri),
         jwks=tuple(dict(key) for key in (row.jwks or ())),
-        tls_client_auth_subject_dn=row.tls_client_auth_subject_dn or "",
-        tls_client_certificate_hash=row.tls_client_certificate_hash or "",
-        id_token_signed_response_alg=row.id_token_signed_response_alg or "",
-        id_token_encrypted_response_alg=row.id_token_encrypted_response_alg or "",
-        id_token_encrypted_response_enc=row.id_token_encrypted_response_enc or "",
-        frontchannel_logout_uri=row.frontchannel_logout_uri or "",
+        tls_client_auth_subject_dn=_text(row.tls_client_auth_subject_dn),
+        tls_client_certificate_hash=_text(row.tls_client_certificate_hash),
+        id_token_signed_response_alg=_text(row.id_token_signed_response_alg),
+        id_token_encrypted_response_alg=_text(row.id_token_encrypted_response_alg),
+        id_token_encrypted_response_enc=_text(row.id_token_encrypted_response_enc),
+        frontchannel_logout_uri=_text(row.frontchannel_logout_uri),
         frontchannel_logout_session_required=row.frontchannel_logout_session_required,
-        backchannel_logout_uri=row.backchannel_logout_uri or "",
+        backchannel_logout_uri=_text(row.backchannel_logout_uri),
         backchannel_logout_session_required=row.backchannel_logout_session_required,
-        registration_access_token_hash=row.registration_access_token_hash or "",
-        created_at=created_at,
+        backchannel_token_delivery_mode=_text(row.backchannel_token_delivery_mode),
+        backchannel_client_notification_endpoint=_text(
+            row.backchannel_client_notification_endpoint
+        ),
+        registration_access_token_hash=_text(row.registration_access_token_hash),
+        created_at=_utc(row.created_at),
         is_active=row.is_active,
         session_lifetime_seconds=row.session_lifetime_seconds,
         access_token_lifetime_seconds=row.access_token_lifetime_seconds,

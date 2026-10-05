@@ -36,6 +36,7 @@ class DiscoveryConfig:
     base_url: str = ""
     registration_enabled: bool = False
     par_enabled: bool = True
+    ciba_enabled: bool = False
     signing_algorithms: tuple[str, ...] = tuple(
         algorithm.value for algorithm in ALL_SIGNING_ALGORITHMS
     )
@@ -114,6 +115,18 @@ class DiscoveryUseCase:
             metadata["registration_endpoint"] = f"{base}/register"
         if self._config.par_enabled:
             metadata["pushed_authorization_request_endpoint"] = f"{base}/par"
+        # CIBA (OIDC CIBA 1.0 §5.1) : modes poll/ping livrés, endpoint dédié,
+        # et le grant publiquement annoncé. ``user_code`` n'est pas supporté
+        # ; ``backchannel_authentication_request_signing_alg_values_supported``
+        # reste omis — les request objects signés sont hors périmètre (§5.2).
+        if self._config.ciba_enabled:
+            metadata["backchannel_token_delivery_modes_supported"] = ["poll", "ping"]
+            metadata["backchannel_authentication_endpoint"] = f"{base}/bc-authorize"
+            metadata["backchannel_user_code_parameter_supported"] = False
+            metadata["grant_types_supported"] = [
+                *self._config.grant_types_supported,
+                "urn:openid:params:grant-type:ciba",
+            ]
         # Request objects (RFC 9101 §5.2) : seuls les jetons non signés
         # (``alg=none``) sont acceptés ; les indicateurs restent à ``true`` pour
         # que la suite de certification n'émette aucun avertissement

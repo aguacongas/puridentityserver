@@ -24,7 +24,7 @@ retenue :
 ## Résultat attendu
 
 - Le workflow `Certification OIDC` se termine avec, pour chaque plan
-  (`oidcc-basic-`, `oidcc-implicit-`, `oidcc-hybrid-certification-test-plan`),
+  (`oidcc-basic-`, `oidcc-implicit-`, `oidcc-hybrid-certification-test-plan`, `fapi-ciba-id1-test-plan` — witness CIBA),
   le détail des modules testés et leur verdict (PASSED / FAILED / WARNING /
   REVIEW / SKIPPED) dans le résumé du run ;
 - l'artefact `certification-results` contient les JSON exportés ;
@@ -175,7 +175,7 @@ uv run python samples/conformance-smoke/smoke_test.py
 | --- | --- |
 | `render.yaml` / `Dockerfile` / `.dockerignore` | déploiement de l'OP sur Render (SQLite, disque éphémère) |
 | `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`) |
-| `plans/basic|implicit|hybrid.json` | configs des plans Core de la suite (alias **unique par plan**, discovery, règles navigateur login/consent) |
+| `plans/basic|implicit|hybrid|ciba.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent) |
 | `conformance-reuse-plan.patch` | patch du driver : `create_test_plan` idempotent (réutilise le plan existant quand sa config n'a pas changé) |
 | `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) ou, à défaut, un PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode witness) |
 | `capture_screenshots.py` | rejoue les 4 scénarios de relecture contre l'OP déployé (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver |

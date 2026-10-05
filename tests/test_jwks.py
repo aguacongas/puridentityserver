@@ -230,6 +230,8 @@ def test_settings_client_seed_reads_defaults_from_config_toml(
         "sample-spa-client",
         "sample-swagger-client",
         "sample-dpop-client",
+        "sample-ciba-client",
+        "sample-ciba-ping-client",
     ]
     assert client.redirect_uris == frozenset({"http://127.0.0.1:5173/callback"})
     assert client.scopes == frozenset({"openid", "profile", "email"})
@@ -242,6 +244,11 @@ def test_settings_client_seed_reads_defaults_from_config_toml(
     assert par_client.par_required is True
     dpop_client = next(c for c in settings.seed_clients if c.client_id == "sample-dpop-client")
     assert dpop_client.require_dpop is True
+    ciba_client = next(c for c in settings.seed_clients if c.client_id == "sample-ciba-client")
+    assert ciba_client.backchannel_token_delivery_mode == "poll"
+    ping_client = next(c for c in settings.seed_clients if c.client_id == "sample-ciba-ping-client")
+    assert ping_client.backchannel_token_delivery_mode == "ping"
+    assert ping_client.backchannel_client_notification_endpoint == "http://127.0.0.1:8118/notify"
 
 
 def test_settings_client_seed_parses_lifetime_fields() -> None:

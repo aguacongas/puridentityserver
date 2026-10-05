@@ -55,6 +55,13 @@
 #                                       `device_code_ttl_seconds`)
 # - device_code_interval_seconds      : intervalle de poll device (par défaut
 #                                       `device_code_interval_seconds`)
+# Client-Initiated Backchannel Authentication (OIDC CIBA 1.0) :
+# - backchannel_token_delivery_mode   : "poll" ou "ping" — inscrit le client
+#                                       au /bc-authorize (absent = non
+#                                       inscrit ; "push" refusé au seed)
+# - backchannel_client_notification_endpoint : URI notifiée en mode ping
+#                                       (POST JSON {"auth_req_id": ...},
+#                                       Authorization: Bearer)
 
 [settings]
 
@@ -141,6 +148,25 @@ refresh_token_ttl_seconds = 2592000
 # `PURIDENTITYSERVER_DEVICE_CODE_INTERVAL_SECONDS`.
 device_code_ttl_seconds = 900
 device_code_interval_seconds = 5
+
+# Client-Initiated Backchannel Authentication (OIDC CIBA 1.0) :
+# - ciba_enabled : active POST /bc-authorize et le grant
+#   urn:openid:params:grant-type:ciba (publié au discovery avec
+#   backchannel_authentication_endpoint et les modes poll/ping).
+# - ciba_approval_enabled : active POST /ciba/approve, endpoint
+#   d'approbation automatisé (`?token=<auth_req_id>&type=allow|deny`)
+#   consommé par le sample et la suite de certification — aucune
+#   authentification : à n'activer qu'en démo (404 sinon).
+# - ciba_ttl_seconds / ciba_interval_seconds : durée de vie de
+#   l'auth_req_id (`requested_expiry` borné) et intervalle minimal de
+#   poll avant `slow_down`.
+# Surchargeables via `PURIDENTITYSERVER_CIBA_ENABLED`,
+# `PURIDENTITYSERVER_CIBA_APPROVAL_ENABLED`, `PURIDENTITYSERVER_CIBA_TTL_SECONDS`
+# et `PURIDENTITYSERVER_CIBA_INTERVAL_SECONDS`.
+ciba_enabled = true
+ciba_approval_enabled = true
+ciba_ttl_seconds = 600
+ciba_interval_seconds = 5
 
 # identité (FastAPI Users, spike) : durée par défaut du cookie et comptes de
 # connexion démo. Surchargeables via `PURIDENTITYSERVER_IDENTITY_*` (env) ou une
@@ -540,3 +566,26 @@ redirect_uris = ["http://127.0.0.1:8110/callback"]
 scopes = "openid profile email offline_access"
 client_type = "public"
 require_dpop = true
+
+# clients du sample CIBA (OIDC CIBA 1.0 — échantillon samples/ciba-client/) :
+# flow sans redirect_uri : POST /bc-authorize (hint = login_hint d'un
+# utilisateur seedé) puis approbation via POST /ciba/approve et collecte
+# du résultat sur /token (grant urn:openid:params:grant-type:ciba).
+# - sample-ciba-client : mode poll (le client interroge /token).
+# - sample-ciba-ping-client : mode ping, notifié en JSON sur
+#   backchannel_client_notification_endpoint (listener local du sample,
+#   port 8118) avec Authorization: Bearer client_notification_token.
+[[settings.clients_seed]]
+client_id = "sample-ciba-client"
+client_secret = "ciba-demo-secret"
+scopes = "openid profile email offline_access"
+client_type = "confidential"
+backchannel_token_delivery_mode = "poll"
+
+[[settings.clients_seed]]
+client_id = "sample-ciba-ping-client"
+client_secret = "ciba-ping-demo-secret"
+scopes = "openid profile email"
+client_type = "confidential"
+backchannel_token_delivery_mode = "ping"
+backchannel_client_notification_endpoint = "http://127.0.0.1:8118/notify"

@@ -113,6 +113,10 @@ def _parse_client(raw: dict[str, object]) -> Client:
         refresh_token_lifetime_seconds=_optional_int(raw, "refresh_token_lifetime_seconds"),
         device_code_lifetime_seconds=_optional_int(raw, "device_code_lifetime_seconds"),
         device_code_interval_seconds=_optional_int(raw, "device_code_interval_seconds"),
+        backchannel_token_delivery_mode=str(raw.get("backchannel_token_delivery_mode", "")),
+        backchannel_client_notification_endpoint=str(
+            raw.get("backchannel_client_notification_endpoint", "")
+        ),
         par_required=bool(raw.get("par_required")),
         require_consent=bool(raw.get("require_consent")),
         require_dpop=bool(raw.get("require_dpop")),
@@ -264,6 +268,19 @@ class Settings(BaseSettings):
     # intervalle minimal conseillé entre deux polls du client sur /token.
     device_code_ttl_seconds: int = 900
     device_code_interval_seconds: int = 5
+
+    # Client-Initiated Backchannel Authentication (OIDC CIBA 1.0).
+    # `ciba_enabled` expose POST /bc-authorize et le grant
+    # urn:openid:params:grant-type:ciba (désactivé par défaut). La durée de
+    # vie de l'auth_req_id (`requested_expiry` inclus est borné) et
+    # l'intervalle minimal de poll avant slow_down se règlent ici.
+    # `ciba_approval_enabled` expose POST /ciba/approve : endpoint
+    # d'approbation automatisé (harness de certification, §9), lui aussi
+    # désactivé par défaut — sans lui, la route répond 404.
+    ciba_enabled: bool = False
+    ciba_approval_enabled: bool = False
+    ciba_ttl_seconds: int = 600
+    ciba_interval_seconds: int = 5
     clients_seed: Annotated[tuple[dict[str, object], ...], NoDecode] = ()
 
     # UserInfo (OIDC Core §5.4) — seed du user store (`sub` -> claims)

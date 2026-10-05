@@ -77,7 +77,19 @@ from puridentityserver.domain.key_validation import (
 from puridentityserver.interfaces.domain.secrets import SecretCipher
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 
-_ALLOWED_GRANT_TYPES = frozenset({"authorization_code", "refresh_token", "implicit"})
+_ALLOWED_GRANT_TYPES = frozenset(
+    {
+        "authorization_code",
+        "refresh_token",
+        "implicit",
+        # CIBA (OIDC CIBA 1.0 §16.1.1) : le grant backchannel s'enregistre
+        # ici ; son usage sur /token reste conditionné au mode de livraison.
+        "urn:openid:params:grant-type:ciba",
+    }
+)
+# Modes de livraison CIBA admissibles (CIBA §16.1.1). ``push`` n'est pas
+# livré par le serveur : il est explicitement refusé à l'enregistrement.
+_CIBA_DELIVERY_MODES = frozenset({"poll", "ping"})
 # Miroir des sept ``response_type`` émis par ``application/authorize.py``
 # (``_VALID_RESPONSE_TYPES``) : le registre accepte exactement ce que
 # l'endpoint d'autorisation sait produire.
@@ -155,6 +167,8 @@ class RegistrationMetadata:
     backchannel_logout_uri: str = ""
     backchannel_logout_session_required: bool = False
     dpop_bound_access_tokens: bool = False
+    backchannel_token_delivery_mode: str = ""
+    backchannel_client_notification_endpoint: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,6 +243,8 @@ class ClientRegistration:
     backchannel_logout_uri: str = ""
     backchannel_logout_session_required: bool = False
     dpop_bound_access_tokens: bool = False
+    backchannel_token_delivery_mode: str = ""
+    backchannel_client_notification_endpoint: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,6 +347,8 @@ class RegistrationUseCase:
             frontchannel_logout_session_required=metadata.frontchannel_logout_session_required,
             backchannel_logout_uri=metadata.backchannel_logout_uri,
             backchannel_logout_session_required=metadata.backchannel_logout_session_required,
+            backchannel_token_delivery_mode=metadata.backchannel_token_delivery_mode,
+            backchannel_client_notification_endpoint=metadata.backchannel_client_notification_endpoint,
         )
         await self._clients.save(client)
         return self._response(
@@ -421,6 +439,8 @@ class RegistrationUseCase:
             frontchannel_logout_session_required=metadata.frontchannel_logout_session_required,
             backchannel_logout_uri=metadata.backchannel_logout_uri,
             backchannel_logout_session_required=metadata.backchannel_logout_session_required,
+            backchannel_token_delivery_mode=metadata.backchannel_token_delivery_mode,
+            backchannel_client_notification_endpoint=metadata.backchannel_client_notification_endpoint,
         )
         await self._clients.save(updated)
         return self._response(updated, client_secret=rotation.issued_secret)
@@ -755,6 +775,8 @@ class RegistrationUseCase:
             frontchannel_logout_session_required=client.frontchannel_logout_session_required,
             backchannel_logout_uri=client.backchannel_logout_uri,
             backchannel_logout_session_required=client.backchannel_logout_session_required,
+            backchannel_token_delivery_mode=client.backchannel_token_delivery_mode,
+            backchannel_client_notification_endpoint=client.backchannel_client_notification_endpoint,
         )
 
     def _base_url(self) -> str:
@@ -800,6 +822,8 @@ def _parse_metadata(
         backchannel_logout_uri,
         backchannel_logout_session_required,
         dpop_bound_access_tokens,
+        backchannel_token_delivery_mode,
+        backchannel_client_notification_endpoint,
     ) = extras
 
     client_type = ClientType.PUBLIC if auth_method == "none" else ClientType.CONFIDENTIAL
@@ -825,6 +849,8 @@ def _parse_metadata(
         backchannel_logout_uri=backchannel_logout_uri,
         backchannel_logout_session_required=backchannel_logout_session_required,
         dpop_bound_access_tokens=dpop_bound_access_tokens,
+        backchannel_token_delivery_mode=backchannel_token_delivery_mode,
+        backchannel_client_notification_endpoint=backchannel_client_notification_endpoint,
     )
 
 
@@ -852,6 +878,8 @@ def _parse_metadata_extras(
         str,
         bool,
         bool,
+        str,
+        str,
     ]
     | RegistrationError
 ):
@@ -909,6 +937,16 @@ def _parse_metadata_extras(
             lambda raw, _known: _parse_session_required(raw, "backchannel_logout_session_required"),
         ),
         ("dpop_bound_access_tokens", lambda raw, _known: _parse_dpop_bound(raw)),
+        # CIBA (OIDC CIBA 1.0 §16.1.1) : mode de livraison + endpoint de
+        # notification. ``backchannel_authentication_request_signing_alg`` est
+        # accepté sans stockage (request objects signés hors périmètre) et
+        # ``backchannel_user_code_parameter`` doit valoir false (non supporté).
+        ("backchannel_token_delivery_mode", lambda raw, _known: _parse_ciba_delivery_mode(raw)),
+        (
+            "backchannel_client_notification_endpoint",
+            lambda raw, _known: _parse_ciba_notification_endpoint(raw),
+        ),
+        ("backchannel_user_code_parameter", lambda raw, _known: _parse_ciba_user_code(raw)),
     )
     results: dict[str, object] = {}
     for name, parser in parsers:
@@ -939,6 +977,8 @@ def _assemble_extras(
     str,
     bool,
     bool,
+    str,
+    str,
 ]:
     """Recompose le tuple de métadonnées extraites (types garantis par les parseurs)."""
     return (
@@ -959,6 +999,8 @@ def _assemble_extras(
         cast(str, results["backchannel_logout_uri"]),
         cast(bool, results["backchannel_logout_session_required"]),
         cast(bool, results["dpop_bound_access_tokens"]),
+        cast(str, results["backchannel_token_delivery_mode"]),
+        cast(str, results["backchannel_client_notification_endpoint"]),
     )
 
 
@@ -1205,6 +1247,54 @@ def _parse_dpop_bound(raw: dict[str, object]) -> bool | RegistrationError:
     token endpoint pour ce client (``require_dpop`` côté serveur).
     """
     return _parse_bool_flag(raw, "dpop_bound_access_tokens", default=False)
+
+
+def _parse_ciba_delivery_mode(raw: dict[str, object]) -> str | RegistrationError:
+    """Lit ``backchannel_token_delivery_mode`` (CIBA §16.1.1) : poll ou ping.
+
+    Absent ou vide : le client n'est pas inscrit pour CIBA. ``push`` (et
+    toute autre valeur) est refusé — le serveur ne livre pas ce mode.
+    """
+    value = raw.get("backchannel_token_delivery_mode")
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str) or value not in _CIBA_DELIVERY_MODES:
+        return RegistrationError(
+            "invalid_client_metadata",
+            "backchannel_token_delivery_mode doit être poll ou ping (push non supporté)",
+        )
+    return value
+
+
+def _parse_ciba_notification_endpoint(raw: dict[str, object]) -> str | RegistrationError:
+    """Lit ``backchannel_client_notification_endpoint`` (CIBA §16.1.1) — http(s) de bout en bout."""
+    value = raw.get("backchannel_client_notification_endpoint")
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str):
+        return RegistrationError(
+            "invalid_client_metadata",
+            "backchannel_client_notification_endpoint doit être une chaîne",
+        )
+    if not _is_redirect_uri(value):
+        return RegistrationError(
+            "invalid_client_metadata",
+            "backchannel_client_notification_endpoint doit être une URI http(s) sans fragment",
+        )
+    return value
+
+
+def _parse_ciba_user_code(raw: dict[str, object]) -> bool | RegistrationError:
+    """Valide ``backchannel_user_code_parameter`` (CIBA §16.1.1) : ``user_code`` non supporté."""
+    value = _parse_bool_flag(raw, "backchannel_user_code_parameter", default=False)
+    if isinstance(value, RegistrationError):
+        return value
+    if value:
+        return RegistrationError(
+            "invalid_client_metadata",
+            "backchannel_user_code_parameter : user_code non supporté",
+        )
+    return False
 
 
 def _parse_jwks_uri(raw: dict[str, object]) -> str | RegistrationError:

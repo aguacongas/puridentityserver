@@ -170,13 +170,18 @@ class Client:
     jeton JWS est émis tel quel ; sinon le JWS imbriqué est chiffré avec
     ``client_secret_ciphertext`` (familles symétriques) ou la clé publique
     RSA du ``jwks`` (RSA-OAEP).
-    ``frontchannel_logout_uri`` / ``backchannel_logout_uri`` (OIDC
-    Front-Channel Logout 1.0 §2 / Back-Channel Logout 1.0 §2) : URI de
-    terminaison de session du client appelées par ``/end_session`` après la
-    déconnexion — iframe (front-channel, ``iss``/``sid`` en query) ou
-    ``POST logout_token`` direct serveur→client (back-channel).
-    ``..._session_required`` impose l'envoi du ``sid`` (Session Management
-    properly focus) ; sans ``sid`` vérifiable, la notification est omise.
+     ``frontchannel_logout_uri`` / ``backchannel_logout_uri`` (OIDC
+     Front-Channel Logout 1.0 §2 / Back-Channel Logout 1.0 §2) : URI de
+     terminaison de session du client appelées par ``/end_session`` après la
+     déconnexion — iframe (front-channel, ``iss``/``sid`` en query) ou
+     ``POST logout_token`` direct serveur→client (back-channel).
+     ``..._session_required`` impose l'envoi du ``sid`` (Session Management
+     properly focus) ; sans ``sid`` vérifiable, la notification est omise.
+     ``backchannel_token_delivery_mode`` (OIDC CIBA 1.0 §4) porte le mode
+     d'obtention du résultat CIBA enregistré pour ce client (``poll`` ou
+     ``ping`` ; ``push`` n'est pas supporté) — vide = le client n'est pas
+     habilité à CIBA. ``backchannel_client_notification_endpoint`` est l'URI
+     notifiée en mode ``ping`` (§9).
     """
 
     client_id: str
@@ -211,6 +216,8 @@ class Client:
     frontchannel_logout_session_required: bool = False
     backchannel_logout_uri: str = ""
     backchannel_logout_session_required: bool = False
+    backchannel_token_delivery_mode: str = ""
+    backchannel_client_notification_endpoint: str = ""
 
     @property
     def effective_auth_method(self) -> TokenEndpointAuthMethod:
@@ -384,6 +391,61 @@ class DeviceAuthorization:
     expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     interval: int = 5
     last_polled_at: datetime | None = None
+
+
+class BackchannelAuthenticationStatus(str, Enum):
+    """États d'une demande d'authentification backchannel (OIDC CIBA 1.0 §7-§10).
+
+    ``PENDING`` : demande acceptée par ``/bc-authorize``, l'utilisateur n'a
+    pas encore été authentifié/approuvé sur son appareil d'authentification.
+    ``APPROVED`` : l'utilisateur a autorisé la demande ; le client obtient
+    les jetons via ``/token`` (grant CIBA).
+    ``DENIED`` : l'utilisateur a refusé ; le poll retourne ``access_denied``.
+    """
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    DENIED = "denied"
+
+
+#: Type de grant CIBA (OIDC CIBA 1.0 §4 — extension grant OAuth 2.0 §4.5).
+CIBA_GRANT_TYPE = "urn:openid:params:grant-type:ciba"
+
+
+@dataclass(frozen=True, slots=True)
+class BackchannelAuthenticationRequest:
+    """Demande d'authentification backchannel (OIDC CIBA 1.0 §7).
+
+    Créée par ``/bc-authorize``, elle lie l'``auth_req_id`` opaque (stocké en
+    empreinte SHA-256, ``auth_req_id_hash``) au hint résolu (``subject``, fixé
+    à l'acceptation de la demande) et au client demandeur. ``status`` passe de
+    ``PENDING`` à ``APPROVED`` ou ``DENIED`` selon la décision de l'utilisateur ;
+    le client recueille ensuite le résultat via le mode ``poll`` ou ``ping``
+    sur ``/token`` (grant ``urn:openid:params:grant-type:ciba``). ``interval``
+    et ``last_polled_at`` alimentent l'anti-bourrage (``slow_down``).
+
+    ``delivery_mode`` provient de l'enregistrement du client
+    (``backchannel_token_delivery_mode``) ; en mode ``ping``,
+    ``client_notification_token`` et ``client_notification_endpoint``
+    permettent à l'OP de notifier le client qu'un résultat est disponible
+    (§10.2). ``binding_message`` (message d'inter-verrouillage affichable)
+    et ``acr`` (premier ``acr_values`` demandé, §7.1) sont conservés pour
+    l'approbation et l'``id_token`` émis lors de l'échange du token.
+    """
+
+    auth_req_id_hash: str
+    client_id: str
+    scopes: frozenset[Scope] = frozenset()
+    subject: str = ""
+    status: BackchannelAuthenticationStatus = BackchannelAuthenticationStatus.PENDING
+    delivery_mode: str = "poll"
+    client_notification_token: str = ""
+    client_notification_endpoint: str = ""
+    binding_message: str = ""
+    acr: str = ""
+    interval: int = 5
+    last_polled_at: datetime | None = None
+    expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 #: Préfixe URN des ``request_uri`` émis par ``POST /par`` (RFC 9126 §6.2) :
