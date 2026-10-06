@@ -80,8 +80,8 @@ class PyJWTSignedRequestObjectVerifier:
         try:
             claims = pyjwt.decode(
                 token,
-                options={
-                    "verify_signature": False,  # NOSONAR(S5659) — lecture seule
+                options={  # NOSONAR(S5659) — lecture seule, vérification ensuite
+                    "verify_signature": False,
                     "verify_exp": False,
                     "verify_nbf": False,
                     "verify_aud": False,
