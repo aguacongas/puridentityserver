@@ -8,6 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Form, Request, Response
 from starlette.datastructures import FormData
 
+from puridentityserver.application.resource_indicators import encode_resource_parameter
 from puridentityserver.application.token import (
     TokenError,
     TokenRequest,
@@ -43,6 +44,7 @@ def token_router(usecase: TokenUseCase) -> APIRouter:
             code_verifier=_form_field(form, "code_verifier"),
             refresh_token=_form_field(form, "refresh_token"),
             scope=_form_field(form, "scope"),
+            resource=encode_resource_parameter([str(v) for v in form.getlist("resource")]),
             device_code=_form_field(form, "device_code"),
             auth_req_id=_form_field(form, "auth_req_id"),
             client_assertion_type=_form_field(form, "client_assertion_type"),

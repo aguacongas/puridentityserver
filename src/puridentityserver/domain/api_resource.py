@@ -11,6 +11,20 @@ un scope non enregistré (standard ou API) est rejetée en ``invalid_scope``.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlsplit
+
+
+def is_resource_uri(value: str) -> bool:
+    """Vérifie qu'une URI de resource indicator est absolue et sans fragment (RFC 8707 §2.1).
+
+    Un schéma et une composante d'autorité (``scheme://host``) sont
+    requis — cible HTTP(S) d'un resource server — et tout fragment est
+    proscrit.
+    """
+    if not value:
+        return False
+    parts = urlsplit(value)
+    return bool(parts.scheme and parts.netloc and not parts.fragment)
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,13 +33,16 @@ class ApiResource:
 
     ``name`` est l'audience de l'access token (ex. ``api``), ``display_name``
     le libellé humain, ``scopes`` l'ensemble des scopes d'API appartenant à
-    cette resource (ex. ``api.read`` / ``api.write``), et
+    cette resource (ex. ``api.read`` / ``api.write``),
     ``allowed_access_token_signing_algos`` la liste restreinte des
     algorithmes de signature acceptables pour les access tokens destinés à
-    cette resource (vide = tous les algorithmes configurés).
+    cette resource (vide = tous les algorithmes configurés), et
+    ``indicator`` l'URI absolue reconnue comme ``resource`` au sens de
+    RFC 8707 (vide = aucun resource indicator).
     """
 
     name: str
     display_name: str = ""
     scopes: frozenset[str] = frozenset()
     allowed_access_token_signing_algos: tuple[str, ...] = ()
+    indicator: str = ""

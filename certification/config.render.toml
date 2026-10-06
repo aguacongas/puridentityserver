@@ -36,6 +36,12 @@ registration_initial_access_token_mode = "disabled"
 ciba_enabled = true
 ciba_approval_enabled = true
 
+# Resource server intégré (RFC 8707, FAPI-R-6.2.1) : GET /protected-resource,
+# pointé par `resource.resourceUrl` du plan ciba.json — la suite y vérifie
+# l'access token (en-tête Bearer, `x-fapi-interaction-id` échoyé, Date,
+# content-type JSON ; 200 attendu, 401 sans jeton).
+protected_resource_enabled = true
+
 # Login obligatoire à l'endpoint /authorize (OIDC Core 1.0 §3.1.2.1) : la
 # demande non authentifiée est redirigée vers /login (refresh de session du
 # navigateur interne de la suite), `prompt=none` reçoit `login_required`.

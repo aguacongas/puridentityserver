@@ -30,6 +30,7 @@ class ApiResourceRow(PersistenceBase):
     allowed_access_token_signing_algos: Mapped[list[str]] = mapped_column(
         JSON, default=list, server_default=text("'[]'")
     )
+    indicator: Mapped[str] = mapped_column(String(1024), default="", server_default=text("''"))
 
 
 class SQLApiResourceRepository:
@@ -91,6 +92,7 @@ def _to_row(resource: ApiResource) -> ApiResourceRow:
         display_name=resource.display_name,
         scopes=sorted(resource.scopes),
         allowed_access_token_signing_algos=sorted(resource.allowed_access_token_signing_algos),
+        indicator=resource.indicator,
     )
 
 
@@ -101,4 +103,5 @@ def _from_row(row: ApiResourceRow) -> ApiResource:
         display_name=row.display_name,
         scopes=frozenset(row.scopes or ()),
         allowed_access_token_signing_algos=tuple(row.allowed_access_token_signing_algos or ()),
+        indicator=row.indicator or "",
     )

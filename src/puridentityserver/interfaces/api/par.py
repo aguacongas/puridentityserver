@@ -18,6 +18,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from puridentityserver.application.par import PushedAuthorizationUseCase, PushError
+from puridentityserver.application.resource_indicators import encode_resource_parameter
 from puridentityserver.interfaces.api.dpop_proof import extract_dpop_proof
 
 _JSON_MEDIA_TYPE = "application/json"
@@ -59,17 +60,25 @@ def par_router(usecase: PushedAuthorizationUseCase) -> APIRouter:
 async def _form_body(request: Request) -> dict[str, str]:
     """Décode le corps form-urlencodé de la requête.
 
-    Les valeurs multiples pour une même clé sont concaténées avec un espace
-    (cas de ``scope`` répété) ; les clés vides sont ignorées.
+    Les valeurs multiples d'une même clé sont concaténées avec un espace
+    (cas de ``scope`` répété) — sauf ``resource`` (RFC 8707), dont les
+    occurrences sont repliées en tableau JSON compact par
+    :func:`encode_resource_parameter`. Les clés vides sont ignorées.
     """
     form = await request.form()
     params: dict[str, str] = {}
+    resources: list[str] = []
     for key, value in form.multi_items():
         if not key:
+            continue
+        if key == "resource":
+            resources.append(str(value))
             continue
         parts = [params[key]] if key in params else []
         parts.append(str(value))
         params[key] = " ".join(parts)
+    if resources:
+        params["resource"] = encode_resource_parameter(resources)
     return params
 
 

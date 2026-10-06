@@ -286,6 +286,14 @@ registration_required_claim_values = ["register"]
 par_enabled = true
 par_ttl_seconds = 90
 
+# Resource server intégré (RFC 8707, FAPI-R-6.2.1) : endpoint
+# GET /protected-resource, réservé aux access tokens émis par ce serveur
+# (en-tête `Authorization: Bearer`, en-tête `x-fapi-interaction-id` échoyée).
+# - protected_resource_enabled : monte la ressource protégée (404 sinon).
+#   Le `resource.resourceUrl` des plans de certification y pointe.
+# Surchargeable via `PURIDENTITYSERVER_PROTECTED_RESOURCE_ENABLED`.
+protected_resource_enabled = true
+
 # seed utilisateurs (user store) : clé = subject (sub), valeur = claims
 # exposés selon les scopes accordés au jeton (openid > sub, profile >
 # identité, email, address, phone). Sujets = utilisateurs, jamais des
@@ -394,6 +402,11 @@ password = "password"
 # - display_name          : libellé humain (facultatif)
 # - scopes                : scopes d'API exposés par la resource (liste ;
 #                           insensibles à la casse, ``-``/``_`` tolérés)
+# - indicator             : resource indicator RFC 8707 (URI absolue sans
+#                           fragment) acceptée en paramètre `resource`
+#                           d'/authorize, /bc-authorize et /token — toute
+#                           valeur hors registre vaut ``invalid_target``
+#                           (facultatif)
 # - allowed_access_token_signing_algos : algorithmes de signature acceptés
 #                           par la resource (facultatif ; défaut = ceux du
 #                           serveur, `jwks_algorithms`)
@@ -407,6 +420,7 @@ password = "password"
 name = "sample-api"
 display_name = "API de démonstration"
 scopes = ["api.read", "api.write"]
+indicator = "http://127.0.0.1:8000/protected-resource"
 
 # resource dont le scope `admin` alimente le claim `scope` des jetons de gestion
 # (protège les CRUD d'administration) — voir `admin_required_claim_values`.
@@ -501,6 +515,17 @@ redirect_uris = ["http://127.0.0.1:8000/callback"]
 scopes = "openid profile"
 client_type = "confidential"
 client_secret = "introspect-demo-secret"
+
+# client du sample Resource Indicators (RFC 8707) : flow Authorization Code
+# avec paramètre `resource` (URI ciblée devenue le claim `aud` du jeton) -
+# échantillon samples/resource-indicators-client/. Scopes volontairement
+# sans scope d'API : sans `resource`, l'`aud` reste le `client_id`.
+[[settings.clients_seed]]
+client_id = "sample-resource-client"
+redirect_uris = ["http://127.0.0.1:8000/callback"]
+scopes = "openid profile offline_access"
+client_type = "confidential"
+client_secret = "resource-demo-secret"
 
 # client du sample Device Authorization Grant (RFC 8628) : flow sans
 # redirect_uri, adapté aux appareils à entrées limitées (TV, CLI…).

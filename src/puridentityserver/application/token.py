@@ -34,6 +34,11 @@ L'authentification du client suit sa ``token_endpoint_auth_method`` :
 ``client_secret_jwt`` / ``private_key_jwt`` (assertion JWT, RFC 7523 §2.2)
 portée par le port ``client_assertions``, ou ``tls_client_auth`` /
 ``self_signed_tls_client_auth`` (certificat mTLS, RFC 8705).
+
+Les resource indicators (RFC 8707 §2-§3) sont acceptés sur tous les
+grants : le support lié (code, refresh token, demande CIBA) fixe le
+périmètre ``aud`` de l'access token — toute déclaration hors périmètre
+vaut ``invalid_target``.
 """
 
 from __future__ import annotations
@@ -62,6 +67,11 @@ from puridentityserver.application.dpop import (
 )
 from puridentityserver.application.id_token_encryption import encrypt_id_token_for_client
 from puridentityserver.application.id_token_material import resolve_id_token_material
+from puridentityserver.application.resource_indicators import (
+    is_resource_uri,
+    parse_resource_parameter,
+    resource_audience,
+)
 from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.domain.authorization import (
     CIBA_GRANT_TYPE,
@@ -123,7 +133,13 @@ class TokenConfig:
 
 @dataclass(slots=True)
 class TokenRequest:
-    """Paramètres fournis par le client à l'endpoint ``/token``."""
+    """Paramètres fournis par le client à l'endpoint ``/token``.
+
+    ``resource`` porte les resource indicators RFC 8707 §2 (URI absolues
+    sans fragment, encodées en tableau ou en JSON compact) ; le support
+    qui a produit les jetons (code, refresh token, demande CIBA) en fixe
+    le périmètre — la requête ne peut que le reprendre ou le restreindre.
+    """
 
     grant_type: str
     code: str = ""
@@ -135,6 +151,7 @@ class TokenRequest:
     device_code: str = ""
     auth_req_id: str = ""
     scope: str = ""
+    resource: str = ""
     client_assertion_type: str = ""
     client_assertion: str = ""
     assertion: str = ""
@@ -251,6 +268,10 @@ class TokenUseCase:
         if isinstance(binding, TokenError):
             return binding
 
+        resources = await self._effective_resources(request, auth_code.resource_uris)
+        if isinstance(resources, TokenError):
+            return resources
+
         await self._codes.consume(auth_code.code)
 
         refresh_token = ""
@@ -261,6 +282,7 @@ class TokenUseCase:
                 auth_code.scopes,
                 now,
                 dpop_jkt=binding.jkt if binding.bound else "",
+                resources=resources,
             )
         issued = await self._issue_tokens(
             client,
@@ -273,6 +295,7 @@ class TokenUseCase:
             acr=auth_code.acr,
             claims=auth_code.claims,
             dpop_jkt=binding.jkt if binding.bound else "",
+            resources=resources,
         )
         if isinstance(issued, TokenError):
             return issued
@@ -383,6 +406,10 @@ class TokenUseCase:
         if isinstance(binding, TokenError):
             return binding
 
+        resources = await self._effective_resources(request, stored.resource_uris)
+        if isinstance(resources, TokenError):
+            return resources
+
         await self._refresh_tokens.consume(stored.token_hash)
         refresh_token = await self._issue_refresh_token(
             client,
@@ -390,6 +417,7 @@ class TokenUseCase:
             scopes,
             now,
             dpop_jkt=self._refresh_dpop_jkt(client, stored, binding),
+            resources=resources,
         )
         issued = await self._issue_tokens(
             client,
@@ -398,6 +426,7 @@ class TokenUseCase:
             nonce="",
             now=now,
             dpop_jkt=binding.jkt if binding.bound else "",
+            resources=resources,
         )
         if isinstance(issued, TokenError):
             return issued
@@ -463,6 +492,10 @@ class TokenUseCase:
         if isinstance(binding, TokenError):
             return binding
 
+        resources = await self._effective_resources(request, ())
+        if isinstance(resources, TokenError):
+            return resources
+
         now = datetime.now(timezone.utc)
         access_token, token_ttl = await self._issue_access_token(
             client,
@@ -470,11 +503,47 @@ class TokenUseCase:
             scopes=scopes,
             now=now,
             dpop_jkt=binding.jkt if binding.bound else "",
+            resources=resources,
         )
         return self._success("", access_token, token_ttl, scopes, dpop_bound=binding.bound)
 
     async def _jwt_bearer(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Émet un access token au nom du sujet d'une assertion JWT (RFC 7523 §2.1).
+
+        L'assertion est validée par :meth:`_jwt_bearer_subject` ; la
+        portée, la preuve DPoP et les resources (RFC 8707) complètent
+        ensuite le jeton émis pour le ``sub`` délégué.
+        """
+        resolved = await self._jwt_bearer_subject(request)
+        if isinstance(resolved, TokenError):
+            return resolved
+        client, subject = resolved
+
+        scopes = await self._effective_scope(client, request.scope, default=client.scopes)
+        if isinstance(scopes, TokenError):
+            return scopes
+
+        binding = await self._evaluate_dpop(client, request)
+        if isinstance(binding, TokenError):
+            return binding
+
+        resources = await self._effective_resources(request, ())
+        if isinstance(resources, TokenError):
+            return resources
+
+        now = datetime.now(timezone.utc)
+        access_token, token_ttl = await self._issue_access_token(
+            client,
+            subject=subject,
+            scopes=scopes,
+            now=now,
+            dpop_jkt=binding.jkt if binding.bound else "",
+            resources=resources,
+        )
+        return self._success("", access_token, token_ttl, scopes, dpop_bound=binding.bound)
+
+    async def _jwt_bearer_subject(self, request: TokenRequest) -> tuple[Client, str] | TokenError:
+        """Localise le client et vérifie l'assertion JWT déléguée (RFC 7523 §2.1).
 
         L'assertion est signée par le client (HMAC secret partagé ou clé
         publique enregistrée), ``aud`` doit désigner le token endpoint et
@@ -510,24 +579,7 @@ class TokenUseCase:
         subject = verified["sub"]
         if not isinstance(subject, str):
             return self._error("invalid_grant", "Assertion jwt-bearer sans sujet (sub)")
-
-        scopes = await self._effective_scope(client, request.scope, default=client.scopes)
-        if isinstance(scopes, TokenError):
-            return scopes
-
-        binding = await self._evaluate_dpop(client, request)
-        if isinstance(binding, TokenError):
-            return binding
-
-        now = datetime.now(timezone.utc)
-        access_token, token_ttl = await self._issue_access_token(
-            client,
-            subject=subject,
-            scopes=scopes,
-            now=now,
-            dpop_jkt=binding.jkt if binding.bound else "",
-        )
-        return self._success("", access_token, token_ttl, scopes, dpop_bound=binding.bound)
+        return client, subject
 
     async def _device_code(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Poll l'état de la session appareil et émet les jetons une fois approuvée.
@@ -561,9 +613,13 @@ class TokenUseCase:
         if isinstance(stored, TokenError):
             return stored
 
+        resources = await self._effective_resources(request, ())
+        if isinstance(resources, TokenError):
+            return resources
+
         now = datetime.now(timezone.utc)
         if stored.status == DeviceAuthorizationStatus.APPROVED:
-            return await self._device_approved_flow(client, stored, now, binding)
+            return await self._device_approved_flow(client, stored, now, binding, resources)
         return await self._device_pending_response(stored, now)
 
     async def _load_device_session(self, request: TokenRequest) -> DeviceAuthorization | TokenError:
@@ -607,6 +663,7 @@ class TokenUseCase:
         stored: DeviceAuthorization,
         now: datetime,
         binding: DpopBinding,
+        resources: tuple[str, ...],
     ) -> TokenResponse | TokenError:
         """Consomme la session appareil approuvée et émet ses jetons (RFC 8628 §3.5)."""
         if self._device_codes is None:
@@ -616,10 +673,21 @@ class TokenUseCase:
         refresh_token = ""
         if Scope.OFFLINE_ACCESS in stored.scopes:
             refresh_token = await self._issue_refresh_token(
-                client, stored.subject, stored.scopes, now, dpop_jkt=dpop_jkt
+                client,
+                stored.subject,
+                stored.scopes,
+                now,
+                dpop_jkt=dpop_jkt,
+                resources=resources,
             )
         issued = await self._issue_tokens(
-            client, stored.subject, stored.scopes, nonce="", now=now, dpop_jkt=dpop_jkt
+            client,
+            stored.subject,
+            stored.scopes,
+            nonce="",
+            now=now,
+            dpop_jkt=dpop_jkt,
+            resources=resources,
         )
         if isinstance(issued, TokenError):
             return issued
@@ -665,9 +733,13 @@ class TokenUseCase:
         if isinstance(stored, TokenError):
             return stored
 
+        resources = await self._effective_resources(request, stored.resource_uris)
+        if isinstance(resources, TokenError):
+            return resources
+
         now = datetime.now(timezone.utc)
         if stored.status == BackchannelAuthenticationStatus.APPROVED:
-            return await self._ciba_approved_flow(client, stored, now, binding)
+            return await self._ciba_approved_flow(client, stored, now, binding, resources)
         return await self._ciba_pending_response(stored, now)
 
     async def _load_ciba_session(
@@ -721,6 +793,7 @@ class TokenUseCase:
         stored: BackchannelAuthenticationRequest,
         now: datetime,
         binding: DpopBinding,
+        resources: tuple[str, ...],
     ) -> TokenResponse | TokenError:
         """Consomme la demande CIBA approuvée et émet ses jetons (CIBA §10.1.1)."""
         if self._backchannel_auth is None:
@@ -730,7 +803,12 @@ class TokenUseCase:
         refresh_token = ""
         if Scope.OFFLINE_ACCESS in stored.scopes:
             refresh_token = await self._issue_refresh_token(
-                client, stored.subject, stored.scopes, now, dpop_jkt=dpop_jkt
+                client,
+                stored.subject,
+                stored.scopes,
+                now,
+                dpop_jkt=dpop_jkt,
+                resources=resources,
             )
         issued = await self._issue_tokens(
             client,
@@ -740,6 +818,7 @@ class TokenUseCase:
             now=now,
             acr=stored.acr,
             dpop_jkt=dpop_jkt,
+            resources=resources,
         )
         if isinstance(issued, TokenError):
             return issued
@@ -770,6 +849,46 @@ class TokenUseCase:
                     "invalid_scope", "Scope(s) non enregistré(s) : " + ", ".join(unknown)
                 )
         return scopes
+
+    async def _effective_resources(
+        self, request: TokenRequest, bound: tuple[str, ...]
+    ) -> tuple[str, ...] | TokenError:
+        """Resources effectives du grant ou ``invalid_target`` (RFC 8707 §4).
+
+        ``bound`` porte les resource indicators persistés avec le support
+        (code d'autorisation, refresh token, demande CIBA) : les resources
+        de la requête doivent en être un sous-ensemble ; à défaut, les
+        resources déclarées sont contrôlées contre le registre des
+        ``ApiResource.indicator``. ``bound`` vide restitué tel quel quand
+        la requête n'en déclare aucune (périmètre du support).
+        """
+        resources = parse_resource_parameter(request.resource)
+        if not resources:
+            return bound
+        if bound:
+            outside = [uri for uri in resources if uri not in bound]
+            if outside:
+                return self._error(
+                    "invalid_target",
+                    "resource hors des ressources liées au grant (RFC 8707 §4) : "
+                    + ", ".join(outside),
+                )
+            return resources
+        malformed = [uri for uri in resources if not is_resource_uri(uri)]
+        if malformed:
+            return self._error(
+                "invalid_target",
+                "resource doit être une URI absolue sans fragment (RFC 8707 §2.1) : "
+                + ", ".join(malformed),
+            )
+        if self._scope_registry is not None:
+            unknown = await self._scope_registry.unknown_resources(resources)
+            if unknown:
+                return self._error(
+                    "invalid_target",
+                    "Resource non enregistrée (RFC 8707 §2.2) : " + ", ".join(unknown),
+                )
+        return resources
 
     async def _evaluate_dpop(
         self, client: Client, request: TokenRequest, *, bound_jkt: str = ""
@@ -849,6 +968,7 @@ class TokenUseCase:
         acr: str = "",
         claims: str = "",
         dpop_jkt: str = "",
+        resources: tuple[str, ...] = (),
     ) -> tuple[str, str, int] | TokenError:
         """Émet et retourne l'``id_token``, l'``access_token`` et la TTL effective.
 
@@ -858,7 +978,8 @@ class TokenUseCase:
         ``id_token`` est résolu dans l'id_token et son member ``userinfo``
         voyage dans l'access_token, relu par ``/userinfo``. ``dpop_jkt``
         (RFC 9449 §5) lie l'access token à la clé prouvée via le claim
-        ``cnf`` — chaîne vide = jeton porteur classique.
+        ``cnf`` — chaîne vide = jeton porteur classique. ``resources``
+        (RFC 8707 §3) porte l'``aud`` du jeton quand il est renseigné.
         """
         claims_request = parse_claims_parameter(claims) if claims else None
         token_ttl = resolve_lifetime_seconds(
@@ -903,7 +1024,7 @@ class TokenUseCase:
             )
         except JWEUnavailableError:
             return self._error("invalid_client", "Matériel de chiffrement d'id_token indisponible")
-        audience = await self._resolve_audience(client, scopes)
+        audience = await self._resolve_audience(client, scopes, resources)
         access_token = await self._token_manager.create_access_token(
             algorithm=self._config.signing_algorithm,
             issuer=self._config.issuer,
@@ -935,11 +1056,13 @@ class TokenUseCase:
         scopes: frozenset[Scope],
         now: datetime,
         dpop_jkt: str = "",
+        resources: tuple[str, ...] = (),
     ) -> tuple[str, int]:
         """Émet et retourne un ``access_token`` et sa TTL effective.
 
         ``dpop_jkt`` non vide lie le jeton à la clé DPoP prouvée (claim
-        ``cnf``, RFC 9449 §5.1).
+        ``cnf``, RFC 9449 §5.1) ; ``resources`` (RFC 8707 §3) porte
+        l'``aud`` du jeton quand il est renseigné.
         """
         token_ttl = resolve_lifetime_seconds(
             client.access_token_lifetime_seconds, self._config.access_token_ttl_seconds
@@ -947,7 +1070,7 @@ class TokenUseCase:
         expires_at = now + timedelta(seconds=token_ttl)
         issued_at = int(now.timestamp())
         expires_epoch = int(expires_at.timestamp())
-        audience = await self._resolve_audience(client, scopes)
+        audience = await self._resolve_audience(client, scopes, resources)
         access_token = await self._token_manager.create_access_token(
             algorithm=self._config.signing_algorithm,
             issuer=self._config.issuer,
@@ -960,8 +1083,12 @@ class TokenUseCase:
         )
         return access_token, token_ttl
 
-    async def _resolve_audience(self, client: Client, scopes: frozenset[Scope]) -> str | list[str]:
-        """Audience d'un access token : resources protégées accordées, sinon client."""
+    async def _resolve_audience(
+        self, client: Client, scopes: frozenset[Scope], resources: tuple[str, ...] = ()
+    ) -> str | list[str]:
+        """Audience du jeton : resources RFC 8707, sinon resources accordées, sinon client."""
+        if resources:
+            return resource_audience(resources)
         if self._scope_registry is None:
             return client.client_id
         return await self._scope_registry.audiences_for(client.client_id, scopes)
@@ -974,12 +1101,14 @@ class TokenUseCase:
         now: datetime,
         *,
         dpop_jkt: str = "",
+        resources: tuple[str, ...] = (),
     ) -> str:
         """Génère, persiste (empreinte) et retourne un nouveau refresh token opque.
 
         ``dpop_jkt`` non vide lie le refresh token à la clé DPoP (RFC
         9449 §5) : chaque renouvellement devra then présenter une preuve
-        signée par cette même clé.
+        signée par cette même clé. ``resources`` fixe les resource
+        indicators (RFC 8707) que tout renouvellement devra reprendre.
         """
         ttl = resolve_lifetime_seconds(
             client.refresh_token_lifetime_seconds, self._config.refresh_token_ttl_seconds
@@ -993,6 +1122,7 @@ class TokenUseCase:
                 scopes=scopes,
                 expires_at=now + timedelta(seconds=ttl),
                 dpop_jkt=dpop_jkt,
+                resource_uris=resources,
             )
         )
         return value

@@ -15,7 +15,7 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
-from puridentityserver.domain.api_resource import ApiResource
+from puridentityserver.domain.api_resource import ApiResource, is_resource_uri
 from puridentityserver.domain.authorization import (
     Client,
     ClientType,
@@ -182,11 +182,17 @@ def _parse_api_resource(raw: dict[str, object]) -> ApiResource:
     ]
     if unknown:
         raise ValueError(f"Algorithme(s) de signature non supportés : {', '.join(unknown)}")
+    indicator = str(raw.get("indicator", "")).strip()
+    if indicator and not is_resource_uri(indicator):
+        raise ValueError(
+            f"Indicator RFC 8707 invalide (URI absolue sans fragment attendue) : {indicator}"
+        )
     return ApiResource(
         name=str(raw["name"]),
         display_name=str(raw.get("display_name", "")),
         scopes=scopes,
         allowed_access_token_signing_algos=tuple(sorted(set(algos))),
+        indicator=indicator,
     )
 
 
@@ -306,7 +312,10 @@ class Settings(BaseSettings):
     # `api_resources_seed` ajoute des ressources au démarrage : name,
     # display_name, scopes (liste) et, facultativement,
     # allowed_access_token_signing_algos (restriction des algorithmes de
-    # signature acceptables pour cette resource).
+    # signature acceptables pour cette resource) et indicator (URI absolue
+    # sans fragment reconnue comme `resource` au sens de RFC 8707 - un
+    # paramètre `resource` qui ne matche aucun indicator est rejeté
+    # `invalid_target`).
     api_resources_seed: Annotated[tuple[dict[str, object], ...], NoDecode] = ()
 
     # Dynamic Client Registration (RFC 7591 + 7592) — endpoint /register.
@@ -394,6 +403,14 @@ class Settings(BaseSettings):
     # fenêtre limite le stockage des demandes poussées.
     par_enabled: bool = True
     par_ttl_seconds: int = 90
+
+    # Resource server d'exemple - endpoint GET /protected-resource
+    # (RFC 8707 + profil FAPI-R-6.2.1 de la suite de certification) :
+    # valide l'en-tête Bearer (signature, expiration, révocation), renvoie
+    # un JSON 200 et renvoie toujours l'en-tête `x-fapi-interaction-id`
+    # (écho de la requête, ou UUID généré). Désactivé par défaut ; les
+    # déploiements de certification le rallument via `config.toml`.
+    protected_resource_enabled: bool = False
 
     # Authentification à l'endpoint /authorize.
     # `require_login = false` (défaut de démo) : l'utilisateur non connecté est

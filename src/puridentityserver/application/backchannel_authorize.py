@@ -30,6 +30,10 @@ from puridentityserver.application.client_auth import (
     CLIENT_UNKNOWN_ERROR,
     authenticate_client,
 )
+from puridentityserver.application.resource_indicators import (
+    is_resource_uri,
+    parse_resource_parameter,
+)
 from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.domain.authorization import (
     BackchannelAuthenticationRequest,
@@ -67,6 +71,7 @@ _REQUEST_CLAIM_PARAMETERS = (
     "id_token_hint",
     "binding_message",
     "acr_values",
+    "resource",
     "client_notification_token",
     "requested_expiry",
 )
@@ -103,6 +108,7 @@ class BackchannelAuthenticationParams:
     id_token_hint: str = ""
     binding_message: str = ""
     acr_values: str = ""
+    resource: str = ""
     client_notification_token: str = ""
     requested_expiry: str = ""
     client_secret: str = ""
@@ -314,6 +320,10 @@ class BackchannelAuthenticationUseCase:
         ttl = self._resolve_ttl(params.requested_expiry)
         if isinstance(ttl, BackchannelAuthenticationError):
             return ttl
+        resources = parse_resource_parameter(params.resource)
+        resource_error = await self._resource_error(resources)
+        if resource_error is not None:
+            return resource_error
 
         auth_req_id = token_urlsafe(32)
         now = datetime.now(timezone.utc)
@@ -330,6 +340,7 @@ class BackchannelAuthenticationUseCase:
                 acr=params.acr_values.split()[0] if params.acr_values.split() else "",
                 interval=self._config.interval_seconds,
                 expires_at=now + timedelta(seconds=ttl),
+                resource_uris=resources,
             )
         )
         return AuthenticationAck(
@@ -337,6 +348,32 @@ class BackchannelAuthenticationUseCase:
             expires_in=ttl,
             interval=self._config.interval_seconds,
         )
+
+    async def _resource_error(
+        self, resources: tuple[str, ...]
+    ) -> BackchannelAuthenticationError | None:
+        """Contrôle les resource indicators (RFC 8707 §2.1-§2.2) ou ``None``.
+
+        Chaque URI doit être absolue, sans fragment, et correspondre à un
+        ``ApiResource.indicator`` enregistré — sinon ``invalid_target``.
+        """
+        if not resources:
+            return None
+        malformed = [uri for uri in resources if not is_resource_uri(uri)]
+        if malformed:
+            return BackchannelAuthenticationError(
+                "invalid_target",
+                "resource doit être une URI absolue sans fragment (RFC 8707 §2.1) : "
+                + ", ".join(malformed),
+            )
+        if self._scope_registry is not None:
+            unknown = await self._scope_registry.unknown_resources(resources)
+            if unknown:
+                return BackchannelAuthenticationError(
+                    "invalid_target",
+                    "Resource non enregistrée (RFC 8707 §2.2) : " + ", ".join(unknown),
+                )
+        return None
 
     async def _validate_scopes(
         self, client: Client, scope: str

@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from puridentityserver.domain.api_resource import ApiResource
+from puridentityserver.domain.api_resource import ApiResource, is_resource_uri
 from puridentityserver.domain.jwks import JWTAlgorithm
 from puridentityserver.interfaces.repositories.api_resource_repository import (
     ApiResourceRepository,
@@ -34,6 +34,7 @@ class ApiResourceRequest:
     display_name: str = ""
     scopes: frozenset[str] = frozenset()
     allowed_access_token_signing_algos: frozenset[str] = frozenset()
+    indicator: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +45,7 @@ class ApiResourceData:
     display_name: str = ""
     scopes: list[str] = field(default_factory=list)
     allowed_access_token_signing_algos: list[str] = field(default_factory=list)
+    indicator: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +103,7 @@ class ApiResourceUseCase:
             display_name=requested.display_name,
             scopes=requested.scopes,
             allowed_access_token_signing_algos=requested.allowed_access_token_signing_algos,
+            indicator=requested.indicator,
         )
         await self._repository.save(updated)
         return _to_data(updated)
@@ -151,11 +154,19 @@ def _parse_request(request: ApiResourceRequest) -> ApiResource | ApiResourceErro
             f"Algorithme(s) de signature non supportés : {', '.join(unknown)}",
             400,
         )
+    indicator = request.indicator.strip()
+    if indicator and not is_resource_uri(indicator):
+        return ApiResourceError(
+            "invalid_api_resource",
+            "L'indicator RFC 8707 doit être une URI absolue sans fragment",
+            400,
+        )
     return ApiResource(
         name=name,
         display_name=request.display_name.strip(),
         scopes=scopes,
         allowed_access_token_signing_algos=algos,
+        indicator=indicator,
     )
 
 
@@ -166,4 +177,5 @@ def _to_data(resource: ApiResource) -> ApiResourceData:
         display_name=resource.display_name,
         scopes=sorted(resource.scopes),
         allowed_access_token_signing_algos=sorted(resource.allowed_access_token_signing_algos),
+        indicator=resource.indicator,
     )

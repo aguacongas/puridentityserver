@@ -46,6 +46,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 - [OAuth 2.0 Dynamic Client Registration] (RFC 7591) + [Client Management] (RFC 7592) — `/register`
 - CORS — origines autorisées **déduites des URIs des clients actifs** (`redirect_uris` + `web_origins`, OAuth 2.0 for Browser-Based Apps), pour les SPA publics en Authorization Code + PKCE
 - **Ressources protégées** (ApiResources) — registre des audiences API et de leurs scopes : l'`aud` d'un access token porte le nom des resources dont des scopes ont été accordés, tout scope non enregistré est refusé (`invalid_scope`)
+- **Resource Indicators** ([RFC 8707 Resource Indicators]) — le paramètre `resource` de `/authorize`, `/par`, `/bc-authorize` et `/token` désigne l'URI cible du jeton : valeur enregistrée en `indicator` d'une ApiResource (sinon `invalid_target`), liée au code / refresh token / ticket CIBA (sous-ensemble exigé au `/token`), et l'`aud` du jeton porte l'URI (chaîne) ou la liste des URI ciblées ; resource server intégré `GET /protected-resource` (flag `protected_resource_enabled`)
 
 ## Endpoints prévus
 
@@ -63,6 +64,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 | `/register`                         | Client registration dynamique (RFC 7591/7592) | ✅   |
 | `/identity-resources`              | Gestion CRUD des IdentityResources (scopes + claims) | ✅   |
 | `/api-resources`                   | Gestion CRUD des ApiResources (scopes d'API / audiences) | ✅   |
+| `/protected-resource`              | Resource server intégré (RFC 8707, FAPI-R-6.2.1) | ✅   |
 | `/end_session`                      | RP-Initiated Logout                       | ✅   |
 | `/session_state` + `/check_session` | Session Management (iframe OP + statut)   | ✅   |
 
@@ -266,6 +268,20 @@ tests/             pytest unit + intégration (TestClient httpx)
     `dpop_signing_alg_values_supported` publié au discovery (algorithmes
     asymétriques uniquement). Échantillon testable pas-à-pas :
     `samples/dpop-client/`.
+23. ✅ **Resource Indicators** (issue #101, RFC 8707) — le paramètre
+    `resource` (une ou plusieurs URI absolues sans fragment, repliées en
+    tableau JSON compact) est accepté sur `/authorize` (GET et POST), `/par`,
+    `/bc-authorize` et `/token` ; chaque URI doit correspondre à l'`indicator`
+    d'une ApiResource seedée, sinon `invalid_target` (redirectable sur
+    `/authorize`). Les resources sont **liées au support** : persistées sur le
+    code d'autorisation, le refresh token et le ticket CIBA, le `/token`
+    n'acceptant qu'un sous-ensemble de ce périmètre (§4). L'`aud` de l'access
+    token vaut l'URI ciblée (chaîne) ou la liste des URI (ordre du client),
+    en priorité sur le calcul d'audience par scopes. Resource server intégré
+    `GET /protected-resource` (flag `protected_resource_enabled`, Bearer
+    uniquement, `x-fapi-interaction-id` échoyée ou générée, `401` + challenge
+    `WWW-Authenticate`). Échantillon testable pas-à-pas :
+    `samples/resource-indicators-client/`.
 
 ## Développement local
 
@@ -315,6 +331,7 @@ gh secret set SONAR_SECRET
 
 [OAuth 2.0 Core]: https://datatracker.ietf.org/doc/html/rfc6749
 [OAuth 2.0 Bearer Tokens]: https://datatracker.ietf.org/doc/html/rfc6750
+[Resource Indicators (RFC 8707)]: https://datatracker.ietf.org/doc/html/rfc8707
 [OpenID Connect Core 1.0]: https://openid.net/specs/openid-connect-core-1_0.html
 [OpenID Connect Discovery]: https://openid.net/specs/openid-connect-discovery-1_0.html
 [JWK Set]: https://www.rfc-editor.org/rfc/rfc7517
