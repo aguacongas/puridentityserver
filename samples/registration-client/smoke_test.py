@@ -11,18 +11,20 @@ scénario :
 1. le discovery annonce ``registration_endpoint`` (``/register``) ;
 2. ``POST /register`` sans initial access token -> ``401 invalid_client`` ;
 3. ``POST /register`` avec une redirect_uri invalide -> ``400 invalid_redirect_uri`` ;
-4. ``POST /register`` avec un initial access token -> ``201`` + ``Location``,
+4. ``POST /register`` profil CIBA (``grant_types`` sans flow de redirection)
+   sans ``redirect_uris`` -> ``201`` (RFC 7591 §2 : ``redirect_uris`` omissible) ;
+5. ``POST /register`` avec un initial access token -> ``201`` + ``Location``,
    ``client_id`` + ``client_secret`` + ``registration_access_token`` émis une seule fois ;
-5. ``GET /register/{client_id}`` avec le registration access token -> ``200``
+6. ``GET /register/{client_id}`` avec le registration access token -> ``200``
    (métadonnées, ni secret ni registration token dans la réponse) ;
-6. flow OIDC complet avec le client **dynamique** : ``/authorize`` puis
+7. flow OIDC complet avec le client **dynamique** : ``/authorize`` puis
    ``/token`` avec le secret émis à la registration -> ``200`` access_token ;
-7. ``PUT /register/{client_id}`` avec un nouveau ``client_secret`` (rotation)
+8. ``PUT /register/{client_id}`` avec un nouveau ``client_secret`` (rotation)
    -> ``200`` + nouveau secret, émis une seule fois ;
-8. ``/token`` avec l'ancien secret -> ``400 invalid_client`` (rotation) ;
-9. ``/token`` avec le nouveau secret -> ``200`` access_token ;
-10. ``DELETE /register/{client_id}`` -> ``204`` ;
-11. ``GET /register/{client_id}`` -> ``404`` (suppression effective).
+9. ``/token`` avec l'ancien secret -> ``400 invalid_client`` (rotation) ;
+10. ``/token`` avec le nouveau secret -> ``200`` access_token ;
+11. ``DELETE /register/{client_id}`` -> ``204`` ;
+12. ``GET /register/{client_id}`` -> ``404`` (suppression effective).
 
 Le sous-processus est terminé dans tous les cas (``finally``) et un
 garde-fou borne la durée totale.
@@ -123,17 +125,29 @@ def _run_scenario() -> None:
     with httpx.Client(follow_redirects=False, timeout=_HTTP_TIMEOUT) as http:
         metadata = http.get(f"{SERVER_URL}/.well-known/openid-configuration").json()
         assert metadata["registration_endpoint"] == f"{SERVER_URL}/register"
-        print(f"  [1/11] discovery OK (registration_endpoint={metadata['registration_endpoint']})")
+        print(f"  [1/12] discovery OK (registration_endpoint={metadata['registration_endpoint']})")
 
         response = _register(http, _METADATA, initial_access_token="")
         assert response.status_code == 401, response.text
         assert response.json()["error"] == "invalid_client"
-        print("  [2/11] POST /register sans initial access token -> 401 invalid_client OK")
+        print("  [2/12] POST /register sans initial access token -> 401 invalid_client OK")
 
         response = _register(http, {**_METADATA, "redirect_uris": ["javascript:alert(1)"]})
         assert response.status_code == 400, response.text
         assert response.json()["error"] == "invalid_redirect_uri"
-        print("  [3/11] redirect_uri invalide -> 400 invalid_redirect_uri OK")
+        print("  [3/12] redirect_uri invalide -> 400 invalid_redirect_uri OK")
+
+        response = _register(
+            http,
+            {
+                "grant_types": ["urn:openid:params:grant-type:ciba"],
+                "response_types": [],
+                "scope": "openid",
+            },
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["redirect_uris"] == []
+        print("  [4/12] DCR sans redirect_uris (grant CIBA, RFC 7591 §2) -> 201 OK")
 
         response = _register(http, _METADATA)
         assert response.status_code == 201, response.text
@@ -154,7 +168,7 @@ def _run_scenario() -> None:
         assert response.headers["location"] == registration_client_uri
         assert registration_client_uri == f"{REGISTRATION_URL}/{client_id}"
         print(
-            f"  [4/11] POST /register -> 201 (client_id={client_id[:8]}..., "
+            f"  [5/12] POST /register -> 201 (client_id={client_id[:8]}..., "
             f"secret + registration_access_token émis une seule fois)"
         )
 
@@ -167,14 +181,14 @@ def _run_scenario() -> None:
         assert read["client_id"] == client_id
         assert "client_secret" not in read
         assert "registration_access_token" not in read
-        print("  [5/11] GET /register/{{client_id}} -> 200 (ni secret ni token réémis) OK")
+        print("  [6/12] GET /register/{{client_id}} -> 200 (ni secret ni token réémis) OK")
 
         code = _authorize(http, client_id=client_id)
         response = _exchange_code(http, code=code, client_id=client_id, client_secret=client_secret)
         assert response.status_code == 200, response.text
         assert response.json()["token_type"] == "Bearer"
         assert response.json()["access_token"]
-        print("  [6/11] flow OIDC complet via le client dynamique (secret de registration) OK")
+        print("  [7/12] flow OIDC complet via le client dynamique (secret de registration) OK")
 
         new_secret = "rotated-secret-8chars"
         response = http.put(
@@ -186,28 +200,28 @@ def _run_scenario() -> None:
         updated = response.json()
         assert updated["client_secret"] == new_secret
         assert updated["scope"] == "email openid profile"
-        print("  [7/11] PUT /register/{{client_id}} (rotation du secret) -> 200 OK")
+        print("  [8/12] PUT /register/{{client_id}} (rotation du secret) -> 200 OK")
 
         code = _authorize(http, client_id=client_id)
         response = _exchange_code(http, code=code, client_id=client_id, client_secret=client_secret)
         assert response.status_code == 400, response.text
         assert response.json()["error"] == "invalid_client"
-        print("  [8/11] ancien secret après rotation -> 400 invalid_client OK")
+        print("  [9/12] ancien secret après rotation -> 400 invalid_client OK")
 
         code = _authorize(http, client_id=client_id)
         response = _exchange_code(http, code=code, client_id=client_id, client_secret=new_secret)
         assert response.status_code == 200, response.text
         assert response.json()["access_token"]
-        print("  [9/11] nouveau secret (après rotation) -> 200 access_token OK")
+        print("  [10/12] nouveau secret (après rotation) -> 200 access_token OK")
 
         response = http.delete(registration_client_uri, headers=auth)
         assert response.status_code == 204, response.text
         assert response.content == b""
-        print("  [10/11] DELETE /register/{{client_id}} -> 204 corps vide OK")
+        print("  [11/12] DELETE /register/{{client_id}} -> 204 corps vide OK")
 
         response = http.get(registration_client_uri, headers=auth)
         assert response.status_code == 404, response.text
-        print("  [11/11] GET /register/{{client_id}} après suppression -> 404 OK")
+        print("  [12/12] GET /register/{{client_id}} après suppression -> 404 OK")
     print()
 
 
