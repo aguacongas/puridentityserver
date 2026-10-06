@@ -321,6 +321,54 @@ class TestRegister:
         assert result.error == "invalid_client_metadata"
         assert "redirect_uris" in result.error_description
 
+    def test_rejects_missing_redirect_uris_with_redirect_grants(self) -> None:
+        usecase = _usecase()
+
+        for grant in ("authorization_code", "implicit"):
+            result = run(
+                usecase.register(
+                    RegisterRequest({"grant_types": [grant]}, initial_access_token=_INITIAL_TOKEN)
+                )
+            )
+
+            assert isinstance(result, RegistrationError)
+            assert result.error == "invalid_client_metadata"
+            assert "redirect_uris" in result.error_description
+
+    def test_accepts_missing_redirect_uris_without_redirect_grants(self) -> None:
+        usecase = _usecase()
+
+        result = run(
+            usecase.register(
+                RegisterRequest(
+                    {
+                        "grant_types": ["urn:openid:params:grant-type:ciba"],
+                        "response_types": [],
+                    },
+                    initial_access_token=_INITIAL_TOKEN,
+                )
+            )
+        )
+
+        assert isinstance(result, ClientRegistration)
+        assert result.client_id
+        assert result.redirect_uris == []
+
+    def test_reports_grant_types_error_when_not_a_list(self) -> None:
+        usecase = _usecase()
+
+        result = run(
+            usecase.register(
+                RegisterRequest(
+                    {"grant_types": "authorization_code"}, initial_access_token=_INITIAL_TOKEN
+                )
+            )
+        )
+
+        assert isinstance(result, RegistrationError)
+        assert result.error == "invalid_client_metadata"
+        assert "grant_types" in result.error_description
+
     def test_rejects_invalid_redirect_uris(self) -> None:
         usecase = _usecase()
         for bad_uri in (

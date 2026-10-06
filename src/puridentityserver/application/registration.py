@@ -807,7 +807,7 @@ def _parse_metadata(
         return RegistrationError(
             "invalid_client_metadata", "Métadonnées non conforme (objet JSON attendu)"
         )
-    redirect_uris = _parse_uri_list(raw, "redirect_uris", required=True)
+    redirect_uris = _parse_uri_list(raw, "redirect_uris", required=_uses_redirect_flows(raw))
     if isinstance(redirect_uris, RegistrationError):
         return redirect_uris
     post_logout_uris = _parse_uri_list(raw, "post_logout_redirect_uris")
@@ -1027,6 +1027,27 @@ def _assemble_extras(
         cast(str, results["backchannel_token_delivery_mode"]),
         cast(str, results["backchannel_client_notification_endpoint"]),
         cast(str, results["backchannel_authentication_request_signing_alg"]),
+    )
+
+
+def _uses_redirect_flows(raw: dict[str, object]) -> bool:
+    """Indique si le client doit déclarer ``redirect_uris`` (RFC 7591 §2).
+
+    ``redirect_uris`` n'est exigé que pour les clients utilisant des flows
+    **avec redirection** (``authorization_code``, ``implicit``) : un client
+    sans flow de redirection (ex. CIBA seul,
+    ``urn:openid:params:grant-type:ciba``) peut l'omettre. ``grant_types``
+    absent vaut ``authorization_code`` (défaut RFC 7591 §2) : la déclaration
+    reste alors exigée. Un ``grant_types`` de type invalide est laissé à
+    :func:`_parse_members`, qui rendra sa propre erreur.
+    """
+    value = raw.get("grant_types")
+    if value is None:
+        return True
+    if not isinstance(value, list):
+        return False
+    return any(
+        member in {"authorization_code", "implicit"} for member in value if isinstance(member, str)
     )
 
 
