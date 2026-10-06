@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import threading
 from collections.abc import Awaitable
@@ -10,9 +11,13 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from secrets import token_urlsafe
 from typing import ClassVar, TypeVar
 
+import jwt as pyjwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -58,6 +63,9 @@ from puridentityserver.infrastructure.persistence.memory.codes import (
 from puridentityserver.infrastructure.persistence.memory.device_authorizations import (
     InMemoryDeviceAuthorizationRepository,
 )
+from puridentityserver.infrastructure.persistence.memory.dpop_replays import (
+    InMemoryDpopReplayRepository,
+)
 from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKeyPairRepository
 from puridentityserver.infrastructure.persistence.memory.refresh_tokens import (
     InMemoryRefreshTokenRepository,
@@ -67,8 +75,14 @@ from puridentityserver.infrastructure.persistence.sql.backchannel_authentication
     SQLBackchannelAuthenticationRepository,
 )
 from puridentityserver.infrastructure.settings import Settings
+from puridentityserver.infrastructure.signed_request_object import (
+    PyJWTSignedRequestObjectVerifier,
+)
 from puridentityserver.infrastructure.tokens import PyJWTTokenManager
-from puridentityserver.interfaces.domain.client_assertions import LoginHintTokenResult
+from puridentityserver.interfaces.domain.client_assertions import (
+    CLIENT_ASSERTION_TYPE_URN,
+    LoginHintTokenResult,
+)
 from puridentityserver.server import create_app
 
 _T = TypeVar("_T")
@@ -127,6 +141,8 @@ def _make_usecase(
     users: InMemoryUserRepository | None = None,
     assertions: object | None = None,
     token_manager: object | None = None,
+    request_objects: object | None = None,
+    extra_clients: tuple[Client, ...] = (),
 ) -> tuple[
     BackchannelAuthenticationUseCase,
     InMemoryBackchannelAuthenticationRepository,
@@ -147,6 +163,7 @@ def _make_usecase(
         requests,
         client_assertions=assertions,  # type: ignore[arg-type]
         token_manager=token_manager,  # type: ignore[arg-type]
+        request_objects=request_objects,  # type: ignore[arg-type]
     )
     token_uc = TokenUseCase(
         TokenConfig(issuer=_ISSUER, signing_algorithm=JWTAlgorithm.RS256),
@@ -159,7 +176,79 @@ def _make_usecase(
     )
     approval = CibaApprovalUseCase(requests)
     run(clients.save(client or _CIBA_CLIENT))
+    for extra in extra_clients:
+        run(clients.save(extra))
     return uc, requests, token_uc, approval
+
+
+_JAR_KID = "ciba-jar-test-key"
+
+
+def _jar_key(algorithm: str = "PS256") -> tuple[RSAPrivateKey, tuple[dict[str, object], ...]]:
+    """Paire RSA de test et JWKS embarqué (``kid``/``alg``) pour le ``request``."""
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    numbers = private.public_key().public_numbers()
+    n = base64.urlsafe_b64encode(numbers.n.to_bytes((numbers.n.bit_length() + 7) // 8, "big"))
+    e = base64.urlsafe_b64encode(numbers.e.to_bytes((numbers.e.bit_length() + 7) // 8, "big"))
+    jwks = (
+        {
+            "kty": "RSA",
+            "use": "sig",
+            "kid": _JAR_KID,
+            "alg": algorithm,
+            "n": n.rstrip(b"=").decode("ascii"),
+            "e": e.rstrip(b"=").decode("ascii"),
+        },
+    )
+    return private, jwks
+
+
+def _signed_client(jwks: tuple[dict[str, object], ...], *, algorithm: str = "PS256") -> Client:
+    """Client CIBA exigeant un ``request`` signé (JWKS embarqués + secret)."""
+    return Client(
+        client_id=_CLIENT_ID,
+        scopes=frozenset({Scope.OPENID, Scope.PROFILE, Scope.OFFLINE_ACCESS}),
+        client_type=ClientType.CONFIDENTIAL,
+        client_secret_hash=hashlib.sha256(_CLIENT_SECRET.encode("utf-8")).hexdigest(),
+        backchannel_token_delivery_mode="poll",
+        backchannel_authentication_request_signing_alg=algorithm,
+        jwks=jwks,
+    )
+
+
+def _jar_verifier() -> PyJWTSignedRequestObjectVerifier:
+    """Vérificateur JAR réel branché sur un store anti-replay neuf."""
+    return PyJWTSignedRequestObjectVerifier(InMemoryDpopReplayRepository())
+
+
+def _request_object(
+    private_key: RSAPrivateKey,
+    *,
+    algorithm: str = "PS256",
+    issuer: str = _CLIENT_ID,
+    audience: str = _ISSUER,
+    claims: dict[str, object] | None = None,
+    lifetime: int = 600,
+    nbf: int = 0,
+    omit_jti: bool = False,
+) -> str:
+    """Signe un request object CIBA (iss/aud/iat/nbf/exp/jti + hints)."""
+    now = int(datetime.now(timezone.utc).timestamp())
+    payload: dict[str, object] = {
+        "iss": issuer,
+        "aud": audience,
+        "iat": now,
+        "nbf": now + nbf,
+        "exp": now + nbf + lifetime,
+        "jti": token_urlsafe(16),
+        "scope": "openid",
+        "login_hint": _USER_SUBJECT,
+    }
+    if omit_jti:
+        payload.pop("jti", None)
+    if claims:
+        payload.update(claims)
+    return str(pyjwt.encode(payload, private_key, algorithm=algorithm, headers={"kid": _JAR_KID}))
 
 
 def _store_request(
@@ -416,13 +505,13 @@ class TestBackchannelAuthorizeUseCase:
         uc, *_ = _make_usecase()
         result = run(uc.execute(_params(login_hint=_USER_SUBJECT, request="eyJhbGciOiJub25lIn0.x")))
         assert isinstance(result, BackchannelAuthenticationError)
-        assert result.error == "invalid_request_object"
+        assert result.error == "invalid_request"
 
     def test_rejects_request_uri(self) -> None:
         uc, *_ = _make_usecase()
         result = run(uc.execute(_params(login_hint=_USER_SUBJECT, request_uri="urn:x:y")))
         assert isinstance(result, BackchannelAuthenticationError)
-        assert result.error == "invalid_request_object"
+        assert result.error == "invalid_request"
 
     def test_expired_login_hint_token(self) -> None:
         assertions = _FakeAssertions(LoginHintTokenResult(claims=None, expired=True))
@@ -465,6 +554,220 @@ class TestBackchannelAuthorizeUseCase:
         result = run(uc.execute(_params(id_token_hint="forged")))
         assert isinstance(result, BackchannelAuthenticationError)
         assert result.error == "invalid_request"
+
+
+class TestSignedRequestObject:
+    """Request objects signés au backchannel endpoint (OIDC CIBA 1.0 §7.1.1, JAR)."""
+
+    def test_accepts_signed_request_object(self) -> None:
+        key, jwks = _jar_key("PS256")
+        uc, requests, *_ = _make_usecase(_signed_client(jwks), request_objects=_jar_verifier())
+        token = _request_object(key, algorithm="PS256")
+        result = run(uc.execute(_params(request=token)))
+        assert isinstance(result, AuthenticationAck)
+        stored = run(requests.find_by_auth_req_id_hash(token_hash(result.auth_req_id)))
+        assert stored is not None
+        assert stored.subject == _USER_SUBJECT
+        assert stored.scopes == frozenset({Scope.OPENID})
+
+    def test_request_claims_override_form_parameters(self) -> None:
+        key, jwks = _jar_key("PS256")
+        uc, requests, *_ = _make_usecase(_signed_client(jwks), request_objects=_jar_verifier())
+        token = _request_object(
+            key,
+            algorithm="PS256",
+            claims={"scope": "openid offline_access", "binding_message": "code 9911"},
+        )
+        result = run(uc.execute(_params(request=token, binding_message="form 0000")))
+        assert isinstance(result, AuthenticationAck)
+        stored = run(requests.find_by_auth_req_id_hash(token_hash(result.auth_req_id)))
+        assert stored is not None
+        assert stored.scopes == frozenset({Scope.OPENID, Scope.OFFLINE_ACCESS})
+        assert stored.binding_message == "code 9911"
+
+    def test_deduces_client_id_from_request_object(self) -> None:
+        key, jwks = _jar_key("PS256")
+        uc, *_ = _make_usecase(_signed_client(jwks), request_objects=_jar_verifier())
+        token = _request_object(key, algorithm="PS256")
+        result = run(uc.execute(_params(client_id="", request=token)))
+        assert isinstance(result, AuthenticationAck)
+
+    def test_requires_signed_request_for_registered_alg(self) -> None:
+        _, jwks = _jar_key("PS256")
+        uc, *_ = _make_usecase(_signed_client(jwks), request_objects=_jar_verifier())
+        result = run(uc.execute(_params(login_hint=_USER_SUBJECT)))
+        assert isinstance(result, BackchannelAuthenticationError)
+        assert result.error == "invalid_request"
+
+    def test_rejects_request_signed_with_unknown_key(self) -> None:
+        _, jwks = _jar_key("PS256")
+        rogue, _ = _jar_key("PS256")
+        uc, *_ = _make_usecase(_signed_client(jwks), request_objects=_jar_verifier())
+        token = _request_object(rogue, algorithm="PS256")
+        result = run(uc.execute(_params(request=token)))
+        assert isinstance(result, BackchannelAuthenticationError)
+        assert result.error == "invalid_request"
+
+    def test_rejects_request_with_unregistered_algorithm(self) -> None:
+        key, jwks = _jar_key("PS256")
+        uc, *_ = _make_usecase(_signed_client(jwks), request_objects=_jar_verifier())
+        token = _request_object(key, algorithm="RS256")
+        result = run(uc.execute(_params(request=token)))
+        assert isinstance(result, BackchannelAuthenticationError)
+        assert result.error == "invalid_request"
+
+    def test_rejects_symmetric_request_when_alg_not_registered(self) -> None:
+        uc, *_ = _make_usecase(_CIBA_CLIENT, request_objects=_jar_verifier())
+        now = int(datetime.now(timezone.utc).timestamp())
+        token = str(
+            pyjwt.encode(
+                {
+                    "iss": _CLIENT_ID,
+                    "aud": _ISSUER,
+                    "iat": now,
+                    "nbf": now,
+                    "exp": now + 600,
+                    "jti": token_urlsafe(16),
+                    "login_hint": _USER_SUBJECT,
+                },
+                "x" * 32,
+                algorithm="HS256",
+                headers={"kid": _JAR_KID},
+            )
+        )
+        result = run(uc.execute(_params(request=token)))
+        assert isinstance(result, BackchannelAuthenticationError)
+        assert result.error == "invalid_request"
+
+    def test_rejects_request_object_from_other_client(self) -> None:
+        key, jwks = _jar_key("PS256")
+        other = Client(
+            client_id="other-app",
+            scopes=frozenset({Scope.OPENID}),
+            client_type=ClientType.CONFIDENTIAL,
+            backchannel_token_delivery_mode="poll",
+            jwks=jwks,
+        )
+        uc, *_ = _make_usecase(
+            _signed_client(jwks),
+            extra_clients=(other,),
+            request_objects=_jar_verifier(),
+        )
+        token = _request_object(key, algorithm="PS256", issuer="other-app")
+        result = run(uc.execute(_params(request=token)))
+        assert isinstance(result, BackchannelAuthenticationError)
+        assert result.error == "invalid_client"
+        assert result.status_code == 401
+
+    def test_rejects_replayed_request_object_jti(self) -> None:
+        key, jwks = _jar_key("PS256")
+        uc, *_ = _make_usecase(_signed_client(jwks), request_objects=_jar_verifier())
+        token = _request_object(key, algorithm="PS256")
+        first = run(uc.execute(_params(request=token)))
+        assert isinstance(first, AuthenticationAck)
+        second = run(uc.execute(_params(request=token)))
+        assert isinstance(second, BackchannelAuthenticationError)
+        assert second.error == "invalid_request"
+
+    def test_rejects_expired_request_object(self) -> None:
+        key, jwks = _jar_key("PS256")
+        uc, *_ = _make_usecase(_signed_client(jwks), request_objects=_jar_verifier())
+        now = int(datetime.now(timezone.utc).timestamp())
+        token = _request_object(
+            key,
+            algorithm="PS256",
+            claims={"iat": now - 120, "nbf": now - 120, "exp": now - 60},
+        )
+        result = run(uc.execute(_params(request=token)))
+        assert isinstance(result, BackchannelAuthenticationError)
+        assert result.error == "invalid_request"
+
+    def test_rejects_immature_request_object(self) -> None:
+        key, jwks = _jar_key("PS256")
+        uc, *_ = _make_usecase(_signed_client(jwks), request_objects=_jar_verifier())
+        token = _request_object(key, algorithm="PS256", nbf=120, lifetime=600)
+        result = run(uc.execute(_params(request=token)))
+        assert isinstance(result, BackchannelAuthenticationError)
+        assert result.error == "invalid_request"
+
+    def test_rejects_request_object_over_sixty_minutes(self) -> None:
+        key, jwks = _jar_key("PS256")
+        uc, *_ = _make_usecase(_signed_client(jwks), request_objects=_jar_verifier())
+        token = _request_object(key, algorithm="PS256", lifetime=4200)
+        result = run(uc.execute(_params(request=token)))
+        assert isinstance(result, BackchannelAuthenticationError)
+        assert result.error == "invalid_request"
+
+    def test_rejects_request_object_of_unknown_issuer(self) -> None:
+        key, jwks = _jar_key("PS256")
+        uc, *_ = _make_usecase(_signed_client(jwks), request_objects=_jar_verifier())
+        token = _request_object(key, algorithm="PS256", issuer="ghost-app")
+        result = run(uc.execute(_params(request=token)))
+        assert isinstance(result, BackchannelAuthenticationError)
+        assert result.error == "invalid_request"
+
+    def test_rejects_request_object_without_jti(self) -> None:
+        key, jwks = _jar_key("PS256")
+        uc, *_ = _make_usecase(_signed_client(jwks), request_objects=_jar_verifier())
+        token = _request_object(key, algorithm="PS256", omit_jti=True)
+        result = run(uc.execute(_params(request=token)))
+        assert isinstance(result, BackchannelAuthenticationError)
+        assert result.error == "invalid_request"
+
+    def test_rejects_request_object_with_empty_jti(self) -> None:
+        key, jwks = _jar_key("PS256")
+        uc, *_ = _make_usecase(_signed_client(jwks), request_objects=_jar_verifier())
+        token = _request_object(key, algorithm="PS256", claims={"jti": ""})
+        result = run(uc.execute(_params(request=token)))
+        assert isinstance(result, BackchannelAuthenticationError)
+        assert result.error == "invalid_request"
+
+    def test_http_accepts_request_and_assertion_without_client_id(self) -> None:
+        """Corps type FAPI-CIBA-ID1 : ``request`` + assertion, sans ``client_id`` (§7.1, §7.2)."""
+        key, jwks = _jar_key("PS256")
+        now = int(datetime.now(timezone.utc).timestamp())
+        assertion = str(
+            pyjwt.encode(
+                {
+                    "iss": _CLIENT_ID,
+                    "sub": _CLIENT_ID,
+                    "aud": _ISSUER,
+                    "iat": now,
+                    "exp": now + 300,
+                },
+                key,
+                algorithm="PS256",
+                headers={"kid": _JAR_KID},
+            )
+        )
+        app = _app(
+            clients_seed=(
+                {
+                    "client_id": _CLIENT_ID,
+                    "scopes": "openid profile offline_access",
+                    "client_type": "confidential",
+                    "token_endpoint_auth_method": "private_key_jwt",
+                    "jwks": list(jwks),
+                    "backchannel_token_delivery_mode": "poll",
+                    "backchannel_authentication_request_signing_alg": "PS256",
+                },
+            ),
+        )
+        with TestClient(app) as client:
+            resp = client.post(
+                "/bc-authorize",
+                data={
+                    "request": _request_object(
+                        key,
+                        algorithm="PS256",
+                        claims={"login_hint": _DEMO_HINT_EMAIL},
+                    ),
+                    "client_assertion": assertion,
+                    "client_assertion_type": CLIENT_ASSERTION_TYPE_URN,
+                },
+            )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["auth_req_id"]
 
 
 class TestCibaApprovalUseCase:
@@ -971,6 +1274,11 @@ class TestCibaIntegrationHTTP:
             assert doc["backchannel_authentication_endpoint"] == f"{_ISSUER}/bc-authorize"
             assert doc["backchannel_token_delivery_modes_supported"] == ["poll", "ping"]
             assert doc["backchannel_user_code_parameter_supported"] is False
+            assert doc["backchannel_authentication_request_signing_alg_values_supported"] == [
+                "PS256",
+                "ES256",
+                "RS256",
+            ]
             assert CIBA_GRANT_TYPE in doc["grant_types_supported"]
 
     def test_discovery_hides_ciba_without_flag(self) -> None:
@@ -978,6 +1286,7 @@ class TestCibaIntegrationHTTP:
             doc = client.get("/.well-known/openid-configuration").json()
             assert doc["backchannel_authentication_endpoint"] is None
             assert doc["backchannel_token_delivery_modes_supported"] == []
+            assert doc["backchannel_authentication_request_signing_alg_values_supported"] == []
             assert CIBA_GRANT_TYPE not in doc["grant_types_supported"]
 
 
@@ -1050,3 +1359,72 @@ class TestCibaRegistrationMetadata:
             )
             assert resp.status_code == 400
             assert resp.json()["error"] == "invalid_client_metadata"
+
+    def test_registers_client_with_request_signing_alg(self) -> None:
+        with TestClient(self._app()) as client:
+            resp = client.post(
+                "/register",
+                json={
+                    "redirect_uris": ["https://rp.example/cb"],
+                    "backchannel_token_delivery_mode": "poll",
+                    "backchannel_authentication_request_signing_alg": "PS256",
+                },
+                headers=self._HEADERS,
+            )
+            assert resp.status_code == 201, resp.text
+            body = resp.json()
+            assert body["backchannel_authentication_request_signing_alg"] == "PS256"
+            read = client.get(
+                f"/register/{body['client_id']}",
+                headers={"Authorization": f"Bearer {body['registration_access_token']}"},
+            )
+            assert read.status_code == 200, read.text
+            assert read.json()["backchannel_authentication_request_signing_alg"] == "PS256"
+
+    def test_rejects_unknown_request_signing_alg(self) -> None:
+        with TestClient(self._app()) as client:
+            resp = client.post(
+                "/register",
+                json={
+                    "redirect_uris": ["https://rp.example/cb"],
+                    "backchannel_authentication_request_signing_alg": "HS256",
+                },
+                headers=self._HEADERS,
+            )
+            assert resp.status_code == 400
+            assert resp.json()["error"] == "invalid_client_metadata"
+
+
+class TestSignedRequestObjectVerifier:
+    """Refus hors bornes du ``request`` signé (JAR, OIDC CIBA 1.0 §7.1.1)."""
+
+    def test_rejects_wrong_audience(self) -> None:
+        key, jwks = _jar_key("RS256")
+        client = _signed_client(jwks)
+        token = _request_object(key, algorithm="RS256", audience="https://other.example")
+        result = run(
+            _jar_verifier().verify(
+                token=token, client=client, issuer=_ISSUER, allowed_algorithms=("RS256",)
+            )
+        )
+        assert result.claims is None
+        assert "aud" in result.reason
+
+    def test_rejects_iss_different_from_client(self) -> None:
+        key, jwks = _jar_key("RS256")
+        client = _signed_client(jwks)
+        token = _request_object(key, algorithm="RS256", issuer="someone-else")
+        result = run(
+            _jar_verifier().verify(
+                token=token, client=client, issuer=_ISSUER, allowed_algorithms=("RS256",)
+            )
+        )
+        assert result.claims is None
+        assert "iss" in result.reason
+
+    def test_issuer_of_reads_unverified_iss(self) -> None:
+        key, _ = _jar_key("RS256")
+        token = _request_object(key, algorithm="RS256")
+        verifier = _jar_verifier()
+        assert verifier.issuer_of(token) == _CLIENT_ID
+        assert verifier.issuer_of("not.a-jwt") == ""

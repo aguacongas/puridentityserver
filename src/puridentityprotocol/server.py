@@ -83,6 +83,9 @@ from puridentityserver.infrastructure.request_object import (
 )
 from puridentityserver.infrastructure.secrets import AsymmetricSecretCipher, load_seal_key_pair
 from puridentityserver.infrastructure.settings import Settings
+from puridentityserver.infrastructure.signed_request_object import (
+    PyJWTSignedRequestObjectVerifier,
+)
 from puridentityserver.infrastructure.tokens import PyJWTTokenManager
 from puridentityserver.interfaces.api.authorize import authorize_router
 from puridentityserver.interfaces.api.backchannel_authorize import (
@@ -292,6 +295,7 @@ class ProtocolDependencies:
             self.scope_registry,
             client_assertions=self.client_assertions,
             token_manager=self.token_manager,
+            request_objects=PyJWTSignedRequestObjectVerifier(stores.dpop_replay),
         )
         self.ciba_approval_usecase = CibaApprovalUseCase(
             stores.backchannel, ping_notifier=HTTPCibaPingNotifier()

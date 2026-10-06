@@ -20,6 +20,7 @@ from puridentityserver.domain.jwe import (
 from puridentityserver.domain.jwks import (
     ALL_SIGNING_ALGORITHMS,
     ASYMMETRIC_ALGORITHMS,
+    CIBA_REQUEST_SIGNING_ALGORITHMS,
     JWTAlgorithm,
 )
 from puridentityserver.interfaces.repositories.readers import (
@@ -37,6 +38,7 @@ class DiscoveryConfig:
     registration_enabled: bool = False
     par_enabled: bool = True
     ciba_enabled: bool = False
+    ciba_request_signing_algorithms: tuple[str, ...] = CIBA_REQUEST_SIGNING_ALGORITHMS
     signing_algorithms: tuple[str, ...] = tuple(
         algorithm.value for algorithm in ALL_SIGNING_ALGORITHMS
     )
@@ -116,13 +118,16 @@ class DiscoveryUseCase:
         if self._config.par_enabled:
             metadata["pushed_authorization_request_endpoint"] = f"{base}/par"
         # CIBA (OIDC CIBA 1.0 §5.1) : modes poll/ping livrés, endpoint dédié,
-        # et le grant publiquement annoncé. ``user_code`` n'est pas supporté
-        # ; ``backchannel_authentication_request_signing_alg_values_supported``
-        # reste omis — les request objects signés sont hors périmètre (§5.2).
+        # grant publiquement annoncé et algorithmes de signature des request
+        # objects (CIBA §5.2.2, check ``*SigningAlgValuesSupported``).
+        # ``user_code`` n'est pas supporté (§5.1).
         if self._config.ciba_enabled:
             metadata["backchannel_token_delivery_modes_supported"] = ["poll", "ping"]
             metadata["backchannel_authentication_endpoint"] = f"{base}/bc-authorize"
             metadata["backchannel_user_code_parameter_supported"] = False
+            metadata["backchannel_authentication_request_signing_alg_values_supported"] = list(
+                self._config.ciba_request_signing_algorithms
+            )
             metadata["grant_types_supported"] = [
                 *self._config.grant_types_supported,
                 "urn:openid:params:grant-type:ciba",

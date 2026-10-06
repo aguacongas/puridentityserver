@@ -8,18 +8,23 @@ l'acquittement ``{auth_req_id, expires_in, interval}`` (§7.3). Le résultat
 est ensuite recueilli via ``/token`` avec le grant
 ``urn:openid:params:grant-type:ciba`` (modes ``poll`` / ``ping``).
 
-Les request objects signés (``request``, FAPI/JAR) ne sont pas encore
-supportés au backchannel endpoint : ils sont refusés explicitement — le
-cœur du flow (hints, grant, approbation, notification) est indépendant de
-ce complément (issue dédiée).
+Le paramètre ``request`` (request object signé — JAR, RFC 9101) est
+vérifié derrière le port ``SignedRequestObjectVerifier`` : signature contre
+les JWKS du client nommé par ``iss``, claims temporels bornés et ``jti``
+anti-replay (§7.1.1). Sa présence est **obligatoire** pour un client
+enregistré avec ``backchannel_authentication_request_signing_alg`` — les
+autres clients conservent le chemin non signé. ``request_uri`` reste
+refusé. Tout échec du request object est rendu ``invalid_request`` (§13).
 """
 
 from __future__ import annotations
 
+import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
+from typing import Any
 
 from puridentityserver.application.client_auth import (
     CLIENT_UNKNOWN_ERROR,
@@ -33,9 +38,11 @@ from puridentityserver.domain.authorization import (
     ClientCertificate,
     Scope,
 )
+from puridentityserver.domain.jwks import CIBA_REQUEST_SIGNING_ALGORITHMS
 from puridentityserver.domain.revocation import token_hash
 from puridentityserver.interfaces.domain.backchannel import CibaPingNotifier
 from puridentityserver.interfaces.domain.client_assertions import ClientAssertionVerifier
+from puridentityserver.interfaces.domain.request_object import SignedRequestObjectVerifier
 from puridentityserver.interfaces.domain.tokens import TokenManager
 from puridentityserver.interfaces.repositories.backchannel_authentication_repository import (
     BackchannelAuthenticationRepository,
@@ -51,6 +58,19 @@ _NOTIFICATION_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9\-._~+/]+=*\Z")
 #: Claims pouvant porter l'identité d'un utilisateur dans un hint (CIBA §7.1).
 _HINT_IDENTITY_CLAIMS = ("sub", "email", "preferred_username", "phone_number")
 
+#: Paramètres de demande que les claims du request object peuvent porter et
+#: faire primer sur le corps form (RFC 9101 §4, OIDC Core 1.0 §6.1).
+_REQUEST_CLAIM_PARAMETERS = (
+    "scope",
+    "login_hint",
+    "login_hint_token",
+    "id_token_hint",
+    "binding_message",
+    "acr_values",
+    "client_notification_token",
+    "requested_expiry",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class BackchannelAuthenticationConfig:
@@ -58,6 +78,9 @@ class BackchannelAuthenticationConfig:
 
     ``token_endpoint`` et ``bc_authorize_endpoint`` complètent l'issuer
     comme valeurs d'``aud`` admises des ``client_assertion`` (§7.1).
+    ``request_signing_algorithms`` liste les algorithmes de ``request``
+    signé admis pour un client sans algorithme enregistré (publiés au
+    discovery sous ``backchannel_authentication_request_signing_alg_values_supported``).
     """
 
     issuer: str
@@ -66,6 +89,7 @@ class BackchannelAuthenticationConfig:
     interval_seconds: int = 5
     token_endpoint: str = ""
     bc_authorize_endpoint: str = ""
+    request_signing_algorithms: tuple[str, ...] = CIBA_REQUEST_SIGNING_ALGORITHMS
 
 
 @dataclass(slots=True)
@@ -124,14 +148,18 @@ class BackchannelAuthenticationUseCase:
         *,
         client_assertions: ClientAssertionVerifier | None = None,
         token_manager: TokenManager | None = None,
+        request_objects: SignedRequestObjectVerifier | None = None,
     ) -> None:
         """Injection de la configuration, des repositories et des vérificateurs.
 
         ``client_assertions`` décode les ``login_hint_token`` signés par le
-        client et vérifie les ``client_assertion`` d'authentification ;
-        ``token_manager`` valide la signature serveur des ``id_token_hint``.
-        Sans injection, les hints concernés sont refusés (leur validité ne
-        peut être établie).
+        client, vérifie les ``client_assertion`` d'authentification et
+        déduit le ``client_id`` de leur ``iss`` quand le corps form n'en
+        porte pas ; ``token_manager`` valide la signature serveur des
+        ``id_token_hint`` ; ``request_objects`` vérifie les ``request``
+        signés (JWKS du client, bornes temporelles, ``jti`` anti-replay).
+        Sans injection, les hints ou demandes signés concernés sont refusés
+        (leur validité ne peut être établie).
         """
         self._config = config
         self._clients = client_repository
@@ -140,26 +168,26 @@ class BackchannelAuthenticationUseCase:
         self._scope_registry = scope_registry
         self._client_assertions = client_assertions
         self._token_manager = token_manager
+        self._request_objects = request_objects
 
     async def execute(
         self, params: BackchannelAuthenticationParams
     ) -> AuthenticationAck | BackchannelAuthenticationError:
         """Authentifie le client, valide la demande et retourne l'acquittement."""
-        if params.request or params.request_uri:
-            return BackchannelAuthenticationError(
-                "invalid_request_object",
-                "request object non supporté au backchannel authentication endpoint",
-            )
         client = await self._authenticate_client(params)
         if isinstance(client, BackchannelAuthenticationError):
             return client
-        return await self._accept(client, params)
+        effective, error = await self._apply_request_object(client, params)
+        if error is not None:
+            return error
+        return await self._accept(client, effective)
 
     async def _authenticate_client(
         self, params: BackchannelAuthenticationParams
     ) -> Client | BackchannelAuthenticationError:
         """Charge le client puis l'authentifie selon sa méthode déclarée (§7.2)."""
-        client = await self._clients.find_by_id(params.client_id)
+        client_id = params.client_id or self._deduced_client_id(params)
+        client = await self._clients.find_by_id(client_id)
         if client is None or not client.is_active:
             return BackchannelAuthenticationError(
                 "invalid_client", CLIENT_UNKNOWN_ERROR, status_code=401
@@ -176,6 +204,85 @@ class BackchannelAuthenticationUseCase:
         if detail is not None:
             return BackchannelAuthenticationError("invalid_client", detail, status_code=401)
         return client
+
+    def _deduced_client_id(self, params: BackchannelAuthenticationParams) -> str:
+        """Déduit le ``client_id`` absent du corps form (formulaire private_key_jwt).
+
+        Une demande authentifiée par assertion ne porte pas de ``client_id``
+        explicite : il est lu dans l'``iss`` de l'assertion, puis dans
+        l'``iss`` du request object — la signature reste vérifiée ensuite.
+        """
+        if params.client_assertion and self._client_assertions is not None:
+            issuer = self._client_assertions.issuer_of(params.client_assertion)
+            if issuer:
+                return issuer
+        if params.request and self._request_objects is not None:
+            return self._request_objects.issuer_of(params.request)
+        return ""
+
+    async def _apply_request_object(
+        self, client: Client, params: BackchannelAuthenticationParams
+    ) -> tuple[BackchannelAuthenticationParams, BackchannelAuthenticationError | None]:
+        """Contrôle le ``request`` (signé ou exigé) et en fusionne les claims (§7.1.1).
+
+        Un client enregistré avec ``backchannel_authentication_request_signing_alg``
+        doit présenter un ``request`` signé avec cet algorithme (FAPI-CIBA ¶6) ;
+        pour les autres, ``request`` reste facultatif mais vérifié s'il est
+        présent. Les claims du jeton priment sur le corps form (RFC 9101 §4).
+        """
+        if params.request_uri:
+            return params, BackchannelAuthenticationError(
+                "invalid_request",
+                "request_uri non supporté au backchannel authentication endpoint",
+            )
+        if not params.request:
+            if client.backchannel_authentication_request_signing_alg:
+                return params, BackchannelAuthenticationError(
+                    "invalid_request",
+                    "request object signé requis pour ce client (CIBA §7.1.1)",
+                )
+            return params, None
+        if self._request_objects is None:
+            return params, BackchannelAuthenticationError(
+                "invalid_request", "vérification de request object indisponible"
+            )
+        issuer_client = await self._issuer_client(params.request)
+        if isinstance(issuer_client, BackchannelAuthenticationError):
+            return params, issuer_client
+        result = await self._request_objects.verify(
+            token=params.request,
+            client=issuer_client,
+            issuer=self._config.issuer,
+            allowed_algorithms=self._request_signing_algorithms(client),
+        )
+        if result.claims is None:
+            return params, BackchannelAuthenticationError("invalid_request", result.reason)
+        if issuer_client.client_id != client.client_id:
+            return params, BackchannelAuthenticationError(
+                "invalid_client",
+                "request object émis pour un autre client",
+                status_code=401,
+            )
+        return _merge_request_claims(params, result.claims), None
+
+    async def _issuer_client(self, token: str) -> Client | BackchannelAuthenticationError:
+        """Charge le client nommé par le ``iss`` non vérifié du request object."""
+        issuer = self._request_objects.issuer_of(token) if self._request_objects else ""
+        if not issuer:
+            return BackchannelAuthenticationError(
+                "invalid_request", "request object illisible (claim iss absent)"
+            )
+        issuer_client = await self._clients.find_by_id(issuer)
+        if issuer_client is None or not issuer_client.is_active:
+            return BackchannelAuthenticationError(
+                "invalid_request", "request object signé par un client inconnu"
+            )
+        return issuer_client
+
+    def _request_signing_algorithms(self, client: Client) -> tuple[str, ...]:
+        """Algorithmes admis : l'algorithme enregistré du client, sinon la liste publiée."""
+        registered = client.backchannel_authentication_request_signing_alg
+        return (registered,) if registered else self._config.request_signing_algorithms
 
     async def _accept(
         self, client: Client, params: BackchannelAuthenticationParams
@@ -454,6 +561,27 @@ class CibaApprovalUseCase:
             client_notification_token=stored.client_notification_token,
             auth_req_id=auth_req_id,
         )
+
+
+def _merge_request_claims(
+    params: BackchannelAuthenticationParams, claims: dict[str, object]
+) -> BackchannelAuthenticationParams:
+    """Compose la demande : les claims du request object priment (RFC 9101 §4).
+
+    Seuls les paramètres de demande connus sont repris ; l'authentification
+    du client (secret, assertion, certificat) reste exclusivement portée par
+    le corps form, jamais par le jeton.
+    """
+    overrides: dict[str, Any] = {}
+    for name in _REQUEST_CLAIM_PARAMETERS:
+        value = claims.get(name)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            overrides[name] = value
+        else:
+            overrides[name] = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return replace(params, request="", **overrides)
 
 
 def _audience_holds(audience: object, client_id: str) -> bool:

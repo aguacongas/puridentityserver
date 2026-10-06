@@ -36,6 +36,9 @@ class DiscoveryDocument(BaseModel):
     backchannel_authentication_endpoint: str | None = None
     backchannel_token_delivery_modes_supported: list[str] = Field(default_factory=list)
     backchannel_user_code_parameter_supported: bool | None = None
+    backchannel_authentication_request_signing_alg_values_supported: list[str] = Field(
+        default_factory=list
+    )
     request_object_signing_alg_values_supported: list[str] = Field(default_factory=list)
     request_parameter_supported: bool = False
     request_uri_parameter_supported: bool = False

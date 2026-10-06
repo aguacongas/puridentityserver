@@ -104,13 +104,36 @@ class PyJWTClientAssertionVerifier:
             return _decode_hint(token, secret.encode("utf-8"), algorithms=_HMAC_ALGORITHMS)
         try:
             signing_key = await asyncio.to_thread(
-                _resolve_signing_key, token, client.jwks, client.jwks_uri
+                resolve_signing_key, token, client.jwks, client.jwks_uri
             )
         except (pyjwt.PyJWTError, KeyError, OSError, ValueError):
             return LoginHintTokenResult()
         if signing_key is None:
             return LoginHintTokenResult()
         return _decode_hint(token, signing_key, algorithms=[algorithm])
+
+    def issuer_of(self, token: str) -> str:
+        """Retourne le claim ``iss`` non vérifié de l'assertion, ``""`` si illisible.
+
+        Sert uniquement à déduire le ``client_id`` quand le corps form n'en
+        porte pas (formulaire ``private_key_jwt``) : la signature reste
+        intégralement vérifiée ensuite par ``verify``.
+        """
+        try:
+            claims = pyjwt.decode(
+                token,
+                options={
+                    "verify_signature": False,
+                    "verify_exp": False,
+                    "verify_nbf": False,
+                    "verify_aud": False,
+                    "verify_iss": False,
+                },
+            )
+        except (pyjwt.PyJWTError, ValueError):
+            return ""
+        issuer = claims.get("iss")
+        return issuer if isinstance(issuer, str) else ""
 
     async def _hmac_secret(self, client: Client) -> str | None:
         """Déchiffre le secret du client pour la vérification HMAC, sinon ``None``."""
@@ -181,7 +204,7 @@ async def verify_jwks_assertion(
     if not jwks and not jwks_uri:
         return None
     try:
-        signing_key = await asyncio.to_thread(_resolve_signing_key, token, jwks, jwks_uri)
+        signing_key = await asyncio.to_thread(resolve_signing_key, token, jwks, jwks_uri)
         algorithm = pyjwt.get_unverified_header(token)["alg"]  # NOSONAR(S5659)
     except (pyjwt.PyJWTError, KeyError, OSError, ValueError):
         return None
@@ -197,7 +220,7 @@ async def verify_jwks_assertion(
     )
 
 
-def _resolve_signing_key(
+def resolve_signing_key(
     token: str,
     jwks: tuple[dict[str, object], ...],
     jwks_uri: str,

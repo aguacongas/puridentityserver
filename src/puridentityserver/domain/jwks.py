@@ -134,6 +134,17 @@ ALL_SIGNING_ALGORITHMS: tuple[JWTAlgorithm, ...] = tuple(
     algorithm for algorithm in JWTAlgorithm if algorithm is not JWTAlgorithm.NONE
 )
 
+#: Algorithmes admis pour un ``request`` signé au backchannel authentication
+#: endpoint (OIDC CIBA 1.0 §7.1.1) : ``PS256`` exigé par FAPI-CIBA-ID1,
+#: ``ES256``/``RS256`` complémentaires. Publiés au discovery sous
+#: ``backchannel_authentication_request_signing_alg_values_supported`` et
+#: contrôlés à l'enregistrement (DCR) comme à la vérification.
+CIBA_REQUEST_SIGNING_ALGORITHMS: tuple[str, ...] = (
+    JWTAlgorithm.PS256.value,
+    JWTAlgorithm.ES256.value,
+    JWTAlgorithm.RS256.value,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class KeyPair:

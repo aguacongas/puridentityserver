@@ -117,6 +117,9 @@ def _parse_client(raw: dict[str, object]) -> Client:
         backchannel_client_notification_endpoint=str(
             raw.get("backchannel_client_notification_endpoint", "")
         ),
+        backchannel_authentication_request_signing_alg=str(
+            raw.get("backchannel_authentication_request_signing_alg", "")
+        ),
         par_required=bool(raw.get("par_required")),
         require_consent=bool(raw.get("require_consent")),
         require_dpop=bool(raw.get("require_dpop")),

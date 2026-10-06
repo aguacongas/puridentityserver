@@ -81,6 +81,9 @@ class ClientRow(PersistenceBase):
     backchannel_client_notification_endpoint: Mapped[str] = mapped_column(
         String(512), default="", server_default=text("''")
     )
+    backchannel_authentication_request_signing_alg: Mapped[str] = mapped_column(
+        String(16), default="", server_default=text("''")
+    )
     registration_access_token_hash: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -181,6 +184,9 @@ def _to_row(client: Client) -> ClientRow:
         backchannel_logout_session_required=client.backchannel_logout_session_required,
         backchannel_token_delivery_mode=client.backchannel_token_delivery_mode,
         backchannel_client_notification_endpoint=client.backchannel_client_notification_endpoint,
+        backchannel_authentication_request_signing_alg=(
+            client.backchannel_authentication_request_signing_alg
+        ),
         registration_access_token_hash=client.registration_access_token_hash,
         created_at=client.created_at,
         is_active=client.is_active,
@@ -254,6 +260,9 @@ def _from_row(row: ClientRow) -> Client:
         backchannel_token_delivery_mode=_text(row.backchannel_token_delivery_mode),
         backchannel_client_notification_endpoint=_text(
             row.backchannel_client_notification_endpoint
+        ),
+        backchannel_authentication_request_signing_alg=_text(
+            row.backchannel_authentication_request_signing_alg
         ),
         registration_access_token_hash=_text(row.registration_access_token_hash),
         created_at=_utc(row.created_at),

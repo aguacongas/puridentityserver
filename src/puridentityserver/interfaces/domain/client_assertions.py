@@ -60,6 +60,15 @@ class ClientAssertionVerifier(Protocol):
         """
         ...
 
+    def issuer_of(self, token: str) -> str:
+        """Retourne le claim ``iss`` non vérifié de l'assertion, ``""`` si illisible.
+
+        Sert uniquement à déduire le ``client_id`` quand le corps form n'en
+        porte pas (formulaire ``private_key_jwt``) : la signature reste
+        intégralement vérifiée ensuite par ``verify``.
+        """
+        ...
+
     async def decode_login_hint_token(self, *, token: str, client: Client) -> LoginHintTokenResult:
         """Décode un ``login_hint_token`` signé par le client (CIBA §7.1.1).
 

@@ -170,6 +170,10 @@ def _registration_json(result: ClientRegistration) -> str:
             "backchannel_client_notification_endpoint",
             result.backchannel_client_notification_endpoint,
         ),
+        (
+            "backchannel_authentication_request_signing_alg",
+            result.backchannel_authentication_request_signing_alg,
+        ),
     )
     data.update({name: value for name, value in optional_fields if value})
     return json.dumps(data, separators=(",", ":"))
