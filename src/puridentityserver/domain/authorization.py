@@ -297,6 +297,11 @@ class AuthorizationCode:
     jamais le jeton en clair) et ``access_token_expires_at`` référencent
     les jetons émis lors du premier échange : une réutilisation du code
     permet alors de les révoquer (RFC 6749 §4.1.2).
+
+    ``resource_uris`` (RFC 8707 §3) porte les resource indicators liés au
+    code à l'émission (``resource`` sur ``/authorize`` ou ``/par``) :
+    l'échange au token endpoint doit s'y limiter (sous-ensemble) et l'``aud``
+    de l'access token en découle.
     """
 
     code: str = field(default_factory=lambda: f"{uuid4().hex[:16]}")
@@ -317,6 +322,7 @@ class AuthorizationCode:
     access_token_expires_at: datetime | None = None
     refresh_token_hash: str = ""
     dpop_jkt: str = ""
+    resource_uris: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,6 +338,10 @@ class RefreshToken:
     une preuve signée par cette même clé, sinon le token endpoint rejette
     ``invalid_grant``. Vide pour un client confidentiel (le refresh token
     de ces clients reste un jeton porteur, RFC 9449 §5).
+
+    ``resource_uris`` (RFC 8707 §4) porte les resource indicators de
+    l'accord initial : un renouvellement demandant ``resource`` doit s'y
+    limiter (sous-ensemble).
     """
 
     token_hash: str
@@ -341,6 +351,7 @@ class RefreshToken:
     expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     is_consumed: bool = False
     dpop_jkt: str = ""
+    resource_uris: tuple[str, ...] = ()
 
 
 class DeviceAuthorizationStatus(str, Enum):
@@ -437,6 +448,11 @@ class BackchannelAuthenticationRequest:
     (§10.2). ``binding_message`` (message d'inter-verrouillage affichable)
     et ``acr`` (premier ``acr_values`` demandé, §7.1) sont conservés pour
     l'approbation et l'``id_token`` émis lors de l'échange du token.
+
+    ``resource_uris`` (RFC 8707 §3) porte les resource indicators liés à
+    la demande (``resource`` sur ``/bc-authorize``) : l'échange du grant
+    CIBA doit s'y limiter (sous-ensemble) et l'``aud`` de l'access token
+    en découle.
     """
 
     auth_req_id_hash: str
@@ -452,6 +468,7 @@ class BackchannelAuthenticationRequest:
     interval: int = 5
     last_polled_at: datetime | None = None
     expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    resource_uris: tuple[str, ...] = ()
 
 
 #: Préfixe URN des ``request_uri`` émis par ``POST /par`` (RFC 9126 §6.2) :

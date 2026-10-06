@@ -148,6 +148,7 @@ def _parse_payload(payload: dict[str, object]) -> ApiResourceRequest:
         display_name=str(payload.get("display_name", "")),
         scopes=parsed_scopes,
         allowed_access_token_signing_algos=parsed_algos,
+        indicator=str(payload.get("indicator", "")),
     )
 
 
@@ -169,6 +170,7 @@ def _data_json(resource: ApiResourceData) -> dict[str, object]:
         "display_name": resource.display_name,
         "scopes": resource.scopes,
         "allowed_access_token_signing_algos": resource.allowed_access_token_signing_algos,
+        "indicator": resource.indicator,
     }
 
 

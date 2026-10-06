@@ -12,7 +12,11 @@
   },
   "client2": {
     "client_name": "PurIdentityServer conformance CIBA second",
-    "scope": "openid profile"
+    "scope": "openid profile",
+    "acr_value": "loa2"
+  },
+  "resource": {
+    "resourceUrl": "{OPURL}/protected-resource"
   },
   "automated_ciba_approval_url": "{OPURL}/ciba/approve?token={auth_req_id}&type={action}"
 }

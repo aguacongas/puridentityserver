@@ -47,6 +47,9 @@ class AuthorizationCodeRow(PersistenceBase):
     )
     refresh_token_hash: Mapped[str] = mapped_column(String(64), default="")
     dpop_jkt: Mapped[str] = mapped_column(String(80), default="", server_default=text("''"))
+    resource_uris: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default=text("'[]'")
+    )
 
 
 class SQLAuthorizationCodeRepository:
@@ -119,6 +122,7 @@ def _to_row(code: AuthorizationCode) -> AuthorizationCodeRow:
         access_token_expires_at=code.access_token_expires_at,
         refresh_token_hash=code.refresh_token_hash,
         dpop_jkt=code.dpop_jkt,
+        resource_uris=list(code.resource_uris),
     )
 
 
@@ -149,4 +153,5 @@ def _from_row(row: AuthorizationCodeRow) -> AuthorizationCode:
         access_token_expires_at=access_expires,
         refresh_token_hash=row.refresh_token_hash or "",
         dpop_jkt=row.dpop_jkt or "",
+        resource_uris=tuple(row.resource_uris or ()),
     )

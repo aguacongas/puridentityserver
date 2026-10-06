@@ -34,6 +34,9 @@ class RefreshTokenRow(PersistenceBase):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     is_consumed: Mapped[bool] = mapped_column(Boolean, default=False)
     dpop_jkt: Mapped[str] = mapped_column(String(80), default="", server_default=text("''"))
+    resource_uris: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default=text("'[]'")
+    )
 
 
 class SQLRefreshTokenRepository:
@@ -99,6 +102,7 @@ def _to_row(token: RefreshToken) -> RefreshTokenRow:
         expires_at=token.expires_at,
         is_consumed=token.is_consumed,
         dpop_jkt=token.dpop_jkt,
+        resource_uris=list(token.resource_uris),
     )
 
 
@@ -115,4 +119,5 @@ def _from_row(row: RefreshTokenRow) -> RefreshToken:
         expires_at=expires_at,
         is_consumed=row.is_consumed,
         dpop_jkt=row.dpop_jkt or "",
+        resource_uris=tuple(row.resource_uris or ()),
     )

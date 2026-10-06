@@ -27,6 +27,7 @@ from puridentityserver.application.request_object import (
     RequestObjectResolver,
     is_pushed_request_uri,
 )
+from puridentityserver.application.resource_indicators import encode_resource_parameter
 from puridentityserver.domain.authorization import ResponseMode, Scope
 from puridentityserver.identity.config import (
     CurrentUser,
@@ -87,6 +88,7 @@ class AuthorizeQueryParams(BaseModel):
     acr_values: str = ""
     claims: str = ""
     dpop_jkt: str = ""
+    resource: list[str] = []
 
 
 def authorize_router(
@@ -133,7 +135,7 @@ def authorize_router(
         context: Annotated[_AuthorizeContext, Depends(_authorize_context)],
         query: Annotated[AuthorizeQueryParams, Query()],
     ) -> RedirectResponse | HTMLResponse:
-        return await _handle_authorize(context.request, query.model_dump(), context.user)
+        return await _handle_authorize(context.request, _query_params(query), context.user)
 
     @router.post(
         "/authorize",
@@ -151,6 +153,7 @@ def authorize_router(
         """Traitement d'une demande ``POST /authorize`` (corps form-urlencoded)."""
         form = await request.form()
         params = {name: str(value) for name, value in form.items()}
+        params["resource"] = encode_resource_parameter([str(v) for v in form.getlist("resource")])
         # RFC 6749 §4.1.2 note : la demande voyage dans le corps, mais la
         # redirection vers /login part en query string. On mémorise le corps
         # traité pour que `next` (et le hash de réauthentification) rejoue
@@ -247,7 +250,23 @@ async def _direct_authorize_request(
         acr_values=params.get("acr_values", ""),
         claims=params.get("claims", ""),
         dpop_jkt=params.get("dpop_jkt", ""),
+        resource=params.get("resource", ""),
     )
+
+
+def _query_params(query: AuthorizeQueryParams) -> dict[str, str]:
+    """Plat le modèle de query en paramètres de chaînes (RFC 8707 inclus).
+
+    ``resource`` peut être répété (``?resource=a&resource=b``) : les
+    occurrences sont repliées en tableau JSON compact, forme décodée par
+    ``parse_resource_parameter`` — les dictionnaires de params ne gardent
+    qu'une valeur par clé.
+    """
+    raw = query.model_dump()
+    resources = raw.pop("resource", [])
+    values = resources if isinstance(resources, list) else [resources]
+    raw["resource"] = encode_resource_parameter([str(value) for value in values])
+    return {name: str(value) for name, value in raw.items()}
 
 
 def _missing_parameters_page(missing: list[str]) -> HTMLResponse:

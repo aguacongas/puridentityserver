@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, Integer, String
+from sqlalchemy import JSON, DateTime, Integer, String, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -44,6 +44,9 @@ class BackchannelAuthenticationRow(PersistenceBase):
     interval: Mapped[int] = mapped_column(Integer, default=5)
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    resource_uris: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default=text("'[]'")
+    )
 
 
 class SQLBackchannelAuthenticationRepository:
@@ -125,6 +128,7 @@ def _to_row(request: BackchannelAuthenticationRequest) -> BackchannelAuthenticat
         interval=request.interval,
         last_polled_at=request.last_polled_at,
         expires_at=request.expires_at,
+        resource_uris=list(request.resource_uris),
     )
 
 
@@ -150,4 +154,5 @@ def _from_row(row: BackchannelAuthenticationRow) -> BackchannelAuthenticationReq
         interval=row.interval,
         last_polled_at=last_polled_at,
         expires_at=expires_at,
+        resource_uris=tuple(row.resource_uris or ()),
     )

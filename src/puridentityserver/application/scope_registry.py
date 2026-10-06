@@ -10,6 +10,8 @@ du client émetteur, audience historique des tokens du serveur).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCES
 from puridentityserver.interfaces.repositories.readers import (
     ApiResourceReader,
@@ -45,6 +47,20 @@ class ScopeRegistry:
             for resource in api_stored:
                 names.update(resource.scopes)
         return frozenset(names)
+
+    async def unknown_resources(self, resources: Sequence[str]) -> tuple[str, ...]:
+        """Resources demandées sans ``ApiResource.indicator`` enregistré (RFC 8707).
+
+        Retourne la liste ordonnée des URI à rejeter en ``invalid_target``.
+        Sans registre de resources d'API injecté, aucune vérification n'est
+        possible : la liste est vide (les URI bien formées passent), à
+        l'instar du repli de :meth:`audiences_for`.
+        """
+        if self._api_resources is None or not resources:
+            return ()
+        stored = await self._api_resources.find_all()
+        known = {resource.indicator for resource in stored if resource.indicator}
+        return tuple(uri for uri in resources if uri not in known)
 
     async def audiences_for(self, client_id: str, scopes: frozenset[str]) -> str | list[str]:
         """Audience d'un access token : resources dont des scopes sont accordés.

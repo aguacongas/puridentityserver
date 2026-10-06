@@ -41,6 +41,10 @@ from puridentityserver.application.introspect import IntrospectConfig, Introspec
 from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
 from puridentityserver.application.logout import LogoutConfig, LogoutUseCase
 from puridentityserver.application.par import PushedAuthorizationConfig, PushedAuthorizationUseCase
+from puridentityserver.application.protected_resource import (
+    ProtectedResourceConfig,
+    ProtectedResourceUseCase,
+)
 from puridentityserver.application.registration import RegistrationConfig, RegistrationUseCase
 from puridentityserver.application.request_object import RequestObjectConfig, RequestObjectResolver
 from puridentityserver.application.revocation import RevocationConfig, RevocationUseCase
@@ -101,6 +105,7 @@ from puridentityserver.interfaces.api.introspect import introspect_router
 from puridentityserver.interfaces.api.jwks import jwk_set_router
 from puridentityserver.interfaces.api.logout import logout_router
 from puridentityserver.interfaces.api.par import par_router
+from puridentityserver.interfaces.api.protected_resource import protected_resource_router
 from puridentityserver.interfaces.api.registration import registration_router
 from puridentityserver.interfaces.api.revocation import revocation_router
 from puridentityserver.interfaces.api.session_management import session_management_router
@@ -308,6 +313,13 @@ class ProtocolDependencies:
             self.readers.identity_resource,
             dpop=self.dpop_validator,
         )
+        self.protected_resource_usecase: ProtectedResourceUseCase | None = None
+        if settings.protected_resource_enabled:
+            self.protected_resource_usecase = ProtectedResourceUseCase(
+                ProtectedResourceConfig(issuer=settings.issuer),
+                self.token_manager,
+                stores.revoked,
+            )
         self.introspect_usecase = IntrospectUseCase(
             IntrospectConfig(issuer=settings.issuer),
             self.readers.client,
@@ -450,6 +462,8 @@ class ProtocolDependencies:
         if self.settings.ciba_approval_enabled:
             app.include_router(ciba_approval_router(self.ciba_approval_usecase))
         app.include_router(userinfo_router(self.userinfo_usecase))
+        if self.protected_resource_usecase is not None:
+            app.include_router(protected_resource_router(self.protected_resource_usecase))
         app.include_router(introspect_router(self.introspect_usecase))
         app.include_router(revocation_router(self.revocation_usecase))
         app.include_router(logout_router(self.logout_usecase))

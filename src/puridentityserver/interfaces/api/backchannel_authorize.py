@@ -30,6 +30,7 @@ from puridentityserver.application.backchannel_authorize import (
     BackchannelAuthenticationUseCase,
     CibaApprovalUseCase,
 )
+from puridentityserver.application.resource_indicators import encode_resource_parameter
 from puridentityserver.infrastructure.client_tls import extract_client_certificate
 from puridentityserver.interfaces.api.error_description import ascii_error_description
 from puridentityserver.interfaces.api.http_client_auth import parse_basic_auth
@@ -58,6 +59,7 @@ def backchannel_authorization_router(usecase: BackchannelAuthenticationUseCase) 
             id_token_hint=_form_value(form, "id_token_hint"),
             binding_message=_form_value(form, "binding_message"),
             acr_values=_form_value(form, "acr_values"),
+            resource=encode_resource_parameter([str(v) for v in form.getlist("resource")]),
             client_notification_token=_form_value(form, "client_notification_token"),
             requested_expiry=_form_value(form, "requested_expiry"),
             client_secret=_form_value(form, "client_secret") or header_secret,

@@ -225,6 +225,7 @@ def test_settings_client_seed_reads_defaults_from_config_toml(
         "sample-api-client",
         "sample-admin-client",
         "sample-introspect-client",
+        "sample-resource-client",
         "sample-device-client",
         "sample-par-client",
         "sample-spa-client",

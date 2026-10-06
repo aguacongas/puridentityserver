@@ -39,6 +39,11 @@ from puridentityserver.application.claims_request import (
 )
 from puridentityserver.application.id_token_encryption import encrypt_id_token_for_client
 from puridentityserver.application.id_token_material import resolve_id_token_material
+from puridentityserver.application.resource_indicators import (
+    is_resource_uri,
+    parse_resource_parameter,
+    resource_audience,
+)
 from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.application.session_management import (
     SessionManagementUseCase,
@@ -112,6 +117,7 @@ class AuthorizeRequest:
     acr_values: str = ""  # valeurs ACR demandées, séparées par des espaces (§3.1.2.1)
     claims: str = ""  # paramètre claims brut (OIDC Core 1.0 §5.5)
     dpop_jkt: str = ""  # empreinte de la clé DPoP liant le code (RFC 9449 §4.2)
+    resource: str = ""  # resource indicators RFC 8707 (URI uniques ou tableau JSON compact)
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,16 +167,19 @@ class ValidatedAuthorization:
     response_mode: ResponseMode
 
 
-def _parameter_error(
-    request: AuthorizeRequest, response_mode: ResponseMode
+async def _parameter_error(
+    request: AuthorizeRequest,
+    scope_registry: ScopeRegistry | None,
+    response_mode: ResponseMode,
 ) -> AuthorizeError | None:
-    """Rejette ``max_age`` négatif, ``claims`` ou ``dpop_jkt`` malformés, ou ``None``.
+    """Rejette ``max_age`` négatif, ``claims``/``dpop_jkt``/``resource`` malformés, ou ``None``.
 
     ``claims`` doit être un objet JSON (OIDC Core 1.0 §5.5.1) ; toute autre
     forme — tableau, scalaire, JSON invalide — vaut ``invalid_request``.
     ``dpop_jkt`` doit être l'empreinte thumbprint RFC 7638 d'une clé publique
     (43 caractères base64url, RFC 9449 §4.2) ; tout autre format vaut
-    ``invalid_request``.
+    ``invalid_request``. Le contrôle ``resource`` (RFC 8707) est délégué à
+    :func:`_resource_error`.
     """
     if request.max_age < -1:
         return _authorize_error(
@@ -193,6 +202,43 @@ def _parameter_error(
             description="dpop_jkt doit être une empreinte RFC 7638 (43 caractères base64url)",
             response_mode=response_mode,
         )
+    return await _resource_error(request, scope_registry, response_mode)
+
+
+async def _resource_error(
+    request: AuthorizeRequest,
+    scope_registry: ScopeRegistry | None,
+    response_mode: ResponseMode,
+) -> AuthorizeError | None:
+    """Contrôle le paramètre ``resource`` (RFC 8707 §2.1-§2.2).
+
+    Chaque resource indicator doit être une URI absolue sans fragment,
+    dont l'``ApiResource.indicator`` correspondant est enregistré. Toute
+    URI malformée ou inconnue vaut ``invalid_target`` (RFC 8707 §2.2) ;
+    la ``redirect_uri`` étant déjà vérifiée à ce stade, l'erreur peut
+    être renvoyée dans la redirection.
+    """
+    resources = parse_resource_parameter(request.resource)
+    if not resources:
+        return None
+    malformed = [uri for uri in resources if not is_resource_uri(uri)]
+    if malformed:
+        return _authorize_error(
+            "invalid_target",
+            request,
+            description="resource doit être une URI absolue sans fragment (RFC 8707 §2.1) : "
+            + ", ".join(malformed),
+            response_mode=response_mode,
+        )
+    if scope_registry is not None:
+        unknown = await scope_registry.unknown_resources(resources)
+        if unknown:
+            return _authorize_error(
+                "invalid_target",
+                request,
+                description="Resource non enregistrée (RFC 8707 §2.2) : " + ", ".join(unknown),
+                response_mode=response_mode,
+            )
     return None
 
 
@@ -249,7 +295,7 @@ async def validate_authorization_request(
             redirectable=False,
         )
 
-    param_error = _parameter_error(request, response_mode)
+    param_error = await _parameter_error(request, scope_registry, response_mode)
     if param_error is not None:
         return param_error
 
@@ -437,6 +483,7 @@ class AuthorizeUseCase:
             acr=first_acr_value(request.acr_values),
             claims=request.claims,
             dpop_jkt=request.dpop_jkt,
+            resource_uris=parse_resource_parameter(request.resource),
             expires_at=now + timedelta(seconds=code_ttl),
         )
         await self._codes.save(code)
@@ -476,7 +523,7 @@ class AuthorizeUseCase:
         at_hash = ""
         access_token = ""
         if wants_token:
-            audience = await self._resolve_audience(client, scopes)
+            audience = await self._resolve_audience(client, scopes, request.resource)
             access_token = await self._token_manager.create_access_token(
                 algorithm=self._config.signing_algorithm,
                 issuer=self._config.issuer,
@@ -575,8 +622,18 @@ class AuthorizeUseCase:
             )
         return additional or None
 
-    async def _resolve_audience(self, client: Client, scopes: frozenset[Scope]) -> str | list[str]:
-        """Audience d'un access token : resources protégées accordées, sinon client."""
+    async def _resolve_audience(
+        self, client: Client, scopes: frozenset[Scope], resource: str = ""
+    ) -> str | list[str]:
+        """Audience d'un access token : resources ciblées (RFC 8707), sinon registre, sinon client.
+
+        Un ``resource`` présent prend la priorité sur le calcul par
+        scopes : l'``aud`` porte alors les URI ciblées (chaîne pour une
+        seule, liste sinon), après validation de :func:`_resource_error`.
+        """
+        resources = parse_resource_parameter(resource)
+        if resources:
+            return resource_audience(resources)
         if self._scope_registry is None:
             return client.client_id
         return await self._scope_registry.audiences_for(client.client_id, scopes)

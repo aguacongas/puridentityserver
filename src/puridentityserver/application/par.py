@@ -178,6 +178,7 @@ class PushedAuthorizationUseCase:
             acr_values=params.get("acr_values", ""),
             claims=params.get("claims", ""),
             dpop_jkt=params.get("dpop_jkt", ""),
+            resource=params.get("resource", ""),
         )
 
         validated = await validate_authorization_request(
@@ -298,4 +299,5 @@ class PushedAuthorizationUseCase:
             acr_values=pushed.params.get("acr_values", ""),
             claims=pushed.params.get("claims", ""),
             dpop_jkt=pushed.params.get("dpop_jkt", ""),
+            resource=pushed.params.get("resource", ""),
         )
