@@ -123,7 +123,7 @@ class PyJWTClientAssertionVerifier:
             claims = pyjwt.decode(
                 token,
                 options={
-                    "verify_signature": False,
+                    "verify_signature": False,  # NOSONAR(S5659) — lecture seule
                     "verify_exp": False,
                     "verify_nbf": False,
                     "verify_aud": False,

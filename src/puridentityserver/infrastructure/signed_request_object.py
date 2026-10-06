@@ -81,7 +81,7 @@ class PyJWTSignedRequestObjectVerifier:
             claims = pyjwt.decode(
                 token,
                 options={
-                    "verify_signature": False,
+                    "verify_signature": False,  # NOSONAR(S5659) — lecture seule
                     "verify_exp": False,
                     "verify_nbf": False,
                     "verify_aud": False,
@@ -108,7 +108,7 @@ class PyJWTSignedRequestObjectVerifier:
         attendue et ``allowed_algorithms`` les en-têtes ``alg`` admis.
         """
         try:
-            header = pyjwt.get_unverified_header(token)
+            header = pyjwt.get_unverified_header(token)  # NOSONAR(S5659)
         except pyjwt.PyJWTError:
             return _refus("JWT attendu (en-tête illisible)")
         algorithm = str(header.get("alg", ""))

@@ -581,7 +581,7 @@ def _merge_request_claims(
             overrides[name] = value
         else:
             overrides[name] = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-    return replace(params, request="", **overrides)
+    return replace(params, request="", **overrides)  # NOSONAR(S5886) — replace préserve le type
 
 
 def _audience_holds(audience: object, client_id: str) -> bool:
