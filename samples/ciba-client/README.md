@@ -70,9 +70,39 @@ Le client démarre un listener local sur le port 8118 (endpoint
 la notification JSON du serveur s'affiche, puis les jetons sont
 récupérés par poll. `CIBA_NOTIFY_PORT` change le port d'écoute.
 
+## Mode signé (FAPI-CIBA-ID1 — request object JAR)
+
+```sh
+CIBA_SIGNED=1 python client.py
+```
+
+Le client s'enregistre d'abord par **Dynamic Client Registration**
+(`POST /register`, Bearer `CIBA_REGISTRATION_TOKEN`, défaut
+`dev-registrar-token`) avec une **clé RSA éphémère générée à la volée**
+(JWKS embarqué, aucune clé écrite sur disque), puis :
+
+- envoie la backchannel request sous la forme FAPI-CIBA-ID1
+  `{request, client_assertion, client_assertion_type}` — le
+  `request` est un **JWT signé PS256** (`iss`/`aud` = client/issuer,
+  `exp − nbf ≤ 60 min`, `jti` anti-replay) portant `scope`,
+  `login_hint`… — **sans `client_id` ni secret dans le corps** :
+  le serveur déduit l'appelant de l'`iss` de l'assertion puis vérifie
+  la signature du request object ;
+- authentifie son poll `/token` par `client_assertion` (RFC 7523).
+
+Toute défaillance du JAR (signature, `iss`, `aud`, `exp`, `jti`
+réjoué, alg non enregistré…) répond `invalid_request` en 400. Le
+discovery publie les algos admis dans
+`backchannel_authentication_request_signing_alg_values_supported`
+(PS256, ES256, RS256).
+
+> `CIBA_REGISTRATION_TOKEN` = token d'inscription initial (config
+> racine : `registration_enabled = true` +
+> `registration_initial_access_tokens = ["dev-registrar-token"]`).
+
 ## Smoke test
 
-Le smoke test enchaîne le flow complet de façon automatique (port dédié
+Le smoke test enchaîne deux scénarios de façon automatique (port dédié
 8116, aucun impact sur le serveur courant) :
 
 ```sh
@@ -80,6 +110,11 @@ cd samples/ciba-client
 python smoke_test.py
 ```
 
-Quatre étapes sont vérifiées : discovery (métadonnées CIBA),
+Scénario non signé (4 étapes) : discovery (métadonnées CIBA),
 `/bc-authorize` (`auth_req_id`), `/ciba/approve`, `/token`
 (`access_token` + `id_token`).
+
+Scénario signé (6 étapes) : discovery (algos de signature), DCR
+(`private_key_jwt` + PS256), rejet d'une demande **non** signée
+(`invalid_request` 400), `/bc-authorize` avec `request` signé,
+approbation, poll authentifié par assertion → jetons.

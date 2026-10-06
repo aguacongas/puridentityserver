@@ -68,7 +68,11 @@ from puridentityserver.domain.jwe import (
     ASYMMETRIC_ENCRYPTION_ALGORITHMS,
     SYMMETRIC_ENCRYPTION_ALGORITHMS,
 )
-from puridentityserver.domain.jwks import SYMMETRIC_ALGORITHMS, JWTAlgorithm
+from puridentityserver.domain.jwks import (
+    CIBA_REQUEST_SIGNING_ALGORITHMS,
+    SYMMETRIC_ALGORITHMS,
+    JWTAlgorithm,
+)
 from puridentityserver.domain.key_validation import (
     require_encryption_rsa_key,
     require_signing_key,
@@ -169,6 +173,7 @@ class RegistrationMetadata:
     dpop_bound_access_tokens: bool = False
     backchannel_token_delivery_mode: str = ""
     backchannel_client_notification_endpoint: str = ""
+    backchannel_authentication_request_signing_alg: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,6 +250,7 @@ class ClientRegistration:
     dpop_bound_access_tokens: bool = False
     backchannel_token_delivery_mode: str = ""
     backchannel_client_notification_endpoint: str = ""
+    backchannel_authentication_request_signing_alg: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -349,6 +355,9 @@ class RegistrationUseCase:
             backchannel_logout_session_required=metadata.backchannel_logout_session_required,
             backchannel_token_delivery_mode=metadata.backchannel_token_delivery_mode,
             backchannel_client_notification_endpoint=metadata.backchannel_client_notification_endpoint,
+            backchannel_authentication_request_signing_alg=(
+                metadata.backchannel_authentication_request_signing_alg
+            ),
         )
         await self._clients.save(client)
         return self._response(
@@ -441,6 +450,9 @@ class RegistrationUseCase:
             backchannel_logout_session_required=metadata.backchannel_logout_session_required,
             backchannel_token_delivery_mode=metadata.backchannel_token_delivery_mode,
             backchannel_client_notification_endpoint=metadata.backchannel_client_notification_endpoint,
+            backchannel_authentication_request_signing_alg=(
+                metadata.backchannel_authentication_request_signing_alg
+            ),
         )
         await self._clients.save(updated)
         return self._response(updated, client_secret=rotation.issued_secret)
@@ -777,6 +789,9 @@ class RegistrationUseCase:
             backchannel_logout_session_required=client.backchannel_logout_session_required,
             backchannel_token_delivery_mode=client.backchannel_token_delivery_mode,
             backchannel_client_notification_endpoint=client.backchannel_client_notification_endpoint,
+            backchannel_authentication_request_signing_alg=(
+                client.backchannel_authentication_request_signing_alg
+            ),
         )
 
     def _base_url(self) -> str:
@@ -824,6 +839,7 @@ def _parse_metadata(
         dpop_bound_access_tokens,
         backchannel_token_delivery_mode,
         backchannel_client_notification_endpoint,
+        backchannel_authentication_request_signing_alg,
     ) = extras
 
     client_type = ClientType.PUBLIC if auth_method == "none" else ClientType.CONFIDENTIAL
@@ -851,6 +867,9 @@ def _parse_metadata(
         dpop_bound_access_tokens=dpop_bound_access_tokens,
         backchannel_token_delivery_mode=backchannel_token_delivery_mode,
         backchannel_client_notification_endpoint=backchannel_client_notification_endpoint,
+        backchannel_authentication_request_signing_alg=(
+            backchannel_authentication_request_signing_alg
+        ),
     )
 
 
@@ -878,6 +897,7 @@ def _parse_metadata_extras(
         str,
         bool,
         bool,
+        str,
         str,
         str,
     ]
@@ -938,13 +958,17 @@ def _parse_metadata_extras(
         ),
         ("dpop_bound_access_tokens", lambda raw, _known: _parse_dpop_bound(raw)),
         # CIBA (OIDC CIBA 1.0 §16.1.1) : mode de livraison + endpoint de
-        # notification. ``backchannel_authentication_request_signing_alg`` est
-        # accepté sans stockage (request objects signés hors périmètre) et
-        # ``backchannel_user_code_parameter`` doit valoir false (non supporté).
+        # notification + algorithme de signature du request object (stocké :
+        # il rend la signature obligatoire sur /bc-authorize, FAPI-CIBA-ID1
+        # §6). ``backchannel_user_code_parameter`` doit valoir false.
         ("backchannel_token_delivery_mode", lambda raw, _known: _parse_ciba_delivery_mode(raw)),
         (
             "backchannel_client_notification_endpoint",
             lambda raw, _known: _parse_ciba_notification_endpoint(raw),
+        ),
+        (
+            "backchannel_authentication_request_signing_alg",
+            lambda raw, _known: _parse_ciba_request_signing_alg(raw),
         ),
         ("backchannel_user_code_parameter", lambda raw, _known: _parse_ciba_user_code(raw)),
     )
@@ -979,6 +1003,7 @@ def _assemble_extras(
     bool,
     str,
     str,
+    str,
 ]:
     """Recompose le tuple de métadonnées extraites (types garantis par les parseurs)."""
     return (
@@ -1001,6 +1026,7 @@ def _assemble_extras(
         cast(bool, results["dpop_bound_access_tokens"]),
         cast(str, results["backchannel_token_delivery_mode"]),
         cast(str, results["backchannel_client_notification_endpoint"]),
+        cast(str, results["backchannel_authentication_request_signing_alg"]),
     )
 
 
@@ -1295,6 +1321,24 @@ def _parse_ciba_user_code(raw: dict[str, object]) -> bool | RegistrationError:
             "backchannel_user_code_parameter : user_code non supporté",
         )
     return False
+
+
+def _parse_ciba_request_signing_alg(raw: dict[str, object]) -> str | RegistrationError:
+    """Lit ``backchannel_authentication_request_signing_alg`` (CIBA §16.1.1).
+
+    Absent ou vide : les request objects ne sont pas exigés pour ce client.
+    Toute valeur hors ``CIBA_REQUEST_SIGNING_ALGORITHMS`` (PS256, ES256,
+    RS256) est refusée ``invalid_client_metadata``.
+    """
+    value = raw.get("backchannel_authentication_request_signing_alg")
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str) or value not in CIBA_REQUEST_SIGNING_ALGORITHMS:
+        return RegistrationError(
+            "invalid_client_metadata",
+            "backchannel_authentication_request_signing_alg doit être PS256, ES256 ou RS256",
+        )
+    return value
 
 
 def _parse_jwks_uri(raw: dict[str, object]) -> str | RegistrationError:

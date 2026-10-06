@@ -177,11 +177,16 @@ class Client:
      ``POST logout_token`` direct serveur→client (back-channel).
      ``..._session_required`` impose l'envoi du ``sid`` (Session Management
      properly focus) ; sans ``sid`` vérifiable, la notification est omise.
-     ``backchannel_token_delivery_mode`` (OIDC CIBA 1.0 §4) porte le mode
-     d'obtention du résultat CIBA enregistré pour ce client (``poll`` ou
-     ``ping`` ; ``push`` n'est pas supporté) — vide = le client n'est pas
-     habilité à CIBA. ``backchannel_client_notification_endpoint`` est l'URI
-     notifiée en mode ``ping`` (§9).
+      ``backchannel_token_delivery_mode`` (OIDC CIBA 1.0 §4) porte le mode
+      d'obtention du résultat CIBA enregistré pour ce client (``poll`` ou
+      ``ping`` ; ``push`` n'est pas supporté) — vide = le client n'est pas
+      habilité à CIBA. ``backchannel_client_notification_endpoint`` est l'URI
+      notifiée en mode ``ping`` (§9).
+      ``backchannel_authentication_request_signing_alg`` (§16.1.1) est
+      l'algorithme avec lequel le client signe ses ``request`` au backchannel
+      endpoint : renseigné, la signature devient **obligatoire** pour lui et
+      l'en-tête doit porter exactement cet algorithme (FAPI-CIBA ¶6) — vide =
+      les demandes non signées restent acceptées.
     """
 
     client_id: str
@@ -218,6 +223,7 @@ class Client:
     backchannel_logout_session_required: bool = False
     backchannel_token_delivery_mode: str = ""
     backchannel_client_notification_endpoint: str = ""
+    backchannel_authentication_request_signing_alg: str = ""
 
     @property
     def effective_auth_method(self) -> TokenEndpointAuthMethod:
