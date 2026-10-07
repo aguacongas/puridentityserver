@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import time
 from typing import Any
 
@@ -20,6 +21,20 @@ from harness import FlowResult
 
 _MAX_SKEW_SECONDS = 300
 _MIN_CODE_LENGTH = 16
+# Longueur minimale des jetons mesurée en bits par la suite (128 bits exigés
+# pour l'``access_token``, le ``refresh_token`` et l'``auth_req_id`` —
+# ``EnsureMinimumAccessTokenLength`` / ``EnsureMinimumRefreshTokenLength`` /
+# ``EnsureMinimumAuthenticationRequestIdLength``) : ≥ 16 caractères.
+_MIN_TOKEN_LENGTH_BITS = 128
+# ``expires_in`` de l'``auth_req_id`` borné à un an (356 jours) par
+# ``ValidateAuthenticationRequestIdExpiresIn`` ; ``interval`` borné à 6 h par
+# ``ValidateAuthenticationRequestIdInterval``.
+_MAX_ACK_EXPIRES_IN = 356 * 24 * 60 * 60
+_MAX_ACK_INTERVAL = 6 * 60 * 60
+# ``auth_req_id`` : ``[A-Za-z0-9\-_\.]+`` (``ValidateAuthenticationRequestId``).
+_AUTH_REQ_ID_PATTERN = r"[A-Za-z0-9\-_\.]+"
+# ``token68`` / ``b64token`` des jetons (RFC 6749 §A.17, RFC 6750 §2.1).
+_BEARER_TOKEN_PATTERN = r"[A-Za-z0-9\-._~+/]+=*"
 # Claims rendus par scope (OIDC Core 1.0 §5.1.2 / §5.1.3) : objet des checks
 # ``VerifyScopesReturnedInUserInfoClaims`` et
 # ``VerifyScopesReturnedInAuthorizationEndpointIdToken`` — la table complète
@@ -487,3 +502,321 @@ def check_refreshed_id_token_claims(
     assert not second_claims.get("azp") or first_claims.get("azp") == second_claims.get("azp"), (
         "azp présent alors que l'id_token initial n'en portait pas (OIDC Core 1.0 §12.2)"
     )
+
+
+def check_backchannel_ack(response: httpx.Response) -> dict[str, Any]:
+    """Acquittement de ``/bc-authorize`` (modules ``fapi-ciba-id1-*``).
+
+    Enchaîne ``CheckBackchannelAuthenticationEndpointHttpStatus200``,
+    ``CheckBackchannelAuthenticationEndpointContentType``,
+    ``CheckIfBackchannelAuthenticationEndpointResponseError``,
+    ``ValidateAuthenticationRequestId`` (charset),
+    ``EnsureMinimumAuthenticationRequestIdLength`` /
+    ``...Entropy`` (≥ 128 bits), ``ValidateAuthenticationRequestIdExpiresIn``
+    (0 < ``expires_in`` ≤ 1 an) et ``ValidateAuthenticationRequestIdInterval``
+    (0 ≤ ``interval`` ≤ 6 h) — ``performValidateAuthorizationResponse()``.
+    """
+    assert response.status_code == 200, (
+        f"HTTP {response.status_code} sur /bc-authorize : {response.text[:300]}"
+    )
+    assert "application/json" in response.headers.get("content-type", ""), (
+        f"Content-Type non JSON : {response.headers.get('content-type')!r}"
+    )
+    payload = json.loads(response.text)
+    assert "error" not in payload, f"acquittement en erreur : {payload}"
+    auth_req_id = payload.get("auth_req_id", "")
+    assert isinstance(auth_req_id, str) and auth_req_id, f"auth_req_id absent : {sorted(payload)}"
+    assert re.fullmatch(_AUTH_REQ_ID_PATTERN, auth_req_id), (
+        f"auth_req_id hors [A-Za-z0-9._-] : {auth_req_id!r}"
+    )
+    assert len(auth_req_id) * 8 >= _MIN_TOKEN_LENGTH_BITS, (
+        f"auth_req_id trop court : {len(auth_req_id)} caractères (< 128 bits)"
+    )
+    assert len(set(auth_req_id)) >= _MIN_CODE_LENGTH, (
+        f"entropie trop faible pour auth_req_id : {auth_req_id[:16]!r}…"
+    )
+    expires_in = payload.get("expires_in")
+    assert isinstance(expires_in, int) and not isinstance(expires_in, bool), (
+        f"expires_in non entier : {payload.get('expires_in')!r}"
+    )
+    assert 0 < expires_in <= _MAX_ACK_EXPIRES_IN, f"expires_in hors bornes : {expires_in}"
+    interval = payload.get("interval")
+    if interval is not None:
+        assert isinstance(interval, int) and not isinstance(interval, bool), (
+            f"interval non entier : {payload.get('interval')!r}"
+        )
+        assert 0 <= interval <= _MAX_ACK_INTERVAL, f"interval hors bornes : {interval}"
+    return payload
+
+
+def check_pending_or_slowdown(response: httpx.Response) -> str:
+    """Poll en attente : ``authorization_pending`` ou ``slow_down`` (§11).
+
+    ``verifyTokenEndpointResponseIsPendingOrSlowDown()`` :
+    ``CheckTokenEndpointHttpStatus400``, structure ``RFC6749-5.2`` de l'erreur
+    (``ValidateErrorFromTokenEndpointResponseError``,
+    ``ValidateErrorDescription...``, sans CRLF/TAB —
+    ``CheckErrorDescription...ContainsCRLFTAB``) puis
+    ``EnsureErrorTokenEndpointSlowdownOrAuthorizationPending``.
+    Retourne l'``error`` observé.
+    """
+    return check_token_error(response, ("authorization_pending", "slow_down"), status_code=400)
+
+
+def check_token_error(
+    response: httpx.Response,
+    expected_errors: tuple[str, ...],
+    *,
+    status_code: int | None = 400,
+    allow_statuses: tuple[int, ...] = (),
+) -> str:
+    """Erreur structurée du token endpoint (RFC 6749 §5.2 / CIBA §11, §13).
+
+    ``ValidateErrorFromTokenEndpointResponseError`` +
+    ``ValidateErrorDescription...`` : JSON, ``error`` ∈ *expected_errors*,
+    ``error_description`` présent sans CRLF/TAB. ``status_code`` fixe le code
+    attendu (``None`` : aucun contrôle) ; ``allow_statuses`` ajoute des codes
+    admissibles (``CheckTokenEndpointHttpStatusIs400Allowing401ForInvalidClientError``).
+    """
+    accepted = (status_code,) if status_code is not None else ()
+    accepted = (*accepted, *allow_statuses)
+    if accepted:
+        assert response.status_code in accepted, (
+            f"HTTP {response.status_code} hors {accepted} : {response.text[:300]}"
+        )
+    assert "application/json" in response.headers.get("content-type", ""), (
+        f"Content-Type non JSON : {response.headers.get('content-type')!r}"
+    )
+    payload = json.loads(response.text)
+    error = payload.get("error")
+    assert error in expected_errors, f"error={error!r} hors {expected_errors} : {payload}"
+    description = payload.get("error_description")
+    assert isinstance(description, str) and description, (
+        f"error_description absent : {sorted(payload)}"
+    )
+    assert not any(char in description for char in "\r\n\t"), (
+        f"error_description contient CRLF/TAB : {description!r}"
+    )
+    return str(error)
+
+
+def check_ciba_token_success(response: httpx.Response, *, expect_refresh: bool) -> dict[str, Any]:
+    """Réponse réussie du grant CIBA (``handleSuccessfulTokenEndpointResponse()``).
+
+    ``CheckTokenEndpointHttpStatus200`` + ``CheckTokenEndpointCacheHeaders``
+    (``no-store``, CIBA-10.1.1) + ``CheckForAccessTokenValue`` +
+    ``ValidateExpiresIn`` + ``EnsureMinimumAccessTokenLength/Entropy`` +
+    ``CheckForRefreshTokenValue`` + ``EnsureMinimumRefreshTokenLength/Entropy``
+    + ``ExtractIdToken`` + ``EnsureIdTokenContainsKid`` +
+    ``FAPIValidateIdTokenSigningAlg`` (PS256, FAPI-RW-8.6).
+    """
+    assert response.status_code == 200, f"HTTP {response.status_code} : {response.text[:300]}"
+    assert "no-store" in response.headers.get("cache-control", ""), (
+        f"Cache-Control sans no-store : {response.headers.get('cache-control')!r}"
+    )
+    assert "application/json" in response.headers.get("content-type", ""), (
+        f"Content-Type non JSON : {response.headers.get('content-type')!r}"
+    )
+    payload = json.loads(response.text)
+    assert "error" not in payload, f"réponse en erreur : {payload}"
+    access_token = payload.get("access_token", "")
+    assert isinstance(access_token, str) and len(access_token) * 8 >= _MIN_TOKEN_LENGTH_BITS, (
+        f"access_token trop court : {sorted(payload)}"
+    )
+    assert str(payload.get("token_type", "")).lower() == "bearer", (
+        f"token_type != Bearer : {payload.get('token_type')!r}"
+    )
+    expires_in = payload.get("expires_in")
+    assert isinstance(expires_in, int) and not isinstance(expires_in, bool) and expires_in > 0, (
+        f"expires_in invalide : {payload.get('expires_in')!r}"
+    )
+    refresh_token = payload.get("refresh_token")
+    if refresh_token:
+        assert re.fullmatch(_BEARER_TOKEN_PATTERN, str(refresh_token)), (
+            f"refresh_token hors b64token (RFC 6749 §A.17) : {str(refresh_token)[:24]!r}…"
+        )
+        assert len(str(refresh_token)) * 8 >= _MIN_TOKEN_LENGTH_BITS, (
+            f"refresh_token trop court : {len(str(refresh_token))} caractères"
+        )
+    if expect_refresh:
+        assert refresh_token, f"refresh_token absent (offline_access demandé) : {sorted(payload)}"
+    return dict(payload)
+
+
+def check_ciba_id_token_header(id_token: str) -> dict[str, Any]:
+    """En-tête de l'id_token CIBA (``EnsureIdTokenContainsKid``, FAPI-RW-8.6).
+
+    ``ExtractIdToken`` extrait le jeton de la réponse ``/token`` puis
+    ``EnsureIdTokenContainsKid`` (OIDCD-10.1) exige un ``kid`` et
+    ``FAPIValidateIdTokenSigningAlg`` (FAPI-RW-8.6) impose ``PS256`` —
+    borne du profil FAPI-CIBA-ID1 §5.2.2. Retourne l'en-tête décodé.
+    """
+    header = id_token.split(".")[0]
+    header += "=" * (-len(header) % 4)
+    decoded = dict(json.loads(base64.urlsafe_b64decode(header)))
+    assert decoded.get("kid"), f"kid absent de l'en-tête id_token : {decoded}"
+    assert decoded.get("alg") == "PS256", (
+        f"alg id_token={decoded.get('alg')!r} != PS256 (FAPI-RW-8.6)"
+    )
+    return decoded
+
+
+def check_backchannel_error(
+    response: httpx.Response,
+    expected_errors: tuple[str, ...],
+    *,
+    allow_statuses: tuple[int, ...] = (400,),
+) -> str:
+    """Erreur de ``/bc-authorize`` (``validateErrorFromBackchannelAuthorizationRequestResponse()``).
+
+    ``ValidateErrorResponseFromBackchannelAuthenticationEndpoint`` +
+    ``ValidateErrorDescription...`` (JSON, ``error`` ∈ *expected_errors*,
+    ``error_description`` sans CRLF/TAB), ``CheckBackchannelAuthenticationEndpoint
+    HttpStatus400`` (CIBA-13 ; 401/403 admis via *allow_statuses* selon
+    ``CheckBackchannelAuthenticationEndpointErrorHttpStatus`` : ``invalid_client``
+    → 400/401, ``access_denied`` → 403) et
+    ``CheckErrorFromBackchannelAuthenticationEndpointErrorInvalidRequest``.
+    """
+    return check_token_error(
+        response,
+        expected_errors,
+        status_code=None,
+        allow_statuses=allow_statuses,
+    )
+
+
+def check_fapi_ciba_discovery(metadata: dict[str, Any]) -> None:
+    """Document de discovery du module ``FAPICIBAID1DiscoveryEndpointVerification``.
+
+    ``GetDynamicServerConfiguration`` (200 + JSON), ``CheckDiscEndpointIssuer``
+    / ``...IsValidUrl`` (OIDCD-4.3, RFC8414-2), les endpoints requis
+    (``CheckDiscEndpointTokenEndpoint``, ``CheckJwksUri``,
+    ``CheckDiscBackchannelAuthorizationEndpoint`` CIBA-4,
+    ``CheckDiscEndpointRegistrationEndpoint`` OIDCD-3),
+    ``CheckDiscEndpointIdTokenSigningAlgValuesSupportedContainsPS256OrES256``
+    (FAPI-RW-8.6),
+    ``CheckDiscEndpointTokenEndpointAuthMethodsSupportedContainsPrivateKeyOrTlsClient``
+    (FAPI-RW-5.2.2-14), ``CheckDiscEndpointTokenEndpointAuthSigningAlgValuesSupported``
+    (FAPI-RW-8.6, écart connu — issue #110, non asserté), les checks CIBA
+    ``...BackchannelAuthenticationRequestSigningAlgValuesSupported`` +
+    ``CheckBackchannelUserCodeParameterSupported`` +
+    ``FAPICIBACheckDiscEndpointGrantTypesSupported``
+    (CIBA-4) et ``CheckBackchannelTokenDeliveryPollModeSupported``
+    (FAPI-RW-5.2.2-6), enfin ``CheckDiscEndpointScopesSupportedSyntax``
+    (RFC6749-3.3). ``CheckTLSClientCertificateBoundAccessTokensTrue``
+    (FAPI-RW-5.2.2-6) n'est pas asserté : jetons non contraints par
+    certificat (écart connu — issue #110).
+    """
+    issuer = str(metadata.get("issuer", ""))
+    assert issuer.startswith(("http://", "https://")), f"issuer invalide : {issuer!r}"
+    for key in (
+        "authorization_endpoint",
+        "token_endpoint",
+        "jwks_uri",
+        "backchannel_authentication_endpoint",
+        "registration_endpoint",
+    ):
+        value = metadata.get(key)
+        assert isinstance(value, str) and value.startswith(("http://", "https://")), (
+            f"{key} absent ou invalide : {value!r}"
+        )
+    id_token_algs = list(metadata.get("id_token_signing_alg_values_supported") or [])
+    assert "PS256" in id_token_algs or "ES256" in id_token_algs, (
+        f"id_token_signing_alg_values_supported sans PS256/ES256 : {id_token_algs}"
+    )
+    auth_methods = list(metadata.get("token_endpoint_auth_methods_supported") or [])
+    assert "private_key_jwt" in auth_methods, (
+        f"token_endpoint_auth_methods_supported sans private_key_jwt : {auth_methods}"
+    )
+    bc_signing = list(
+        metadata.get("backchannel_authentication_request_signing_alg_values_supported") or []
+    )
+    assert set(bc_signing) & {"PS256", "ES256"}, f"bc signing algs sans PS256/ES256 : {bc_signing}"
+    user_code = metadata.get("backchannel_user_code_parameter_supported")
+    assert user_code is None or isinstance(user_code, bool), (
+        f"backchannel_user_code_parameter_supported non booléen : {user_code!r}"
+    )
+    grants = list(metadata.get("grant_types_supported") or [])
+    assert "urn:openid:params:grant-type:ciba" in grants, (
+        f"grant_types_supported sans urn:openid:params:grant-type:ciba : {grants}"
+    )
+    delivery = list(metadata.get("backchannel_token_delivery_modes_supported") or [])
+    assert "poll" in delivery, f"backchannel_token_delivery_modes_supported sans poll : {delivery}"
+    scopes = list(metadata.get("scopes_supported") or [])
+    assert scopes, "scopes_supported vide"
+    for scope in scopes:
+        assert isinstance(scope, str) and scope == scope.strip() and " " not in scope, (
+            f"scope hors RFC6749-3.3 : {scope!r}"
+        )
+
+
+def check_ciba_id_token(
+    claims: dict[str, Any],
+    *,
+    issuer: str,
+    client_id: str,
+    requested_acr: str = "",
+    auth_req_id: str = "",
+) -> None:
+    """id_token du grant CIBA (``PerformStandardIdTokenChecks`` + profile).
+
+    ``ValidateIdToken`` (iss/aud/exp/iat/sub) sans ``nonce`` (non demandé en
+    CIBA), ``ValidateIdTokenNotIncludeCHashAndSHash`` (aucun ``c_hash``/
+    ``s_hash`` hors flux front-channel),
+    ``FAPICIBAValidateIdTokenAuthRequestIdClaims`` (claim ``auth_req_id``
+    absent — ou identique s'il est émis) et, sous réserve que l'OP annonce
+    ``acr_values_supported``, ``FAPICIBAValidateIdTokenACRClaims``.
+    """
+    now = time.time()
+    assert claims.get("iss") == issuer, f"iss={claims.get('iss')!r} != {issuer!r}"
+    audience = claims.get("aud")
+    assert client_id in ([audience] if isinstance(audience, str) else list(audience or [])), (
+        f"aud={audience!r} ne contient pas {client_id!r}"
+    )
+    assert int(claims["exp"]) > now - _MAX_SKEW_SECONDS, f"exp expiré : {claims.get('exp')}"
+    assert int(claims["iat"]) <= now + _MAX_SKEW_SECONDS, f"iat dans le futur : {claims.get('iat')}"
+    sub = claims.get("sub")
+    assert sub, f"sub absent ou vide : {sorted(claims)}"
+    assert not claims.get("c_hash"), f"c_hash ne doit pas figurer : {sorted(claims)}"
+    assert not claims.get("s_hash"), f"s_hash ne doit pas figurer : {sorted(claims)}"
+    if auth_req_id:
+        assert claims.get("urn:openid:params:jwt:claim:auth_req_id", "") in ("", auth_req_id), (
+            "claim auth_req_id incohérent dans l'id_token"
+        )
+    if requested_acr:
+        acr = claims.get("acr")
+        assert acr is not None and acr != "", f"acr absent : {sorted(claims)}"
+        assert acr in requested_acr.split(), f"acr={acr!r} hors {requested_acr!r}"
+
+
+def check_protected_resource(
+    response: httpx.Response,
+    *,
+    interaction_id: str,
+    subject: str,
+    expect_date: bool,
+) -> dict[str, Any]:
+    """``/protected-resource`` (``requestProtectedResource()``).
+
+    ``CallProtectedResource`` (FAPI-R-6.2.1-1/-3) : 200 JSON,
+    ``EnsureResourceResponseReturnedJsonContentType`` (FAPI1-BASE-6.2.1-9),
+    ``CheckForDateHeaderInResourceResponse`` (FAPI-R-6.2.1-10 — ``expect_date``
+    : l'en-tête ``date`` est ajouté par le serveur HTTP, absent du transport
+    ASGI ``TestClient``, vérifié par le smoke contre uvicorn) et l'écho
+    ``x-fapi-interaction-id`` (FAPI 1.0 §7.4).
+    """
+    assert response.status_code == 200, (
+        f"ressource HTTP {response.status_code} : {response.text[:300]}"
+    )
+    assert "application/json" in response.headers.get("content-type", ""), (
+        f"Content-Type non JSON : {response.headers.get('content-type')!r}"
+    )
+    assert response.headers.get("x-fapi-interaction-id") == interaction_id, (
+        "x-fapi-interaction-id non échoyé : "
+        f"{response.headers.get('x-fapi-interaction-id')!r} != {interaction_id!r}"
+    )
+    if expect_date:
+        assert response.headers.get("date"), "en-tête Date absent (FAPI-R-6.2.1-10)"
+    payload = json.loads(response.text)
+    assert payload.get("sub") == subject, f"sub ressource={payload.get('sub')!r} != {subject!r}"
+    return dict(payload)

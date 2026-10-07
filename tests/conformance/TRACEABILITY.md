@@ -1,4 +1,4 @@
-# Traçabilité des checks rejoués (PR 1/4 — #69, PR 2/4 — #70, PR 3/4 — #71, PR 4/4 — #72)
+# Traçabilité des checks rejoués (PR 1/4 — #69, PR 2/4 — #70, PR 3/4 — #71, PR 4/4 — #72, FAPI-CIBA-ID1 — #109)
 
 Ce dossier rejoue localement les checks de la suite officielle
 [`openid/conformance-suite`](https://github.com/openid/conformance-suite),
@@ -21,7 +21,7 @@ et on relit les fichiers cités ci-dessous à chaque nouvelle PR.
 uv run --no-sync --no-build --locked python -m pytest -m conformance --no-cov -p no:cacheprovider
 # contre un OP réel démarré localement (le harness bascule sur httpx)
 $env:PURIDENTITYSERVER_CONFORMANCE_URL = "http://127.0.0.1:8000"
-# ou smoke complet : serveur uvicorn + rejeu des 188 scénarios (PR 4)
+# ou smoke complet : serveur uvicorn + rejeu des 222 scénarios (PR 4 + #109)
 uv run python samples/conformance-smoke/smoke_test.py
 ```
 
@@ -188,6 +188,54 @@ Rejeu PR 3 (local) : **164 passed, 9 skipped** au total
 (38 Basic + 49 Implicit + 86 Hybrid, dont 4 skips `userinfo-post-body` et
 5 skips `none`) en ≈ 6 min 45.
 
+## Matrice module → test (issue #109 — FAPI-CIBA-ID1)
+
+Plan `fapi-ciba-ciba-certification-test-plan` : **66 modules publiés**, dont
+**34 applicables** à notre variante (`private_key_jwt` + `poll` +
+`plain_fapi`). Exclus : 21 modules ConnectID (identité sociale hors périmètre),
+5 ping (hors-variante), 2 modules Brésil (`*br*`), 4 modules mTLS/hors-variante
+(`@VariantNotApplicable` / `@VariantSetup`). Les 34 tests de
+`test_plan_fapi_ciba.py` correspondent 1:1 aux modules applicables.
+
+Lectures Java dans le clone local (`release-v5.2.4`) : plans
+`FAPI.java` / `FAPI-CIBA-ID1.java`, classes sous
+`oidf/conformance/.../fapi/ciba/` (bases `AbstractFAPICIBAID1*`, modules
+concrets, `FAPICIBAID1DiscoveryEndpointVerification`,
+`AbstractFAPIDiscoveryEndpointVerification`).
+
+| Module de la suite | Check Java lu dans le clone | Test Python | Assertion |
+| --- | --- | --- | --- |
+| `fapi-ciba-id1-discovery` | `FAPICIBAID1DiscoveryEndpointVerification` + `AbstractFAPIDiscoveryEndpointVerification` (issuer/URLs/schema, PS256, private_key_jwt, CIBA : `backchannel_authentication_endpoint`, signing algs ∩ {PS256,ES256}, `backchannel_token_delivery_modes_supported` ⊇ poll, grant ciba, scopes) | `test_ciba_discovery_endpoint_verification` | `checks.check_fapi_ciba_discovery` — écarts documentés non assertés : `tls_client_certificate_bound_access_tokens` et `token_endpoint_auth_signing_alg_values_supported` absents (#110) |
+| `fapi-ciba-id1` | `AbstractFAPICIBAID1` (ack → poll pending/slow_down → approve → poll → ressource) + `FAPICIBAID1` (2 clients, `requested_expiry=300` via `AddRequestedExp300SToAuthorizationEndpointRequest`, en-tête `typ` « OautH-auThZ-REQ+jWt » via `SignRequestObjectIncludeMediaType`, réutilisation d'auth req id → `invalid_grant`) | `test_ciba_happy_flow_two_clients` | `checks.check_ciba_id_token_header` (PS256 + kid) + claims id_token + écho `/protected-resource` + 400 `invalid_grant` à la réutilisation ; jetons non contraints par certificat TLS → cross-check clés client1 + jeton client2 écarté (#110) |
+| `fapi-ciba-id1-user-rejects` | `FAPICIBAID1UserRejectsAuthentication` (`request_action=deny`) | `test_ciba_user_rejects_authentication` | `checks.check_backchannel_error` : 403 `access_denied` (`CheckBackchannelAuthenticationEndpointErrorHttpStatus`) |
+| `fapi-ciba-id1-multiple-call` | `FAPICIBAID1MultipleCallToTokenEndpoint` (20 polls max) | `test_ciba_multiple_calls_to_token_endpoint` | 19 × 400 `slow_down`/`pending` puis 200 |
+| `fapi-ciba-id1-auth-req-id-expired` | `FAPICIBAID1AuthReqIdExpired` + `AddRequestedExp10s` + `SleepUntilAuthReqExpires` | `test_ciba_auth_req_id_expired` | 400 `expired_token` (sleep 11 s réel) |
+| `fapi-ciba-id1-binding-message` | `FAPICIBAID1EnsureBindingMessageSucceeds` + `AddBindingMessage…` (« 1234 ») | `test_ciba_binding_message_succeeds` | flux complet accepté |
+| `fapi-ciba-id1-other-scope-order` | `…ReverseScopeOrderInAuthorizationEndpointRequest` | `test_ciba_other_scope_order_succeeds` | flux complet accepté |
+| `fapi-ciba-id1-requested-expiry-as-string` | `…AddRequestedExp30sAsString` (`requested_expiry="30"`) | `test_ciba_requested_expiry_as_string_succeeds` | `ack_expires_in=30` + flux complet |
+| `fapi-ciba-id1-potentially-bad-binding` | `…AddPotentiallyBadBindingMessage` (binding ~456 car. > limite OP) | `test_ciba_potentially_bad_binding_message` | 400 `invalid_binding_message` **ou** flux complet accepté (bornes OP : `MAX_BINDING_MESSAGE_LENGTH=512`) |
+| 16 modules `fapi-ciba-id1-*` négatifs (suppression/détournement de claims JAR) | `AbstractFAPICIBAID1EnsureSendingInvalidBackchannelAuthorizationRequest` + mutations (`Remove*`, `AddBadAud`, `AddExpiredExp`, `AddExpValueIs70Minutes`, `AddNbf*`, `InvalidateRequestObjectSignature`, `SerializeRequestObjectWithNullAlgorithm`, `ChangeClientJwksAlgToRS256`, signature par autre clé) → tous `invalid_request` (CIBA-13) | `test_ciba_request_object_negative[<case>]` × 16 | 400 `invalid_request` (`CheckBackchannelAuthenticationEndpointErrorHttpStatus`) ; durée de vie JAR bornée à 3600 s (`exp=nbf+300` accepté, ±70 min rejeté) |
+| `fapi-ciba-id1-multiple-hints` | `AddMultipleHintsToAuthorizationEndpointRequest` (`join@example.com` + `xxxx…`) | `test_ciba_multiple_hints_fails` | 400 `invalid_request` (OP exige hint unique) |
+| `fapi-ciba-id1-wrong-auth-req-id` | `FAPICIBAID1EnsureWrongAuthenticationRequestId…` (client2) | `test_ciba_wrong_auth_req_id_fails` | 400 `invalid_grant` |
+| `…without-assertion-in-backchannel…` | `FAPICIBAID1EnsureWithoutClientAssertionInBackchannel…` | `test_ciba_without_client_assertion_fails[backchannel]` | 400/401/403 générique (`invalid_client`) |
+| `…without-assertion-in-token…` | idem côté token endpoint | `test_ciba_without_client_assertion_fails[token]` | 400/401 `invalid_client`/`invalid_request` |
+| `…backchannel…RS256Fails` | `ChangeClientJwksAlgToRS256` (modifie le JWKS **local de la suite** ; `AbstractSignJWT` signe avec l'`alg` du JWK local → assertion RS256) | `test_ciba_client_assertion_rs256_fails[backchannel]` | 400/401/403 — l'OP refuse (JWK enregistré `alg=PS256` ≠ en-tête `RS256` → `resolve_signing_key` → `invalid_client`) |
+| `…token…RS256Fails` | idem côté token endpoint | `test_ciba_client_assertion_rs256_fails[token]` | 400/401 `invalid_client` |
+| `…iss-aud` | `UpdateClientAuthenticationAssertionClaimsWithISSAud` (aud = issuer seul) | `test_ciba_client_assertion_iss_aud_accepted` | pending/slow_down **ou** `invalid_client` acceptable (le scénario accepte les deux) |
+| `…without-request-object` | `FAPICIBAID1EnsureBackchannelAuthorizationRequestWithoutRequestFails` (client enregistré avec `backchannel_authentication_request_signing_alg` mais sans `request`) | `test_ciba_without_request_object_fails` | 400 `invalid_request` (« request object signé requis ») |
+| `fapi-ciba-id1-refresh-token` | `FAPICIBAID1RefreshToken` (`RefreshTokenRequestSteps` / `ExpectingErrorSteps`) | `test_ciba_refresh_token_flow` | refresh + id_token cohérent + `invalid_grant` croisé client2 (sleep 1.1 s : l'OP autorise `iat` identique à la seconde près dans #76) |
+
+Notes de rejeu :
+
+- `PerformStandardIdTokenChecks` saute `acr` quand `acr_values_supported` est
+  absent du discovery (notre OP ne le publie pas) → tests avec
+  `requested_acr=""` sans assertion `acr` — gap documenté (#111).
+- La suite s'enregistre avec `tls_client_certificate_bound_access_tokens=true`
+  et `response_types=[]` : nos parsers ignorent les champs inconnus (DCR) ;
+  le token endpoint ne contraint pas le jeton au certificat TLS (gap G6 → #110).
+- Rejeu local (222 scénarios au total) : **222 passed, 1059 deselected**
+  en ≈ 19 min 26.
+
 ## Observeurs du harness
 
 Le harness (`harness.py`) reproduit le rôle du navigateur pilote des plans
@@ -270,6 +318,14 @@ ils passent.
   skips restants redeviennent des rejeux réels (`test_id_token_alg_none_is_issued`
   + `test_request_object_module_completes` × 18) → **188 passed, 0 skipped**
   en ≈ 14 min 30.
+- **Issue #109 (rejeu FAPI-CIBA-ID1)** : plan `fapi-ciba-ciba-certification-
+  test-plan`, 34 modules applicables sur 66 — matrice module → test ci-dessus,
+  `test_plan_fapi_ciba.py` (34 tests) + `ciba_harness.py` (DCR éphémère, JAR
+  RFC 9101, assertion `private_key_jwt`, `/bc-authorize` + `/token` poll,
+  `/ciba/approve`, `/protected-resource`, refresh) + checks
+  `check_ciba_id_token_header`, `check_backchannel_error`,
+  `check_fapi_ciba_discovery`. Écarts OP FAPI1/FAPI2 isolés dans #110/#111 →
+  rejeu local **222 passed, 0 skipped** en ≈ 19 min 26.
 
 ## DPoP (issue #49, RFC 9449) — matrice suite → plans
 
