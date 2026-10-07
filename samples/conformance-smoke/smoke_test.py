@@ -8,11 +8,13 @@ Le serveur PurIdentityServer est lancé en sous-processus (port 8121,
 ``https://id.example``, clients ``web-app`` + ``mobile-app`` +
 ``unsigned-app`` (``id_token_signed_response_alg=none``), compte ``alice``,
 profils de claims ``users_seed`` repris du ``config.toml`` racine,
-``require_login = true``), puis ``PURIDENTITYSERVER_CONFORMANCE_URL`` est
-exporté : le harness (``tests/conformance/harness.py``) bascule alors sur du
-httpx réel au lieu de l'ASGI in-process, et ``pytest -m conformance`` rejoue
-les 188 scénarios des plans Basic, Implicit et Hybrid contre le serveur
-réel. Le code retour de pytest est propagé ; un garde-fou borne la durée.
+``require_login = true``, Dynamic Client Registration / CIBA / ressource
+protégée activés comme la config de certification), puis
+``PURIDENTITYSERVER_CONFORMANCE_URL`` est exporté : le harness
+(``tests/conformance/harness.py``) bascule alors sur du httpx réel au lieu de
+l'ASGI in-process, et ``pytest -m conformance`` rejoue les 222 scénarios des
+plans Basic, Implicit, Hybrid et FAPI-CIBA-ID1 contre le serveur réel. Le
+code retour de pytest est propagé ; un garde-fou borne la durée.
 
 Usage (depuis n'importe où dans le dépôt) :
 
@@ -50,8 +52,8 @@ SERVER_PORT = 8121
 # seed pointent vers des hôtes externes (jamais suivis par le harness).
 ISSUER = "https://id.example"
 
-# 188 scénarios contre un vrai serveur : le rejeu in-process prend déjà
-# ~14 min, HTTP réel en ajoute — le garde-fou ne doit pas tronquer un rejeu sain.
+# 222 scénarios contre un vrai serveur : le rejeu in-process prend déjà
+# ~16 min, HTTP réel en ajoute — le garde-fou ne doit pas tronquer un rejeu sain.
 _DEADLINE = 2400
 
 
@@ -80,7 +82,15 @@ def main() -> int:
             users=_IDENTITY_USERS,
             users_seed=_users_seed(),
             issuer=ISSUER,
-            extra_settings={"require_login": True},
+            registration_enabled=True,
+            jwks_algorithms=("RS256", "PS256"),
+            extra_settings={
+                "require_login": True,
+                "registration_initial_access_token_mode": "disabled",
+                "ciba_enabled": True,
+                "ciba_approval_enabled": True,
+                "protected_resource_enabled": True,
+            },
         ) as server_url,
     ):
         print(f"\nRejeu conformance contre {server_url} (deadline={_DEADLINE}s)...")

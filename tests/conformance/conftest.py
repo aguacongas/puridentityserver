@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from ciba_harness import CibaHarness
 from fastapi import FastAPI
 from harness import ConformanceHarness
 
@@ -66,15 +67,28 @@ def build_app() -> FastAPI:
     authentifiée part vers ``/login``, ce qui est le prérequis des checks
     ``prompt=login`` et ``max_age`` — sans lui le code est émis avec un
     ``sub`` vide et le rejeu perd son sens.
+
+    Les flags ``registration_*``, ``ciba_*`` et ``protected_resource_enabled``
+    reprennent ``certification/config.render.toml`` : les modules
+    ``fapi-ciba-id1*`` s'enregistrent par DCR sans access token initial,
+    appellent ``/bc-authorize`` puis interrogent la ressource protégée.
+    ``jwks_algorithms`` ajoute ``PS256`` (l'OP de certification publie tous
+    les algorithmes) : la suite enregistre ``id_token_signed_response_alg=
+    PS256`` et exige ``FAPIValidateIdTokenSigningAlg`` (FAPI-RW-8.6).
     """
     return create_app(
         Settings(
             issuer=_ISSUER,
             base_url=_ISSUER,
-            jwks_algorithms=("RS256",),
+            jwks_algorithms=("RS256", "PS256"),
             clients_seed=(_CLIENT, _CLIENT_OTHER, _CLIENT_UNSIGNED),
             require_login=True,
             identity_seed_users=_IDENTITY_USERS,
+            registration_enabled=True,
+            registration_initial_access_token_mode="disabled",
+            ciba_enabled=True,
+            ciba_approval_enabled=True,
+            protected_resource_enabled=True,
         )
     )
 
@@ -83,6 +97,19 @@ def build_app() -> FastAPI:
 def harness() -> Iterator[ConformanceHarness]:
     """Harness RP d'un test : ``/authorize`` → login/consent auto → callback."""
     with ConformanceHarness(build_app()) as instance:
+        yield instance
+
+
+@pytest.fixture
+def ciba_harness() -> Iterator[CibaHarness]:
+    """Harness CIBA d'un test : DCR, JAR, ``/bc-authorize``, ``/token``.
+
+    Module ``fapi-ciba-id1*`` (issue #109) : chaque test s'enregistre ses
+    clients éphémères via ``register`` et rejoue le flux ``poll`` contre
+    l'application locale (ou l'OP distant via ``PURIDENTITYSERVER_
+    CONFORMANCE_URL``).
+    """
+    with CibaHarness(build_app()) as instance:
         yield instance
 
 

@@ -6,13 +6,13 @@
   },
   "client": {
     "client_name": "PurIdentityServer conformance CIBA",
-    "scope": "openid profile",
+    "scope": "openid profile offline_access",
     "hint_type": "login_hint",
     "hint_value": "alice.martin@example.com"
   },
   "client2": {
     "client_name": "PurIdentityServer conformance CIBA second",
-    "scope": "openid profile",
+    "scope": "openid profile offline_access",
     "acr_value": "loa2"
   },
   "resource": {
