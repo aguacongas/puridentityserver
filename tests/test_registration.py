@@ -289,7 +289,7 @@ class TestRegister:
         )
 
         assert isinstance(result, ClientRegistration)
-        assert result.scope == "openid"
+        assert result.scope == "address email offline_access openid phone profile"
         assert result.grant_types == ["authorization_code"]
         assert result.response_types == ["code"]
 

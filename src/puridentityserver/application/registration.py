@@ -1139,10 +1139,17 @@ def _is_web_origin(uri: str) -> bool:
 def _parse_scopes(
     raw: dict[str, object], known_scopes: frozenset[str]
 ) -> frozenset[Scope] | RegistrationError:
-    """Valide le scope (chaîne espacée) contre les scopes connus du serveur."""
+    """Valide le scope (chaîne espacée) contre les scopes connus du serveur.
+
+    Un ``scope`` absent ou vide vaut les scopes identité standards du
+    serveur (``openid``, ``profile``, ``email``, ``address``, ``phone``,
+    ``offline_access``) : la portée par défaut des clients enregistrés sans
+    métadonnée ``scope`` (RFC 7591 §2.1, comportement serveur — les suites
+    de certification n'en envoient pas et adressent ``openid profile``).
+    """
     value = raw.get("scope")
     if value is None or value == "":
-        return frozenset((Scope.OPENID,))
+        return frozenset(Scope(token) for token in _STANDARD_SCOPES)
     if not isinstance(value, str):
         return RegistrationError("invalid_client_metadata", "scope doit être une chaîne")
     tokens = value.split()

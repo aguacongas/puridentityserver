@@ -406,6 +406,27 @@ class TestBackchannelAuthorizeUseCase:
         assert isinstance(result, BackchannelAuthenticationError)
         assert result.error == "invalid_scope"
 
+    def test_accepts_default_registration_scope(self) -> None:
+        uc, *_ = _make_usecase(
+            replace(
+                _CIBA_CLIENT,
+                scopes=frozenset(
+                    Scope(name)
+                    for name in (
+                        "openid",
+                        "profile",
+                        "email",
+                        "address",
+                        "phone",
+                        "offline_access",
+                    )
+                ),
+            )
+        )
+        result = run(uc.execute(_params(login_hint=_USER_EMAIL)))
+
+        assert isinstance(result, AuthenticationAck)
+
     def test_rejects_missing_hint(self) -> None:
         uc, *_ = _make_usecase()
         result = run(uc.execute(_params()))
