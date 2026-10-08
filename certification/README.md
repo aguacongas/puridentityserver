@@ -84,14 +84,15 @@ retenue :
 ## Rejeu local sans la suite
 
 Le chantier « rejouer la certification OIDC en tests Python locaux » rejoue les
-checks des plans Core **sans docker ni suite de la Fondation** : les définitions
+checks des plans Core, FAPI-CIBA-ID1 et **FAPI1 Advanced Final** (issue #110)
+**sans docker ni suite de la Fondation** : les définitions
 des modules (`release-v5.2.4`) ont été extraites dans
 `tests/conformance/` (traçabilité complète : matrices module → test dans
 `tests/conformance/TRACEABILITY.md`).
 
 ```bash
-# rejeu in-process (FastAPI via ASGITransport) — 188 scénarios :
-# 188 passed, 0 skipped, 821 deselected
+# rejeu in-process (FastAPI via ASGITransport) — 328 scénarios :
+# 328 passed, 0 skipped
 uv run --no-sync --no-build --locked python -m pytest -m conformance --no-cov -p no:cacheprovider
 
 # variante contre un VRAI serveur uvicorn (sous-processus, port 8121,
@@ -101,6 +102,11 @@ uv run python samples/conformance-smoke/smoke_test.py
 
 - Les tests sont exclus du gate (`addopts` porte `-m "not conformance"`) et
   `--no-cov` est requis : ce sous-ensemble ne couvre pas le seuil de 80 %.
+- **Plan FAPI1 (#110)** : `tests/conformance/test_plan_fapi1.py` rejoue
+  106 exécutions (44 by-value + 62 pushed) sur les 63 modules applicables
+  des 68 du plan (exclusions documentées dans `TRACEABILITY.md`) ; le plan
+  de certification officiel est `certification/plans/fapi1.json` et le
+  parcours de démonstration `samples/fapi1-client/`.
 - **Plus aucun skip** : `alg=none` est émis (id_token non signé) et les
   request objects `request`/`request_uri` (RFC 9101) sont traités — les 19
   scénarios qui sautaient (`oidcc-idtoken-unsigned` ×1, modules
