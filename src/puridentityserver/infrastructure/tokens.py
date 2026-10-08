@@ -43,6 +43,7 @@ class PyJWTTokenManager:
         issued_at: int,
         at_hash: str = "",
         c_hash: str = "",
+        s_hash: str = "",
         auth_time: int = 0,
         shared_secret: str = "",
         additional_claims: Mapping[str, object] | None = None,
@@ -51,7 +52,8 @@ class PyJWTTokenManager:
 
         Le claim ``nonce`` ne figure que s'il est renseigné : un id_token de
         refresh ne doit pas porter de nonce (OIDC Core 1.0 §12.2). Les
-        empreintes ``at_hash`` / ``c_hash`` (liens implicit/hybrid) ne sont
+        empreintes ``at_hash`` / ``c_hash`` (liens implicit/hybrid) et
+        ``s_hash`` (empreinte du ``state``, FAPI1-ADV-5.2.2.1-5) ne sont
         ajoutées que lorsqu'elles sont fournies (OIDC Core 1.0 §3.3.2.11).
         ``shared_secret`` porte le secret partagé du client pour les
         algorithmes symétriques HS* (OIDC Core 1.0 §3.1.3.7) ; il est
@@ -76,6 +78,8 @@ class PyJWTTokenManager:
             payload["at_hash"] = at_hash
         if c_hash:
             payload["c_hash"] = c_hash
+        if s_hash:
+            payload["s_hash"] = s_hash
         if auth_time:
             payload["auth_time"] = auth_time
         for name, value in (additional_claims or {}).items():

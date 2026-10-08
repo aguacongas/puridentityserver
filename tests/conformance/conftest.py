@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 from ciba_harness import CibaHarness
+from fapi_harness import FAPI_CLIENT_2_SEED, FAPI_CLIENT_SEED, FapiHarness
 from fastapi import FastAPI
 from harness import ConformanceHarness
 
@@ -75,13 +76,22 @@ def build_app() -> FastAPI:
     ``jwks_algorithms`` ajoute ``PS256`` (l'OP de certification publie tous
     les algorithmes) : la suite enregistre ``id_token_signed_response_alg=
     PS256`` et exige ``FAPIValidateIdTokenSigningAlg`` (FAPI-RW-8.6).
+    Les deux clients FAPI (issue #110) portent des clés statiques lues par
+    ``fapi_harness`` ; ``par_ttl_seconds`` descend à 30 s pour borner le
+    sommeil du module ``PARAttemptToUseExpiredRequestUri``.
     """
     return create_app(
         Settings(
             issuer=_ISSUER,
             base_url=_ISSUER,
             jwks_algorithms=("RS256", "PS256"),
-            clients_seed=(_CLIENT, _CLIENT_OTHER, _CLIENT_UNSIGNED),
+            clients_seed=(
+                _CLIENT,
+                _CLIENT_OTHER,
+                _CLIENT_UNSIGNED,
+                FAPI_CLIENT_SEED,
+                FAPI_CLIENT_2_SEED,
+            ),
             require_login=True,
             identity_seed_users=_IDENTITY_USERS,
             registration_enabled=True,
@@ -89,6 +99,7 @@ def build_app() -> FastAPI:
             ciba_enabled=True,
             ciba_approval_enabled=True,
             protected_resource_enabled=True,
+            par_ttl_seconds=30,
         )
     )
 
@@ -110,6 +121,19 @@ def ciba_harness() -> Iterator[CibaHarness]:
     CONFORMANCE_URL``).
     """
     with CibaHarness(build_app()) as instance:
+        yield instance
+
+
+@pytest.fixture
+def fapi_harness() -> Iterator[FapiHarness]:
+    """Harness FAPI 1.0 Advanced (issue #110) : clients seedés à clés statiques.
+
+    Chaque test rejoue un module du plan ``fapi1-advanced-final-test-plan``
+    contre l'application locale (ou l'OP distant via
+    ``PURIDENTITYSERVER_CONFORMANCE_URL``) : JAR ``PS256``, variante
+    ``by_value``/``pushed``, ``private_key_jwt``.
+    """
+    with FapiHarness(build_app()) as instance:
         yield instance
 
 

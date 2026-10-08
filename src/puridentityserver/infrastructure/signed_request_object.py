@@ -1,12 +1,17 @@
-"""Vérification du ``request`` signé au backchannel endpoint (OIDC CIBA 1.0 §7.1.1).
+"""Vérification du ``request`` signé (JAR, RFC 9101) côté backchannel et FAPI.
 
 Le request object (JAR, RFC 9101) est un JWT signé par le client : sa
 signature est vérifiée contre ses JWKS enregistrés (``jwks`` embarqués ou
-``jwks_uri`` distante), les claims temporels sont bornés — ``iss``, ``aud``,
-``exp``, ``iat``, ``nbf`` et ``jti`` sont tous requis (CIBA §7.1.1) et la
-durée de vie ``exp - nbf`` est limitée à 60 minutes (FAPI-CIBA-ID1 §5.2.2) —
-et le ``jti`` déjà présenté est refusé (anti-replay). Tout refus est rendu
-``invalid_request`` côté endpoint (CIBA §13).
+``jwks_uri`` distante) et les claims temporels sont bornés — ``exp`` ≤
+maintenant + 60 minutes, ``nbf`` ≥ maintenant - 60 minutes et la durée de
+vie ``exp - nbf`` limitée à 60 minutes (CIBA §7.1.1, FAPI-CIBA-ID1 et
+FAPI1-ADV-5.2.2-13/-17). Les claims exigés sont paramétrés : ``iss``,
+``aud``, ``exp``, ``iat``, ``nbf`` et ``jti`` pour le backchannel (CIBA
+§7.1.1, ``jti`` anti-replay requis), ``exp``/``nbf``/``scope``/``nonce``/
+``redirect_uri`` (plus ``iss``/``aud`` contrôlés par la vérification)
+pour un request object FAPI (FAPI1-ADV-5.2.2), sans ``jti`` ni anti-replay.
+Tout refus est rendu ``invalid_request`` côté endpoint backchannel (CIBA
+§13) ou ``invalid_request_object`` côté request object FAPI (JAR §6.3).
 """
 
 from __future__ import annotations
@@ -32,11 +37,13 @@ from puridentityserver.interfaces.repositories.dpop_replay_repository import (
 _JTI_NAMESPACE = "ciba:"
 
 #: Durée de vie maximale d'un request object — FAPI-CIBA-ID1 §5.2.2 (9)
-#: limite la fenêtre ``nbf`` → ``exp`` à 60 minutes.
+#: et FAPI1-ADV-5.2.2-13/-17 limitent la fenêtre ``nbf`` → ``exp`` à 60
+#: minutes, ``exp`` à 60 minutes dans le futur et ``nbf`` à 60 minutes
+#: dans le passé.
 MAX_REQUEST_OBJECT_LIFETIME_SECONDS = 3600
 
 #: Claims obligatoires d'un request object CIBA (CIBA §7.1.1).
-_REQUIRED_CLAIMS = ("iss", "aud", "exp", "iat", "nbf", "jti")
+_REQUIRED_CLAIMS: tuple[str, ...] = ("iss", "aud", "exp", "iat", "nbf", "jti")
 
 
 def _refus(reason: str) -> SignedRequestObjectResult:
@@ -100,12 +107,18 @@ class PyJWTSignedRequestObjectVerifier:
         client: Client,
         issuer: str,
         allowed_algorithms: Sequence[str],
+        required_claims: Sequence[str] = _REQUIRED_CLAIMS,
+        enforce_jti: bool = True,
     ) -> SignedRequestObjectResult:
-        """Vérifie signature, claims temporels et anti-replay du ``jti``.
+        """Vérifie signature, claims temporels et, le cas échéant, anti-replay.
 
         ``client`` est le client nommé par le claim ``iss`` (dont les JWKS
         servent à vérifier la signature), ``issuer`` la valeur d'``aud``
         attendue et ``allowed_algorithms`` les en-têtes ``alg`` admis.
+        ``required_claims`` liste les claims exigés (CIBA §7.1.1 ou FAPI
+        1.0 Advanced selon l'appelant) ; ``enforce_jti`` exige et
+        mémorise le ``jti`` (anti-replay) — désactivé pour les request
+        objects FAPI, qui n'en portent pas.
         """
         try:
             header = pyjwt.get_unverified_header(token)  # NOSONAR(S5659)
@@ -117,15 +130,25 @@ class PyJWTSignedRequestObjectVerifier:
         key = await self._signing_key(token, client)
         if key is None:
             return _refus("aucune clé du client ne correspond à l'en-tête du jeton")
-        claims, reason = _claims(token, key, algorithm, issuer=issuer, client=client)
+        claims, reason = _claims(
+            token, key, algorithm, issuer=issuer, client=client, required_claims=required_claims
+        )
         if claims is None:
             return _refus(reason)
         try:
-            lifetime = _timestamp(claims, "exp") - _timestamp(claims, "nbf")
+            exp = _timestamp(claims, "exp")
+            nbf = _timestamp(claims, "nbf")
         except (TypeError, ValueError):
             return _refus("claims exp/nbf invalides (entiers attendus)")
-        if lifetime > MAX_REQUEST_OBJECT_LIFETIME_SECONDS:
+        if exp - nbf > MAX_REQUEST_OBJECT_LIFETIME_SECONDS:
             return _refus("durée de vie (exp - nbf) supérieure à 60 minutes (FAPI-CIBA-ID1 §5.2.2)")
+        now = int(datetime.now(timezone.utc).timestamp())
+        if exp > now + MAX_REQUEST_OBJECT_LIFETIME_SECONDS:
+            return _refus("claim exp plus de 60 minutes dans le futur (FAPI1-ADV-5.2.2-13)")
+        if nbf < now - MAX_REQUEST_OBJECT_LIFETIME_SECONDS:
+            return _refus("claim nbf plus de 60 minutes dans le passé (FAPI1-ADV-5.2.2-17)")
+        if not enforce_jti:
+            return SignedRequestObjectResult(claims=claims)
         return await self._remember_jti(claims)
 
     async def _signing_key(self, token: str, client: Client) -> object | None:
@@ -156,6 +179,7 @@ def _claims(
     *,
     issuer: str,
     client: Client,
+    required_claims: Sequence[str],
 ) -> tuple[dict[str, object] | None, str]:
     """Décode le JWT signé et contrôle ses claims ; ``(None, raison)`` si refusé."""
     try:
@@ -165,7 +189,7 @@ def _claims(
             algorithms=[algorithm],
             audience=issuer,
             issuer=client.client_id,
-            options={"require": list(_REQUIRED_CLAIMS)},
+            options={"require": list(required_claims)},
         )
     except pyjwt.MissingRequiredClaimError as exc:
         return None, f"claim requis absent : {exc}"

@@ -153,7 +153,14 @@ def _mount_authorization_routers(
             base_url=base_url,
         )
     )
-    app.include_router(consent_router(consent_usecase, authorize_usecase, client_reader))
+    app.include_router(
+        consent_router(
+            consent_usecase,
+            authorize_usecase,
+            client_reader,
+            par_usecase=par_usecase if par_enabled else None,
+        )
+    )
     if par_enabled:
         app.include_router(par_router(par_usecase))
 
@@ -211,6 +218,7 @@ class ProtocolDependencies:
         self.client_assertions = PyJWTClientAssertionVerifier(self.secret_cipher)
         self.bearer_verifier = build_bearer_verifier(settings, self.token_manager)
         self.dpop_validator = PyJWTDpopProofValidator(stores.dpop_replay)
+        self.signed_request_objects = PyJWTSignedRequestObjectVerifier(stores.dpop_replay)
         self.registration_authorizer = BearerClaimAuthorizer(
             self.bearer_verifier,
             ClaimRule(
@@ -230,8 +238,10 @@ class ProtocolDependencies:
         self.session_management = SessionManagementUseCase()
         self.claims_provider = UserStoreClaimsProvider(self.readers.user)
         self.request_object_resolver = RequestObjectResolver(
-            RequestObjectConfig(),
+            RequestObjectConfig(issuer=settings.issuer),
             HTTPRequestObjectFetcher(allow_local_targets=loopback_bind(settings.host)),
+            clients=self.readers.client,
+            signed=self.signed_request_objects,
         )
 
         self.authorize_usecase = AuthorizeUseCase(
@@ -300,7 +310,7 @@ class ProtocolDependencies:
             self.scope_registry,
             client_assertions=self.client_assertions,
             token_manager=self.token_manager,
-            request_objects=PyJWTSignedRequestObjectVerifier(stores.dpop_replay),
+            request_objects=self.signed_request_objects,
         )
         self.ciba_approval_usecase = CibaApprovalUseCase(
             stores.backchannel, ping_notifier=HTTPCibaPingNotifier()
@@ -355,11 +365,15 @@ class ProtocolDependencies:
             PushedAuthorizationConfig(
                 ttl_seconds=settings.par_ttl_seconds,
                 par_endpoint=(f"{settings.base_url or settings.issuer}".rstrip("/") + "/par"),
+                issuer=settings.issuer,
+                token_endpoint=(f"{settings.base_url or settings.issuer}".rstrip("/") + "/token"),
             ),
             self.readers.client,
             stores.pushed,
             self.scope_registry,
             dpop=self.dpop_validator,
+            client_assertions=self.client_assertions,
+            request_object_resolver=self.request_object_resolver,
         )
         self.consent_usecase = ConsentUseCase(stores.consent)
 

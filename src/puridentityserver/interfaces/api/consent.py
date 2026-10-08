@@ -9,7 +9,9 @@ applique la décision :
 - autoriser → ``ConsentUseCase.grant`` puis exécution directe
   d'``AuthorizeUseCase`` : l'utilisateur récupère le code / les jetons
   dans sa ``redirect_uri`` sans repasser par ``/authorize`` (indispensable
-  pour PAR, dont le ``request_uri`` est à usage unique) ;
+  pour PAR, dont le ``request_uri`` est à usage unique) ; la référence
+  poussée est alors consommée (``pushed_reference``, même invariant que
+  ``_success_redirect``) ;
 - refuser → redirection d'erreur ``access_denied`` vers ``redirect_uri``.
 
 Utilisateur non connecté : redirection vers le formulaire de connexion
@@ -32,6 +34,7 @@ from puridentityserver.application.authorize import (
     validate_authorization_request,
 )
 from puridentityserver.application.consent import ConsentUseCase
+from puridentityserver.application.par import PushedAuthorizationUseCase
 from puridentityserver.domain.authorization import Scope
 from puridentityserver.identity.config import CurrentUserOptional
 from puridentityserver.interfaces.api.authorize_error import error_response
@@ -79,15 +82,18 @@ _PAGE_TEMPLATE = """<!doctype html>
 """
 
 
-def _consent_params(request: AuthorizeRequest) -> dict[str, str]:
+def _consent_params(request: AuthorizeRequest, pushed_reference: str = "") -> dict[str, str]:
     """Paramètres d'autorisation portés par l'URL de consentement.
 
     Les champs sont énumérés explicitement (jamais ``getattr``) afin de
     garder un typage strict et un ordre stable pour les champs cachés du
-    formulaire. Côté PAR, la ``request_uri`` (usage unique) n'est pas
-    retransmise : la page travaille sur les paramètres poussés.
+    formulaire. La ``request_uri`` ne circule pas comme paramètre
+    d'autorisation (la page travaille sur les paramètres poussés) : seule
+    son alias opaque ``pushed_reference`` l'accompagne (vide hors PAR) pour
+    que l'approbation consomme la demande poussée à l'émission de la
+    réponse.
     """
-    return {
+    params = {
         "response_type": request.response_type,
         "client_id": request.client_id,
         "redirect_uri": request.redirect_uri,
@@ -97,22 +103,32 @@ def _consent_params(request: AuthorizeRequest) -> dict[str, str]:
         "code_challenge": request.code_challenge,
         "code_challenge_method": request.code_challenge_method,
         "response_mode": request.response_mode,
+        "prompt": request.prompt,
         "acr_values": request.acr_values,
         "claims": request.claims,
     }
+    if pushed_reference:
+        params["pushed_reference"] = pushed_reference
+    return params
 
 
-def consent_url(request: AuthorizeRequest) -> str:
+def consent_url(request: AuthorizeRequest, pushed_reference: str = "") -> str:
     """URL de la page de consentement portant les paramètres d'autorisation."""
-    return "/consent?" + urlencode(_consent_params(request))
+    return "/consent?" + urlencode(_consent_params(request, pushed_reference))
 
 
 def consent_router(
     consent_usecase: ConsentUseCase,
     authorize_usecase: AuthorizeUseCase,
     client_repository: ClientReader,
+    par_usecase: PushedAuthorizationUseCase | None = None,
 ) -> APIRouter:
-    """Construit le routeur FastAPI exposant la page de consentement ``/consent``."""
+    """Construit le routeur FastAPI exposant la page de consentement ``/consent``.
+
+    ``par_usecase`` (``None`` : PAR désactivé) consomme la ``pushed_reference``
+    au moment où l'approbation émet la réponse d'autorisation — même
+    invariant que la redirection de succès de ``GET /authorize``.
+    """
     router = APIRouter(tags=["consent"])
 
     @router.get(
@@ -132,8 +148,10 @@ def consent_router(
         code_challenge: Annotated[str, Query()] = "",
         code_challenge_method: Annotated[str, Query()] = "S256",
         response_mode: Annotated[str, Query()] = "",
+        prompt: Annotated[str, Query()] = "",
         acr_values: Annotated[str, Query()] = "",
         claims: Annotated[str, Query()] = "",
+        pushed_reference: Annotated[str, Query()] = "",
         user: CurrentUserOptional = None,
     ) -> RedirectResponse | HTMLResponse | str:
         request = AuthorizeRequest(
@@ -146,13 +164,23 @@ def consent_router(
             code_challenge=code_challenge,
             code_challenge_method=code_challenge_method,
             response_mode=response_mode,
+            prompt=prompt,
             acr_values=acr_values,
             claims=claims,
         )
         if user is None:
-            return RedirectResponse(f"/login?next={quote(consent_url(request))}", status_code=302)
+            return RedirectResponse(
+                f"/login?next={quote(consent_url(request, pushed_reference))}",
+                status_code=302,
+            )
         return await _handle_consent(
-            consent_usecase, authorize_usecase, client_repository, request, str(user.id)
+            consent_usecase,
+            authorize_usecase,
+            client_repository,
+            request,
+            str(user.id),
+            pushed_reference=pushed_reference,
+            par_usecase=par_usecase,
         )
 
     @router.post(
@@ -174,6 +202,7 @@ def consent_router(
         response_mode: Annotated[str, Form()] = "",
         acr_values: Annotated[str, Form()] = "",
         claims: Annotated[str, Form()] = "",
+        pushed_reference: Annotated[str, Form()] = "",
         action: Annotated[str, Form()] = "authorize",
         user: CurrentUserOptional = None,
     ) -> RedirectResponse | HTMLResponse:
@@ -191,7 +220,10 @@ def consent_router(
             claims=claims,
         )
         if user is None:
-            return RedirectResponse(f"/login?next={quote(consent_url(request))}", status_code=302)
+            return RedirectResponse(
+                f"/login?next={quote(consent_url(request, pushed_reference))}",
+                status_code=302,
+            )
         if not redirect_uri:
             raise HTTPException(status_code=400, detail="redirect_uri requis")
         validated = await validate_authorization_request(request, client_repository)
@@ -224,6 +256,8 @@ def consent_router(
                 acr_values=request.acr_values,
                 claims=request.claims,
             ),
+            par_usecase=par_usecase,
+            pushed_reference=pushed_reference,
         )
 
     return router
@@ -235,13 +269,21 @@ async def _handle_consent(
     client_repository: ClientReader,
     request: AuthorizeRequest,
     subject: str,
+    *,
+    pushed_reference: str = "",
+    par_usecase: PushedAuthorizationUseCase | None = None,
 ) -> RedirectResponse | HTMLResponse | str:
     """Affiche la page ou court-circuite quand le consentement est déjà couvert.
 
     Réutilisée par ``GET /consent`` : la demande est re-validée (URIs et
     scopes), puis soit le consentement manquant est affiché, soit
     ``/authorize`` est exécuté directement — le consentement étant déjà
-    actif, point de nouvel aller-retour par la page.
+    actif, point de nouvel aller-retour par la page. ``prompt=consent``
+    (OIDC Core 1.0 §3.1.2.1) conserve l'écran forcé par ``/authorize``
+    même quand le consentement stocké couvre la demande (la page est
+    rendue, jamais court-circuitée). ``pushed_reference``
+    accompagne la page et l'exécution pour consommer la demande poussée
+    à l'émission du code (PAR).
     """
     if not request.redirect_uri:
         raise HTTPException(status_code=400, detail="redirect_uri requis")
@@ -259,12 +301,21 @@ async def _handle_consent(
         code_challenge=request.code_challenge,
         code_challenge_method=request.code_challenge_method,
         response_mode=request.response_mode,
+        prompt=request.prompt,
         acr_values=request.acr_values,
         claims=request.claims,
     )
-    if not await consent_usecase.is_required(validated.client, subject, _requested_scopes(request)):
-        return await _execution_redirect(authorize_usecase, request)
-    return _render_page(request)
+    forced = "consent" in request.prompt.split()
+    if not await consent_usecase.is_required(
+        validated.client, subject, _requested_scopes(request), force=forced
+    ):
+        return await _execution_redirect(
+            authorize_usecase,
+            request,
+            par_usecase=par_usecase,
+            pushed_reference=pushed_reference,
+        )
+    return _render_page(request, pushed_reference)
 
 
 def _requested_scopes(request: AuthorizeRequest) -> frozenset[Scope]:
@@ -272,7 +323,7 @@ def _requested_scopes(request: AuthorizeRequest) -> frozenset[Scope]:
     return Scope.from_space_separated(request.scope)
 
 
-def _render_page(request: AuthorizeRequest) -> str:
+def _render_page(request: AuthorizeRequest, pushed_reference: str = "") -> str:
     """Rend l'écran de consentement (client, scopes et destination)."""
     label = html.escape(request.client_id)
     scopes = [
@@ -282,7 +333,7 @@ def _render_page(request: AuthorizeRequest) -> str:
     ]
     hidden = "\n".join(
         f'<input type="hidden" name="{name}" value="{html.escape(value)}">'
-        for name, value in _consent_params(request).items()
+        for name, value in _consent_params(request, pushed_reference).items()
     )
     redirect_host = urlsplit(request.redirect_uri).netloc
     return _PAGE_TEMPLATE.format(
@@ -296,10 +347,21 @@ def _render_page(request: AuthorizeRequest) -> str:
 
 
 async def _execution_redirect(
-    usecase: AuthorizeUseCase, request: AuthorizeRequest
+    usecase: AuthorizeUseCase,
+    request: AuthorizeRequest,
+    *,
+    par_usecase: PushedAuthorizationUseCase | None = None,
+    pushed_reference: str = "",
 ) -> RedirectResponse | HTMLResponse:
-    """Exécute la demande d'autorisation et redirige vers ``redirect_uri``."""
+    """Exécute la demande d'autorisation et redirige vers ``redirect_uri``.
+
+    Sur émission réussie (code ou jetons), consomme la ``pushed_reference``
+    (PAR) : la même référence ne peut plus être rejouée après l'approbation
+    du consentement — invariant de ``_success_redirect`` de ``/authorize``.
+    """
     result = await usecase.execute(request)
     if isinstance(result, AuthorizeError):
         return error_response(result)
+    if par_usecase is not None and pushed_reference:
+        await par_usecase.complete(pushed_reference)
     return RedirectResponse(result.redirect_uri, status_code=302)

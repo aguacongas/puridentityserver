@@ -859,6 +859,7 @@ class TestDpopHttpEndpoints:
                 data={
                     "response_type": "code",
                     "client_id": _CLIENT_ID,
+                    "client_secret": _CLIENT_SECRET,
                     "redirect_uri": _REDIRECT_URI,
                     "scope": "openid",
                     "dpop_jkt": "autre-empreinte",

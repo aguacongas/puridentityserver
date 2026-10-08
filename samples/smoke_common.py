@@ -54,16 +54,17 @@ def wait_port(port: int, timeout: float = _WAIT_PORT_TIMEOUT) -> None:
 
 
 def _render_blocks(table: str, items: tuple[dict[str, object], ...]) -> str:
-    """Rend la séquence de blocs ``[[settings.<table>]]`` pour chaque ``item``."""
+    """Rend la séquence de blocs ``[[settings.<table>]]`` pour chaque ``item``.
+
+    Les valeurs imbriquées (listes, tables inline ``jwks``) passent par
+    :func:`_render_settings_value` : ``json.dumps`` seul produirait du JSON
+    (``{"kty": "RSA"}``) invalide en TOML (``{"kty" = "RSA"}`` attendu).
+    """
     blocks: list[str] = []
     for item in items:
         lines = [f"[[settings.{table}]]"]
         for key, value in item.items():
-            if isinstance(value, (list, tuple)):
-                rendered = ", ".join(json.dumps(entry) for entry in value)
-                lines.append(f"{key} = [{rendered}]")
-            else:
-                lines.append(f"{key} = {json.dumps(value)}")
+            lines.append(f"{key} = {_render_settings_value(value)}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
 
@@ -72,7 +73,8 @@ def _render_settings_value(value: object) -> str:
     """Rend une valeur ``[settings]`` en TOML (scalaire, liste ou objet inline).
 
     Les ``Mapping`` deviennent des tables inline TOML (``{ "clé" = valeur }``),
-    rendues récursivement : c'est le format de ``swagger_ui_init_oauth``.
+    rendues récursivement : c'est le format de ``swagger_ui_init_oauth`` et
+    des ``jwks`` client (listes de tables inline).
     """
     if isinstance(value, Mapping):
         rendered = ", ".join(
@@ -81,7 +83,7 @@ def _render_settings_value(value: object) -> str:
         )
         return "{" + rendered + "}"
     if isinstance(value, (list, tuple)):
-        rendered = ", ".join(json.dumps(entry) for entry in value)
+        rendered = ", ".join(_render_settings_value(entry) for entry in value)
         return f"[{rendered}]"
     return json.dumps(value)
 

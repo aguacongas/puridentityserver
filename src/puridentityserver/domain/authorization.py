@@ -134,7 +134,14 @@ class Client:
     configuration enregistrée (lecture, mise à jour, suppression).
     ``par_required`` (RFC 9126 §6.1) force ce client à pousser ses
     demandes via ``/par`` : l'endpoint d'autorisation rejette alors toute
-    demande directe sans ``request_uri``. ``require_consent`` (OAuth 2.0
+    demande directe sans ``request_uri``. ``fapi_enabled`` (FAPI 1.0
+    Advanced Final) active le profil FAPI pour ce client : le request
+    object devient obligatoire et signé ``PS256``/``ES256``, seuls les
+    claims du request object sont retenus (FAPI1-ADV-5.2.3-8), le flow
+    hybride ``code id_token`` est exigé (FAPI1-ADV-5.2.2-2) et, via PAR,
+    PKCE en ``S256`` devient obligatoire (FAPI1-ADV-5.2.2-18). Sans ce
+    drapeau, le client garde le comportement standard de l'OP (JAR
+    ``alg=none`` admis). ``require_consent`` (OAuth 2.0
     Consent, OIDC Core 1.0 §3.1.2.2) exige la confirmation de
     l'utilisateur connecté — mémorisée dans le store ``consents`` — avant
     d'émettre le moindre code ou jeton.
@@ -206,6 +213,7 @@ class Client:
     device_code_lifetime_seconds: int | None = None
     device_code_interval_seconds: int | None = None
     par_required: bool = False
+    fapi_enabled: bool = False
     require_consent: bool = False
     require_dpop: bool = False
     token_endpoint_auth_method: TokenEndpointAuthMethod | None = None

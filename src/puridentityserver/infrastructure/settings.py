@@ -121,6 +121,7 @@ def _parse_client(raw: dict[str, object]) -> Client:
             raw.get("backchannel_authentication_request_signing_alg", "")
         ),
         par_required=bool(raw.get("par_required")),
+        fapi_enabled=bool(raw.get("fapi_enabled")),
         require_consent=bool(raw.get("require_consent")),
         require_dpop=bool(raw.get("require_dpop")),
     )

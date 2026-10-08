@@ -615,6 +615,7 @@ class TestApiResourceScopeValidation:
                 data={
                     "response_type": "code",
                     "client_id": "web-app",
+                    "client_secret": "super-secret",
                     "redirect_uri": "https://app.example/callback",
                     "scope": "openid totally.unregistered",
                 },

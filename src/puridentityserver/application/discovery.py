@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from puridentityserver.application.request_object import REQUEST_OBJECT_SIGNING_ALGORITHMS
+from puridentityserver.application.request_object import (
+    PUBLISHED_REQUEST_OBJECT_SIGNING_ALGORITHMS,
+)
 from puridentityserver.domain.authorization import TokenEndpointAuthMethod
 from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCES
 from puridentityserver.domain.jwe import (
@@ -49,6 +51,8 @@ class DiscoveryConfig:
     token_endpoint_auth_methods: tuple[str, ...] = field(
         default_factory=lambda: tuple(method.value for method in TokenEndpointAuthMethod)
     )
+    token_endpoint_auth_signing_algorithms: tuple[str, ...] = ("PS256", "ES256")
+    code_challenge_methods: tuple[str, ...] = ("S256", "plain")
     grant_types_supported: tuple[str, ...] = (
         "authorization_code",
         "implicit",
@@ -57,7 +61,7 @@ class DiscoveryConfig:
         "urn:ietf:params:oauth:grant-type:device_code",
         "urn:ietf:params:oauth:grant-type:jwt-bearer",
     )
-    request_object_signing_algorithms: tuple[str, ...] = REQUEST_OBJECT_SIGNING_ALGORITHMS
+    request_object_signing_algorithms: tuple[str, ...] = PUBLISHED_REQUEST_OBJECT_SIGNING_ALGORITHMS
     dpop_signing_algorithms: tuple[str, ...] = tuple(
         algorithm.value for algorithm in ASYMMETRIC_ALGORITHMS
     )
@@ -106,6 +110,19 @@ class DiscoveryUseCase:
             "id_token_encryption_alg_values_supported": list(self._config.encryption_algorithms),
             "id_token_encryption_enc_values_supported": list(self._config.encryption_methods),
             "token_endpoint_auth_methods_supported": list(self._config.token_endpoint_auth_methods),
+            # Algorithmes admis pour la ``client_assertion`` signée (RFC 7523
+            # §3, FAPI1-ADV-8.6) : ``private_key_jwt`` exige au moins l'un des
+            # deux familles PS/ES publiés ici.
+            "token_endpoint_auth_signing_alg_values_supported": list(
+                self._config.token_endpoint_auth_signing_algorithms
+            ),
+            # Méthodes PKCE réellement honorées sur /authorize (RFC 7636 §4.4,
+            # FAPI1-ADV-5.2.2-18).
+            "code_challenge_methods_supported": list(self._config.code_challenge_methods),
+            # Liaison mTLS des access tokens réellement implémentée :
+            # ``cnf.x5t#S256`` émis pour un client mTLS (RFC 8705 §3.3) et
+            # opposé sur /userinfo et la ressource protégée.
+            "tls_client_certificate_bound_access_tokens": True,
             "grant_types_supported": list(self._config.grant_types_supported),
             "scopes_supported": scopes_supported,
             "claims_supported": claims_supported,
@@ -132,8 +149,9 @@ class DiscoveryUseCase:
                 *self._config.grant_types_supported,
                 "urn:openid:params:grant-type:ciba",
             ]
-        # Request objects (RFC 9101 §5.2) : seuls les jetons non signés
-        # (``alg=none``) sont acceptés ; les indicateurs restent à ``true`` pour
+        # Request objects (RFC 9101 §5.2) : ``alg=none`` pour les clients
+        # standards, ``PS256``/``ES256`` pour le profil FAPI1 Advanced
+        # (FAPI1-ADV-5.2.2-1) ; les indicateurs restent à ``true`` pour
         # que la suite de certification n'émette aucun avertissement
         # (``CheckDiscEndpointRequest*ParameterSupported``).
         metadata["request_object_signing_alg_values_supported"] = list(

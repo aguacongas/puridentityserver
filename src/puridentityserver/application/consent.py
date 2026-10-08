@@ -21,16 +21,23 @@ class ConsentUseCase:
         """Injection du repository de consentements."""
         self._repository = consent_repository
 
-    async def is_required(self, client: Client, subject: str, scopes: frozenset[Scope]) -> bool:
+    async def is_required(
+        self, client: Client, subject: str, scopes: frozenset[Scope], *, force: bool = False
+    ) -> bool:
         """Vrai si le client exige un consentement que ``subject`` n'a pas encore donné.
 
         Un client non marqué ``require_consent`` ne passe jamais par la
         page de consentement ; pour les autres, la demande est déjà
         couverte quand le consentement stocké inclut tous les scopes
-        demandés (``Consent.covers``).
+        demandés (``Consent.covers``). ``force`` (``prompt=consent``,
+        OIDC Core 1.0 §3.1.2.1) impose l'écran même quand le
+        consentement stocké couvre la demande : réafficher le choix est
+        exactement l'objet de la demande.
         """
         if not client.require_consent:
             return False
+        if force:
+            return True
         stored = await self._repository.find(subject, client.client_id)
         return stored is None or not stored.covers(scopes)
 

@@ -13,6 +13,7 @@ from puridentityserver.application.userinfo import (
     UserInfoResponse,
     UserInfoUseCase,
 )
+from puridentityserver.infrastructure.client_tls import extract_client_certificate
 from puridentityserver.interfaces.api.dpop_proof import extract_dpop_proof
 
 
@@ -63,6 +64,7 @@ def userinfo_router(usecase: UserInfoUseCase) -> APIRouter:
                 dpop_proof=proof,
                 htu=str(request.url),
                 htm=request.method,
+                tls_certificate=extract_client_certificate(request),
             )
         )
         if isinstance(result, UserInfoError):

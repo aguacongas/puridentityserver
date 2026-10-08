@@ -8,12 +8,18 @@ révocation RFC 6749 §5.2) avant de restituer un corps JSON minimal.
 Le contrôle d'``aud`` n'est pas opposé : la suite appelle la ressource
 sans resource indicator — le ``aud`` du jeton reste alors celui des
 resources accordées au client (RFC 8707 §2, comportement RP-side).
+
+Un access token lié à un certificat client mTLS (RFC 8705 §3.3, claim
+``cnf.x5t#S256``) n'est accepté que présenté avec ce certificat, lu
+depuis le contexte TLS ou les en-têtes du proxy de terminaison.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from puridentityserver.application.tls_binding import certificate_binding_error
+from puridentityserver.domain.authorization import ClientCertificate
 from puridentityserver.domain.revocation import token_hash
 from puridentityserver.interfaces.domain.tokens import TokenManager
 from puridentityserver.interfaces.repositories.revoked_token_repository import (
@@ -30,9 +36,15 @@ class ProtectedResourceConfig:
 
 @dataclass(frozen=True, slots=True)
 class ProtectedResourceRequest:
-    """Requête de la ressource protégée : jeton Bearer présenté (RFC 6750 §2.1)."""
+    """Requête de la ressource protégée : jeton Bearer présenté (RFC 6750 §2.1).
+
+    ``tls_certificate`` porte le certificat client mTLS présenté, lu par
+    le routeur depuis le contexte TLS ou les en-têtes du proxy
+    (RFC 8705 §3.3).
+    """
 
     access_token: str
+    tls_certificate: ClientCertificate | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +96,11 @@ class ProtectedResourceUseCase:
         if await self._revoked_tokens.is_revoked(token_hash(request.access_token)):
             return ProtectedResourceError(
                 error="invalid_token", error_description="Access token révoqué"
+            )
+        certificate_error = certificate_binding_error(claims, request.tls_certificate)
+        if certificate_error:
+            return ProtectedResourceError(
+                error="invalid_token", error_description=certificate_error
             )
         return ProtectedResourceResponse(
             subject=str(claims.get("sub", "")),

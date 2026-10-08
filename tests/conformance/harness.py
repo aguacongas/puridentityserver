@@ -166,16 +166,18 @@ class ConformanceHarness:
         params.update(extra)
         return params
 
-    def run_flow(self, **params: str) -> FlowResult:
+    def run_flow(self, *, deny_consent: bool = False, **params: str) -> FlowResult:
         """Enchaîne ``/authorize`` jusqu'au callback, en gérant login et consent.
 
         Une réponse non redirigeante (page d'erreur HTTP 400 par exemple) est
         retournée telle quelle dans :attr:`FlowResult.body`. Les redirections
         vers ``/login`` et ``/consent`` sont résolues automatiquement — les
         pages présentées sont comptées, c'est ce que les checks
-        ``ExpectSecondLoginPage`` observent.
+        ``ExpectSecondLoginPage`` observent. ``deny_consent`` refuse
+        l'écran (bouton « Refuser ») au lieu d'approuver — rejoue
+        ``fapi1-advanced-final-user-rejects-authentication``.
         """
-        return self._navigate("GET", params)
+        return self._navigate("GET", params, deny_consent=deny_consent)
 
     def run_flow_post(self, **params: str) -> FlowResult:
         """Parcours identique mais la demande d'autorisation part en HTTP POST.
@@ -190,7 +192,13 @@ class ConformanceHarness:
         """Oublie les cookies de session : l'utilisateur est à nouveau anonyme."""
         self._client.cookies.clear()
 
-    def _navigate(self, method: str, params: dict[str, str]) -> FlowResult:
+    def raw_get(self, path: str) -> httpx.Response:
+        """``GET`` brut côté OP, sans enchaîner login/consent (visites « 1ʳᵉ fois »)."""
+        return self._client.get(path)
+
+    def _navigate(
+        self, method: str, params: dict[str, str], *, deny_consent: bool = False
+    ) -> FlowResult:
         """Boucle de redirections ; la première requête utilise ``method``."""
         result = FlowResult()
         clean = {key: value for key, value in params.items() if value}
@@ -215,7 +223,7 @@ class ConformanceHarness:
                 continue
             if target.startswith("/consent"):
                 result.consent_pages += 1
-                location = self._submit_consent(target)
+                location = self._submit_consent(target, deny=deny_consent)
                 target = _path_of(location)
                 if not target.startswith(("/login", "/consent", "/authorize")):
                     return _record_callback(result, location)
@@ -321,17 +329,26 @@ class ConformanceHarness:
             )
         return _path_of(response.headers.get("location", "/"))
 
-    def _submit_consent(self, consent_url: str) -> str:
-        """Approuve l'écran de consentement et renvoie la redirection obtenue."""
+    def _submit_consent(self, consent_url: str, *, deny: bool = False) -> str:
+        """Traite l'écran de consentement et renvoie la redirection obtenue.
+
+        ``deny`` poste le bouton « Refuser » : la réponse attendue est le
+        callback ``access_denied`` (OIDC Core 1.0 §3.1.2.6). Si l'OP répond
+        à ``GET /consent`` par une redirection (erreur émise avant
+        d'afficher le formulaire — issues « page ou callback » de la suite),
+        cette redirection termine le parcours.
+        """
         page = self._client.get(consent_url)
+        if page.status_code in (302, 303, 307, 308):
+            return page.headers.get("location", "")
         hidden = {
             name: html.unescape(value) for name, value in re.findall(_HIDDEN_INPUT, page.text)
         }
-        hidden["action"] = "authorize"
+        hidden["action"] = "deny" if deny else "authorize"
         response = self._client.post("/consent", data=hidden)
         if response.status_code != 302:
             raise AssertionError(
-                f"consentement refusé ({response.status_code}) : {response.text[:300]}"
+                f"POST /consent sans redirection ({response.status_code}) : {response.text[:300]}"
             )
         return response.headers.get("location", "")
 

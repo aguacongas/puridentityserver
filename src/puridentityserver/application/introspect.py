@@ -106,9 +106,12 @@ class IntrospectUseCase:
     def _select_claims(claims: dict[str, object]) -> dict[str, object]:
         """Retient les membres RFC 7662 §2.2 présents dans le JWT inspecté.
 
-        Un access token lié à une clé DPoP (claim ``cnf``, RFC 9449 §5.1)
-        est annoncé ``token_type=DPoP`` et son ``cnf`` est exposé
-        top-level (RFC 9449 §6) ; sinon ``Bearer`` reste la valeur.
+        Un access token lié à une clé DPoP (claim ``cnf.jkt``, RFC 9449
+        §5.1) est annoncé ``token_type=DPoP`` et son ``cnf`` est exposé
+        top-level (RFC 9449 §6) ; un access token lié à un certificat
+        client mTLS (``cnf.x5t#S256``, RFC 8705 §3.3) expose aussi son
+        ``cnf`` mais reste ``Bearer`` — la liaison certificat ne change
+        pas le scheme du jeton.
         """
         selected: dict[str, object] = {}
         for name in ("iss", "sub", "aud", "exp", "iat", "scope"):
@@ -121,8 +124,10 @@ class IntrospectUseCase:
         elif "sub" in claims:
             selected["username"] = claims["sub"]
         cnf = claims.get("cnf")
-        bound = isinstance(cnf, dict)
-        if bound:
+        if isinstance(cnf, dict):
             selected["cnf"] = cnf
-        selected["token_type"] = "DPoP" if bound else "Bearer"
+            jkt = cnf.get("jkt")
+            selected["token_type"] = "DPoP" if isinstance(jkt, str) and jkt else "Bearer"
+        else:
+            selected["token_type"] = "Bearer"  # ruff: ignore[hardcoded-password-string]  (valeur standard OAuth, pas un secret)
         return selected

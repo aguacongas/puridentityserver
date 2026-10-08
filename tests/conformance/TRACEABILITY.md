@@ -1,4 +1,4 @@
-# Traçabilité des checks rejoués (PR 1/4 — #69, PR 2/4 — #70, PR 3/4 — #71, PR 4/4 — #72, FAPI-CIBA-ID1 — #109)
+# Traçabilité des checks rejoués (PR 1/4 — #69, PR 2/4 — #70, PR 3/4 — #71, PR 4/4 — #72, FAPI-CIBA-ID1 — #109, FAPI1 Advanced Final — #110)
 
 Ce dossier rejoue localement les checks de la suite officielle
 [`openid/conformance-suite`](https://github.com/openid/conformance-suite),
@@ -21,7 +21,7 @@ et on relit les fichiers cités ci-dessous à chaque nouvelle PR.
 uv run --no-sync --no-build --locked python -m pytest -m conformance --no-cov -p no:cacheprovider
 # contre un OP réel démarré localement (le harness bascule sur httpx)
 $env:PURIDENTITYSERVER_CONFORMANCE_URL = "http://127.0.0.1:8000"
-# ou smoke complet : serveur uvicorn + rejeu des 222 scénarios (PR 4 + #109)
+# ou smoke complet : serveur uvicorn + rejeu des 328 scénarios (PR 4 + #109 + #110)
 uv run python samples/conformance-smoke/smoke_test.py
 ```
 
@@ -236,6 +236,131 @@ Notes de rejeu :
 - Rejeu local (222 scénarios au total) : **222 passed, 1059 deselected**
   en ≈ 19 min 26.
 
+## Matrice module → test (issue #110 — FAPI1 Advanced Final)
+
+Plan `fapi1-advanced-final-test-plan` (`fapi1advancedfinal/FAPI1AdvancedFinalTestPlan.java`) :
+**68 modules publiés**, dont **63 applicables** à notre profil. Exclus :
+
+- #33 `fapi1-advanced-final-ensure-mtls-holder-of-key-required` (profil mTLS
+  `@VariantNotApplicable` pour `ClientAuthType=private_key_jwt`) ;
+- #45 `…ensure-server-handles-non-matching-intent-id` et #46
+  `…test-essential-acr-sca-claim` (`@VariantNotApplicable` pour
+  `FAPI1FinalOPProfile=plain_fapi` : écosystèmes OBUK/CDR hors périmètre) ;
+- #47 `…brazil-ensure-encryption-required` et #48
+  `…brazil-ensure-bad-payment-signature-fails` (profils Brazil/KSA).
+
+Profil retenu (`@VariantParameters`) : `ClientAuthType=private_key_jwt`,
+`FAPI1FinalOPProfile=plain_fapi`, `FAPIResponseMode=plain_response`,
+`FAPIAuthRequestMethod ∈ {by_value, pushed}`. Les 63 modules donnent
+**106 exécutions** (44 `by_value` + 62 `pushed`) : 43 modules lancés dans les
+deux variantes, #6 `…ensure-valid-pkce-succeeds` `by_value` seul (NA `pushed`),
+19 modules PAR/PKCE `pushed` seuls (NA `by_value` : #49-53 et #55-68).
+
+Lectures Java dans le clone local (`release-v5.2.4`) : mécanique commune
+`AbstractFAPI1AdvancedFinalServerTestModule` (JAR obligatoire, claims
+`iat`/`nbf`/`exp`/`aud`/`iss` ajoutés puis signés, `by_value` = `request` +
+doublons `response_type`/`client_id`/`scope`/`redirect_uri` en query,
+`pushed` = `/par` + `request_uri` + PKCE, callback hybride `code id_token`
+avec `state`/`s_hash`/`c_hash`, échange + ressource FAPI), modules concrets
+cités ci-dessous. Fiches détaillées : `fapi-specs/agent-{a,b,c,d}.md`
+(clone lecture seule, hors dépôt).
+
+### Flux nominal, paramètres et id_token (20 modules — 39 exécutions)
+
+| Module de la suite | Nodeid pytest | Assertion |
+| --- | --- | --- |
+| `fapi1-advanced-final-discovery-end-point-verification` | `test_fapi1_discovery_declares_jar_par_and_pkce[method]` | discovery FAPI1 : algs JAR ∩ {PS256, ES256}, endpoint PAR + `require_pushed_authorization_requests` (variante `pushed`), `code_challenge_methods_supported=S256` |
+| `fapi1-advanced-final` | `test_fapi1_advanced_final_happy_flow[method]` | flux complet base : callback hybride PS256 + `kid`, `state`/`nonce`/`s_hash`/`c_hash`, échange (PKCE sous `pushed`) puis ressource 200/201 + `FAPI-Interaction-Id` |
+| `…user-rejects-authentication` | `test_fapi1_user_rejects_authentication[method]` | 2ᵉ client avec `requested_state_length=128` ; déni de connexion → erreur sans code |
+| `…ensure-valid-pkce-succeeds` | `test_fapi1_valid_pkce_succeeds` (`by_value`) | PKCE hors PAR accepté (NA `pushed`) |
+| `…ensure-request-object-with-multiple-aud-succeeds` | `test_fapi1_multiple_aud_succeeds[method]` | `aud` tableau accepté (RFC 7519 §4.1.3) |
+| `…ensure-authorization-request-without-state-success` | `test_fapi1_without_state_success[method]` | module SUCCESS : aucun `state` ni en query ni dans le JAR, flux complet |
+| `…ensure-other-scope-order-succeeds` | `test_fapi1_other_scope_order_succeeds[method]` | ordre des scopes inversé accepté (RFC 6749 §3.3) |
+| `…access-token-type-header-case-sensitivity` | `test_fapi1_access_token_type_header_case_sensitivity[method]` | ressource avec en-tête `Bearer` majuscule/minuscule accepté |
+| `…ensure-response-mode-query` | `test_fapi1_response_mode_query[method]` | `response_mode=query` sur `code id_token` → rejet admis (page d'erreur, `400 invalid_request` au `/par` ou callback `invalid_request`) ; jamais de `code` en query (OIDCC-3.3.2.5, OAuth2 RT-5) |
+| `…ensure-different-nonce-inside-and-outside-request-object` | `test_fapi1_different_nonce_inside_and_outside[method]` | `nonce` différant hors/dedans le JAR : la valeur du JAR prime |
+| `…ensure-registered-redirect-uri` | `test_fapi1_registered_redirect_uri_rejected[method]` | `redirect_uri` altéré (suffixe + aléatoire) → page d'erreur ou `invalid_request` (OIDCC-3.1.2.1) |
+| `…ensure-request-object-with-long-nonce` | `test_fapi1_long_nonce_accepted[method]` | nonce 384 caractères accepté (FAPI gitlab #359) |
+| `…ensure-request-object-with-64-char-nonce-success` | `test_fapi1_64_char_nonce_success[method]` | nonce 64 caractères écho dans l'id_token |
+| `…ensure-request-object-with-long-state` | `test_fapi1_long_state_accepted[method]` | state 1000 caractères accepté (FAPI PR #483) |
+| `…ensure-matching-key-in-authorization-request` | `test_fapi1_matching_key_rejected[method]` | JAR signé par la clé du client 2 alors que `iss`/`client_id` = client 1 → rejet (`invalid_request_object`) |
+| `…ensure-authorization-request-without-request-object-fails` | `test_fapi1_without_request_object_fails[method]` | paramètres plats sans `request` → rejet (JAR obligatoire FAPI1-ADV-5.2.3) |
+| `…ensure-redirect-uri-in-authorization-request` | `test_fapi1_redirect_uri_missing[method]` | `redirect_uri` retirée de la demande → rejet |
+| `…attempt-reuse-authorisation-code-after-one-second` | `test_fapi1_attempt_reuse_code_after_one_second[method]` | 2ᵉ échange après 1 s → `invalid_grant` + jetons du 1ᵉr échange révoqués |
+| `…ensure-client-assertion-with-iss-aud-succeeds` | `test_fapi1_client_assertion_iss_aud_succeeds[method]` | assertion `iss == sub == client_id` acceptée |
+| `…refresh-token` | `test_fapi1_refresh_token[method]` | refresh + id_token cohérent (`iat` diffère) puis `invalid_grant` croisé client 2 |
+
+### PAR et PKCE (20 modules — 21 exécutions)
+
+| Module de la suite | Nodeid pytest | Assertion |
+| --- | --- | --- |
+| `…par-ensure-reused-request-uri-prior-to-auth-completion-succeeds` | `test_fapi1_par_reused_request_uri_succeeds` | `request_uri` réutilisée **avant** la fin de l'authentification acceptée (PAR-2.2) |
+| `…par-test-pushed-authorization-url-as-audience-for-client-JWT-assertion` | `test_fapi1_par_endpoint_as_assertion_audience` | `aud` = endpoint `/par` acceptée (PAR-2) |
+| `…par-token-endpoint-url-as-audience-for-client-JWT-assertion` | `test_fapi1_par_token_endpoint_as_assertion_audience` | `aud` = endpoint `/token` acceptée (RFC 7523 §3) |
+| `…test-array-as-audience-for-client-JWT-assertion` | `test_fapi1_array_as_assertion_audience[method]` | `aud` tableau (issuer + endpoint) accepté |
+| `…par-without-duplicate-parameters` | `test_fapi1_par_without_duplicate_parameters` | redirect `request_uri` sans doublons en query accepté (PAR-4) |
+| `…par-ensure-client-assertion-with-wrong-{aud,iss,sub}-fails` | `test_fapi1_par_client_assertion_wrong_{aud,iss,sub}_fails` | 400 (401 `invalid_client` admis) + `invalid_client` (RFC 7523 §3, PAR-2) |
+| `…par-ensure-pkce-required` | `test_fapi1_par_pkce_required` | 400 `invalid_request` sans `code_challenge` (FAPI1-ADV-5.2.2-18) |
+| `…par-plain-pkce-rejected` | `test_fapi1_par_plain_pkce_rejected` | 400 `invalid_request` pour `code_challenge_method=plain` (S256 exigé) |
+| `…par-attempt-invalid-redirect_uri` | `test_fapi1_par_attempt_invalid_redirect_uri` | 400 `invalid_request` pour `redirect_uri` non enregistré (RFC 6749 §3.1.2.3) |
+| `…par-pushed-authorization-url-as-audience-in-request-object` | `test_fapi1_par_url_as_audience_in_request_object` | `aud` = URL du `/par` dans le JAR → 400 `invalid_request_object` (JAR-6.2, PAR-2.3) |
+| `…par-attempt-invalid-http-method` | `test_fapi1_par_attempt_invalid_http_method` | `PUT /par` → 4xx (PAR-2.3.3 impose POST) |
+| `…incorrect-pkce-code-verifier-rejected` | `test_fapi1_incorrect_pkce_code_verifier_rejected` | 400 `invalid_grant` avec un `code_verifier` neuf (RFC 7636 §4.6) |
+| `…ensure-pkce-code-verifier-required` | `test_fapi1_ensure_pkce_code_verifier_required` | 400 `invalid_grant` sans `code_verifier` à l'échange (FAPI1-ADV-5.2.2-18) |
+| `…par-authorization-request-containing-request_uri-form-param` | `test_fapi1_par_request_uri_form_param_rejected` | `request_uri` dans le corps form du `/par` → 400 (PAR-2.1) |
+| `…par-authorization-request-containing-request_uri` | `test_fapi1_par_request_uri_claim_in_request_object` | claim `request_uri` dans le JAR → rejet (PAR-2, JAR-6.2) |
+| `…par-attempt-to-use-expired-request_uri` | `test_fapi1_par_attempt_expired_request_uri` | réutilisation après le TTL → `invalid_request_uri` (PAR-2.2.2, sleep 30 s réel) |
+| `…par-attempt-reuse-request_uri` | `test_fapi1_par_attempt_reuse_request_uri` | consommation unique post-succès → `invalid_request_uri` (PAR-2.2.2) |
+| `…par-attempt-to-use-request_uri-for-different-client` | `test_fapi1_par_request_uri_bound_to_client` | `request_uri` du client 1 présentée par le client 2 → erreur, jamais de code (PAR-2.2.1) |
+
+### Assertion client au `/token` et `response_type` (6 modules — 12 exécutions)
+
+| Module de la suite | Nodeid pytest | Assertion |
+| --- | --- | --- |
+| `…ensure-client-assertion-with-wrong-{iss,sub,aud}-fails` | `test_fapi1_client_assertion_wrong_{iss,sub,aud}_fails[method]` | 400 (401 `invalid_client` admis) + `invalid_client` (RFC 7523 §3, OIDCC-9) |
+| `…ensure-client-assertion-with-no-sub-fails` | `test_fapi1_client_assertion_no_sub_fails[method]` | idem sans claim `sub` (OIDCC-9) |
+| `…ensure-client-assertion-with-exp-is-5-minutes-in-past-fails` | `test_fapi1_client_assertion_exp_in_past_fails[method]` | idem avec `exp` périmé (RFC 7523 §3) |
+| `…ensure-response-type-code-fails` | `test_fapi1_response_type_code_fails[method]` | `response_type=code` → rejet (FAPI1-ADV-5.2.2-2) |
+
+### Request objects négatifs (13 modules — 26 exécutions)
+
+| Modules de la suite | Nodeid pytest | Assertion |
+| --- | --- | --- |
+| `…ensure-request-object-without-{exp,nbf,scope,nonce,redirect-uri}-fails` | `test_fapi1_request_object_without_{exp,nbf,scope,nonce,redirect_uri}_fails[method]` | trifurcation : 400 `/par` (`invalid_request_object`, ou `invalid_request` ⊕ pour `scope`/`nonce`), callback en erreur (bifurcation `pushed`/`by_value` : `invalid_request_uri`/`access_denied` admis hors `by_value` sans `exp`/`nbf`) ou page d'erreur (JAR-6.2, FAPI1-ADV-5.2.2) |
+| `…state-only-outside-request-object-not-used` | `test_fapi1_state_only_outside_request_object[method]` | module SUCCESS : `state` ajouté **après** signature → ignoré (aucun `state` ni `s_hash` au callback, FAPI1-ADV-5.2.2-10), puis token + ressource |
+| `…ensure-expired-request-object-fails`, `…ensure-request-object-with-bad-aud-fails`, `…-with-exp-over-60-fails`, `…-with-nbf-over-60-fails` | `test_fapi1_expired_request_object_fails[method]`, `test_fapi1_request_object_bad_aud_fails[method]`, `test_fapi1_request_object_{exp,nbf}_over_60_fails[method]` | 400 `invalid_request_object` ; callback `invalid_request_object` strict (expired, by_value) ou `invalid_request_uri` strict (`pushed` pour `bad-aud`/`exp-60`/`nbf-60`) ; page d'erreur admise |
+| `…request-object-signature-algorithm-is-not-none`, `…signed-request-object-with-RS256-fails`, `…request-object-with-invalid-signature-fails` | `test_fapi1_request_object_alg_none_fails[method]`, `test_fapi1_request_object_rs256_fails[method]`, `test_fapi1_request_object_invalid_signature_fails[method]` | `invalid_request_object` **strict** partout (FAPI1-ADV-8.6 : PS256/ES256 seuls ; signature corrompue octet par octet) |
+
+### Token endpoint : liaison client (4 modules — 8 exécutions)
+
+| Module de la suite | Nodeid pytest | Assertion |
+| --- | --- | --- |
+| `…ensure-client-id-in-token-endpoint` | `test_fapi1_client_id_in_token_endpoint[method]` | 400 (401 admis) + `error ∈ {invalid_client, invalid_grant}` — l'ordre entre authentification client et liaison du code n'est pas défini par les specs |
+| `…ensure-authorization-code-is-bound-to-client` | `test_fapi1_authorization_code_bound_to_client[method]` | 400 + `invalid_grant` **strict** — fix OP (#110) : `_validate_code_exchange` comparait `auth_code.client_id` au client authentifié (RFC 6749 §4.1.3), au même titre que refresh/device/CIBA |
+| `…ensure-client-assertion-in-token-endpoint` | `test_fapi1_client_assertion_missing_in_token_endpoint[method]` | form sans `client_assertion` (uniquement `client_id`) → 400/401 + `error ∈ {invalid_client, invalid_request}` (FAPI1-BASE-5.2.2-19) |
+| `…ensure-signed-client-assertion-with-RS256-fails` | `test_fapi1_client_assertion_rs256_fails[method]` | assertion signée RS256 (clé enregistrée PS256) → 400/401 + `invalid_client` **strict** (FAPI1-ADV-8.6) |
+
+### Notes de rejeu (issue #110)
+
+- **Écarts OP G1-G6 levés** dans le working tree : JAR signé vérifié avec algs
+  `PS256`/`ES256` + contrôles `exp`/`nbf`/`aud`/`iss` (`application/request_object.py`,
+  `invalid_request_object`) ; authentification `client_assertion` au `/par`
+  (`application/par.py`) ; PKCE obligatoire pour les clients FAPI1 + `S256`
+  seul au `/token` ; `iss == sub` + contrôle de liste d'algos des assertions
+  client (`infrastructure/client_assertions.py`) ; discovery
+  `request_object_signing_alg_values_supported`, `code_challenge_methods_supported`,
+  `token_endpoint_auth_signing_alg_values_supported`,
+  `tls_client_certificate_bound_access_tokens` ; mode FAPI sur `/authorize`
+  (JAR obligatoire, `response_type=code` rejeté, `response_mode=query` refusé
+  en hybride sans code en query) ; liaison du code d'autorisation au client
+  (`_validate_code_exchange`).
+- **Bornes OP assumées** (issues admises par les tests) : 401 admis pour
+  `invalid_client` au `/par` et au `/token`, `invalid_request` ⊕
+  `invalid_request_object` sur certains JAR incomplets, TTL PAR borné à 30 s
+  dans le harness (`conftest.par_ttl_seconds`), réutilisation de `request_uri`
+  ≈ consommation unique post-succès.
+- Rejeu local : **106 passed** (44 `by_value` + 62 `pushed`) en ≈ 8 min 30.
+
 ## Observeurs du harness
 
 Le harness (`harness.py`) reproduit le rôle du navigateur pilote des plans
@@ -326,6 +451,14 @@ ils passent.
   `check_ciba_id_token_header`, `check_backchannel_error`,
   `check_fapi_ciba_discovery`. Écarts OP FAPI1/FAPI2 isolés dans #110/#111 →
   rejeu local **222 passed, 0 skipped** en ≈ 19 min 26.
+- **Issue #110 (FAPI1 Advanced Final)** : plan `fapi1-advanced-final-test-plan`,
+  63 modules applicables sur 68 (exclus mTLS, OBUK/CDR, Brazil) — matrice
+  module → test ci-dessus, `test_plan_fapi1.py` (106 exécutions) +
+  `fapi_harness.py` (FAPI client1/client2, JAR PS256, `/par`, `private_key_jwt`,
+  `switch` 2ᵉ client) ; écarts OP G1-G6 levés (JAR signé, assertion au `/par`,
+  PKCE `S256`, algos d'assertion, discovery FAPI, mode FAPI `/authorize`,
+  liaison code↔client) ; smoke étendu aux seeds FAPI1 → rejeu local
+  **106 passed** (total conformance 328).
 
 ## DPoP (issue #49, RFC 9449) — matrice suite → plans
 

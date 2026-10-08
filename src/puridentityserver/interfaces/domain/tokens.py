@@ -46,6 +46,7 @@ class TokenManager(Protocol):
         issued_at: int,
         at_hash: str = "",
         c_hash: str = "",
+        s_hash: str = "",
         auth_time: int = 0,
         shared_secret: str = "",
         additional_claims: Mapping[str, object] | None = None,
@@ -53,7 +54,9 @@ class TokenManager(Protocol):
         """Crée un id_token signé JWS (JWT) pour le client ``audience``.
 
         ``at_hash`` (implicit/hybrid) lie l'id_token à l'access token,
-        ``c_hash`` (hybrid) au code d'autorisation (OIDC Core 1.0 §3.3.2.11).
+        ``c_hash`` (hybrid) au code d'autorisation (OIDC Core 1.0
+        §3.3.2.11) et ``s_hash`` au ``state`` (FAPI1-ADV-5.2.2.1-5) :
+        chacune n'est ajoutée que si fournie.
         ``shared_secret`` fournit le secret partagé du client pour la
         signature symétrique HS* (OIDC Core 1.0 §3.1.3.7).
         ``session_id`` porte le ``sid`` de la session navigateur (OIDC
