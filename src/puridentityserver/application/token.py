@@ -85,6 +85,8 @@ from puridentityserver.domain.authorization import (
     DeviceAuthorizationStatus,
     RefreshToken,
     Scope,
+    TokenEndpointAuthMethod,
+    der_certificate_hash,
     resolve_lifetime_seconds,
 )
 from puridentityserver.domain.jwks import JWTAlgorithm
@@ -95,6 +97,7 @@ from puridentityserver.interfaces.domain.client_assertions import (
 )
 from puridentityserver.interfaces.domain.secrets import SecretCipher
 from puridentityserver.interfaces.domain.tokens import (
+    IdTokenConditionalClaims,
     IdTokenEncrypter,
     JWEUnavailableError,
     TokenManager,
@@ -233,6 +236,7 @@ class TokenUseCase:
 
     async def execute(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Traite le grant type demandé et retourne les jetons ou une erreur."""
+        self._deduce_client_id(request)
         if request.grant_type == "authorization_code":
             return await self._exchange_code(request)
         if request.grant_type == "refresh_token":
@@ -246,6 +250,23 @@ class TokenUseCase:
         if request.grant_type == CIBA_GRANT_TYPE:
             return await self._ciba(request)
         return self._error("unsupported_grant_type")
+
+    def _deduce_client_id(self, request: TokenRequest) -> None:
+        """Localise le client par l'``iss`` non vérifié de la ``client_assertion``.
+
+        RFC 7523 §2.2 : le corps form peut omettre ``client_id`` quand
+        l'appelant s'authentifie par assertion (formulaire de la suite
+        ``CreateTokenEndpointRequestForAuthorizationCodeGrant``) —
+        l'assertion seule porte l'identité, exactement comme au endpoint
+        PAR. Aucune décision de sécurité sur cette valeur non vérifiée :
+        ``_authenticate_client`` valide ensuite signature, ``iss``/``sub``,
+        ``aud`` et ``exp`` avant tout échange.
+        """
+        if request.client_id or not request.client_assertion or self._client_assertions is None:
+            return
+        issuer = self._client_assertions.issuer_of(request.client_assertion)
+        if issuer:
+            request.client_id = issuer
 
     async def _exchange_code(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Échange un code d'autorisation à usage unique contre des jetons."""
@@ -296,6 +317,7 @@ class TokenUseCase:
             claims=auth_code.claims,
             dpop_jkt=binding.jkt if binding.bound else "",
             resources=resources,
+            tls_cert_hash=_tls_certificate_bound_hash(client, request),
         )
         if isinstance(issued, TokenError):
             return issued
@@ -322,7 +344,9 @@ class TokenUseCase:
         """Contrôle client, ``redirect_uri`` et PKCE avant d'échanger le code.
 
         RFC 6749 §4.1.3 : le code n'est consommé qu'une fois ces contrôles
-        passés ; un rejet le laisse intact.
+        passés ; un rejet le laisse intact. Le code est lié au client qui a
+        initié la demande — un autre client authentifié reçoit
+        ``invalid_grant``, au même titre qu'un ``redirect_uri`` discordant.
         """
         client = await self._clients.find_by_id(request.client_id)
         if client is None or not client.is_active:
@@ -334,6 +358,8 @@ class TokenUseCase:
         authenticated = await self._authenticate_client(client, request)
         if authenticated is not None:
             return authenticated
+        if auth_code.client_id != client.client_id:
+            return self._error("invalid_grant", "Code d'autorisation émis pour un autre client")
         if client.client_type == ClientType.PUBLIC and not auth_code.code_challenge:
             return self._error("invalid_grant", "Les clients publics doivent utiliser PKCE")
         if auth_code.code_challenge and not self._verify_pkce(auth_code, request.code_verifier):
@@ -427,6 +453,7 @@ class TokenUseCase:
             now=now,
             dpop_jkt=binding.jkt if binding.bound else "",
             resources=resources,
+            tls_cert_hash=_tls_certificate_bound_hash(client, request),
         )
         if isinstance(issued, TokenError):
             return issued
@@ -504,6 +531,7 @@ class TokenUseCase:
             now=now,
             dpop_jkt=binding.jkt if binding.bound else "",
             resources=resources,
+            tls_cert_hash=_tls_certificate_bound_hash(client, request),
         )
         return self._success("", access_token, token_ttl, scopes, dpop_bound=binding.bound)
 
@@ -539,6 +567,7 @@ class TokenUseCase:
             now=now,
             dpop_jkt=binding.jkt if binding.bound else "",
             resources=resources,
+            tls_cert_hash=_tls_certificate_bound_hash(client, request),
         )
         return self._success("", access_token, token_ttl, scopes, dpop_bound=binding.bound)
 
@@ -619,7 +648,14 @@ class TokenUseCase:
 
         now = datetime.now(timezone.utc)
         if stored.status == DeviceAuthorizationStatus.APPROVED:
-            return await self._device_approved_flow(client, stored, now, binding, resources)
+            return await self._device_approved_flow(
+                client,
+                stored,
+                now,
+                binding,
+                resources,
+                _tls_certificate_bound_hash(client, request),
+            )
         return await self._device_pending_response(stored, now)
 
     async def _load_device_session(self, request: TokenRequest) -> DeviceAuthorization | TokenError:
@@ -664,6 +700,7 @@ class TokenUseCase:
         now: datetime,
         binding: DpopBinding,
         resources: tuple[str, ...],
+        tls_cert_hash: str = "",
     ) -> TokenResponse | TokenError:
         """Consomme la session appareil approuvée et émet ses jetons (RFC 8628 §3.5)."""
         if self._device_codes is None:
@@ -688,6 +725,7 @@ class TokenUseCase:
             now=now,
             dpop_jkt=dpop_jkt,
             resources=resources,
+            tls_cert_hash=tls_cert_hash,
         )
         if isinstance(issued, TokenError):
             return issued
@@ -739,7 +777,14 @@ class TokenUseCase:
 
         now = datetime.now(timezone.utc)
         if stored.status == BackchannelAuthenticationStatus.APPROVED:
-            return await self._ciba_approved_flow(client, stored, now, binding, resources)
+            return await self._ciba_approved_flow(
+                client,
+                stored,
+                now,
+                binding,
+                resources,
+                _tls_certificate_bound_hash(client, request),
+            )
         return await self._ciba_pending_response(stored, now)
 
     async def _load_ciba_session(
@@ -794,6 +839,7 @@ class TokenUseCase:
         now: datetime,
         binding: DpopBinding,
         resources: tuple[str, ...],
+        tls_cert_hash: str = "",
     ) -> TokenResponse | TokenError:
         """Consomme la demande CIBA approuvée et émet ses jetons (CIBA §10.1.1)."""
         if self._backchannel_auth is None:
@@ -819,6 +865,7 @@ class TokenUseCase:
             acr=stored.acr,
             dpop_jkt=dpop_jkt,
             resources=resources,
+            tls_cert_hash=tls_cert_hash,
         )
         if isinstance(issued, TokenError):
             return issued
@@ -935,14 +982,19 @@ class TokenUseCase:
     async def _authenticate_client(
         self, client: Client, request: TokenRequest
     ) -> TokenError | None:
-        """Authentifie le client selon sa ``token_endpoint_auth_method`` (RFC 6749 §2.3)."""
+        """Authentifie le client selon sa ``token_endpoint_auth_method`` (RFC 6749 §2.3).
+
+        L'``aud`` admise pour la ``client_assertion`` couvre l'issuer et le
+        token endpoint (RFC 7523 §3) : la suite FAPI1 signe avec l'issuer
+        (module ``EnsureClientAssertionWithIssAudSucceeds``).
+        """
         detail = await authenticate_client(
             client,
             client_secret=request.client_secret,
             assertions=self._client_assertions,
             assertion_type=request.client_assertion_type,
             assertion=request.client_assertion,
-            assertion_audience=self._token_endpoint(),
+            assertion_audience=(self._config.issuer.rstrip("/"), self._token_endpoint()),
             tls_certificate=request.tls_certificate,
         )
         if detail is None:
@@ -969,6 +1021,7 @@ class TokenUseCase:
         claims: str = "",
         dpop_jkt: str = "",
         resources: tuple[str, ...] = (),
+        tls_cert_hash: str = "",
     ) -> tuple[str, str, int] | TokenError:
         """Émet et retourne l'``id_token``, l'``access_token`` et la TTL effective.
 
@@ -980,6 +1033,8 @@ class TokenUseCase:
         (RFC 9449 §5) lie l'access token à la clé prouvée via le claim
         ``cnf`` — chaîne vide = jeton porteur classique. ``resources``
         (RFC 8707 §3) porte l'``aud`` du jeton quand il est renseigné.
+        ``tls_cert_hash`` (RFC 8705 §3.3) porte l'empreinte du certificat
+        client mTLS qui doit lier l'access token — chaîne vide sans lien.
         """
         claims_request = parse_claims_parameter(claims) if claims else None
         token_ttl = resolve_lifetime_seconds(
@@ -1007,11 +1062,13 @@ class TokenUseCase:
             issuer=self._config.issuer,
             subject=subject,
             audience=client.client_id,
-            nonce=nonce,
-            session_id=session_id,
             expires_at=expires_epoch,
             issued_at=issued_at,
-            auth_time=auth_time,
+            conditional_claims=IdTokenConditionalClaims(
+                nonce=nonce,
+                session_id=session_id,
+                auth_time=auth_time,
+            ),
             shared_secret=shared_secret,
             additional_claims=additional or None,
         )
@@ -1033,7 +1090,9 @@ class TokenUseCase:
             expires_at=expires_epoch,
             issued_at=issued_at,
             scopes=scopes,
-            additional_claims=_access_token_additional_claims(claims_request, dpop_jkt),
+            additional_claims=_access_token_additional_claims(
+                claims_request, dpop_jkt, tls_cert_hash
+            ),
         )
         return id_token, access_token, token_ttl
 
@@ -1057,12 +1116,15 @@ class TokenUseCase:
         now: datetime,
         dpop_jkt: str = "",
         resources: tuple[str, ...] = (),
+        tls_cert_hash: str = "",
     ) -> tuple[str, int]:
         """Émet et retourne un ``access_token`` et sa TTL effective.
 
         ``dpop_jkt`` non vide lie le jeton à la clé DPoP prouvée (claim
         ``cnf``, RFC 9449 §5.1) ; ``resources`` (RFC 8707 §3) porte
-        l'``aud`` du jeton quand il est renseigné.
+        l'``aud`` du jeton quand il est renseigné ; ``tls_cert_hash``
+        non vide lie le jeton au certificat client mTLS présenté (claim
+        ``cnf.x5t#S256``, RFC 8705 §3.3).
         """
         token_ttl = resolve_lifetime_seconds(
             client.access_token_lifetime_seconds, self._config.access_token_ttl_seconds
@@ -1079,7 +1141,7 @@ class TokenUseCase:
             expires_at=expires_epoch,
             issued_at=issued_at,
             scopes=scopes,
-            additional_claims=_access_token_additional_claims(None, dpop_jkt),
+            additional_claims=_access_token_additional_claims(None, dpop_jkt, tls_cert_hash),
         )
         return access_token, token_ttl
 
@@ -1189,19 +1251,47 @@ def _unverified_assertion_claims(assertion: str) -> dict[str, object] | None:
 
 
 def _access_token_additional_claims(
-    claims_request: ClaimsRequest | None, dpop_jkt: str
+    claims_request: ClaimsRequest | None, dpop_jkt: str, tls_cert_hash: str = ""
 ) -> dict[str, object] | None:
-    """Claims additionnels de l'access token : member ``userinfo`` + lien DPoP.
+    """Claims additionnels de l'access token : member ``userinfo`` + liens du jeton.
 
     Le member ``userinfo`` du paramètre ``claims`` (OIDC Core 1.0 §5.5)
     est relu par ``/userinfo`` ; ``cnf.jkt`` (RFC 9449 §5.1) lie le jeton
-    à la clé DPoP dont la preuve a été validée. ``None`` sans rien à
-    ajouter, pour ne pas altérer le payload standard.
+    à la clé DPoP dont la preuve a été validée et ``cnf.x5t#S256``
+    (RFC 8705 §3.3) au certificat client mTLS présenté au token
+    endpoint. ``None`` sans rien à ajouter, pour ne pas altérer le
+    payload standard.
     """
     additional: dict[str, object] = {}
     payload = requested_userinfo_payload(claims_request) if claims_request else None
     if payload:
         additional.update(payload)
+    confirmation: dict[str, object] = {}
     if dpop_jkt:
-        additional["cnf"] = {"jkt": dpop_jkt}
+        confirmation["jkt"] = dpop_jkt
+    if tls_cert_hash:
+        confirmation["x5t#S256"] = tls_cert_hash
+    if confirmation:
+        additional["cnf"] = confirmation
     return additional or None
+
+
+def _tls_certificate_bound_hash(client: Client, request: TokenRequest) -> str:
+    """Empreinte du certificat client liant l'access token émis (RFC 8705 §3.3).
+
+    Le jeton n'est lié que si le client s'authentifie par certificat
+    mTLS (``tls_client_auth`` / ``self_signed_tls_client_auth``) et si
+    la requête porte réellement ce certificat : ``cnf.x5t#S256`` reprend
+    l'empreinte base64url(SHA-256(DER)). Chaîne vide = jeton porteur
+    classique (aucune autre méthode d'authentification ne voit son jeton
+    lié, y compris derrière un proxy qui poserait des en-têtes TLS).
+    """
+    if client.token_endpoint_auth_method not in (
+        TokenEndpointAuthMethod.TLS_CLIENT_AUTH,
+        TokenEndpointAuthMethod.SELF_SIGNED_TLS_CLIENT_AUTH,
+    ):
+        return ""
+    certificate = request.tls_certificate
+    if certificate is None or certificate.der is None:
+        return ""
+    return der_certificate_hash(certificate.der)

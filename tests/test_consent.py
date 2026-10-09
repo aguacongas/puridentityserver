@@ -5,14 +5,18 @@
 - intégration HTTP : ``/authorize`` redirige vers ``/consent`` pour un client
   ``require_consent``, la page rend les scopes, ``POST /consent`` autorise
   (code échangeable à ``/token``) ou refuse (``access_denied``), le consentement
-  est mémorisé (auto-approbation en 2e demande, nouvel écran pour un scope
-  ajouté), l'utilisateur non connecté est renvoyé vers ``/login``, et le flow
-  PAR aboutit via la page (exécution directe d'``AuthorizeUseCase``).
+est mémorisé (auto-approbation en 2e demande, nouvel écran pour un scope
+ajouté, ``prompt=consent`` qui force l'écran même mémorisé), l'utilisateur
+non connecté est renvoyé vers ``/login``, et le flow
+PAR aboutit via la page (exécution directe d'``AuthorizeUseCase``) en
+consommant la ``request_uri`` (RFC 9126 §4).
 """
 
 import asyncio
 import base64
 import hashlib
+import html
+import re
 from collections.abc import Awaitable
 from pathlib import Path
 from typing import TypeVar
@@ -111,6 +115,17 @@ def test_is_required_reflects_granted_scopes() -> None:
     )
     assert run(usecase.is_required(client, "alice", frozenset({Scope.OPENID, Scope.EMAIL}))) is True
     assert run(usecase.is_required(client, "bob", frozenset({Scope.OPENID}))) is True
+
+
+def test_is_required_force_overrides_stored_consent() -> None:
+    usecase = ConsentUseCase(InMemoryConsentRepository())
+    client = _consent_client()
+    run(usecase.grant("alice", client.client_id, frozenset({Scope.OPENID, Scope.PROFILE})))
+
+    assert run(usecase.is_required(client, "alice", frozenset({Scope.OPENID}))) is False
+    assert run(usecase.is_required(client, "alice", frozenset({Scope.OPENID}), force=True)) is True
+    plain = _consent_client(require_consent=False)
+    assert run(usecase.is_required(plain, "alice", frozenset({Scope.OPENID}), force=True)) is False
 
 
 def test_grant_unions_scopes_across_approvals() -> None:
@@ -332,6 +347,21 @@ def test_consent_is_memorized_for_next_authorize() -> None:
     assert _redirect_query(location)["code"]
 
 
+def test_prompt_consent_reprompts_after_grant() -> None:
+    """``prompt=consent`` (OIDC Core 1.0 §3.1.2.1) réaffiche l'écran mémorisé."""
+    with TestClient(_app()) as client:
+        _login(client)
+        client.get("/authorize", params=_authorize_params(), follow_redirects=False)
+        client.post("/consent", data=_consent_form_data(), follow_redirects=False)
+
+        forced = _authorize_params()
+        forced["prompt"] = "consent"
+        response = client.get("/authorize", params=forced, follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"].startswith("/consent?")
+
+
 def test_new_scope_requires_consent_again() -> None:
     with TestClient(_app()) as client:
         _login(client)
@@ -435,3 +465,54 @@ def test_par_flow_reaches_consent_and_approves() -> None:
     query = _redirect_query(location)
     assert query["state"] == ["st-par"]
     assert query["code"]
+
+
+def _consent_hidden(consent_path: str, client: TestClient) -> dict[str, str]:
+    """Champs cachés réels de l'écran de consentement (``pushed_reference`` y compris)."""
+    page = client.get(consent_path)
+    assert page.status_code == 200
+    return {
+        name: html.unescape(value)
+        for name, value in re.findall(
+            r'<input type="hidden" name="([^"]+)" value="([^"]*)">', page.text
+        )
+    }
+
+
+def test_par_consent_approval_consumes_request_uri() -> None:
+    verifier = "verifier-verifier"
+    with TestClient(_app(par_enabled=True)) as client:
+        push = client.post(
+            "/par",
+            data={
+                "response_type": "code",
+                "client_id": "app-with-consent",
+                "redirect_uri": _REDIRECT_URI,
+                "scope": "openid profile",
+                "state": "st-par",
+                "code_challenge": _s256_challenge(verifier),
+            },
+        )
+        assert push.status_code == 201
+        request_uri = push.json()["request_uri"]
+        authorize = {"client_id": "app-with-consent", "request_uri": request_uri}
+
+        _login(client)
+        auth = client.get("/authorize", params=authorize, follow_redirects=False)
+        assert auth.status_code == 302
+        assert auth.headers["location"].startswith("/consent?")
+
+        hidden = _consent_hidden(auth.headers["location"], client)
+        assert hidden.get("pushed_reference") == request_uri
+        decision = client.post(
+            "/consent",
+            data={**hidden, "action": "authorize"},
+            follow_redirects=False,
+        )
+        assert decision.status_code == 302
+        assert _redirect_query(decision.headers["location"])["code"]
+
+        reuse = client.get("/authorize", params=authorize, follow_redirects=False)
+
+    assert reuse.status_code == 400
+    assert reuse.json()["detail"]["error"] == "invalid_request_uri"

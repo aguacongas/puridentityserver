@@ -9,6 +9,11 @@ Un access token lié à une clé DPoP (RFC 9449 §5.1, claim ``cnf.jkt``)
 n'est accepté que via le scheme ``DPoP`` avec une preuve dont l'empreinte
 correspond, liée au jeton par ``ath`` (§7.2) — le scheme ``Bearer`` est
 alors rejeté avec un challenge ``DPoP``.
+
+Un access token lié à un certificat client mTLS (RFC 8705 §3.3, claim
+``cnf.x5t#S256``) n'est accepté que présenté avec ce certificat, lu par
+le resource server depuis le contexte TLS ou les en-têtes du proxy de
+terminaison.
 """
 
 from __future__ import annotations
@@ -19,6 +24,8 @@ from puridentityserver.application.claims_request import (
     allowed_scope_claims,
     requested_userinfo_claims,
 )
+from puridentityserver.application.tls_binding import certificate_binding_error
+from puridentityserver.domain.authorization import ClientCertificate
 from puridentityserver.domain.dpop import access_token_hash
 from puridentityserver.domain.revocation import token_hash
 from puridentityserver.interfaces.domain.dpop import DpopProofValidator, DpopValidationError
@@ -46,7 +53,9 @@ class UserInfoRequest:
 
     ``auth_scheme`` reprend le scheme employé (``bearer``/``dpop``) ;
     ``dpop_proof``, ``htu`` et ``htm`` portent la preuve RFC 9449 et le
-    contexte HTTP qu'elle doit autoriser (§7.1).
+    contexte HTTP qu'elle doit autoriser (§7.1) ; ``tls_certificate``
+    porte le certificat client mTLS présenté (RFC 8705 §3.3), lu par le
+    routeur depuis le contexte TLS ou les en-têtes du proxy.
     """
 
     access_token: str
@@ -54,6 +63,7 @@ class UserInfoRequest:
     dpop_proof: str = ""
     htu: str = ""
     htm: str = "GET"
+    tls_certificate: ClientCertificate | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +132,10 @@ class UserInfoUseCase:
 
         if await self._blacklist.is_revoked(token_hash(request.access_token)):
             return UserInfoError(error="invalid_token", error_description="Access token révoqué")
+
+        certificate_error = certificate_binding_error(claims, request.tls_certificate)
+        if certificate_error:
+            return UserInfoError(error="invalid_token", error_description=certificate_error)
 
         binding_error = await self._validate_dpop_binding(request, claims)
         if binding_error is not None:

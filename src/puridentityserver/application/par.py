@@ -21,7 +21,11 @@ from puridentityserver.application.authorize import (
     parse_max_age,
     validate_authorization_request,
 )
-from puridentityserver.application.client_auth import CLIENT_UNKNOWN_ERROR, verify_client_secret
+from puridentityserver.application.client_auth import authenticate_client
+from puridentityserver.application.request_object import (
+    RequestObjectError,
+    RequestObjectResolver,
+)
 from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.domain.authorization import (
     PUSHED_REQUEST_URI_PREFIX,
@@ -30,6 +34,7 @@ from puridentityserver.domain.authorization import (
     PushedAuthorization,
 )
 from puridentityserver.domain.dpop import DPoPProof
+from puridentityserver.interfaces.domain.client_assertions import ClientAssertionVerifier
 from puridentityserver.interfaces.domain.dpop import DpopProofValidator, DpopValidationError
 from puridentityserver.interfaces.repositories.pushed_authorization_repository import (
     PushedAuthorizationRepository,
@@ -43,10 +48,16 @@ class PushedAuthorizationConfig:
 
     ``par_endpoint`` est l'URL du endpoint, employée comme ``htu`` de la
     preuve DPoP éventuellement présentée au push (RFC 9449 §10.1).
+    ``issuer``, ``token_endpoint`` et ``par_endpoint`` sont les audiences
+    admises pour la ``client_assertion`` du push : l'AS **doit** accepter
+    son issuer, l'URL du token endpoint et l'URL du endpoint PAR (RFC 9126
+    §2, exigence FAPI1 ``PAR-2``).
     """
 
     ttl_seconds: int = 90
     par_endpoint: str = ""
+    issuer: str = ""
+    token_endpoint: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,12 +77,52 @@ class PushError:
     status_code: int = 400
 
 
+def _fapi_pkce_error(params: dict[str, str]) -> PushError | None:
+    """Contrôle PKCE ``S256`` exigé d'un push FAPI (FAPI1-ADV-5.2.2-18).
+
+    ``code_challenge`` est requis dès qu'un client ``fapi_enabled`` pousse
+    sa demande, et seule la méthode ``S256`` est admise (``plain`` est
+    rejeté). Renvoie ``None`` quand la demande est conforme.
+    """
+    if not params.get("code_challenge"):
+        return PushError(
+            error="invalid_request",
+            error_description="PKCE (code_challenge) requis pour un client FAPI1 "
+            "via PAR (FAPI1-ADV-5.2.2-18)",
+        )
+    if params.get("code_challenge_method", "S256") != "S256":
+        return PushError(
+            error="invalid_request",
+            error_description="code_challenge_method doit être 'S256' pour un client "
+            "FAPI1 (FAPI1-ADV-5.2.2-18)",
+        )
+    return None
+
+
+def _validated_push_error(validated: AuthorizeError) -> PushError:
+    """Traduit l'erreur du validateur d'autorisation en erreur de push (RFC 9126 §2.3).
+
+    Le push ne redirige jamais : une ``redirect_uri`` non enregistrée vaut
+    ``invalid_request`` (suite de conformance PAR-2.3), le détail de
+    ``error_description`` conservant l'explication ``invalid_redirect_uri``.
+    """
+    error = validated.error
+    if error == "invalid_redirect_uri":
+        error = "invalid_request"
+    return PushError(
+        error=error,
+        error_description=validated.error_description,
+        status_code=401 if error == "invalid_client" else 400,
+    )
+
+
 class PushedAuthorizationUseCase:
     """Gère le cycle de vie des requêtes d'autorisation poussées.
 
     ``push()`` valide les paramètres (réutilisant le validateur standard),
-    puis ``resolve()`` consomme le ``request_uri`` au moment du redirect
-    vers ``/authorize``.
+    ``resolve()`` reconstruit la demande à chaque visite de ``/authorize``
+    et ``complete()`` consomme définitivement la référence à l'émission de
+    la réponse (RFC 9126 §4).
     """
 
     def __init__(
@@ -82,45 +133,85 @@ class PushedAuthorizationUseCase:
         scope_registry: ScopeRegistry | None = None,
         *,
         dpop: DpopProofValidator | None = None,
+        client_assertions: ClientAssertionVerifier | None = None,
+        request_object_resolver: RequestObjectResolver | None = None,
     ) -> None:
         """Prépare le use case avec ses dépendances de configuration et stockage.
 
         ``dpop`` (RFC 9449 §10.1) vérifie la preuve présentée au push ;
         sans injection, une preuve fournie est refusée plutôt qu'acceptée
-        sans vérification.
+        sans vérification. ``client_assertions`` (RFC 7523 §2.2) authentifie
+        le client par ``client_assertion`` au push ; sans injection, une
+        assertion fournie est refusée. ``request_object_resolver``
+        (RFC 9101 §5) incorpore un ``request`` fourni au push **avant**
+        validation — indispensable pour les clients FAPI, dont le request
+        object signé porte les vrais paramètres (FAPI1-ADV-5.2.3-8).
         """
         self._config = par_config
         self._clients = client_repository
         self._pushed = pushed_repository
         self._scope_registry = scope_registry
         self._dpop = dpop
+        self._client_assertions = client_assertions
+        self._request_object_resolver = request_object_resolver
 
-    async def _authenticate_client(self, client_id: str, client_secret: str) -> Client | PushError:
+    def _assertion_audiences(self) -> tuple[str, ...]:
+        """Audiences admises de la ``client_assertion`` du push (RFC 9126 §2).
+
+        Issuer, URL du token endpoint et URL du endpoint PAR, sans
+        doublon ni barre finale.
+        """
+        values = (
+            self._config.issuer,
+            self._config.token_endpoint,
+            self._config.par_endpoint,
+        )
+        return tuple(dict.fromkeys(value.rstrip("/") for value in values if value))
+
+    async def _authenticate_client(self, params: dict[str, str]) -> Client | PushError:
         """Authentifie le client du push ; retourne ``PushError`` ``invalid_client`` sinon.
 
-        * ``client_secret`` présent → client confidentiel attendu, sinon
-          ``invalid_client`` (401).
-        * ``client_secret`` absent → client public, ``client_id`` seul suffit.
+        Le client est identifié par ``client_id`` ou, à défaut, par le
+        ``iss`` non vérifié de la ``client_assertion`` (formulaire
+        ``private_key_jwt`` — la signature reste intégralement contrôlée).
+        La ``client_assertion`` est vérifiée avec la même chaîne que le
+        token endpoint (RFC 7523 §2.2) mais pour l'**issuer, l'URL du
+        token endpoint et l'URL du ``/par``** comme audiences : l'AS doit
+        accepter ces trois valeurs (RFC 9126 §2, exigence FAPI1
+        ``PAR-2``), toute autre ``aud`` étant refusée. Un client
+        confidentiel sans aucun secret ni assertion est refusé (RFC 6749
+        §2.3.1).
         """
-        client = await self._clients.find_by_id(client_id)
+        client_id = params.get("client_id", "")
+        assertion = params.get("client_assertion", "")
+        if not client_id and assertion and self._client_assertions is not None:
+            client_id = self._client_assertions.issuer_of(assertion)
+        client = await self._clients.find_by_id(client_id) if client_id else None
         if client is None or not client.is_active:
             return PushError(
                 error="invalid_client",
-                error_description=CLIENT_UNKNOWN_ERROR,
+                error_description="Client inconnu ou désactivé",
                 status_code=401,
             )
-        if not client_secret:
-            return client
-        if client.client_type is not ClientType.CONFIDENTIAL:
+        client_secret = params.get("client_secret", "")
+        if client_secret and client.client_type is not ClientType.CONFIDENTIAL:
             return PushError(
                 error="invalid_client",
                 error_description="client_secret fourni mais le client n'est pas confidentiel",
                 status_code=401,
             )
-        if not verify_client_secret(client, client_secret):
+        detail = await authenticate_client(
+            client,
+            client_secret=client_secret,
+            assertions=self._client_assertions,
+            assertion_type=params.get("client_assertion_type", ""),
+            assertion=assertion,
+            assertion_audience=self._assertion_audiences(),
+        )
+        if detail is not None:
             return PushError(
                 error="invalid_client",
-                error_description="client_secret invalide",
+                error_description=detail,
                 status_code=401,
             )
         return client
@@ -133,6 +224,10 @@ class PushedAuthorizationUseCase:
         ``client_id`` et éventuellement ``client_secret``. Le paramètre
         ``request_uri``, s'il est fourni, est rejeté conformément à la
         RFC 9126 §2 (interdiction d'inclure ``request_uri`` dans le push).
+        Un ``request`` (RFC 9101) est résolu avant validation : pour un
+        client FAPI, sa signature est contrôlée et ses seuls claims sont
+        retenus (FAPI1-ADV-5.2.3-8), puis PKCE ``S256`` devient exigé
+        (FAPI1-ADV-5.2.2-18).
 
         ``dpop_proof`` porte la preuve DPoP de l'en-tête (RFC 9449 §10.1) :
         validée, elle fixe le ``dpop_jkt`` de la demande à défaut de celui
@@ -141,8 +236,6 @@ class PushedAuthorizationUseCase:
         Paramètres invalides → propagation de l'erreur du validateur
         standard (``invalid_request``, ``invalid_scope``…).
         """
-        client_id = params.get("client_id", "")
-        client_secret = params.get("client_secret", "")
         request_uri = params.get("request_uri", "")
 
         if request_uri:
@@ -153,9 +246,26 @@ class PushedAuthorizationUseCase:
                 status_code=400,
             )
 
-        authenticated = await self._authenticate_client(client_id, client_secret)
+        if self._request_object_resolver is not None:
+            resolved = await self._request_object_resolver.resolve(params)
+            if isinstance(resolved, RequestObjectError):
+                return PushError(
+                    error=resolved.error,
+                    error_description=resolved.error_description,
+                    status_code=400,
+                )
+            params = resolved
+
+        authenticated = await self._authenticate_client(params)
         if isinstance(authenticated, PushError):
             return authenticated
+        client_id = authenticated.client_id
+        params = {**params, "client_id": client_id}
+
+        if authenticated.fapi_enabled:
+            pkce_error = _fapi_pkce_error(params)
+            if pkce_error is not None:
+                return pkce_error
 
         proof = await self._check_dpop_proof(params, dpop_proof)
         if isinstance(proof, PushError):
@@ -172,7 +282,7 @@ class PushedAuthorizationUseCase:
             nonce=params.get("nonce", ""),
             code_challenge=params.get("code_challenge", ""),
             code_challenge_method=params.get("code_challenge_method", "S256"),
-            response_mode=params.get("response_mode", "query"),
+            response_mode=params.get("response_mode", ""),
             prompt=params.get("prompt", ""),
             max_age=parse_max_age(params.get("max_age", "")),
             acr_values=params.get("acr_values", ""),
@@ -185,11 +295,7 @@ class PushedAuthorizationUseCase:
             authorize_request, self._clients, self._scope_registry
         )
         if isinstance(validated, AuthorizeError):
-            return PushError(
-                error=validated.error,
-                error_description=validated.error_description,
-                status_code=401 if validated.error == "invalid_client" else 400,
-            )
+            return _validated_push_error(validated)
 
         reference = secrets.token_urlsafe(32)
         request_uri = f"{PUSHED_REQUEST_URI_PREFIX}{reference}"
@@ -242,17 +348,21 @@ class PushedAuthorizationUseCase:
         return result
 
     async def resolve(self, request_uri: str, client_id: str) -> AuthorizeRequest | PushError:
-        """Résout le ``request_uri`` pour ``/authorize`` (consommation unique).
+        """Résout le ``request_uri`` pour ``/authorize`` (sans le consommer).
 
-        Retourne la requête d'autorisation reconstruite, ou ``PushError``
-        (``invalid_request``) en cas de référence inconnue, expirée, déjà
-        consommée ou associée à un autre ``client_id``. Le ``request_uri``
-        consommé (ou dont l'usage est refusé) est détruit (RFC 9126 §4).
+        Retourne la requête d'autorisation reconstruite, ou ``PushError`` :
+        ``invalid_request_uri`` pour une référence inconnue, expirée ou
+        déjà consommée (RFC 9101 §6.3), ``invalid_request`` pour un
+        ``client_id`` incohérent. La consommation unique est appliquée à
+        l'achèvement du flux (:meth:`complete`) et non à la première
+        visite : la suite de conformance exige que réutiliser la même
+        référence reste possible tant que l'authentification n'est pas
+        terminée (issue conformance-suite #1296, FAPI2 §5.3.2.2 note 3).
         """
         pushed = await self._pushed.find_by_request_uri(request_uri)
         if pushed is None:
             return PushError(
-                error="invalid_request",
+                error="invalid_request_uri",
                 error_description="request_uri inconnu ou expiré",
                 status_code=400,
             )
@@ -261,7 +371,7 @@ class PushedAuthorizationUseCase:
         if pushed.expires_at <= now:
             await self._pushed.delete(request_uri)
             return PushError(
-                error="invalid_request",
+                error="invalid_request_uri",
                 error_description="request_uri expiré",
                 status_code=400,
             )
@@ -269,7 +379,7 @@ class PushedAuthorizationUseCase:
         if pushed.is_consumed:
             await self._pushed.delete(request_uri)
             return PushError(
-                error="invalid_request",
+                error="invalid_request_uri",
                 error_description="request_uri déjà utilisé",
                 status_code=400,
             )
@@ -281,9 +391,6 @@ class PushedAuthorizationUseCase:
                 status_code=400,
             )
 
-        await self._pushed.consume(request_uri)
-        await self._pushed.delete(request_uri)
-
         return AuthorizeRequest(
             response_type=pushed.params.get("response_type", ""),
             client_id=pushed.params.get("client_id", client_id),
@@ -293,7 +400,7 @@ class PushedAuthorizationUseCase:
             nonce=pushed.params.get("nonce", ""),
             code_challenge=pushed.params.get("code_challenge", ""),
             code_challenge_method=pushed.params.get("code_challenge_method", "S256"),
-            response_mode=pushed.params.get("response_mode", "query"),
+            response_mode=pushed.params.get("response_mode", ""),
             prompt=pushed.params.get("prompt", ""),
             max_age=parse_max_age(pushed.params.get("max_age", "")),
             acr_values=pushed.params.get("acr_values", ""),
@@ -301,3 +408,17 @@ class PushedAuthorizationUseCase:
             dpop_jkt=pushed.params.get("dpop_jkt", ""),
             resource=pushed.params.get("resource", ""),
         )
+
+    async def complete(self, request_uri: str) -> None:
+        """Consomme définitivement la demande poussée à l'achèvement du flux.
+
+        Appelé par ``/authorize`` lors de l'émission réussie de la réponse
+        (code ou jetons) : la référence devient inutilisable (RFC 9126 §4).
+        Silencieux si la référence a disparu (expiration ou consommation
+        concurrente).
+        """
+        pushed = await self._pushed.find_by_request_uri(request_uri)
+        if pushed is None:
+            return
+        await self._pushed.consume(request_uri)
+        await self._pushed.delete(request_uri)

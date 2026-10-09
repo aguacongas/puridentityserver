@@ -88,6 +88,11 @@ class DiscoveryDocument(BaseModel):
             "self_signed_tls_client_auth",
         ]
     )
+    token_endpoint_auth_signing_alg_values_supported: list[str] = Field(
+        default_factory=lambda: ["PS256", "ES256"]
+    )
+    code_challenge_methods_supported: list[str] = Field(default_factory=lambda: ["S256", "plain"])
+    tls_client_certificate_bound_access_tokens: bool = True
     subject_types_supported: list[str] = Field(default_factory=lambda: ["public"])
     id_token_signing_alg_values_supported: list[str] = Field(
         default_factory=lambda: [algorithm.value for algorithm in ALL_SIGNING_ALGORITHMS]

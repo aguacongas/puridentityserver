@@ -227,6 +227,34 @@ def expect_authorization_error(
     )
 
 
+def _left_half_hash(value: str) -> str:
+    """Empreinte attendue d'un claim ``*_hash`` (SHA-256, moitié gauche, base64url)."""
+    digest = hashlib.sha256(value.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest[: len(digest) // 2]).rstrip(b"=").decode("ascii")
+
+
+def check_front_channel_artefact_hashes(
+    id_token_claims: dict[str, Any], *, code: str, state: str
+) -> None:
+    """``c_hash`` (OIDC Core 1.0 §3.3.2.11) et ``s_hash`` (FAPI1-ADV-5.2.2.1-5).
+
+    L'id_token livré dans le fragment du flow hybride porte l'empreinte
+    (moitié gauche SHA-256 pour RS*/PS*) du ``code`` émis et du ``state``
+    présenté — ``ExtractSHash`` échoue en FAILURE sans ``s_hash``, et
+    ``CheckCHash``/``ExtractCHash`` contrôlent ``c_hash``. Sans ``state``
+    dans le JAR, ni ``state`` ni ``s_hash`` ne sont émis
+    (``VerifyNoSHash``).
+    """
+    assert id_token_claims.get("c_hash") == _left_half_hash(code), (
+        f"c_hash incorrect : {id_token_claims.get('c_hash')!r} pour le code {code!r}"
+    )
+    if state:
+        assert id_token_claims.get("s_hash") == _left_half_hash(state), (
+            f"s_hash incorrect : {id_token_claims.get('s_hash')!r} pour le state {state!r} "
+            "(FAPI1-ADV-5.2.2.1-5)"
+        )
+
+
 def expect_response_type_missing_error_page(result: FlowResult) -> None:
     """``ExpectResponseTypeMissingErrorPage`` (``oidcc-response-type-missing``).
 

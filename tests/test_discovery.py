@@ -112,13 +112,57 @@ def test_discovery_advertises_configured_signing_algorithms() -> None:
     assert metadata["id_token_signing_alg_values_supported"] == ["RS256", "ES256", "ES512", "none"]
 
 
-def test_discovery_advertises_unsigned_request_objects() -> None:
+def test_discovery_advertises_request_object_signing_algorithms() -> None:
     usecase = DiscoveryUseCase(DiscoveryConfig(issuer=_ISSUER))
     document = run(usecase.execute())
 
-    # RFC 9101 §5.2 : seuls les request objects non signés sont acceptés et
-    # les deux indicateurs restent vrais — la suite de certification émet un
+    # RFC 9101 §5.2 : ``alg=none`` pour les clients standards, ``PS256``/
+    # ``ES256`` pour le profil FAPI1 Advanced (FAPI1-ADV-5.2.2-1) ; les
+    # deux indicateurs restent vrais — la suite de certification émet un
     # avertissement dès qu'un d'eux vaut ``false``.
-    assert document["request_object_signing_alg_values_supported"] == ["none"]
+    assert document["request_object_signing_alg_values_supported"] == [
+        "none",
+        "PS256",
+        "ES256",
+    ]
     assert document["request_parameter_supported"] is True
     assert document["request_uri_parameter_supported"] is True
+
+
+def test_discovery_advertises_fapi1_client_assertion_algorithms() -> None:
+    usecase = DiscoveryUseCase(DiscoveryConfig(issuer=_ISSUER, base_url=_BASE_URL))
+    document = run(usecase.execute())
+
+    assert document["token_endpoint_auth_signing_alg_values_supported"] == ["PS256", "ES256"]
+
+
+def test_discovery_advertises_pkce_methods() -> None:
+    usecase = DiscoveryUseCase(DiscoveryConfig(issuer=_ISSUER, base_url=_BASE_URL))
+    document = run(usecase.execute())
+
+    assert document["code_challenge_methods_supported"] == ["S256", "plain"]
+
+
+def test_discovery_advertises_certificate_bound_access_tokens() -> None:
+    usecase = DiscoveryUseCase(DiscoveryConfig(issuer=_ISSUER, base_url=_BASE_URL))
+    document = run(usecase.execute())
+
+    assert document["tls_client_certificate_bound_access_tokens"] is True
+
+
+def test_discovery_omits_require_pushed_authorization_requests() -> None:
+    usecase = DiscoveryUseCase(DiscoveryConfig(issuer=_ISSUER, base_url=_BASE_URL))
+    document = run(usecase.execute())
+
+    assert "require_pushed_authorization_requests" not in document
+
+
+def test_discovery_endpoint_exposes_fapi1_fields() -> None:
+    settings = Settings(issuer=_ISSUER, base_url=_BASE_URL, jwks_algorithms=("RS256",))
+    with TestClient(create_app(settings)) as client:
+        metadata = client.get("/.well-known/openid-configuration").json()
+
+    assert metadata["token_endpoint_auth_signing_alg_values_supported"] == ["PS256", "ES256"]
+    assert metadata["code_challenge_methods_supported"] == ["S256", "plain"]
+    assert metadata["tls_client_certificate_bound_access_tokens"] is True
+    assert "require_pushed_authorization_requests" not in metadata

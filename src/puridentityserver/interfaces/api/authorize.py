@@ -169,7 +169,9 @@ def authorize_router(
         user: CurrentUserOptional,
     ) -> RedirectResponse | HTMLResponse:
         request_uri = params.get("request_uri", "")
+        pushed_reference = ""
         if request_uri and is_pushed_request_uri(request_uri):
+            pushed_reference = request_uri
             auth_request = await _resolve_pushed_request(
                 request, params.get("client_id", ""), request_uri, par_usecase
             )
@@ -190,16 +192,33 @@ def authorize_router(
         if user is not None:
             auth_request = await _with_authenticated_subject(auth_request, request, user)
         consent_redirect = await _consent_redirect_if_required(
-            auth_request, consent_usecase, client_repository
+            auth_request, consent_usecase, client_repository, pushed_reference
         )
         if consent_redirect is not None:
             return consent_redirect
         result = await usecase.execute(auth_request)
         if isinstance(result, AuthorizeRedirect):
-            return RedirectResponse(result.redirect_uri, status_code=302)
+            return await _success_redirect(result, par_usecase, pushed_reference)
         return error_response(result)
 
     return router
+
+
+async def _success_redirect(
+    result: AuthorizeRedirect,
+    par_usecase: PushedAuthorizationUseCase | None,
+    pushed_reference: str,
+) -> RedirectResponse:
+    """Redirection de succès ; consomme la référence poussée le cas échéant.
+
+    La consommation unique de la demande poussée est appliquée à
+    l'émission réussie de la réponse (RFC 9126 §4) : la visite de
+    ``/authorize`` reste répétable jusqu'à l'achèvement du flux
+    (conformance-suite #1296).
+    """
+    if par_usecase is not None and pushed_reference:
+        await par_usecase.complete(pushed_reference)
+    return RedirectResponse(result.redirect_uri, status_code=302)
 
 
 async def _direct_authorize_request(
@@ -514,8 +533,9 @@ async def _resolve_pushed_request(
     La query string brute de ``/authorize`` ne doit contenir que ``client_id``
     et ``request_uri`` : le serveur ignore les paramètres déjà poussés et
     rejette tout paramètre supplémentaire. Les erreurs de résolution
-    (référence inconnue, expirée, consommée, client incohérent ; PAR
-    désactivé) répondent en JSON ``invalid_request``.
+    (référence inconnue, expirée, consommée → ``invalid_request_uri`` ;
+    client incohérent → ``invalid_request`` ; PAR désactivé →
+    ``invalid_request``) répondent en JSON.
     """
     if par_usecase is None:
         raise _push_error(
@@ -580,20 +600,28 @@ async def _consent_redirect_if_required(
     request: AuthorizeRequest,
     consent_usecase: ConsentUseCase | None,
     client_repository: ClientReader | None,
+    pushed_reference: str = "",
 ) -> RedirectResponse | None:
     """Retourne la redirection vers ``/consent`` quand le consentement est requis.
 
     Délégué à ``ConsentUseCase.is_required`` : un client sans
     ``require_consent`` ne passe jamais par la page ; un consentement déjà
-    mémorisé couvrant la demande (``Consent.covers``) n'est pas redemandé.
-    Utilisateur non connecté (``subject`` vide) : la page de consentement
-    redirigera elle-même vers ``/login`` — aucun code ou jeton n'est émis
-    sans confirmation pour les clients ``require_consent``.
+    mémorisé couvrant la demande (``Consent.covers``) n'est pas redemandé,
+    sauf ``prompt=consent`` (OIDC Core 1.0 §3.1.2.1) qui force l'écran
+    même quand la demande est couverte. Utilisateur non connecté
+    (``subject`` vide) : la page de consentement redirigera elle-même vers
+    ``/login`` — aucun code ou jeton n'est émis sans confirmation pour les
+    clients ``require_consent``.
+    ``pushed_reference`` (PAR) accompagne la page : l'approbation consomme
+    la demande poussée à l'émission du code.
     """
     if consent_usecase is None or client_repository is None:
         return None
     client = await client_repository.find_by_id(request.client_id)
     scopes = Scope.from_space_separated(request.scope)
-    if client is not None and await consent_usecase.is_required(client, request.subject, scopes):
-        return RedirectResponse(consent_url(request), status_code=302)
+    forced = "consent" in request.prompt.split()
+    if client is not None and await consent_usecase.is_required(
+        client, request.subject, scopes, force=forced
+    ):
+        return RedirectResponse(consent_url(request, pushed_reference), status_code=302)
     return None

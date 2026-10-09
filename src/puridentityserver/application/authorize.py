@@ -59,6 +59,7 @@ from puridentityserver.domain.authorization import (
 from puridentityserver.domain.jwks import JWTAlgorithm
 from puridentityserver.interfaces.domain.secrets import SecretCipher
 from puridentityserver.interfaces.domain.tokens import (
+    IdTokenConditionalClaims,
     IdTokenEncrypter,
     JWEUnavailableError,
     TokenManager,
@@ -178,8 +179,9 @@ async def _parameter_error(
     forme — tableau, scalaire, JSON invalide — vaut ``invalid_request``.
     ``dpop_jkt`` doit être l'empreinte thumbprint RFC 7638 d'une clé publique
     (43 caractères base64url, RFC 9449 §4.2) ; tout autre format vaut
-    ``invalid_request``. Le contrôle ``resource`` (RFC 8707) est délégué à
-    :func:`_resource_error`.
+    ``invalid_request``. ``code_challenge_method`` doit être ``S256`` ou
+    ``plain`` (RFC 7636 §4.3). Le contrôle ``resource`` (RFC 8707) est
+    délégué à :func:`_resource_error`.
     """
     if request.max_age < -1:
         return _authorize_error(
@@ -200,6 +202,13 @@ async def _parameter_error(
             "invalid_request",
             request,
             description="dpop_jkt doit être une empreinte RFC 7638 (43 caractères base64url)",
+            response_mode=response_mode,
+        )
+    if request.code_challenge and request.code_challenge_method not in ("S256", "plain"):
+        return _authorize_error(
+            "invalid_request",
+            request,
+            description="code_challenge_method doit être 'S256' ou 'plain' (RFC 7636 §4.3)",
             response_mode=response_mode,
         )
     return await _resource_error(request, scope_registry, response_mode)
@@ -295,30 +304,19 @@ async def validate_authorization_request(
             redirectable=False,
         )
 
+    if client.fapi_enabled:
+        fapi_error = _fapi_profile_error(request, client, response_types, response_mode)
+        if fapi_error is not None:
+            return fapi_error
+
     param_error = await _parameter_error(request, scope_registry, response_mode)
     if param_error is not None:
         return param_error
 
     scopes = Scope.from_space_separated(request.scope)
-    if Scope.OPENID not in scopes:
-        return _authorize_error(
-            "invalid_scope",
-            request,
-            description="Le scope 'openid' est requis",
-            response_mode=response_mode,
-        )
-
-    scope_error = await _unknown_scope_error(scopes, scope_registry, request, response_mode)
+    scope_error = await _scope_profile_error(scopes, scope_registry, request, response_mode)
     if scope_error is not None:
         return scope_error
-
-    if request.code_challenge and request.code_challenge_method not in ("S256", "plain"):
-        return _authorize_error(
-            "invalid_request",
-            request,
-            description="code_challenge_method doit être 'S256' ou 'plain'",
-            response_mode=response_mode,
-        )
 
     if wants_id_token and not request.nonce:
         return _authorize_error(
@@ -337,6 +335,71 @@ async def validate_authorization_request(
         wants_token=wants_token,
         response_mode=response_mode,
     )
+
+
+async def _scope_profile_error(
+    scopes: frozenset[Scope],
+    scope_registry: ScopeRegistry | None,
+    request: AuthorizeRequest,
+    response_mode: ResponseMode,
+) -> AuthorizeError | None:
+    """Contrôle ``openid`` requis et scopes inconnus (OIDC Core 1.0 §3.1.2.1).
+
+    ``None`` si chaque scope demandé est enregistré ; sinon ``invalid_scope``
+    portant le scope fautif ou l'absence d'``openid``.
+    """
+    if Scope.OPENID not in scopes:
+        return _authorize_error(
+            "invalid_scope",
+            request,
+            description="Le scope 'openid' est requis",
+            response_mode=response_mode,
+        )
+    return await _unknown_scope_error(scopes, scope_registry, request, response_mode)
+
+
+def _fapi_profile_error(
+    request: AuthorizeRequest,
+    client: Client,
+    response_types: frozenset[str],
+    response_mode: ResponseMode,
+) -> AuthorizeError | None:
+    """Contrôle le profil FAPI 1.0 Advanced du client (``fapi_enabled``).
+
+    Seul le flow hybride ``code id_token`` est admis sans JARM
+    (FAPI1-ADV-5.2.2-2) : ``code`` seul est refusé
+    ``unsupported_response_type``. Un ``code_challenge`` déclaré doit
+    employer ``S256`` — ``plain`` est rejeté (FAPI1-ADV-5.2.2-18) ;
+    l'obligation PKCE elle-même ne vaut qu'en PAR, appliquée au push.
+    """
+    if not _is_fapi_flow(response_types):
+        return _authorize_error(
+            "unsupported_response_type",
+            request,
+            description="FAPI1-Advanced n'admet que le flow hybride "
+            "'code id_token' (FAPI1-ADV-5.2.2-2)",
+            response_mode=response_mode,
+        )
+    if request.code_challenge and request.code_challenge_method != "S256":
+        return _authorize_error(
+            "invalid_request",
+            request,
+            description="code_challenge_method doit être 'S256' pour un client "
+            "FAPI1 (FAPI1-ADV-5.2.2-18)",
+            response_mode=response_mode,
+        )
+    return None
+
+
+def _is_fapi_flow(response_types: frozenset[str]) -> bool:
+    """True si ``response_types`` est le flow hybride exigé par FAPI 1.0 Advanced.
+
+    Seul ``code id_token`` est admis sans JARM (FAPI1-ADV-5.2.2-2) :
+    ``code`` seul (flow authorization code) comme ``token`` pur sont refusés
+    ``unsupported_response_type`` — le profil JARM (``response_mode=jwt``)
+    n'est pas retenu.
+    """
+    return response_types == frozenset(("code", "id_token"))
 
 
 def _query_mode_forbidden_error(
@@ -555,13 +618,18 @@ class AuthorizeUseCase:
                 issuer=self._config.issuer,
                 subject=request.subject,
                 audience=client.client_id,
-                nonce=request.nonce,
-                session_id=request.session_id,
                 expires_at=expires_epoch,
                 issued_at=issued_at,
-                at_hash=at_hash,
-                c_hash=(_hash_artefact(code, id_token_algorithm) if code else ""),
-                auth_time=request.auth_time,
+                conditional_claims=IdTokenConditionalClaims(
+                    nonce=request.nonce,
+                    session_id=request.session_id,
+                    at_hash=at_hash,
+                    c_hash=(_hash_artefact(code, id_token_algorithm) if code else ""),
+                    s_hash=(
+                        _hash_artefact(request.state, id_token_algorithm) if request.state else ""
+                    ),
+                    auth_time=request.auth_time,
+                ),
                 shared_secret=shared_secret,
                 additional_claims=await self._additional_id_token_claims(
                     request, code=code, wants_token=wants_token, claims_request=claims_request
@@ -734,11 +802,12 @@ def _authorize_error(
 
 
 def _hash_artefact(value: str, algorithm: JWTAlgorithm) -> str:
-    """Empreinte OIDC ``at_hash`` / ``c_hash`` (OIDC Core 1.0 §3.3.2.11).
+    """Empreinte OIDC ``at_hash`` / ``c_hash`` / ``s_hash`` (OIDC Core 1.0 §3.3.2.11).
 
     Moitié gauche du digest SHA-2 (256/384/512 selon l'algorithme JWS) de la
     valeur, encodée base64url sans padding : le client peut ainsi vérifier le
-    lien entre l'id_token et l'access token / le code d'autorisation.
+    lien entre l'id_token et l'access token / le code d'autorisation / le
+    ``state`` (FAPI1-ADV-5.2.2.1-5).
     ``alg=none`` n'a pas d'empreinte définie (le lien repose sur la
     signature) : la chaîne vide fait omettre le claim.
     """

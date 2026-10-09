@@ -20,6 +20,7 @@ from puridentityserver.application.protected_resource import (
     ProtectedResourceResponse,
     ProtectedResourceUseCase,
 )
+from puridentityserver.infrastructure.client_tls import extract_client_certificate
 from puridentityserver.interfaces.api.security import bearer_token
 
 #: En-tête d'interaction FAPI échoyé sur les réponses de la ressource.
@@ -56,7 +57,11 @@ def protected_resource_router(usecase: ProtectedResourceUseCase) -> APIRouter:
                 ),
                 interaction_id,
             )
-        result = await usecase.execute(ProtectedResourceRequest(access_token=token))
+        result = await usecase.execute(
+            ProtectedResourceRequest(
+                access_token=token, tls_certificate=extract_client_certificate(request)
+            )
+        )
         if isinstance(result, ProtectedResourceError):
             return _error_response(result, interaction_id)
         return _success_response(result, interaction_id)

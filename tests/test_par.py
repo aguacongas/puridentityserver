@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import TypeVar
 from urllib.parse import parse_qs, urlparse
 
+import jwt as pyjwt
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -19,7 +22,14 @@ from puridentityserver.application.par import (
     PushError,
     PushResult,
 )
-from puridentityserver.domain.authorization import Client, ClientType, PushedAuthorization, Scope
+from puridentityserver.domain.authorization import (
+    Client,
+    ClientType,
+    PushedAuthorization,
+    Scope,
+    TokenEndpointAuthMethod,
+)
+from puridentityserver.infrastructure.client_assertions import PyJWTClientAssertionVerifier
 from puridentityserver.infrastructure.persistence.factory import (
     build_pushed_authorization_repository,
 )
@@ -31,11 +41,13 @@ from puridentityserver.infrastructure.persistence.sql.pushed_authorizations impo
     SQLPushedAuthorizationRepository,
 )
 from puridentityserver.infrastructure.settings import Settings
+from puridentityserver.interfaces.domain.client_assertions import CLIENT_ASSERTION_TYPE_URN
 from puridentityserver.server import create_app
 
 _T = TypeVar("_T")
 
 _ISSUER = "https://id.example"
+_TOKEN_ENDPOINT = f"{_ISSUER}/token"
 _CLIENT_ID = "par-app"
 _CLIENT_SECRET = "super-secret"
 
@@ -187,7 +199,7 @@ class TestPushedAuthorizationUseCase:
         uc, _, _ = _make_usecase()
         result = run(uc.push({**_PARAMS, "redirect_uri": "https://evil.example/phish"}))
         assert isinstance(result, PushError)
-        assert result.error == "invalid_redirect_uri"
+        assert result.error == "invalid_request"
 
     def test_push_unknown_client_does_not_store(self) -> None:
         uc, _, pushed = _make_usecase()
@@ -199,7 +211,7 @@ class TestPushedAuthorizationUseCase:
         uc, _, _ = _make_usecase()
         result = run(uc.resolve("urn:ietf:params:oauth:request_uri:unknown", _CLIENT_ID))
         assert isinstance(result, PushError)
-        assert result.error == "invalid_request"
+        assert result.error == "invalid_request_uri"
 
     def test_resolve_round_trip(self) -> None:
         uc, _, _ = _make_usecase()
@@ -213,15 +225,18 @@ class TestPushedAuthorizationUseCase:
         assert resolved.scope == "openid"
         assert resolved.state == "st-1"
 
-    def test_resolve_is_single_use(self) -> None:
+    def test_resolve_single_use_applies_at_completion(self) -> None:
         uc, _, _ = _make_usecase()
         pushed_result = run(uc.push(dict(_PARAMS)))
         assert isinstance(pushed_result, PushResult)
         first = run(uc.resolve(pushed_result.request_uri, _CLIENT_ID))
         assert isinstance(first, AuthorizeRequest)
-        second = run(uc.resolve(pushed_result.request_uri, _CLIENT_ID))
-        assert isinstance(second, PushError)
-        assert second.error == "invalid_request"
+        again = run(uc.resolve(pushed_result.request_uri, _CLIENT_ID))
+        assert isinstance(again, AuthorizeRequest)
+        run(uc.complete(pushed_result.request_uri))
+        after = run(uc.resolve(pushed_result.request_uri, _CLIENT_ID))
+        assert isinstance(after, PushError)
+        assert after.error == "invalid_request_uri"
 
     def test_resolve_rejects_other_client(self) -> None:
         uc, _, _ = _make_usecase()
@@ -242,7 +257,7 @@ class TestPushedAuthorizationUseCase:
         run(pushed.save(expired))
         result = run(uc.resolve(expired.request_uri, _CLIENT_ID))
         assert isinstance(result, PushError)
-        assert result.error == "invalid_request"
+        assert result.error == "invalid_request_uri"
         assert "expiré" in result.error_description.lower() or "expired" in result.error_description
 
     def test_resolve_rejects_consumed(self) -> None:
@@ -257,7 +272,7 @@ class TestPushedAuthorizationUseCase:
         run(pushed.save(consumed))
         result = run(uc.resolve(consumed.request_uri, _CLIENT_ID))
         assert isinstance(result, PushError)
-        assert result.error == "invalid_request"
+        assert result.error == "invalid_request_uri"
 
     def test_status_code_of_push_errors(self) -> None:
         uc, _, _ = _make_usecase()
@@ -445,7 +460,7 @@ class TestParIntegrationHTTP:
                 follow_redirects=False,
             )
         assert second.status_code == 400
-        assert second.json()["detail"]["error"] == "invalid_request"
+        assert second.json()["detail"]["error"] == "invalid_request_uri"
 
     def test_authorize_rejects_extra_param_with_request_uri(self) -> None:
         with TestClient(_app()) as client:
@@ -483,7 +498,7 @@ class TestParIntegrationHTTP:
                 follow_redirects=False,
             )
         assert resp.status_code == 400
-        assert resp.json()["detail"]["error"] == "invalid_request"
+        assert resp.json()["detail"]["error"] == "invalid_request_uri"
 
     def test_authorize_rejects_mismatched_client(self) -> None:
         with TestClient(_app()) as client:
@@ -664,3 +679,142 @@ class TestParDisabled:
             )
         assert resp.status_code == 400
         assert resp.json()["detail"]["error"] == "invalid_request"
+
+
+class TestParClientAssertion:
+    """Authentification par ``client_assertion`` au push (RFC 7523 §2.2, FAPI1 PAR-2)."""
+
+    @staticmethod
+    def _key() -> tuple[RSAPrivateKey, dict[str, object]]:
+        """Paire RSA de test et son JWK public ``RS256`` (kid unique)."""
+        private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        numbers = private.public_key().public_numbers()
+        n = base64.urlsafe_b64encode(numbers.n.to_bytes((numbers.n.bit_length() + 7) // 8, "big"))
+        e = base64.urlsafe_b64encode(numbers.e.to_bytes((numbers.e.bit_length() + 7) // 8, "big"))
+        jwk: dict[str, object] = {
+            "kty": "RSA",
+            "use": "sig",
+            "kid": "par-kid",
+            "alg": "RS256",
+            "n": n.rstrip(b"=").decode("ascii"),
+            "e": e.rstrip(b"=").decode("ascii"),
+        }
+        return private, jwk
+
+    @staticmethod
+    def _assertion(
+        private: RSAPrivateKey,
+        *,
+        aud: object = _ISSUER,
+        sub: str | None = None,
+        iss: str = "par-jwt",
+    ) -> str:
+        """Assertion ``private_key_jwt`` fraîche (``iss = sub = client_id``)."""
+        now = datetime.now(timezone.utc)
+        payload: dict[str, object] = {
+            "iss": iss,
+            "sub": sub if sub is not None else iss,
+            "aud": aud,
+            "exp": int(now.timestamp()) + 600,
+            "iat": int(now.timestamp()),
+            "jti": "n0ce",
+        }
+        return str(pyjwt.encode(payload, private, algorithm="RS256", headers={"kid": "par-kid"}))
+
+    @staticmethod
+    def _usecase(
+        client: Client,
+    ) -> tuple[
+        PushedAuthorizationUseCase, InMemoryClientRepository, InMemoryPushedAuthorizationRepository
+    ]:
+        clients = InMemoryClientRepository()
+        pushed = InMemoryPushedAuthorizationRepository()
+        uc = PushedAuthorizationUseCase(
+            PushedAuthorizationConfig(
+                ttl_seconds=90,
+                issuer=_ISSUER,
+                token_endpoint=_TOKEN_ENDPOINT,
+                par_endpoint=f"{_ISSUER}/par",
+            ),
+            clients,
+            pushed,
+            client_assertions=PyJWTClientAssertionVerifier(),
+        )
+        run(clients.save(client))
+        return uc, clients, pushed
+
+    @staticmethod
+    def _jwt_client(jwk: dict[str, object]) -> Client:
+        """Client ``private_key_jwt`` confidentiel avec ``jwk`` embarqué."""
+        return Client(
+            client_id="par-jwt",
+            redirect_uris=frozenset({"https://app.example/callback"}),
+            scopes=frozenset({Scope.OPENID}),
+            client_type=ClientType.CONFIDENTIAL,
+            token_endpoint_auth_method=TokenEndpointAuthMethod.PRIVATE_KEY_JWT,
+            jwks=(jwk,),
+        )
+
+    def _push(
+        self,
+        *,
+        aud: object = _ISSUER,
+        sub: str | None = None,
+        assertion: str = "",
+        with_client_id: bool = True,
+    ) -> PushResult | PushError:
+        """Pousse une demande authentifiée par ``client_assertion`` fraîche."""
+        private, jwk = self._key()
+        uc, _, _ = self._usecase(self._jwt_client(jwk))
+        params: dict[str, str] = dict(_PARAMS)
+        if with_client_id:
+            params["client_id"] = "par-jwt"
+        else:
+            params.pop("client_id", None)
+        params["client_assertion_type"] = CLIENT_ASSERTION_TYPE_URN
+        params["client_assertion"] = assertion or self._assertion(private, aud=aud, sub=sub)
+        return run(uc.push(params))
+
+    def test_push_accepts_assertion_with_issuer_audience(self) -> None:
+        assert isinstance(self._push(), PushResult)
+
+    def test_push_accepts_array_audience_containing_issuer(self) -> None:
+        result = self._push(aud=[_ISSUER, "https://other.example"])
+        assert isinstance(result, PushResult)
+
+    def test_push_accepts_token_endpoint_audience(self) -> None:
+        result = self._push(aud=_TOKEN_ENDPOINT)
+        assert isinstance(result, PushResult)
+
+    def test_push_accepts_par_url_audience(self) -> None:
+        result = self._push(aud=f"{_ISSUER}/par")
+        assert isinstance(result, PushResult)
+
+    def test_push_rejects_foreign_audience(self) -> None:
+        result = self._push(aud="https://foreign.example")
+        assert isinstance(result, PushError)
+        assert result.error == "invalid_client"
+        assert result.status_code == 401
+
+    def test_push_rejects_wrong_sub(self) -> None:
+        result = self._push(sub="autre-client")
+        assert isinstance(result, PushError)
+        assert result.error == "invalid_client"
+
+    def test_push_rejects_missing_assertion_for_jwt_client(self) -> None:
+        _, jwk = self._key()
+        uc, _, _ = self._usecase(self._jwt_client(jwk))
+        result = run(uc.push({**_PARAMS, "client_id": "par-jwt"}))
+        assert isinstance(result, PushError)
+        assert result.error == "invalid_client"
+        assert result.status_code == 401
+
+    def test_push_derives_client_id_from_assertion_iss(self) -> None:
+        assert isinstance(self._push(with_client_id=False), PushResult)
+
+    def test_push_rejects_confidential_without_secret(self) -> None:
+        uc, _, _ = self._usecase(_CONFIDENTIAL_CLIENT)
+        result = run(uc.push({**_PARAMS, "client_id": "par-web"}))
+        assert isinstance(result, PushError)
+        assert result.error == "invalid_client"
+        assert result.status_code == 401
