@@ -426,7 +426,8 @@ def test_fapi_hybrid_flow_is_accepted() -> None:
     validated = _validate(_request())
 
     assert isinstance(validated, ValidatedAuthorization)
-    assert validated.wants_code and validated.wants_id_token
+    assert validated.wants_code
+    assert validated.wants_id_token
 
 
 def test_fapi_rejects_response_type_code() -> None:

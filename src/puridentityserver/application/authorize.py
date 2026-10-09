@@ -59,6 +59,7 @@ from puridentityserver.domain.authorization import (
 from puridentityserver.domain.jwks import JWTAlgorithm
 from puridentityserver.interfaces.domain.secrets import SecretCipher
 from puridentityserver.interfaces.domain.tokens import (
+    IdTokenConditionalClaims,
     IdTokenEncrypter,
     JWEUnavailableError,
     TokenManager,
@@ -617,14 +618,18 @@ class AuthorizeUseCase:
                 issuer=self._config.issuer,
                 subject=request.subject,
                 audience=client.client_id,
-                nonce=request.nonce,
-                session_id=request.session_id,
                 expires_at=expires_epoch,
                 issued_at=issued_at,
-                at_hash=at_hash,
-                c_hash=(_hash_artefact(code, id_token_algorithm) if code else ""),
-                s_hash=(_hash_artefact(request.state, id_token_algorithm) if request.state else ""),
-                auth_time=request.auth_time,
+                conditional_claims=IdTokenConditionalClaims(
+                    nonce=request.nonce,
+                    session_id=request.session_id,
+                    at_hash=at_hash,
+                    c_hash=(_hash_artefact(code, id_token_algorithm) if code else ""),
+                    s_hash=(
+                        _hash_artefact(request.state, id_token_algorithm) if request.state else ""
+                    ),
+                    auth_time=request.auth_time,
+                ),
                 shared_secret=shared_secret,
                 additional_claims=await self._additional_id_token_claims(
                     request, code=code, wants_token=wants_token, claims_request=claims_request

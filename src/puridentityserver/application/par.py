@@ -236,7 +236,6 @@ class PushedAuthorizationUseCase:
         Paramètres invalides → propagation de l'erreur du validateur
         standard (``invalid_request``, ``invalid_scope``…).
         """
-        client_id = params.get("client_id", "")
         request_uri = params.get("request_uri", "")
 
         if request_uri:

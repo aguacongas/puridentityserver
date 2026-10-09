@@ -8,10 +8,30 @@ les implémentations concrètes vivent dans l'infrastructure (PyJWT /
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Protocol
 
 from puridentityserver.domain.authorization import Client, Scope
 from puridentityserver.domain.jwks import JWTAlgorithm
+
+
+@dataclass(frozen=True, slots=True)
+class IdTokenConditionalClaims:
+    """Claims additionnels conditionnels d'un ``id_token`` (OIDC Core 1.0 §3.1.3.6).
+
+    Regroupés en value object afin de garder le port ``create_id_token``
+    sous le seuil de paramètres (S107). Chaque claim n'est émis que s'il
+    est renseigné (``nonce``, ``sid``, ``at_hash``, ``c_hash``,
+    ``s_hash``) ou non nul (``auth_time``), conformément à la sémantique
+    du port.
+    """
+
+    nonce: str = ""
+    session_id: str = ""
+    at_hash: str = ""
+    c_hash: str = ""
+    s_hash: str = ""
+    auth_time: int = 0
 
 
 class JWEUnavailableError(Exception):
@@ -40,31 +60,24 @@ class TokenManager(Protocol):
         issuer: str,
         subject: str,
         audience: str,
-        nonce: str,
-        session_id: str = "",
         expires_at: int,
         issued_at: int,
-        at_hash: str = "",
-        c_hash: str = "",
-        s_hash: str = "",
-        auth_time: int = 0,
+        conditional_claims: IdTokenConditionalClaims | None = None,
         shared_secret: str = "",
         additional_claims: Mapping[str, object] | None = None,
     ) -> str:
         """Crée un id_token signé JWS (JWT) pour le client ``audience``.
 
-        ``at_hash`` (implicit/hybrid) lie l'id_token à l'access token,
-        ``c_hash`` (hybrid) au code d'autorisation (OIDC Core 1.0
-        §3.3.2.11) et ``s_hash`` au ``state`` (FAPI1-ADV-5.2.2.1-5) :
-        chacune n'est ajoutée que si fournie.
+        ``conditional_claims`` regroupe les claims optionnels
+        conditionnels (OIDC Core 1.0 §3.1.3.6) : ``nonce`` (absent d'un
+        id_token de refresh, §12.2), ``session_id`` (``sid``, OIDC Session
+        Management 1.0 §2), ``at_hash`` (implicit/hybrid), ``c_hash``
+        (hybrid) et ``s_hash`` (``state``, FAPI1-ADV-5.2.2.1-5) — chacun
+        n'est ajouté que s'il est renseigné — et ``auth_time`` (§2),
+        ajouté seulement s'il est non nul. Par défaut, aucun de ces
+        claims n'est émis.
         ``shared_secret`` fournit le secret partagé du client pour la
         signature symétrique HS* (OIDC Core 1.0 §3.1.3.7).
-        ``session_id`` porte le ``sid`` de la session navigateur (OIDC
-        Session Management 1.0 §2) : le claim ``sid`` est ajouté seulement
-        si non vide, pour rester stable pour les flux sans session.
-        ``auth_time`` (OIDC Core 1.0 §2) : le claim ``auth_time`` n'est
-        ajouté que s'il est non nul, pour ne pas émettre un temps
-        d'authentification invalide.
         ``additional_claims`` complète le payload (claim ``acr`` si la
         valeur ``acr_values`` demandée est non vide, claims des scopes en
         ``response_type=id_token``, member ``id_token`` du paramètre

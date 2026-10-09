@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives.serialization import (
 from puridentityserver.domain.authorization import Scope
 from puridentityserver.domain.jwks import SYMMETRIC_ALGORITHMS, JWTAlgorithm, KeyPair
 from puridentityserver.interfaces.domain.jwks import KeyManager
+from puridentityserver.interfaces.domain.tokens import IdTokenConditionalClaims
 
 _HMAC_ALGORITHMS = frozenset(SYMMETRIC_ALGORITHMS)
 
@@ -37,32 +38,30 @@ class PyJWTTokenManager:
         issuer: str,
         subject: str,
         audience: str,
-        nonce: str,
-        session_id: str = "",
         expires_at: int,
         issued_at: int,
-        at_hash: str = "",
-        c_hash: str = "",
-        s_hash: str = "",
-        auth_time: int = 0,
+        conditional_claims: IdTokenConditionalClaims | None = None,
         shared_secret: str = "",
         additional_claims: Mapping[str, object] | None = None,
     ) -> str:
         """Construit l'``id_token`` : identité ``sub`` + audience ``client_id``.
 
-        Le claim ``nonce`` ne figure que s'il est renseigné : un id_token de
-        refresh ne doit pas porter de nonce (OIDC Core 1.0 §12.2). Les
-        empreintes ``at_hash`` / ``c_hash`` (liens implicit/hybrid) et
-        ``s_hash`` (empreinte du ``state``, FAPI1-ADV-5.2.2.1-5) ne sont
-        ajoutées que lorsqu'elles sont fournies (OIDC Core 1.0 §3.3.2.11).
+        Les claims optionnels conditionnels sont portés par
+        ``conditional_claims`` (``nonce``, ``sid``, ``at_hash``,
+        ``c_hash``, ``s_hash``, ``auth_time``) : le ``nonce`` ne figure
+        que s'il est renseigné — un id_token de refresh ne doit pas
+        porter de nonce (OIDC Core 1.0 §12.2) — et les empreintes
+        ``at_hash`` / ``c_hash`` (liens implicit/hybrid) et ``s_hash``
+        (empreinte du ``state``, FAPI1-ADV-5.2.2.1-5) ne sont ajoutées
+        que lorsqu'elles sont fournies (OIDC Core 1.0 §3.3.2.11).
         ``shared_secret`` porte le secret partagé du client pour les
         algorithmes symétriques HS* (OIDC Core 1.0 §3.1.3.7) ; il est
-        ignoré pour les familles asymétriques. ``session_id`` reproduit le
-        ``sid`` (OIDC Session Management 1.0 §2) dans le claim ``sid``
-        seulement s'il est non vide. ``additional_claims`` est fusionné sans
-        jamais écraser les claims standards ci-dessous (ex. ``acr`` fourni
-        par l'appelant seulement quand ``acr_values`` est non vide).
+        ignoré pour les familles asymétriques. ``additional_claims`` est
+        fusionné sans jamais écraser les claims standards ci-dessus (ex.
+        ``acr`` fourni par l'appelant seulement quand ``acr_values`` est
+        non vide).
         """
+        conditional = conditional_claims or IdTokenConditionalClaims()
         payload: dict[str, object] = {
             "iss": issuer,
             "sub": subject,
@@ -70,18 +69,18 @@ class PyJWTTokenManager:
             "exp": expires_at,
             "iat": issued_at,
         }
-        if nonce:
-            payload["nonce"] = nonce
-        if session_id:
-            payload["sid"] = session_id
-        if at_hash:
-            payload["at_hash"] = at_hash
-        if c_hash:
-            payload["c_hash"] = c_hash
-        if s_hash:
-            payload["s_hash"] = s_hash
-        if auth_time:
-            payload["auth_time"] = auth_time
+        if conditional.nonce:
+            payload["nonce"] = conditional.nonce
+        if conditional.session_id:
+            payload["sid"] = conditional.session_id
+        if conditional.at_hash:
+            payload["at_hash"] = conditional.at_hash
+        if conditional.c_hash:
+            payload["c_hash"] = conditional.c_hash
+        if conditional.s_hash:
+            payload["s_hash"] = conditional.s_hash
+        if conditional.auth_time:
+            payload["auth_time"] = conditional.auth_time
         for name, value in (additional_claims or {}).items():
             payload.setdefault(name, value)
         return await self._sign(algorithm, payload, shared_secret)

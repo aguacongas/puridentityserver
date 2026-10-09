@@ -93,9 +93,8 @@ def _accept_outcome(result: FlowResult, state: str, allowed: tuple[str, ...]) ->
     if result.error:
         expect_authorization_error(result, state, allowed)
         return "error"
-    assert result.status_code and result.body, (
-        f"ni callback ni page d'erreur (hops : {result.hops})"
-    )
+    assert result.status_code, f"ni callback ni page d'erreur (hops : {result.hops})"
+    assert result.body, f"ni callback ni page d'erreur (hops : {result.hops})"
     return "page"
 
 
@@ -132,7 +131,8 @@ def _run_rejected_jar(
         )
     else:
         result = fapi_harness.start_authorization("by_value", jar, **extra)
-    assert not result.query.get("code") and not result.fragment.get("code"), (
+    assert not result.query.get("code"), f"code retourné (module négatif) : {result.callback_url!r}"
+    assert not result.fragment.get("code"), (
         f"code retourné (module négatif) : {result.callback_url!r}"
     )
     outcome = _accept_outcome(result, state, callback_errors)
@@ -184,7 +184,8 @@ def _check_token_error(response: httpx.Response, errors: tuple[str, ...]) -> Non
         )
     assert "application/json" in response.headers.get("content-type", ""), dict(response.headers)
     description = str(payload.get("error_description", ""))
-    assert description and not any(char in description for char in "\r\n\t"), payload
+    assert description, payload
+    assert not any(char in description for char in "\r\n\t"), payload
 
 
 def _check_token_assertion_rejection(response: httpx.Response) -> None:
@@ -215,7 +216,8 @@ def test_fapi1_discovery_declares_jar_par_and_pkce(fapi_harness: FapiHarness, me
     """
     discovery = fapi_harness.discovery()
     jar_algs = discovery.get("request_object_signing_alg_values_supported", [])
-    assert "PS256" in jar_algs and "ES256" in jar_algs, jar_algs
+    assert "PS256" in jar_algs, jar_algs
+    assert "ES256" in jar_algs, jar_algs
     assert "S256" in discovery.get("code_challenge_methods_supported", []), discovery.get(
         "code_challenge_methods_supported"
     )
@@ -499,7 +501,8 @@ def test_fapi1_registered_redirect_uri_rejected(fapi_harness: FapiHarness, metho
         assert not result.callback_url, (
             f"redirection vers l'URI non enregistrée : {result.callback_url!r}"
         )
-        assert result.status_code and result.body, f"page d'erreur attendue (hops : {result.hops})"
+        assert result.status_code, f"page d'erreur attendue (hops : {result.hops})"
+        assert result.body, f"page d'erreur attendue (hops : {result.hops})"
         return
     response = fapi_harness.push(jar)
     if response.status_code != 201:
@@ -511,7 +514,8 @@ def test_fapi1_registered_redirect_uri_rejected(fapi_harness: FapiHarness, metho
     assert not result.callback_url, (
         f"redirection vers l'URI non enregistrée : {result.callback_url!r}"
     )
-    assert result.status_code and result.body, f"page d'erreur attendue (hops : {result.hops})"
+    assert result.status_code, f"page d'erreur attendue (hops : {result.hops})"
+    assert result.body, f"page d'erreur attendue (hops : {result.hops})"
 
 
 @pytest.mark.conformance
@@ -1423,7 +1427,10 @@ def test_fapi1_response_type_code_fails(fapi_harness: FapiHarness, method: str) 
         )
     else:
         result = fapi_harness.start_authorization("by_value", jar, response_type="code")
-    assert not result.query.get("code") and not result.fragment.get("code"), (
+    assert not result.query.get("code"), (
+        f"code retourné pour response_type=code (FAPI1-ADV-5.2.2-2) : {result.callback_url!r}"
+    )
+    assert not result.fragment.get("code"), (
         f"code retourné pour response_type=code (FAPI1-ADV-5.2.2-2) : {result.callback_url!r}"
     )
     outcome = _accept_outcome(result, state, ("unsupported_response_type", "invalid_request"))
@@ -1534,7 +1541,8 @@ def test_fapi1_state_only_outside_request_object(fapi_harness: FapiHarness, meth
         assert not result.code, f"code avec erreur : {result.callback_url!r}"
         return
     if not result.callback_url:
-        assert result.status_code and result.body, f"ni callback ni page (hops : {result.hops})"
+        assert result.status_code, f"ni callback ni page (hops : {result.hops})"
+        assert result.body, f"ni callback ni page (hops : {result.hops})"
         return
     claims = _check_callback(result, state="", nonce=nonce)
     assert "s_hash" not in claims, "s_hash émis alors que le state hors JAR doit être ignoré"
@@ -1898,7 +1906,10 @@ def test_fapi1_par_request_uri_bound_to_client(fapi_harness: FapiHarness) -> Non
     fapi_harness.switch(FAPI_CLIENT_2)
     result = fapi_harness.run_flow(request_uri=request_uri, client_id=FAPI_CLIENT_2.client_id)
     fapi_harness.switch(FAPI_CLIENT_1)
-    assert not result.query.get("code") and not result.fragment.get("code"), (
+    assert not result.query.get("code"), (
+        f"code retourné pour un request_uri d'un autre client : {result.callback_url!r}"
+    )
+    assert not result.fragment.get("code"), (
         f"code retourné pour un request_uri d'un autre client : {result.callback_url!r}"
     )
     outcome = _accept_outcome(

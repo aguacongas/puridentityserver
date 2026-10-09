@@ -97,6 +97,7 @@ from puridentityserver.interfaces.domain.client_assertions import (
 )
 from puridentityserver.interfaces.domain.secrets import SecretCipher
 from puridentityserver.interfaces.domain.tokens import (
+    IdTokenConditionalClaims,
     IdTokenEncrypter,
     JWEUnavailableError,
     TokenManager,
@@ -1061,11 +1062,13 @@ class TokenUseCase:
             issuer=self._config.issuer,
             subject=subject,
             audience=client.client_id,
-            nonce=nonce,
-            session_id=session_id,
             expires_at=expires_epoch,
             issued_at=issued_at,
-            auth_time=auth_time,
+            conditional_claims=IdTokenConditionalClaims(
+                nonce=nonce,
+                session_id=session_id,
+                auth_time=auth_time,
+            ),
             shared_secret=shared_secret,
             additional_claims=additional or None,
         )

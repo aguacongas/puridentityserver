@@ -21,10 +21,11 @@ Utilisateur non connecté : redirection vers le formulaire de connexion
 from __future__ import annotations
 
 import html
+from dataclasses import dataclass
 from typing import Annotated
 from urllib.parse import quote, urlencode, urlsplit
 
-from fastapi import APIRouter, Form, HTTPException, Query
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from puridentityserver.application.authorize import (
@@ -117,6 +118,35 @@ def consent_url(request: AuthorizeRequest, pushed_reference: str = "") -> str:
     return "/consent?" + urlencode(_consent_params(request, pushed_reference))
 
 
+@dataclass
+class _ConsentContext:
+    """Contexte des routes ``/consent`` : référence PAR poussée et utilisateur.
+
+    Regroupé en dépendance : les routes ne portent plus que leurs query /
+    form parameters et ce contexte (S107), l'utilisateur étant déjà résolu
+    par la chaîne de dépendances FastAPI Users. ``pushed_reference``
+    circule en query (GET) ou en champ de formulaire (POST) — même alias
+    opaque dans les deux cas, jamais la ``request_uri`` elle-même.
+    """
+
+    pushed_reference: str = ""
+    user: CurrentUserOptional = None
+
+
+async def _consent_context(
+    request: Request,
+    user: CurrentUserOptional = None,
+) -> _ConsentContext:
+    """Résout la ``pushed_reference`` (query GET ou champ form POST) et l'utilisateur."""
+    if request.method == "POST":
+        form = await request.form()
+        raw = form.get("pushed_reference", "")
+        pushed_reference = raw if isinstance(raw, str) else ""
+    else:
+        pushed_reference = request.query_params.get("pushed_reference", "")
+    return _ConsentContext(pushed_reference=pushed_reference, user=user)
+
+
 def consent_router(
     consent_usecase: ConsentUseCase,
     authorize_usecase: AuthorizeUseCase,
@@ -139,6 +169,7 @@ def consent_router(
         responses={400: {"description": "redirect_uri requis"}},
     )
     async def consent_prompt(
+        context: Annotated[_ConsentContext, Depends(_consent_context)],
         response_type: Annotated[str, Query()] = "",
         client_id: Annotated[str, Query()] = "",
         redirect_uri: Annotated[str, Query()] = "",
@@ -151,9 +182,9 @@ def consent_router(
         prompt: Annotated[str, Query()] = "",
         acr_values: Annotated[str, Query()] = "",
         claims: Annotated[str, Query()] = "",
-        pushed_reference: Annotated[str, Query()] = "",
-        user: CurrentUserOptional = None,
     ) -> RedirectResponse | HTMLResponse | str:
+        user = context.user
+        pushed_reference = context.pushed_reference
         request = AuthorizeRequest(
             response_type=response_type,
             client_id=client_id,
@@ -191,6 +222,7 @@ def consent_router(
         responses={400: {"description": "redirect_uri requis"}},
     )
     async def consent_decision(
+        context: Annotated[_ConsentContext, Depends(_consent_context)],
         response_type: Annotated[str, Form()],
         client_id: Annotated[str, Form()],
         scope: Annotated[str, Form()],
@@ -202,10 +234,10 @@ def consent_router(
         response_mode: Annotated[str, Form()] = "",
         acr_values: Annotated[str, Form()] = "",
         claims: Annotated[str, Form()] = "",
-        pushed_reference: Annotated[str, Form()] = "",
         action: Annotated[str, Form()] = "authorize",
-        user: CurrentUserOptional = None,
     ) -> RedirectResponse | HTMLResponse:
+        user = context.user
+        pushed_reference = context.pushed_reference
         request = AuthorizeRequest(
             response_type=response_type,
             client_id=client_id,

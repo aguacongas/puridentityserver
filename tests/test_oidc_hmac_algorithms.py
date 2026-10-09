@@ -300,7 +300,6 @@ class TestTokenEndpointHmacSigning:
             issuer=_ISSUER,
             subject="user-123",
             audience="hmac-client",
-            nonce="",
             expires_at=9999999999,
             issued_at=9999990000,
         )
