@@ -27,6 +27,7 @@ from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from pydantic import BaseModel, ConfigDict
 
 from puridentityserver.application.authorize import (
     AuthorizeError,
@@ -134,6 +135,83 @@ class _ConsentContext:
     user: CurrentUserOptional = None
 
 
+class _ConsentQueryParams(BaseModel):
+    """Query parameters de ``GET /consent`` (miroir des champs d'autorisation).
+
+    Regroupés en modèle Pydantic injecté comme dépendance ``Query()`` : la
+    route ne porte plus que ce modèle et son contexte (S107), chaque champ
+    restant un query parameter distinct dans l'OpenAPI. Valeurs par défaut
+    identiques à celles de ``GET /authorize``.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    response_type: str = ""
+    client_id: str = ""
+    redirect_uri: str = ""
+    scope: str = ""
+    state: str = ""
+    nonce: str = ""
+    code_challenge: str = ""
+    code_challenge_method: str = "S256"
+    response_mode: str = ""
+    prompt: str = ""
+    acr_values: str = ""
+    claims: str = ""
+    dpop_jkt: str = ""
+
+
+class _ConsentFormParams(BaseModel):
+    """Champs du formulaire ``POST /consent`` (décision autoriser / refuser).
+
+    Regroupés en modèle Pydantic injecté comme dépendance ``Form()`` (S107) :
+    ``response_type``, ``client_id`` et ``scope`` restent obligatoires (422
+    en leur absence). ``prompt`` voyage en champ caché mais n'est pas relu :
+    il ne fait que forcer l'affichage de la page, déjà consommé au GET.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    response_type: str
+    client_id: str
+    scope: str
+    redirect_uri: str = ""
+    state: str = ""
+    nonce: str = ""
+    code_challenge: str = ""
+    code_challenge_method: str = "S256"
+    response_mode: str = ""
+    acr_values: str = ""
+    claims: str = ""
+    dpop_jkt: str = ""
+    action: str = "authorize"
+
+
+def _authorize_request(params: _ConsentQueryParams | _ConsentFormParams) -> AuthorizeRequest:
+    """Reconstruit l'``AuthorizeRequest`` d'un modèle de page de consentement.
+
+    Les deux modèles (query GET / formulaire POST) portent les mêmes champs
+    d'autorisation ; ``prompt`` n'est relevé que sur le GET (le POST ne
+    reconstruit pas ce paramètre, l'écran ayant déjà été consommé).
+    """
+    prompt = params.prompt if isinstance(params, _ConsentQueryParams) else ""
+    return AuthorizeRequest(
+        response_type=params.response_type,
+        client_id=params.client_id,
+        redirect_uri=params.redirect_uri,
+        scope=params.scope,
+        state=params.state,
+        nonce=params.nonce,
+        code_challenge=params.code_challenge,
+        code_challenge_method=params.code_challenge_method,
+        response_mode=params.response_mode,
+        prompt=prompt,
+        acr_values=params.acr_values,
+        claims=params.claims,
+        dpop_jkt=params.dpop_jkt,
+    )
+
+
 async def _consent_context(
     request: Request,
     user: CurrentUserOptional = None,
@@ -171,37 +249,11 @@ def consent_router(
     )
     async def consent_prompt(
         context: Annotated[_ConsentContext, Depends(_consent_context)],
-        response_type: Annotated[str, Query()] = "",
-        client_id: Annotated[str, Query()] = "",
-        redirect_uri: Annotated[str, Query()] = "",
-        scope: Annotated[str, Query()] = "",
-        state: Annotated[str, Query()] = "",
-        nonce: Annotated[str, Query()] = "",
-        code_challenge: Annotated[str, Query()] = "",
-        code_challenge_method: Annotated[str, Query()] = "S256",
-        response_mode: Annotated[str, Query()] = "",
-        prompt: Annotated[str, Query()] = "",
-        acr_values: Annotated[str, Query()] = "",
-        claims: Annotated[str, Query()] = "",
-        dpop_jkt: Annotated[str, Query()] = "",
+        params: Annotated[_ConsentQueryParams, Query()],
     ) -> RedirectResponse | HTMLResponse | str:
         user = context.user
         pushed_reference = context.pushed_reference
-        request = AuthorizeRequest(
-            response_type=response_type,
-            client_id=client_id,
-            redirect_uri=redirect_uri,
-            scope=scope,
-            state=state,
-            nonce=nonce,
-            code_challenge=code_challenge,
-            code_challenge_method=code_challenge_method,
-            response_mode=response_mode,
-            prompt=prompt,
-            acr_values=acr_values,
-            claims=claims,
-            dpop_jkt=dpop_jkt,
-        )
+        request = _authorize_request(params)
         if user is None:
             return RedirectResponse(
                 f"/login?next={quote(consent_url(request, pushed_reference))}",
@@ -226,47 +278,22 @@ def consent_router(
     )
     async def consent_decision(
         context: Annotated[_ConsentContext, Depends(_consent_context)],
-        response_type: Annotated[str, Form()],
-        client_id: Annotated[str, Form()],
-        scope: Annotated[str, Form()],
-        redirect_uri: Annotated[str, Form()] = "",
-        state: Annotated[str, Form()] = "",
-        nonce: Annotated[str, Form()] = "",
-        code_challenge: Annotated[str, Form()] = "",
-        code_challenge_method: Annotated[str, Form()] = "S256",
-        response_mode: Annotated[str, Form()] = "",
-        acr_values: Annotated[str, Form()] = "",
-        claims: Annotated[str, Form()] = "",
-        dpop_jkt: Annotated[str, Form()] = "",
-        action: Annotated[str, Form()] = "authorize",
+        form: Annotated[_ConsentFormParams, Form()],
     ) -> RedirectResponse | HTMLResponse:
         user = context.user
         pushed_reference = context.pushed_reference
-        request = AuthorizeRequest(
-            response_type=response_type,
-            client_id=client_id,
-            redirect_uri=redirect_uri,
-            scope=scope,
-            state=state,
-            nonce=nonce,
-            code_challenge=code_challenge,
-            code_challenge_method=code_challenge_method,
-            response_mode=response_mode,
-            acr_values=acr_values,
-            claims=claims,
-            dpop_jkt=dpop_jkt,
-        )
+        request = _authorize_request(form)
         if user is None:
             return RedirectResponse(
                 f"/login?next={quote(consent_url(request, pushed_reference))}",
                 status_code=302,
             )
-        if not redirect_uri:
+        if not request.redirect_uri:
             raise HTTPException(status_code=400, detail="redirect_uri requis")
         validated = await validate_authorization_request(request, client_repository)
         if isinstance(validated, AuthorizeError):
             return error_response(validated)
-        if action == "deny":
+        if form.action == "deny":
             return error_response(
                 AuthorizeError(
                     error="access_denied",

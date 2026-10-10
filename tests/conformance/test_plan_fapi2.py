@@ -67,9 +67,8 @@ def _check_dpop_token(tokens: dict[str, Any], thumbprint: str) -> None:
     access_token = str(tokens.get("access_token", ""))
     claims = decode_id_token_claims(access_token)
     cnf = claims.get("cnf")
-    assert isinstance(cnf, dict) and cnf.get("jkt") == thumbprint, (
-        f"cnf.jkt du access token != {thumbprint!r} : {cnf!r}"
-    )
+    assert isinstance(cnf, dict), f"cnf absent du access token : {sorted(claims)}"
+    assert cnf.get("jkt") == thumbprint, f"cnf.jkt du access token != {thumbprint!r} : {cnf!r}"
 
 
 def _happy(
