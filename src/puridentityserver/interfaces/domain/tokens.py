@@ -102,10 +102,12 @@ class TokenManager(Protocol):
 
         L'audience est le ``client_id`` émetteur, ou le(s) nom(s) des
         ``ApiResource`` dont des scopes ont été accordés au jeton (RFC
-        7519 §4.1.3 : ``aud`` peut être une chaîne ou une liste).
-        ``additional_claims`` complète le payload (ex. les noms de claims
-        du member ``userinfo`` du paramètre ``claims``, lus par
-        ``/userinfo``) ; les claims standards priment en cas de collision.
+        7519 §4.1.3 : ``aud`` peut être une chaîne ou une liste). Le
+        claim ``jti`` (RFC 9068 §2.1) rend chaque jeton unique, y
+        compris deux émissions dans la même seconde. ``additional_claims``
+        complète le payload (ex. les noms de claims du member ``userinfo``
+        du paramètre ``claims``, lus par ``/userinfo``) ; les claims
+        standards priment en cas de collision.
         """
         ...
 
