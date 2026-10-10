@@ -259,7 +259,12 @@ def _decode(
     issuer: str,
     require_iss_eq_sub: bool,
 ) -> dict[str, object] | None:
-    """Décode et valide l'assertion (signature, ``aud``, ``exp``, ``iss``)."""
+    """Décode et valide l'assertion (signature, ``aud``, ``exp``, ``iss``).
+
+    ``leeway=60`` tolère un ``nbf``/``iat`` jusqu'à 60 s dans le futur
+    (fenêtre ``EnsureClientAssertionNbf`` de la suite de certification ;
+    un ``exp`` passé de 5 minutes reste refusé).
+    """
     try:
         claims = pyjwt.decode(
             token,
@@ -267,6 +272,7 @@ def _decode(
             algorithms=algorithms,
             audience=audience,
             issuer=issuer,
+            leeway=60,
             options=_required_options(require_iss_eq_sub),
         )
     except pyjwt.PyJWTError:

@@ -157,6 +157,34 @@ def test_discovery_omits_require_pushed_authorization_requests() -> None:
     assert "require_pushed_authorization_requests" not in document
 
 
+def test_discovery_advertises_iss_parameter_support() -> None:
+    """RFC 9207 §2.3 : ``iss`` émis au callback, annoncé en découverte (F2-1)."""
+    usecase = DiscoveryUseCase(DiscoveryConfig(issuer=_ISSUER, base_url=_BASE_URL))
+    document = run(usecase.execute())
+
+    assert document["authorization_response_iss_parameter_supported"] is True
+
+
+def test_discovery_advertises_par_requirement_when_server_forced() -> None:
+    """RFC 9126 §2 : ``require_pushed_authorization_requests`` sous drapeau serveur."""
+    usecase = DiscoveryUseCase(
+        DiscoveryConfig(issuer=_ISSUER, base_url=_BASE_URL, par_required=True)
+    )
+    document = run(usecase.execute())
+
+    assert document["require_pushed_authorization_requests"] is True
+
+
+def test_discovery_omits_par_requirement_without_par_endpoint() -> None:
+    """Sans ``/par`` publié, aucune exigence PAR n'est annoncée (configuration incohérente)."""
+    usecase = DiscoveryUseCase(
+        DiscoveryConfig(issuer=_ISSUER, base_url=_BASE_URL, par_enabled=False, par_required=True)
+    )
+    document = run(usecase.execute())
+
+    assert "require_pushed_authorization_requests" not in document
+
+
 def test_discovery_endpoint_exposes_fapi1_fields() -> None:
     settings = Settings(issuer=_ISSUER, base_url=_BASE_URL, jwks_algorithms=("RS256",))
     with TestClient(create_app(settings)) as client:
@@ -166,3 +194,14 @@ def test_discovery_endpoint_exposes_fapi1_fields() -> None:
     assert metadata["code_challenge_methods_supported"] == ["S256", "plain"]
     assert metadata["tls_client_certificate_bound_access_tokens"] is True
     assert "require_pushed_authorization_requests" not in metadata
+
+
+def test_discovery_endpoint_advertises_par_requirement_when_configured() -> None:
+    """Le drapeau serveur ``par_required`` alimente le document public."""
+    settings = Settings(
+        issuer=_ISSUER, base_url=_BASE_URL, jwks_algorithms=("RS256",), par_required=True
+    )
+    with TestClient(create_app(settings)) as client:
+        metadata = client.get("/.well-known/openid-configuration").json()
+
+    assert metadata["require_pushed_authorization_requests"] is True

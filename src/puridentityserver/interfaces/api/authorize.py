@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import html
+import json
 import time
 from dataclasses import dataclass
 from typing import Annotated
 from urllib.parse import parse_qs, quote, urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict
 
 from puridentityserver.application.authorize import (
@@ -98,6 +99,7 @@ def authorize_router(
     consent_usecase: ConsentUseCase | None = None,
     *,
     request_object_resolver: RequestObjectResolver,
+    par_required: bool = False,
     require_login: bool = False,
     base_url: str = "",
 ) -> APIRouter:
@@ -110,7 +112,8 @@ def authorize_router(
     pointant un document hébergé ailleurs n'ont besoin que du resolver.
     ``client_repository`` permet d'appliquer l'obligation PAR par client
     (``par_required``, RFC 9126 §6.1) et de résoudre le client pour le
-    consentement. ``consent_usecase`` active l'écran de consentement
+    consentement ; ``par_required`` (serveur) l'étend à **tous** les
+    clients. ``consent_usecase`` active l'écran de consentement
     (``require_consent``, OIDC Core 1.0 §3.1.2.2) : la demande est alors
     redirigée vers ``/consent`` quand les scopes demandés ne sont pas déjà
     couverts par un consentement mémorisé. ``require_login`` : la demande non
@@ -134,7 +137,7 @@ def authorize_router(
     async def authorize(
         context: Annotated[_AuthorizeContext, Depends(_authorize_context)],
         query: Annotated[AuthorizeQueryParams, Query()],
-    ) -> RedirectResponse | HTMLResponse:
+    ) -> RedirectResponse | HTMLResponse | Response:
         return await _handle_authorize(context.request, _query_params(query), context.user)
 
     @router.post(
@@ -149,7 +152,7 @@ def authorize_router(
     async def authorize_post(
         request: Request,
         user: CurrentUserOptional = None,
-    ) -> RedirectResponse | HTMLResponse:
+    ) -> RedirectResponse | HTMLResponse | Response:
         """Traitement d'une demande ``POST /authorize`` (corps form-urlencoded)."""
         form = await request.form()
         params = {name: str(value) for name, value in form.items()}
@@ -167,22 +170,17 @@ def authorize_router(
         request: Request,
         params: dict[str, str],
         user: CurrentUserOptional,
-    ) -> RedirectResponse | HTMLResponse:
-        request_uri = params.get("request_uri", "")
-        pushed_reference = ""
-        if request_uri and is_pushed_request_uri(request_uri):
-            pushed_reference = request_uri
-            auth_request = await _resolve_pushed_request(
-                request, params.get("client_id", ""), request_uri, par_usecase
-            )
-        else:
-            built = await _direct_authorize_request(
-                params, request_object_resolver, client_repository
-            )
-            if isinstance(built, HTMLResponse):
-                return built
-            auth_request = built
-
+    ) -> RedirectResponse | HTMLResponse | Response:
+        auth_request, pushed_reference = await _authorize_entry(
+            request,
+            params,
+            par_usecase=par_usecase,
+            request_object_resolver=request_object_resolver,
+            client_repository=client_repository,
+            par_required=par_required,
+        )
+        if isinstance(auth_request, Response):
+            return auth_request
         pre = await _pre_execution_response(
             auth_request, request, user, client_repository, require_login, base_url
         )
@@ -225,6 +223,7 @@ async def _direct_authorize_request(
     params: dict[str, str],
     request_object_resolver: RequestObjectResolver,
     client_repository: ClientReader | None,
+    par_required: bool = False,
 ) -> AuthorizeRequest | HTMLResponse:
     """Construit la demande d'une requête **non poussée** (RFC 6749 §3.1).
 
@@ -253,7 +252,7 @@ async def _direct_authorize_request(
     ]
     if missing:
         return _missing_parameters_page(missing)
-    await _enforce_par_requirement(params.get("client_id", ""), client_repository)
+    await _enforce_par_requirement(params.get("client_id", ""), client_repository, par_required)
     return AuthorizeRequest(
         response_type=params.get("response_type", ""),
         client_id=params.get("client_id", ""),
@@ -522,12 +521,42 @@ def _authorize_url_from_base(base_url: str, http_request: Request) -> str:
     return url
 
 
+async def _authorize_entry(
+    request: Request,
+    params: dict[str, str],
+    *,
+    par_usecase: PushedAuthorizationUseCase | None,
+    request_object_resolver: RequestObjectResolver,
+    client_repository: ClientReader | None,
+    par_required: bool,
+) -> tuple[AuthorizeRequest | Response, str]:
+    """Résout l'entrée ``/authorize`` : poussée (``request_uri``) ou directe.
+
+    Retourne ``(demande, pushed_reference)`` — la ``Response`` d'erreur
+    JSON tient la place de la demande quand la résolution échoue (RFC 9126
+    §6.2) ; ``pushed_reference`` (vide hors PAR) accompagne le reste du
+    parcours pour consommer la demande poussée à l'émission.
+    """
+    request_uri = params.get("request_uri", "")
+    if request_uri and is_pushed_request_uri(request_uri):
+        resolved = await _resolve_pushed_request(
+            request, params.get("client_id", ""), request_uri, par_usecase
+        )
+        return resolved, request_uri
+    built = await _direct_authorize_request(
+        params, request_object_resolver, client_repository, par_required
+    )
+    if isinstance(built, HTMLResponse):
+        return built, ""
+    return built, ""
+
+
 async def _resolve_pushed_request(
     request: Request,
     client_id: str,
     request_uri: str,
     par_usecase: PushedAuthorizationUseCase | None,
-) -> AuthorizeRequest:
+) -> AuthorizeRequest | Response:
     """Résout une référence poussée (RFC 9126 §6.2).
 
     La query string brute de ``/authorize`` ne doit contenir que ``client_id``
@@ -535,10 +564,11 @@ async def _resolve_pushed_request(
     rejette tout paramètre supplémentaire. Les erreurs de résolution
     (référence inconnue, expirée, consommée → ``invalid_request_uri`` ;
     client incohérent → ``invalid_request`` ; PAR désactivé →
-    ``invalid_request``) répondent en JSON.
+    ``invalid_request``) répondent en JSON OAuth top-level (RFC 6749 §5.2,
+    lisible par la suite de certification sans enveloppe ``detail``).
     """
     if par_usecase is None:
-        raise _push_error(
+        return _pushed_param_response(
             PushError(
                 error="invalid_request",
                 error_description="Pushed Authorization Request désactivé",
@@ -551,7 +581,7 @@ async def _resolve_pushed_request(
         name for name in parse_qs(request.url.query, keep_blank_values=True) if name not in allowed
     ]
     if unexpected:
-        raise _push_error(
+        return _pushed_param_response(
             PushError(
                 error="invalid_request",
                 error_description="Les paramètres supplémentaires sont interdits "
@@ -562,30 +592,42 @@ async def _resolve_pushed_request(
 
     resolved = await par_usecase.resolve(request_uri=request_uri, client_id=client_id)
     if isinstance(resolved, PushError):
-        raise _push_error(resolved)
+        return _pushed_param_response(resolved)
     return resolved
 
 
-def _push_error(error: PushError) -> HTTPException:
-    """Construit l'exception HTTP JSON structurée d'une erreur PAR."""
-    return HTTPException(
+def _pushed_param_response(error: PushError) -> Response:
+    """Sérialise une erreur de résolution poussée en JSON OAuth (RFC 6749 §5.2)."""
+    return Response(
+        content=json.dumps(
+            {"error": error.error, "error_description": error.error_description},
+            separators=(",", ":"),
+        ),
+        media_type="application/json",
         status_code=error.status_code,
-        detail={"error": error.error, "error_description": error.error_description},
     )
 
 
-async def _enforce_par_requirement(client_id: str, client_repository: ClientReader | None) -> None:
-    """Refuse une demande directe à /authorize si le client exige PAR (RFC 9126 §6.1).
+async def _enforce_par_requirement(
+    client_id: str,
+    client_repository: ClientReader | None,
+    server_par_required: bool = False,
+) -> None:
+    """Refuse une demande directe à /authorize si PAR est exigé (RFC 9126 §6.1).
 
-    Un client marqué ``par_required`` doit pousser ses paramètres via
-    ``POST /par`` puis présenter le ``request_uri`` à l'endpoint
-    d'autorisation ; toute demande non poussée est rejetée en
+    Un client marqué ``par_required`` (ou ``fapi2_enabled``, FAPI2-SP-5.3.2.2-4 :
+    FAPI2 n'admet que les demandes poussées) doit passer par ``POST /par``
+    puis présenter le ``request_uri`` à l'endpoint d'autorisation ; le
+    drapeau serveur ``server_par_required`` impose la même discipline à
+    **tous** les clients. Toute demande non poussée est rejetée en
     ``invalid_request``.
     """
     if client_repository is None:
         return
     client = await client_repository.find_by_id(client_id)
-    if client is not None and client.par_required:
+    if client is None:
+        return
+    if client.par_required or client.fapi2_enabled or server_par_required:
         raise HTTPException(
             status_code=400,
             detail={

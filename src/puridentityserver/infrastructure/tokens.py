@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import cast
+from uuid import uuid4
 
 import jwt as pyjwt
 from cryptography.hazmat.primitives.serialization import (
@@ -101,9 +102,13 @@ class PyJWTTokenManager:
 
         ``aud`` porte le ``client_id`` ou les noms des ressources
         protégées dont des scopes ont été accordés (chaîne ou liste).
-        ``additional_claims`` complète le payload sans jamais écraser les
-        claims standards (ex. le claim ``claims`` portant les noms de
-        claims userinfo demandés, relus par ``/userinfo``).
+        Le claim ``jti`` (RFC 9068 §2.1) rend chaque jeton unique :
+        deux émissions dans la même seconde avec des paramètres
+        identiques produiraient autrement un JWT octet-identique, ce
+        qui casserait la détection de rotation côté client. Les
+        ``additional_claims`` complètent le payload sans jamais écraser
+        les claims standards (ex. le claim ``claims`` portant les noms
+        de claims userinfo demandés, relus par ``/userinfo``).
         """
         payload: dict[str, object] = {
             "iss": issuer,
@@ -111,6 +116,7 @@ class PyJWTTokenManager:
             "aud": audience,
             "exp": expires_at,
             "iat": issued_at,
+            "jti": str(uuid4()),
             "scope": " ".join(sorted(scope.value for scope in scopes)),
         }
         for name, value in (additional_claims or {}).items():

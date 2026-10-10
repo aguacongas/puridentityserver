@@ -58,6 +58,15 @@ def _optional_int(raw: dict[str, object], key: str) -> int | None:
     return int(str(value)) if value is not None else None
 
 
+def _fapi_profile_flags(raw: dict[str, object]) -> tuple[bool, bool]:
+    """Résout les drapeaux de profil FAPI1 / FAPI2, mutuellement exclusifs."""
+    fapi = bool(raw.get("fapi_enabled"))
+    fapi2 = bool(raw.get("fapi2_enabled"))
+    if fapi and fapi2:
+        raise ValueError("fapi_enabled et fapi2_enabled sont exclusifs")
+    return fapi, fapi2
+
+
 def _parse_client(raw: dict[str, object]) -> Client:
     """Convertit un dictionnaire de configuration en Client domaine."""
     client_id = str(raw["client_id"])
@@ -82,6 +91,7 @@ def _parse_client(raw: dict[str, object]) -> Client:
     scopes = frozenset(Scope(token) for token in str(raw.get("scopes", "openid")).split() if token)
     client_type = _parse_client_type(raw.get("client_type", "public"))
     auth_method = _parse_auth_method(raw)
+    fapi_enabled, fapi2_enabled = _fapi_profile_flags(raw)
     jwks_raw = raw.get("jwks")
     jwks = tuple(dict(key) for key in jwks_raw) if isinstance(jwks_raw, (list, tuple)) else ()
     return Client(
@@ -121,7 +131,8 @@ def _parse_client(raw: dict[str, object]) -> Client:
             raw.get("backchannel_authentication_request_signing_alg", "")
         ),
         par_required=bool(raw.get("par_required")),
-        fapi_enabled=bool(raw.get("fapi_enabled")),
+        fapi_enabled=fapi_enabled,
+        fapi2_enabled=fapi2_enabled,
         require_consent=bool(raw.get("require_consent")),
         require_dpop=bool(raw.get("require_dpop")),
     )
@@ -404,6 +415,11 @@ class Settings(BaseSettings):
     # fenêtre limite le stockage des demandes poussées.
     par_enabled: bool = True
     par_ttl_seconds: int = 90
+    # Imposition PAR **serveur** (RFC 9126 §6.1) : tous les clients doivent
+    # pousser leurs demandes — publiée ``require_pushed_authorization_requests``
+    # au discovery et opposée à /authorize (les clients FAPI2 l'imposent
+    # déjà individuellement via ``fapi2_enabled``).
+    par_required: bool = False
 
     # Resource server d'exemple - endpoint GET /protected-resource
     # (RFC 8707 + profil FAPI-R-6.2.1 de la suite de certification) :

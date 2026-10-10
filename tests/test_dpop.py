@@ -167,6 +167,12 @@ def _validator() -> tuple[PyJWTDpopProofValidator, InMemoryDpopReplayRepository]
     return PyJWTDpopProofValidator(replays), replays
 
 
+def _s256_challenge(verifier: str) -> str:
+    """Empreinte S256 d'un code verifier PKCE (RFC 7636 §4.2)."""
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
 def _future_expiry() -> datetime:
     """Expiration dans le futur (évite l'expiration immédiate du défaut)."""
     return datetime.now(timezone.utc) + timedelta(minutes=5)
@@ -327,13 +333,13 @@ class TestDpopGrantGuard:
         result = self._evaluate(self._client(require_dpop=True), "")
 
         assert isinstance(result, DpopGuardError)
-        assert result.error == "invalid_request"
+        assert result.error == "invalid_dpop_proof"
 
     def test_requires_proof_for_bound_request(self) -> None:
         result = self._evaluate(self._client(), "", bound_jkt="une-empreinte")
 
         assert isinstance(result, DpopGuardError)
-        assert result.error == "invalid_request"
+        assert result.error == "invalid_dpop_proof"
 
     def test_rejects_invalid_proof(self) -> None:
         result = self._evaluate(self._client(), "preuve-malformee")
@@ -437,7 +443,7 @@ class TestTokenUseCaseDPoP:
 
         result = run(usecase.execute(self._request("")))
 
-        assert getattr(result, "error", "") == "invalid_request"
+        assert getattr(result, "error", "") == "invalid_dpop_proof"
 
     def test_issues_bound_token_with_valid_proof(self) -> None:
         usecase, codes, _ = self._make_usecase(require_dpop=True)
@@ -458,7 +464,7 @@ class TestTokenUseCaseDPoP:
 
         result = run(usecase.execute(self._request("")))
 
-        assert getattr(result, "error", "") == "invalid_request"
+        assert getattr(result, "error", "") == "invalid_dpop_proof"
 
     def test_rejects_proof_of_another_key_on_bound_code(self) -> None:
         usecase, codes, _ = self._make_usecase()
@@ -528,7 +534,7 @@ class TestTokenUseCaseDPoP:
             )
         )
 
-        assert getattr(result, "error", "") == "invalid_request"
+        assert getattr(result, "error", "") == "invalid_dpop_proof"
 
 
 class TestUserInfoDPoP:
@@ -742,11 +748,6 @@ class TestDpopHttpEndpoints:
             )
         )
 
-    @staticmethod
-    def _s256_challenge(verifier: str) -> str:
-        digest = hashlib.sha256(verifier.encode("ascii")).digest()
-        return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
-
     def _authorization_code(self, client: TestClient) -> str:
         auth = client.get(
             "/authorize",
@@ -755,7 +756,7 @@ class TestDpopHttpEndpoints:
                 "client_id": _CLIENT_ID,
                 "redirect_uri": _REDIRECT_URI,
                 "scope": "openid",
-                "code_challenge": self._s256_challenge("verifier-verifier"),
+                "code_challenge": _s256_challenge("verifier-verifier"),
                 "code_challenge_method": "S256",
             },
             follow_redirects=False,
@@ -787,7 +788,7 @@ class TestDpopHttpEndpoints:
             response = self._token_request(client, code)
 
         assert response.status_code == 400
-        assert response.json()["error"] == "invalid_request"
+        assert response.json()["error"] == "invalid_dpop_proof"
 
     def test_token_issues_dpop_bound_access_token(self) -> None:
         key = ec.generate_private_key(ec.SECP256R1())
@@ -869,6 +870,179 @@ class TestDpopHttpEndpoints:
 
         assert response.status_code == 400
         assert response.json()["error"] == "invalid_dpop_proof"
+
+
+class TestProtectedResourceDPoP:
+    """Liaison DPoP du resource server /protected-resource (RFC 9449 §7.1)."""
+
+    _SEED: ClassVar[dict[str, object]] = {
+        "client_id": _CLIENT_ID,
+        "client_secret": _CLIENT_SECRET,
+        "redirect_uris": [_REDIRECT_URI],
+        "scopes": "openid",
+        "client_type": "confidential",
+        "require_dpop": True,
+    }
+    _RESOURCE_URL = "http://testserver/protected-resource"
+
+    @staticmethod
+    def _app(*, require_dpop: bool = True) -> FastAPI:
+        seed = {**TestProtectedResourceDPoP._SEED, "require_dpop": require_dpop}
+        return create_app(
+            Settings(
+                issuer=_ISSUER,
+                base_url=_ISSUER,
+                jwks_algorithms=("RS256",),
+                clients_seed=(seed,),
+                api_resources_seed=(),
+                protected_resource_enabled=True,
+            )
+        )
+
+    def _access_token(self, client: TestClient, key: ec.EllipticCurvePrivateKey | None) -> str:
+        """Émet un access token via le flow complet, lié DPoP si ``key`` est fourni."""
+        auth = client.get(
+            "/authorize",
+            params={
+                "response_type": "code",
+                "client_id": _CLIENT_ID,
+                "redirect_uri": _REDIRECT_URI,
+                "scope": "openid",
+                "code_challenge": _s256_challenge("verifier-verifier"),
+                "code_challenge_method": "S256",
+            },
+            follow_redirects=False,
+        )
+        code = parse_qs(urlparse(auth.headers["location"]).query)["code"][0]
+        headers = {"DPoP": _proof(key)} if key is not None else {}
+        response = client.post(
+            "/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": _REDIRECT_URI,
+                "client_id": _CLIENT_ID,
+                "client_secret": _CLIENT_SECRET,
+                "code_verifier": "verifier-verifier",
+            },
+            headers=headers,
+        )
+        assert response.status_code == 200
+        return str(response.json()["access_token"])
+
+    def test_accepts_bound_token_with_valid_proof(self) -> None:
+        key = ec.generate_private_key(ec.SECP256R1())
+        with TestClient(self._app()) as client:
+            token = self._access_token(client, key)
+            proof = _proof(
+                key,
+                htu=self._RESOURCE_URL,
+                method="GET",
+                ath=access_token_hash(token),
+            )
+            response = client.get(
+                "/protected-resource",
+                headers={"Authorization": f"DPoP {token}", "DPoP": proof},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["message"] == "Ressource protégée accessible"
+
+    def test_rejects_bound_token_with_bearer_scheme(self) -> None:
+        key = ec.generate_private_key(ec.SECP256R1())
+        with TestClient(self._app()) as client:
+            token = self._access_token(client, key)
+            response = client.get(
+                "/protected-resource",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert response.status_code == 401
+        assert response.json()["error"] == "invalid_token"
+        assert response.headers["www-authenticate"].startswith('DPoP error="invalid_token"')
+
+    def test_scheme_is_case_insensitive(self) -> None:
+        """RFC 9110 §11.1 : le nom du scheme ne distingue pas les majuscules."""
+        key = ec.generate_private_key(ec.SECP256R1())
+        with TestClient(self._app()) as client:
+            token = self._access_token(client, key)
+            proof = _proof(
+                key,
+                htu=self._RESOURCE_URL,
+                method="GET",
+                ath=access_token_hash(token),
+            )
+            response = client.get(
+                "/protected-resource",
+                headers={"Authorization": f"dPoP {token}", "DPoP": proof},
+            )
+
+        assert response.status_code == 200
+
+    def test_rejects_bound_token_without_proof(self) -> None:
+        key = ec.generate_private_key(ec.SECP256R1())
+        with TestClient(self._app()) as client:
+            token = self._access_token(client, key)
+            response = client.get(
+                "/protected-resource",
+                headers={"Authorization": f"DPoP {token}"},
+            )
+
+        assert response.status_code == 401
+        assert response.json()["error"] == "invalid_token"
+
+    def test_rejects_proof_signed_by_wrong_key(self) -> None:
+        key = ec.generate_private_key(ec.SECP256R1())
+        wrong = ec.generate_private_key(ec.SECP256R1())
+        with TestClient(self._app()) as client:
+            token = self._access_token(client, key)
+            proof = _proof(
+                wrong,
+                htu=self._RESOURCE_URL,
+                method="GET",
+                ath=access_token_hash(token),
+            )
+            response = client.get(
+                "/protected-resource",
+                headers={"Authorization": f"DPoP {token}", "DPoP": proof},
+            )
+
+        assert response.status_code == 401
+        assert response.json()["error"] == "invalid_dpop_proof"
+        assert response.headers["www-authenticate"].startswith('DPoP error="invalid_dpop_proof"')
+
+    def test_rejects_replayed_proof(self) -> None:
+        key = ec.generate_private_key(ec.SECP256R1())
+        with TestClient(self._app()) as client:
+            token = self._access_token(client, key)
+            proof = _proof(
+                key,
+                htu=self._RESOURCE_URL,
+                method="GET",
+                ath=access_token_hash(token),
+            )
+            first = client.get(
+                "/protected-resource",
+                headers={"Authorization": f"DPoP {token}", "DPoP": proof},
+            )
+            second = client.get(
+                "/protected-resource",
+                headers={"Authorization": f"DPoP {token}", "DPoP": proof},
+            )
+
+        assert first.status_code == 200
+        assert second.status_code == 401
+        assert second.json()["error"] == "invalid_dpop_proof"
+
+    def test_accepts_bearer_token_without_proof(self) -> None:
+        with TestClient(self._app(require_dpop=False)) as client:
+            token = self._access_token(client, None)
+            response = client.get(
+                "/protected-resource",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert response.status_code == 200
 
 
 class TestRegistrationDPoP:

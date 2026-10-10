@@ -80,15 +80,19 @@ class DpopGrantGuard:
 
     @staticmethod
     async def _missing_proof(client: Client, *, bound_jkt: str) -> DpopGuardResult:
-        """Traite l'absence de preuve : obligation du drapeau, puis liaison."""
+        """Traite l'absence de preuve : obligation du drapeau, puis liaison.
+
+        RFC 9449 §5.2 : l'absence de preuve sur un endpoint qui l'exige
+        (client ``require_dpop`` ou demande liée) vaut ``invalid_dpop_proof``.
+        """
         if client.require_dpop:
             return DpopGuardError(
-                "invalid_request",
+                "invalid_dpop_proof",
                 "Ce client exige une preuve DPoP (RFC 9449 §5.2)",
             )
         if bound_jkt:
             return DpopGuardError(
-                "invalid_request",
+                "invalid_dpop_proof",
                 "La demande est liée à une clé DPoP : preuve DPoP absente",
             )
         return DpopBinding()

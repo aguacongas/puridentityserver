@@ -12,10 +12,10 @@ profils de claims ``users_seed`` repris du ``config.toml`` racine,
 protégée activés comme la config de certification), puis
 ``PURIDENTITYSERVER_CONFORMANCE_URL`` est exporté : le harness
 (``tests/conformance/harness.py``) bascule alors sur du httpx réel au lieu de
-l'ASGI in-process, et ``pytest -m conformance`` rejoue les 328 scénarios des
-plans Basic, Implicit, Hybrid, FAPI-CIBA-ID1 et FAPI1 Advanced Final contre
-le serveur réel. Le code retour de pytest est propagé ; un garde-fou borne
-la durée.
+l'ASGI in-process, et ``pytest -m conformance`` rejoue les 435 scénarios des
+plans Basic, Implicit, Hybrid, FAPI-CIBA-ID1, FAPI1 Advanced Final et FAPI2
+Security Profile contre le serveur réel. Le code retour de pytest est propagé ;
+un garde-fou borne la durée.
 
 Usage (depuis n'importe où dans le dépôt) :
 
@@ -45,6 +45,10 @@ from conftest import (  # ruff: ignore[module-import-not-at-top-of-file]
     _CLIENT_UNSIGNED,
     _IDENTITY_USERS,
 )
+from fapi2_harness import (  # ruff: ignore[module-import-not-at-top-of-file]
+    FAPI2_CLIENT_2_SEED,
+    FAPI2_CLIENT_SEED,
+)
 from fapi_harness import (  # ruff: ignore[module-import-not-at-top-of-file]
     FAPI_CLIENT_2_SEED,
     FAPI_CLIENT_SEED,
@@ -57,8 +61,8 @@ SERVER_PORT = 8121
 # seed pointent vers des hôtes externes (jamais suivis par le harness).
 ISSUER = "https://id.example"
 
-# 328 scénarios contre un vrai serveur : le rejeu in-process prend déjà
-# ~28 min, HTTP réel en ajoute — le garde-fou ne doit pas tronquer un rejeu sain.
+# 435 scénarios contre un vrai serveur : le rejeu in-process prend déjà
+# ~40 min, HTTP réel en ajoute — le garde-fou ne doit pas tronquer un rejeu sain.
 _DEADLINE = 3600
 
 
@@ -89,6 +93,8 @@ def main() -> int:
                 _CLIENT_UNSIGNED,
                 FAPI_CLIENT_SEED,
                 FAPI_CLIENT_2_SEED,
+                FAPI2_CLIENT_SEED,
+                FAPI2_CLIENT_2_SEED,
             ),
             users=_IDENTITY_USERS,
             users_seed=_users_seed(),

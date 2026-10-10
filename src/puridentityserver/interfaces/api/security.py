@@ -27,6 +27,24 @@ def bearer_token(request: Request) -> str:
     return token.strip() if scheme.lower() == "bearer" else ""
 
 
+def split_authorization(authorization: str | None) -> tuple[str, str | None]:
+    """Scheme et jeton d'un en-tête ``Authorization: <scheme> <token>`` (RFC 6750 §2.1).
+
+    ``bearer`` et ``dpop`` (RFC 9449 §7.1) sont reconnus, sans distinction
+    de casse (RFC 9110 §11.1 : le nom du scheme est insensible à la
+    casse) ; tout autre scheme produit un jeton absent, trahi par un
+    ``invalid_request``.
+    """
+    if not authorization:
+        return "", None
+    scheme, _, token = authorization.partition(" ")
+    token = token.strip()
+    scheme = scheme.lower()
+    if scheme not in ("bearer", "dpop") or not token:
+        return scheme, None
+    return scheme, token
+
+
 def bearer_authorization_dependency(
     authorizer: BearerClaimAuthorizer,
 ) -> Callable[[Request], Awaitable[None]]:

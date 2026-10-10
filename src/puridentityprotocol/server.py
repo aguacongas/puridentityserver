@@ -138,6 +138,7 @@ def _mount_authorization_routers(
     consent_usecase: ConsentUseCase,
     request_object_resolver: RequestObjectResolver,
     par_enabled: bool,
+    par_required: bool,
     require_login: bool,
     base_url: str,
 ) -> None:
@@ -149,6 +150,7 @@ def _mount_authorization_routers(
             client_repository=client_reader,
             consent_usecase=consent_usecase,
             request_object_resolver=request_object_resolver,
+            par_required=par_required,
             require_login=require_login,
             base_url=base_url,
         )
@@ -197,6 +199,7 @@ class ProtocolDependencies:
             base_url=settings.base_url,
             registration_enabled=settings.registration_enabled,
             par_enabled=settings.par_enabled,
+            par_required=settings.par_required,
             ciba_enabled=settings.ciba_enabled,
             signing_algorithms=settings.jwks_algorithms,
             encryption_algorithms=settings.jwks_encryption_algorithms,
@@ -329,6 +332,7 @@ class ProtocolDependencies:
                 ProtectedResourceConfig(issuer=settings.issuer),
                 self.token_manager,
                 stores.revoked,
+                dpop=self.dpop_validator,
             )
         self.introspect_usecase = IntrospectUseCase(
             IntrospectConfig(issuer=settings.issuer),
@@ -465,6 +469,7 @@ class ProtocolDependencies:
             consent_usecase=self.consent_usecase,
             request_object_resolver=self.request_object_resolver,
             par_enabled=self.settings.par_enabled,
+            par_required=self.settings.par_required,
             require_login=self.settings.require_login,
             base_url=self.settings.base_url or self.settings.issuer,
         )

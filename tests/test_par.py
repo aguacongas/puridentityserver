@@ -460,7 +460,7 @@ class TestParIntegrationHTTP:
                 follow_redirects=False,
             )
         assert second.status_code == 400
-        assert second.json()["detail"]["error"] == "invalid_request_uri"
+        assert second.json()["error"] == "invalid_request_uri"
 
     def test_authorize_rejects_extra_param_with_request_uri(self) -> None:
         with TestClient(_app()) as client:
@@ -485,7 +485,7 @@ class TestParIntegrationHTTP:
                 follow_redirects=False,
             )
         assert resp.status_code == 400
-        assert resp.json()["detail"]["error"] == "invalid_request"
+        assert resp.json()["error"] == "invalid_request"
 
     def test_authorize_rejects_unknown_request_uri(self) -> None:
         with TestClient(_app()) as client:
@@ -498,7 +498,7 @@ class TestParIntegrationHTTP:
                 follow_redirects=False,
             )
         assert resp.status_code == 400
-        assert resp.json()["detail"]["error"] == "invalid_request_uri"
+        assert resp.json()["error"] == "invalid_request_uri"
 
     def test_authorize_rejects_mismatched_client(self) -> None:
         with TestClient(_app()) as client:
@@ -519,7 +519,7 @@ class TestParIntegrationHTTP:
                 follow_redirects=False,
             )
         assert resp.status_code == 400
-        assert resp.json()["detail"]["error"] == "invalid_request"
+        assert resp.json()["error"] == "invalid_request"
 
     def test_push_rejects_request_uri_in_body(self) -> None:
         with TestClient(_app()) as client:
@@ -646,6 +646,51 @@ class TestParRequiredPerClient:
         assert _redirect_query(resp.headers["location"])["code"]
 
 
+class TestParRequiredServer:
+    """Obligation PAR serveur (``Settings.par_required``) — RFC 9126 §6.1."""
+
+    def test_direct_authorize_rejected_for_any_client(self) -> None:
+        with TestClient(_app(par_required=True)) as client:
+            resp = client.get(
+                "/authorize",
+                params={
+                    "response_type": "code",
+                    "client_id": _CLIENT_ID,
+                    "redirect_uri": "https://app.example/callback",
+                    "scope": "openid",
+                },
+                follow_redirects=False,
+            )
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error"] == "invalid_request"
+        assert "Pushed Authorization Request" in resp.json()["detail"]["error_description"]
+
+    def test_par_flow_allowed_when_server_requires_par(self) -> None:
+        with TestClient(_app(par_required=True)) as client:
+            push = client.post(
+                "/par",
+                data={
+                    "response_type": "code",
+                    "client_id": _CLIENT_ID,
+                    "redirect_uri": "https://app.example/callback",
+                    "scope": "openid",
+                },
+            )
+            assert push.status_code == 201
+            auth = client.get(
+                "/authorize",
+                params={"client_id": _CLIENT_ID, "request_uri": push.json()["request_uri"]},
+                follow_redirects=False,
+            )
+        assert auth.status_code == 302
+        assert _redirect_query(auth.headers["location"])["code"]
+
+    def test_discovery_advertises_server_par_requirement(self) -> None:
+        with TestClient(_app(par_required=True)) as client:
+            metadata = client.get("/.well-known/openid-configuration").json()
+        assert metadata["require_pushed_authorization_requests"] is True
+
+
 class TestParDisabled:
     """Le endpoint /par et la résolution sont coupés quand par_enabled=False."""
 
@@ -678,7 +723,7 @@ class TestParDisabled:
                 follow_redirects=False,
             )
         assert resp.status_code == 400
-        assert resp.json()["detail"]["error"] == "invalid_request"
+        assert resp.json()["error"] == "invalid_request"
 
 
 class TestParClientAssertion:

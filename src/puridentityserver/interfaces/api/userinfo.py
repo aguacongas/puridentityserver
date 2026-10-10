@@ -15,6 +15,7 @@ from puridentityserver.application.userinfo import (
 )
 from puridentityserver.infrastructure.client_tls import extract_client_certificate
 from puridentityserver.interfaces.api.dpop_proof import extract_dpop_proof
+from puridentityserver.interfaces.api.security import split_authorization
 
 
 def userinfo_router(usecase: UserInfoUseCase) -> APIRouter:
@@ -26,7 +27,7 @@ def userinfo_router(usecase: UserInfoUseCase) -> APIRouter:
         request: Request,
         authorization: Annotated[str | None, Header()] = None,
     ) -> Response:
-        return await _handle_userinfo(request, _split_authorization(authorization))
+        return await _handle_userinfo(request, split_authorization(authorization))
 
     @router.post("/userinfo", summary="Endpoint UserInfo (POST, RFC 6750 §2.1)")
     async def userinfo_post(
@@ -39,7 +40,7 @@ def userinfo_router(usecase: UserInfoUseCase) -> APIRouter:
         ``access_token`` du corps ``application/x-www-form-urlencoded`` est
         lu (RFC 6750 §2.1, méthode 2), présenté comme un ``Bearer``.
         """
-        scheme, token = _split_authorization(authorization)
+        scheme, token = split_authorization(authorization)
         if token is None:
             body_token = (await request.form()).get("access_token")
             if isinstance(body_token, str) and body_token:
@@ -72,22 +73,6 @@ def userinfo_router(usecase: UserInfoUseCase) -> APIRouter:
         return _success_response(result)
 
     return router
-
-
-def _split_authorization(authorization: str | None) -> tuple[str, str | None]:
-    """Scheme et jeton d'un en-tête ``Authorization: <scheme> <token>`` (RFC 6750 §2.1).
-
-    ``bearer`` et ``dpop`` (RFC 9449 §7.1) sont reconnus ; tout autre
-    scheme produit un jeton absent, trahi par un ``invalid_request``.
-    """
-    if not authorization:
-        return "", None
-    scheme, _, token = authorization.partition(" ")
-    token = token.strip()
-    scheme = scheme.lower()
-    if scheme not in ("bearer", "dpop") or not token:
-        return scheme, None
-    return scheme, token
 
 
 def _success_response(result: UserInfoResponse) -> Response:

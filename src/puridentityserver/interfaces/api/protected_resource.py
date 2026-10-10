@@ -1,10 +1,14 @@
 """Route FastAPI du resource server intégré (FAPI-R-6.2.1, RFC 6750 §2).
 
-Le jeton est exigé en en-tête ``Authorization: Bearer`` (RFC 6750 §2.1) ;
-le transport en query string — déconseillé par §2.3 — est refusé. Chaque
-réponse porte l'en-tête ``x-fapi-interaction-id`` (FAPI 1.0 §7.4) :
-valeur reçue échoyée, ou `uuid4` généré quand le client n'en envoie pas
-(la suite l'exige en réponse même sans l'avoir émis).
+Le jeton est exigé en en-tête ``Authorization: Bearer <token>`` ou
+``Authorization: DPoP <token>`` (RFC 9449 §7.1), le nom du scheme étant
+insensible à la casse (RFC 9110 §11.1) ; le transport en query string —
+déconseillé par §2.3 — est refusé. Un access token lié (``cnf.jkt``)
+exige en plus la preuve ``DPoP`` de l'en-tête ``DPoP``, liée au jeton
+par ``ath`` (RFC 9449 §7.1). Chaque réponse porte l'en-tête
+``x-fapi-interaction-id`` (FAPI 1.0 §7.4) : valeur reçue échoyée, ou
+`uuid4` généré quand le client n'en envoie pas (la suite l'exige en
+réponse même sans l'avoir émis).
 """
 
 from __future__ import annotations
@@ -21,7 +25,8 @@ from puridentityserver.application.protected_resource import (
     ProtectedResourceUseCase,
 )
 from puridentityserver.infrastructure.client_tls import extract_client_certificate
-from puridentityserver.interfaces.api.security import bearer_token
+from puridentityserver.interfaces.api.dpop_proof import extract_dpop_proof
+from puridentityserver.interfaces.api.security import split_authorization
 
 #: En-tête d'interaction FAPI échoyé sur les réponses de la ressource.
 _FAPI_INTERACTION_ID = "x-fapi-interaction-id"
@@ -37,8 +42,9 @@ def protected_resource_router(usecase: ProtectedResourceUseCase) -> APIRouter:
     )
     async def protected_resource(request: Request) -> Response:
         interaction_id = _interaction_id(request)
+        scheme, token = split_authorization(request.headers.get("authorization"))
         query_token = request.query_params.get("access_token", "")
-        if query_token and not bearer_token(request):
+        if query_token and not token:
             return _error_response(
                 ProtectedResourceError(
                     error="invalid_request",
@@ -46,20 +52,31 @@ def protected_resource_router(usecase: ProtectedResourceUseCase) -> APIRouter:
                 ),
                 interaction_id,
             )
-        token = bearer_token(request)
         if not token:
             return _error_response(
                 ProtectedResourceError(
                     error="invalid_request",
                     error_description=(
-                        "En-tête Authorization 'Bearer <token>' attendu (RFC 6750 §2.1)"
+                        "En-tête Authorization 'Bearer <token>' ou 'DPoP <token>' "
+                        "attendu (RFC 6750 §2.1, RFC 9449 §7.1)"
                     ),
                 ),
                 interaction_id,
             )
+        proof, proof_error = extract_dpop_proof(request.headers)
+        if proof_error is not None:
+            return _error_response(
+                ProtectedResourceError(error="invalid_request", error_description=proof_error),
+                interaction_id,
+            )
         result = await usecase.execute(
             ProtectedResourceRequest(
-                access_token=token, tls_certificate=extract_client_certificate(request)
+                access_token=token,
+                tls_certificate=extract_client_certificate(request),
+                auth_scheme=scheme,
+                dpop_proof=proof,
+                htu=_htu(request),
+                htm=request.method,
             )
         )
         if isinstance(result, ProtectedResourceError):
@@ -67,6 +84,11 @@ def protected_resource_router(usecase: ProtectedResourceUseCase) -> APIRouter:
         return _success_response(result, interaction_id)
 
     return router
+
+
+def _htu(request: Request) -> str:
+    """URL cible de la preuve DPoP, sans query string ni fragment (RFC 9449 §4.3)."""
+    return str(request.url).partition("?")[0].partition("#")[0]
 
 
 def _interaction_id(request: Request) -> str:
@@ -93,7 +115,13 @@ def _success_response(result: ProtectedResourceResponse, interaction_id: str) ->
 
 
 def _error_response(result: ProtectedResourceError, interaction_id: str) -> Response:
-    """Sérialise l'erreur en JSON avec challenge ``WWW-Authenticate`` (RFC 6750 §3)."""
+    """Sérialise l'erreur en JSON avec challenge ``WWW-Authenticate`` (RFC 6750 §3).
+
+    ``result.challenge`` porte un challenge explicite (scheme ``DPoP``
+    pour une liaison RFC 9449 violée) ; à défaut, le challenge reprend
+    ``Bearer error="<error>"``.
+    """
+    challenge = result.challenge or f'Bearer error="{result.error}"'
     return Response(
         content=json.dumps(
             {"error": result.error, "error_description": result.error_description},
@@ -102,7 +130,7 @@ def _error_response(result: ProtectedResourceError, interaction_id: str) -> Resp
         media_type="application/json",
         status_code=401,
         headers={
-            "WWW-Authenticate": f'Bearer error="{result.error}"',
+            "WWW-Authenticate": challenge,
             _FAPI_INTERACTION_ID: interaction_id,
             "Cache-Control": "no-store",
         },

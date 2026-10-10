@@ -304,10 +304,9 @@ async def validate_authorization_request(
             redirectable=False,
         )
 
-    if client.fapi_enabled:
-        fapi_error = _fapi_profile_error(request, client, response_types, response_mode)
-        if fapi_error is not None:
-            return fapi_error
+    profile_error = _client_profile_error(request, client, response_types, response_mode)
+    if profile_error is not None:
+        return profile_error
 
     param_error = await _parameter_error(request, scope_registry, response_mode)
     if param_error is not None:
@@ -358,6 +357,26 @@ async def _scope_profile_error(
     return await _unknown_scope_error(scopes, scope_registry, request, response_mode)
 
 
+def _client_profile_error(
+    request: AuthorizeRequest,
+    client: Client,
+    response_types: frozenset[str],
+    response_mode: ResponseMode,
+) -> AuthorizeError | None:
+    """Applique le profil du client activé, ``None`` sinon.
+
+    ``fapi_enabled`` (FAPI 1.0 Advanced) et ``fapi2_enabled`` (FAPI 2.0
+    Security Profile) sont exclusifs au chargement de la configuration ;
+    un client sans aucun de ces drapeaux n'est soumis à aucune exigence
+    de profil.
+    """
+    if client.fapi_enabled:
+        return _fapi_profile_error(request, client, response_types, response_mode)
+    if client.fapi2_enabled:
+        return _fapi2_profile_error(request, response_types, response_mode)
+    return None
+
+
 def _fapi_profile_error(
     request: AuthorizeRequest,
     client: Client,
@@ -400,6 +419,38 @@ def _is_fapi_flow(response_types: frozenset[str]) -> bool:
     n'est pas retenu.
     """
     return response_types == frozenset(("code", "id_token"))
+
+
+def _fapi2_profile_error(
+    request: AuthorizeRequest,
+    response_types: frozenset[str],
+    response_mode: ResponseMode,
+) -> AuthorizeError | None:
+    """Contrôle le profil FAPI 2.0 Security Profile du client (``fapi2_enabled``).
+
+    ``None`` si la demande respecte le profil. Seul le flow authorization
+    code ``code`` est admis (FAPI2-SP-5.3.2.2-2) : tout autre
+    ``response_type`` renvoie ``unsupported_response_type``. Un
+    ``code_challenge`` déclaré doit employer ``S256`` (FAPI2-SP-5.3.2.2-5) ;
+    l'obligation PKCE elle-même est opposée à la poussée ``/par``, seule
+    voie d'entrée d'une demande FAPI2 (FAPI2-SP-5.3.2.2-4).
+    """
+    if response_types != frozenset(("code",)):
+        return _authorize_error(
+            "unsupported_response_type",
+            request,
+            description="FAPI2 n'admet que le flow 'code' (FAPI2-SP-5.3.2.2-2)",
+            response_mode=response_mode,
+        )
+    if request.code_challenge and request.code_challenge_method != "S256":
+        return _authorize_error(
+            "invalid_request",
+            request,
+            description="code_challenge_method doit être 'S256' pour un client "
+            "FAPI2 (FAPI2-SP-5.3.2.2-5)",
+            response_mode=response_mode,
+        )
+    return None
 
 
 def _query_mode_forbidden_error(
@@ -732,6 +783,12 @@ class AuthorizeUseCase:
             params.append(f"session_state={session_state}")
         if state:
             params.append(f"state={state}")
+        if self._config.issuer:
+            # RFC 9207 §2.3 : l'émetteur accompagne toute réponse
+            # d'autorisation réussie (``iss``), metadata
+            # ``authorization_response_iss_parameter_supported`` —
+            # OAuth2-iss-2, FAPI2-SP-5.3.2.2-7.
+            params.append(f"iss={self._config.issuer}")
         return params
 
     def _resolve_session_state(self, request: AuthorizeRequest) -> str:
