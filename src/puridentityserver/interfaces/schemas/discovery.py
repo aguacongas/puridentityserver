@@ -30,6 +30,9 @@ class DiscoveryDocument(BaseModel):
     registration_endpoint: str | None = None
     device_authorization_endpoint: str | None = None
     pushed_authorization_request_endpoint: str | None = None
+    # RFC 9126 §2 : ``true`` uniquement quand le serveur impose PAR à tous
+    # les clients — omis sinon (la suite tolère l'absence, PAR-5).
+    require_pushed_authorization_requests: bool | None = None
     # CIBA (OIDC CIBA 1.0 §5.1) : absents (``None`` / vide) tant que
     # ``ciba_enabled`` est désactivé — ``backchannel_authentication_endpoint``
     # n'est publié que couplé aux modes livrés et à l'endpoint réel.
@@ -46,6 +49,9 @@ class DiscoveryDocument(BaseModel):
         default_factory=lambda: [algorithm.value for algorithm in ASYMMETRIC_ALGORITHMS]
     )
     claims_parameter_supported: bool = False
+    # RFC 9207 §2.3 : ``iss`` accompagne toute réponse d'autorisation
+    # réussie — OAuth2-iss-3, FAPI2-SP-FINAL-5.3.2.2-7.
+    authorization_response_iss_parameter_supported: bool = True
     scopes_supported: list[str] = Field(
         default_factory=lambda: [
             "openid",

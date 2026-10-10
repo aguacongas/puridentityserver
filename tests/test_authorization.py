@@ -90,6 +90,26 @@ def test_authorize_redirects_with_code() -> None:
     assert query["state"] == ["xyz"]
 
 
+def test_authorize_redirect_carries_iss_parameter() -> None:
+    """RFC 9207 §2.3 : la réponse de succès porte ``iss`` = issuer (F2-1)."""
+    with TestClient(_app()) as client:
+        response = client.get(
+            "/authorize",
+            params={
+                "response_type": "code",
+                "client_id": "web-app",
+                "redirect_uri": "https://app.example/callback",
+                "scope": "openid profile",
+                "code_challenge": _s256_challenge("verifier-verifier"),
+                "code_challenge_method": "S256",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert _redirect_query(response.headers["location"])["iss"] == [_ISSUER]
+
+
 def test_authorize_rejects_unknown_client() -> None:
     with TestClient(_app()) as client:
         response = client.get(

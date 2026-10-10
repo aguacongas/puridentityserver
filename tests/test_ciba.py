@@ -1305,7 +1305,7 @@ class TestCibaIntegrationHTTP:
     def test_discovery_hides_ciba_without_flag(self) -> None:
         with TestClient(_app(ciba_enabled=False)) as client:
             doc = client.get("/.well-known/openid-configuration").json()
-            assert doc["backchannel_authentication_endpoint"] is None
+            assert doc.get("backchannel_authentication_endpoint") is None
             assert doc["backchannel_token_delivery_modes_supported"] == []
             assert doc["backchannel_authentication_request_signing_alg_values_supported"] == []
             assert CIBA_GRANT_TYPE not in doc["grant_types_supported"]

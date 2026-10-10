@@ -515,4 +515,4 @@ def test_par_consent_approval_consumes_request_uri() -> None:
         reuse = client.get("/authorize", params=authorize, follow_redirects=False)
 
     assert reuse.status_code == 400
-    assert reuse.json()["detail"]["error"] == "invalid_request_uri"
+    assert reuse.json()["error"] == "invalid_request_uri"

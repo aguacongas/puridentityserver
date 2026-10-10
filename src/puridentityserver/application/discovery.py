@@ -39,6 +39,7 @@ class DiscoveryConfig:
     base_url: str = ""
     registration_enabled: bool = False
     par_enabled: bool = True
+    par_required: bool = False
     ciba_enabled: bool = False
     ciba_request_signing_algorithms: tuple[str, ...] = CIBA_REQUEST_SIGNING_ALGORITHMS
     signing_algorithms: tuple[str, ...] = tuple(
@@ -129,11 +130,20 @@ class DiscoveryUseCase:
             # Paramètre claims (OIDC Core 1.0 §5.5) : parsé, validé et honoré
             # sur /authorize — les members userinfo/id_token sont rendus.
             "claims_parameter_supported": True,
+            # RFC 9207 §2.3 : l'émetteur accompagne toute réponse
+            # d'autorisation réussie (paramètre ``iss`` émis par
+            # ``_build_success_params``) — OAuth2-iss-3,
+            # FAPI2-SP-FINAL-5.3.2.2-7.
+            "authorization_response_iss_parameter_supported": True,
         }
         if self._config.registration_enabled:
             metadata["registration_endpoint"] = f"{base}/register"
         if self._config.par_enabled:
             metadata["pushed_authorization_request_endpoint"] = f"{base}/par"
+            if self._config.par_required:
+                # RFC 9126 §2 : le serveur n'accepte que les demandes
+                # poussées — PAR-5, FAPI2-SP-FINAL-5.3.2.2-2.
+                metadata["require_pushed_authorization_requests"] = True
         # CIBA (OIDC CIBA 1.0 §5.1) : modes poll/ping livrés, endpoint dédié,
         # grant publiquement annoncé et algorithmes de signature des request
         # objects (CIBA §5.2.2, check ``*SigningAlgValuesSupported``).

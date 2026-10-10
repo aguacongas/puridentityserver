@@ -1,4 +1,4 @@
-# Traçabilité des checks rejoués (PR 1/4 — #69, PR 2/4 — #70, PR 3/4 — #71, PR 4/4 — #72, FAPI-CIBA-ID1 — #109, FAPI1 Advanced Final — #110)
+# Traçabilité des checks rejoués (PR 1/4 — #69, PR 2/4 — #70, PR 3/4 — #71, PR 4/4 — #72, FAPI-CIBA-ID1 — #109, FAPI1 Advanced Final — #110, FAPI2 Security Profile — #111)
 
 Ce dossier rejoue localement les checks de la suite officielle
 [`openid/conformance-suite`](https://github.com/openid/conformance-suite),
@@ -21,7 +21,7 @@ et on relit les fichiers cités ci-dessous à chaque nouvelle PR.
 uv run --no-sync --no-build --locked python -m pytest -m conformance --no-cov -p no:cacheprovider
 # contre un OP réel démarré localement (le harness bascule sur httpx)
 $env:PURIDENTITYSERVER_CONFORMANCE_URL = "http://127.0.0.1:8000"
-# ou smoke complet : serveur uvicorn + rejeu des 328 scénarios (PR 4 + #109 + #110)
+# ou smoke complet : serveur uvicorn + rejeu des 435 scénarios (PR 4 + #109 + #110 + #111)
 uv run python samples/conformance-smoke/smoke_test.py
 ```
 
@@ -360,6 +360,148 @@ cités ci-dessous. Fiches détaillées : `fapi-specs/agent-{a,b,c,d}.md`
   dans le harness (`conftest.par_ttl_seconds`), réutilisation de `request_uri`
   ≈ consommation unique post-succès.
 - Rejeu local : **106 passed** (44 `by_value` + 62 `pushed`) en ≈ 8 min 30.
+
+## Matrice module → test (issue #111 — FAPI2 Security Profile)
+
+Plans `fapi2-security-profile-final-test-plan` (60 modules) et
+`fapi2-security-profile-id2-test-plan` (67 modules) : **127 modules publiés**,
+dont **114 applicables** au profil retenu. 13 exclusions de profil
+(`@VariantNotApplicable`) : `ensure-registered-redirect-uri` (remplacé par
+`tolerate-unregistered-redirect-uri`, RFC 9126 §2.4 `plain_fapi`), modules
+ConnectID AU / Brazil / OBUK intent_id & acr-SCA, et les 3 modules ID2
+`par-*-as-audience-fails` (réservés cbuae/ksa — leurs contreparties Final
+sont applicables et attendent le rejet).
+
+Baseline (`@VariantParameters`) : `fapi_request_method=unsigned`,
+`plain_response`, `FAPI2SenderConstrainMethod=dpop`,
+`client_auth_type=private_key_jwt`, profil `plain_fapi`,
+`FAPIOpenIDConnect=openid_connect`. En profil `unsigned`, les modules des
+deux plans construisent une demande **implicite** poussée en params plats au
+`/par` (`BuildUnsignedPAREndpointRequest`, `isSignedRequest=false`) : le nom
+des modules ID2 (« request object ») ne change pas le flux observé.
+
+Regroupement Final + ID2 à observable identique : **61 scénarios** (53 paires,
+3 modules Final seuls, 5 modules ID2 seuls) → **107 tests pytest**
+(paramétrage `plan` `final`/`id2` + `iat` ±10 × 2 plans), **114 exécutions**
+de modules couvertes. Fiches détaillées :
+`fapi2-specs/agent-{final,id2,consolide}.md` (clone lecture seule, hors dépôt).
+
+### Flux nominal, paramètres et id_token (16 scénarios)
+
+| Module de la suite | Nodeid pytest | Assertion |
+| --- | --- | --- |
+| `discovery-end-point-verification` | `test_fapi2_discovery_metadata[plan]` | discovery FAPI2 : `require_pushed_authorization_requests`, `authorization_response_iss_parameter_supported`, `code_challenge_methods_supported=S256` seul, `token_endpoint_auth_signing_alg_values_supported=PS256` |
+| `happy-flow` | `test_fapi2_happy_flow[plan]` | flux complet : PAR params plats + `dpop_jkt`, authorize `iss` (RFC 9207), échange PS256 `private_key_jwt` + preuve, `token_type=DPoP` + `cnf.jkt`, ressource 200 avec preuve |
+| `user-rejects-authentication` | `test_fapi2_user_rejects_authentication[plan]` | refus de consentement → callback `access_denied` + `state` |
+| `…ensure-authorization-request-without-state-success` | `test_fapi2_without_state_success[plan]` | `state` absent accepté, callback sans `state`, échange OK |
+| `…ensure-authorization-request-without-nonce-success` | `test_fapi2_without_nonce_success[plan]` | nonce absent accepté (code seul), id_token sans `nonce` |
+| `…ensure-authorization-request-with-64-char-nonce-success` (Final) / `…request-object-with-64-char-nonce-success` (ID2) | `test_fapi2_64_char_nonce_success[plan]` | nonce 64 caractères écho intact dans l'id_token |
+| `…ensure-other-scope-order-succeeds` | `test_fapi2_other_scope_order_succeeds[plan]` | ordre de `scope` inversé accepté (RFC 6749 §3.3) |
+| `test-claims-parameter-identity-claims` | `test_fapi2_claims_parameter_identity_claims[plan]` | **skip** : paramètre `claims` optionnel (OIDCC-10, WARNING suite) — non implémenté (issue #8) |
+| `access-token-type-header-case-sensitivity` | `test_fapi2_access_token_type_case_sensitivity[plan]` | scheme du RS insensible à la casse (`dPoP`/`bearer`) |
+| `check-dpop-proof-nbf-exp` | `test_fapi2_dpop_proof_nbf_exp[plan]` | preuve `nbf`/`exp` dans le futur proche acceptée (skew 300 s) |
+| `…ensure-dpopproof-with-iat-10seconds-{before,after}-succeeds` | `test_fapi2_dpop_iat_skew_accepted[skew,plan]` | `iat` ±10 s acceptée (RFC 9449 §11.1, skew 300 s) |
+| `…ensure-mismatched-dpop-jkt-fails` | `test_fapi2_mismatched_dpop_jkt_fails[plan]` | `dpop_jkt` poussé ≠ clé du client → rejet PAR `invalid_dpop_proof` |
+| `…ensure-token-endpoint-fails-with-mismatched-dpop-proof-jkt` | `test_fapi2_token_fails_with_mismatched_dpop_proof_jkt[plan]` | preuve token signée par une autre clé EC que le `dpop_jkt` → rejet |
+| `…ensure-dpopproof-at-par-endpoint-binding-success` | `test_fapi2_dpopproof_at_par_binding_success[plan]` | même clé au PAR et au token → succès + ressource 200 |
+| `…ensure-dpop-auth-code-binding-success` | `test_fapi2_dpop_auth_code_binding_success[plan]` | code lié au `dpop_jkt` : échange + userinfo (scheme `DPoP`) acceptés |
+| `…ensure-different-nonce-inside-and-outside-request-object` | `test_fapi2_different_nonce_inside_and_outside[plan]` | nonce divergent ajouté en paramètre plat → `invalid_request` JSON (RFC 9126 §6.2) |
+
+### Paramètres divergents, longueurs et `response_type` (10 scénarios)
+
+| Module de la suite | Nodeid pytest | Assertion |
+| --- | --- | --- |
+| `…ensure-different-state-inside-and-outside-request-object` | `test_fapi2_different_state_inside_and_outside[plan]` | state divergent hors push → rejet JSON (issues admises) |
+| `…ensure-authorization-request-with-long-nonce` (Final) / `…request-object-with-long-nonce` (ID2) | `test_fapi2_long_nonce_accepted[plan]` | nonce 384 caractères accepté, jamais tronqué |
+| `…ensure-authorization-request-with-long-state` (Final) / `…request-object-with-long-state` (ID2) | `test_fapi2_long_state_accepted[plan]` | state 1000 caractères accepté |
+| `state-only-outside-request-object-not-used` | `test_fapi2_state_only_outside_not_used[plan]` | `state` ajouté après coup ignoré (aucun `state` au callback), flux complet |
+| `…ensure-request-object-without-redirect-uri-fails` | `test_fapi2_redirect_uri_in_authorization_request[plan]` | `redirect_uri` retirée → rejet, jamais de code |
+| `…ensure-response-type-code-idtoken-fails` | `test_fapi2_response_type_code_idtoken_fails[plan]` | `response_type=code id_token` → rejet (code seul FAPI2-SP-5.3.2.2) |
+| `…ensure-response-type-token-fails` | `test_fapi2_response_type_token_fails[plan]` | `response_type=token` → rejet |
+| `…ensure-client-id-in-token-endpoint` | `test_fapi2_client_id_in_token_endpoint[plan]` | `client_id` du client 2 au token → erreur (2 clients) |
+| `…ensure-holder-of-key-required` | `test_fapi2_holder_of_key_required[plan]` | token bound sans preuve au RS → 401 (branche TLS non rejouable, issue admise) |
+| `…ensure-authorization-code-is-bound-to-client` | `test_fapi2_authorization_code_bound_to_client[plan]` | code du client 1 présenté par le client 2 → `invalid_grant` |
+
+### Token endpoint et assertions client (9 scénarios)
+
+| Module de la suite | Nodeid pytest | Assertion |
+| --- | --- | --- |
+| `…attempt-reuse-authorization-code-after-one-second` | `test_fapi2_reuse_authorization_code[plan]` | réutilisation du code → `invalid_grant` + révocation des jetons émis |
+| `…ensure-token-endpoint-fails-with-expired-auth-code` | `test_fapi2_expired_authorization_code[plan]` | `WaitFor62Seconds` puis échange → `invalid_grant` (TTL code 60 s côté seed) |
+| `…ensure-signed-client-assertion-with-rs256-fails` | `test_fapi2_assertion_rs256_fails[plan]` | `alg=RS256` hors liste (PS256 seul) → `invalid_client` (G4) |
+| `…ensure-client-assertion-in-token-endpoint` | `test_fapi2_client_assertion_in_token_endpoint[plan]` | form sans `client_assertion` → erreur d'authentification |
+| `…ensure-client-assertion-with-exp-is-5-minutes-in-past-fails` | `test_fapi2_assertion_exp_in_past_fails[plan]` | `exp` périmé (5 min) → `invalid_client` (RFC 7523 §3) |
+| `…ensure-client-assertion-with-wrong-aud-fails` | `test_fapi2_assertion_wrong_aud_fails[plan]` | `aud` erroné → rejet |
+| `…ensure-client-assertion-with-no-sub-fails` | `test_fapi2_assertion_no_sub_fails[plan]` | `sub` absent → rejet |
+| `dpop-negative-tests` | `test_fapi2_dpop_negative_tests[plan]` | sélection ~6/~28 : `htu` trahi, `htm`, `typ`, `iat` hors skew, clé étrangère → rejet ; échange nominal + ressource sans/avec preuve ; rejeu du code refusé |
+| `refresh-token` | `test_fapi2_refresh_token[plan]` | rotation access + refresh avec preuve fraîche ; ancien refresh → `invalid_grant` |
+
+### PAR et PKCE (13 scénarios)
+
+| Module de la suite | Nodeid pytest | Assertion |
+| --- | --- | --- |
+| `…par-ensure-reused-request-uri-prior-to-auth-completion-succeeds` | `test_fapi2_reused_request_uri_prior_to_completion[plan]` | réutilisation **avant** la fin de l'auth acceptée (RFC 9126) |
+| `…par-attempt-reuse-request-uri` | `test_fapi2_attempt_reuse_request_uri[plan]` | consommation unique post-succès → `invalid_request_uri` |
+| `…par-attempt-to-use-expired-request-uri` | `test_fapi2_expired_request_uri[plan]` | TTL dépassé (sleep réel) → `invalid_request_uri` |
+| `…par-ensure-jwt-client-assertions-nbf-8-seconds-in-the-future-is-accepted` | `test_fapi2_assertion_nbf_8_seconds_future[plan]` | `nbf` +8 s accepté (leeway 60 s assertions) → 201 |
+| `…par-ensure-jwt-client-assertions-nbf-over-60-seconds-in-the-future-fails` | `test_fapi2_assertion_nbf_over_60s_fails[plan]` | `nbf` +61 s → rejet |
+| `…par-attempt-to-use-request_uri-for-different-client` | `test_fapi2_request_uri_for_different_client[plan]` | `request_uri` du client 1 par le client 2 → rejet (2 clients) |
+| `…par-authorization-request-containing-request_uri-form-param` | `test_fapi2_request_uri_in_push_fails[plan]` | `request_uri` dans le corps du push → 400 (RFC 9126 §2.1) |
+| `…par-attempt-invalid-http-method` | `test_fapi2_par_invalid_http_method[plan]` | `PUT /par` → 4xx/405 (POST seul) |
+| `…par-ensure-pkce-required` | `test_fapi2_pkce_required[plan]` | push sans `code_challenge` → `invalid_request` (FAPI2-SP-5.3.2.2-5) |
+| `…ensure-pkce-code-verifier-required` | `test_fapi2_pkce_code_verifier_required[plan]` | échange sans `code_verifier` → `invalid_grant` (RFC 7636 §4.6) |
+| `…incorrect-pkce-code-verifier-rejected` | `test_fapi2_incorrect_pkce_code_verifier[plan]` | `code_verifier` erroné → `invalid_grant` |
+| `…par-plain-pkce-rejected` | `test_fapi2_plain_pkce_rejected[plan]` | `code_challenge_method=plain` → rejet (S256 seul) |
+| `…par-without-duplicate-parameters` | `test_fapi2_par_without_duplicate_parameters[plan]` | redirect `request_uri` sans doublons accepté |
+
+### Audience des assertions : Final vs ID2 (8 scénarios — écart assumé)
+
+Les modules Final `par-test-*-as-audience-fails` attendent le **rejet** de
+`aud` tableau / URL PAR / URL token ; en profil `plain_fapi`, les modules ID2
+positifs correspondants attendent l'**acceptation**. Notre OP suit RFC 7523
+§3 / RFC 9126 §6.1 et accepte les deux formes : les tests Final assertent
+l'acceptation avec l'écart documenté ici (les modules Final les plus stricts
+sont réservés aux profils cbuae/ksa où leurs contreparties ID2 sont exclues).
+
+| Module de la suite | Nodeid pytest | Assertion |
+| --- | --- | --- |
+| `par-test-array-as-audience-fails` (Final seul) | `test_fapi2_final_array_as_audience_rejected` | `aud` tableau accepté (RFC 7523 §3) — écart vs module Final |
+| `par-test-par-endpoint-url-as-audience-fails` (Final seul) | `test_fapi2_final_par_url_as_audience_rejected` | `aud` = URL PAR accepté — écart vs module Final |
+| `par-test-token-endpoint-url-as-audience-fails` (Final seul) | `test_fapi2_final_token_url_as_audience_rejected` | `aud` = URL token accepté — écart vs module Final |
+| `…ensure-request-object-with-multiple-aud-succeeds` (ID2 seul) | `test_fapi2_id2_multiple_aud_in_request_object` | `aud` tableau hors schéma ignoré, flux réussi |
+| `…ensure-client-assertion-with-token-endpoint-aud-succeeds` (ID2 seul) | `test_fapi2_id2_token_endpoint_aud_succeeds` | `aud` = token_endpoint accepté (refresh 200) |
+| `…par-test-pushed-authorization-url-as-audience-for-client-jwt-assertion` (ID2 seul) | `test_fapi2_id2_par_url_aud_succeeds` | `aud` = URL PAR accepté au push |
+| `…par-test-token-endpoint-url-as-audience-for-client-jwt-assertion` (ID2 seul) | `test_fapi2_id2_token_url_aud_at_par_succeeds` | `aud` = URL token accepté au push |
+| `…test-array-as-audience-for-client-jwt-assertion` (ID2 seul) | `test_fapi2_id2_array_audience_par_and_token` | `aud` tableau accepté au push et au token (RFC 7523 §3) |
+
+### PAR : `redirect_uri` non enregistré
+
+| Module de la suite | Nodeid pytest | Assertion |
+| --- | --- | --- |
+| `tolerate-unregistered-redirect-uri` (Final) / `plain-fapi-ensure-registered-redirect-uri` (ID2) | `test_fapi2_unregistered_redirect_uri` | 2 issues admises (tolérance ou rejet) ; notre OP rejette au push en `invalid_request` + description (RFC 9126 §2.3) |
+
+### Notes de rejeu (issue #111)
+
+- **Écarts OP levés** dans la branche : `iss` au callback + metadata
+  `authorization_response_iss_parameter_supported` (RFC 9207, succès
+  uniquement) ; profil `fapi2_enabled` (`Settings`, exclusif avec
+  `fapi_enabled`) : `response_type=code` seul, nonce non requis, PAR + PKCE
+  `S256` obligatoires (`_fapi2_profile_error`, `_enforce_par_requirement`) ;
+  PKCE exigé au `/token` dès qu'un `code_challenge` est présent (tous types
+  de clients) ; authentification `client_assertion` au `/par` (G2) ; RS DPoP
+  complet (`/protected-resource` + `/userinfo` : preuve, `ath`, `cnf.jkt`,
+  scheme `DPoP` exigé) ; `dpop_jkt` threadé jusqu'au consentement ;
+  erreurs de résolution poussée en JSON top-level (RFC 6749 §5.2, lisible
+  suite) ; leeway 60 s sur `nbf`/`iat` des assertions client.
+- **Bornes OP assumées** (issues admises par les modules) : Final 54-56
+  `aud` acceptée (RFC 7523/9126, cf. tableau ci-dessus), holder-of-key TLS
+  non rejouable (rejet sans preuve rejoué à la place), paramètre `claims`
+  non implémenté (skip, optionnel), TTL code 60 s porté par le seed client
+  (`authorization_code_lifetime_seconds`), réutilisation du code → révocation
+  des jetons (RFC 6749 §4.1.2 « SHOULD revoke »).
+- Rejeu local : **105 passed, 2 skipped** (claims ×2) en ≈ 11 min 45
+  (`uv run --no-sync python -m pytest tests/conformance/test_plan_fapi2.py
+  -m conformance --no-cov -p no:cacheprovider`).
 
 ## Observeurs du harness
 

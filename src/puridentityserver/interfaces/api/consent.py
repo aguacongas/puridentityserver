@@ -107,6 +107,7 @@ def _consent_params(request: AuthorizeRequest, pushed_reference: str = "") -> di
         "prompt": request.prompt,
         "acr_values": request.acr_values,
         "claims": request.claims,
+        "dpop_jkt": request.dpop_jkt,
     }
     if pushed_reference:
         params["pushed_reference"] = pushed_reference
@@ -182,6 +183,7 @@ def consent_router(
         prompt: Annotated[str, Query()] = "",
         acr_values: Annotated[str, Query()] = "",
         claims: Annotated[str, Query()] = "",
+        dpop_jkt: Annotated[str, Query()] = "",
     ) -> RedirectResponse | HTMLResponse | str:
         user = context.user
         pushed_reference = context.pushed_reference
@@ -198,6 +200,7 @@ def consent_router(
             prompt=prompt,
             acr_values=acr_values,
             claims=claims,
+            dpop_jkt=dpop_jkt,
         )
         if user is None:
             return RedirectResponse(
@@ -234,6 +237,7 @@ def consent_router(
         response_mode: Annotated[str, Form()] = "",
         acr_values: Annotated[str, Form()] = "",
         claims: Annotated[str, Form()] = "",
+        dpop_jkt: Annotated[str, Form()] = "",
         action: Annotated[str, Form()] = "authorize",
     ) -> RedirectResponse | HTMLResponse:
         user = context.user
@@ -250,6 +254,7 @@ def consent_router(
             response_mode=response_mode,
             acr_values=acr_values,
             claims=claims,
+            dpop_jkt=dpop_jkt,
         )
         if user is None:
             return RedirectResponse(
@@ -287,6 +292,7 @@ def consent_router(
                 response_mode=request.response_mode,
                 acr_values=request.acr_values,
                 claims=request.claims,
+                dpop_jkt=request.dpop_jkt,
             ),
             par_usecase=par_usecase,
             pushed_reference=pushed_reference,
@@ -336,6 +342,7 @@ async def _handle_consent(
         prompt=request.prompt,
         acr_values=request.acr_values,
         claims=request.claims,
+        dpop_jkt=request.dpop_jkt,
     )
     forced = "consent" in request.prompt.split()
     if not await consent_usecase.is_required(

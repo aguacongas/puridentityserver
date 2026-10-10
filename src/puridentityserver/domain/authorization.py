@@ -141,7 +141,15 @@ class Client:
     hybride ``code id_token`` est exigé (FAPI1-ADV-5.2.2-2) et, via PAR,
     PKCE en ``S256`` devient obligatoire (FAPI1-ADV-5.2.2-18). Sans ce
     drapeau, le client garde le comportement standard de l'OP (JAR
-    ``alg=none`` admis). ``require_consent`` (OAuth 2.0
+    ``alg=none`` admis). ``fapi2_enabled`` (FAPI 2.0 Security Profile)
+    active le profil FAPI2 pour ce client : seul le flow ``code`` est
+    admis (FAPI2-SP-5.3.2.2-2), le request object n'est pas exigé
+    (variante ``unsigned``), ``nonce`` devient optionnel (OIDC Core 1.0
+    §3.1.2.1), ``/par`` exige PKCE ``S256``, l'endpoint d'autorisation
+    rejette toute demande directe sans ``request_uri`` (FAPI2-SP-5.3.2.2-4,
+    équivalent ``par_required`` sans le répéter au seed) et la réponse
+    d'autorisation porte ``iss`` (RFC 9207). Les deux drapeaux sont
+    exclusifs. ``require_consent`` (OAuth 2.0
     Consent, OIDC Core 1.0 §3.1.2.2) exige la confirmation de
     l'utilisateur connecté — mémorisée dans le store ``consents`` — avant
     d'émettre le moindre code ou jeton.
@@ -214,6 +222,7 @@ class Client:
     device_code_interval_seconds: int | None = None
     par_required: bool = False
     fapi_enabled: bool = False
+    fapi2_enabled: bool = False
     require_consent: bool = False
     require_dpop: bool = False
     token_endpoint_auth_method: TokenEndpointAuthMethod | None = None

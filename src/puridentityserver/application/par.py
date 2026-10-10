@@ -77,24 +77,27 @@ class PushError:
     status_code: int = 400
 
 
-def _fapi_pkce_error(params: dict[str, str]) -> PushError | None:
-    """Contrôle PKCE ``S256`` exigé d'un push FAPI (FAPI1-ADV-5.2.2-18).
+def _fapi_pkce_error(params: dict[str, str], *, fapi2: bool = False) -> PushError | None:
+    """Contrôle PKCE ``S256`` exigé d'un push FAPI (FAPI1-ADV-5.2.2-18, FAPI2-SP-5.3.2.2-5).
 
-    ``code_challenge`` est requis dès qu'un client ``fapi_enabled`` pousse
-    sa demande, et seule la méthode ``S256`` est admise (``plain`` est
-    rejeté). Renvoie ``None`` quand la demande est conforme.
+    ``code_challenge`` est requis dès qu'un client ``fapi_enabled`` ou
+    ``fapi2_enabled`` pousse sa demande, et seule la méthode ``S256`` est
+    admise (``plain`` est rejeté). Renvoie ``None`` quand la demande est
+    conforme.
     """
+    profile = "FAPI2" if fapi2 else "FAPI1"
+    requirement = "FAPI2-SP-5.3.2.2-5" if fapi2 else "FAPI1-ADV-5.2.2-18"
     if not params.get("code_challenge"):
         return PushError(
             error="invalid_request",
-            error_description="PKCE (code_challenge) requis pour un client FAPI1 "
-            "via PAR (FAPI1-ADV-5.2.2-18)",
+            error_description=f"PKCE (code_challenge) requis pour un client {profile} "
+            f"via PAR ({requirement})",
         )
     if params.get("code_challenge_method", "S256") != "S256":
         return PushError(
             error="invalid_request",
-            error_description="code_challenge_method doit être 'S256' pour un client "
-            "FAPI1 (FAPI1-ADV-5.2.2-18)",
+            error_description=f"code_challenge_method doit être 'S256' pour un client "
+            f"{profile} ({requirement})",
         )
     return None
 
@@ -107,11 +110,14 @@ def _validated_push_error(validated: AuthorizeError) -> PushError:
     ``error_description`` conservant l'explication ``invalid_redirect_uri``.
     """
     error = validated.error
+    description = validated.error_description
     if error == "invalid_redirect_uri":
         error = "invalid_request"
+        if not description:
+            description = "redirect_uri non enregistrée pour ce client (RFC 6749 §4.1.2.1)"
     return PushError(
         error=error,
-        error_description=validated.error_description,
+        error_description=description,
         status_code=401 if error == "invalid_client" else 400,
     )
 
@@ -262,8 +268,8 @@ class PushedAuthorizationUseCase:
         client_id = authenticated.client_id
         params = {**params, "client_id": client_id}
 
-        if authenticated.fapi_enabled:
-            pkce_error = _fapi_pkce_error(params)
+        if authenticated.fapi_enabled or authenticated.fapi2_enabled:
+            pkce_error = _fapi_pkce_error(params, fapi2=authenticated.fapi2_enabled)
             if pkce_error is not None:
                 return pkce_error
 

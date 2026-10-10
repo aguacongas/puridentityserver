@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 from ciba_harness import CibaHarness
+from fapi2_harness import FAPI2_CLIENT_2_SEED, FAPI2_CLIENT_SEED, Fapi2Harness
 from fapi_harness import FAPI_CLIENT_2_SEED, FAPI_CLIENT_SEED, FapiHarness
 from fastapi import FastAPI
 from harness import ConformanceHarness
@@ -91,6 +92,8 @@ def build_app() -> FastAPI:
                 _CLIENT_UNSIGNED,
                 FAPI_CLIENT_SEED,
                 FAPI_CLIENT_2_SEED,
+                FAPI2_CLIENT_SEED,
+                FAPI2_CLIENT_2_SEED,
             ),
             require_login=True,
             identity_seed_users=_IDENTITY_USERS,
@@ -134,6 +137,19 @@ def fapi_harness() -> Iterator[FapiHarness]:
     ``by_value``/``pushed``, ``private_key_jwt``.
     """
     with FapiHarness(build_app()) as instance:
+        yield instance
+
+
+@pytest.fixture
+def fapi2_harness() -> Iterator[Fapi2Harness]:
+    """Harness FAPI 2.0 Security Profile (issue #111) : clients ``fapi2_enabled``.
+
+    Chaque test rejoue un module des plans ``fapi2-security-profile-final``
+    ou ``fapi2-security-profile-id2`` contre l'application locale (ou l'OP
+    distant via ``PURIDENTITYSERVER_CONFORMANCE_URL``) : demande poussée en
+    params plats, PKCE ``S256``, preuve DPoP ``ES256``, ``private_key_jwt``.
+    """
+    with Fapi2Harness(build_app()) as instance:
         yield instance
 
 

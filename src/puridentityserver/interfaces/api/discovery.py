@@ -10,7 +10,11 @@ def discovery_router(usecase: DiscoveryUseCase) -> APIRouter:
     """Construit le routeur FastAPI exposant les métadonnées de discovery."""
     router = APIRouter(tags=["discovery"])
 
-    @router.get("/.well-known/openid-configuration", summary="OpenID Connect Discovery")
+    @router.get(
+        "/.well-known/openid-configuration",
+        summary="OpenID Connect Discovery",
+        response_model_exclude_none=True,
+    )
     async def openid_configuration() -> DiscoveryDocument:
         doc = await usecase.execute()
         return DiscoveryDocument(**doc)
