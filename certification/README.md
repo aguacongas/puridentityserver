@@ -199,6 +199,14 @@ uv run python samples/conformance-smoke/smoke_test.py
   disparaissent proprement). Ce 500 n'est jamais réessayé (1 tentative au lieu
   de 28). Le run suivant réutilise le plan ainsi recréé (plan le plus récent
   privilégié par `_plan_matching_configuration`).
+- **« Aucun export pour le plan » (garde-fou du workflow)** : le plan a
+  crashé avant tout module terminé (`run-test-plan` en code retour non nul,
+  `results/` vide) alors que le job resterait vert en mode witness. Causes
+  vécues (issue #113) : client statique absent de la config
+  (« must contain a client configuration ») ou variante de plan manquante au
+  sélecteur (« requires a value for variant … »). Corriger la config du plan
+  (`plans/<plan>.json`, `config.render.toml`) ou le sélecteur de
+  `certification.yml`.
 - **ERREUR sur Redis/nginx** : relancer ; le premier pull des images
   `registry.gitlab.com/openid/conformance-suite` est long (~10 min).
 
@@ -207,8 +215,8 @@ uv run python samples/conformance-smoke/smoke_test.py
 | Fichier | Rôle |
 | --- | --- |
 | `render.yaml` / `Dockerfile` / `.dockerignore` | déploiement de l'OP sur Render (SQLite, disque éphémère) |
-| `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`) |
-| `plans/basic|implicit|hybrid|ciba|fapi1|fapi2.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent) |
+| `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`, 4 clients statiques FAPI `private_key_jwt` + JWKS public pour les plans fapi1/fapi2) |
+| `plans/basic|implicit|hybrid|ciba|fapi1|fapi2.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; fapi1/fapi2 portent aussi `client`/`client2` en clé privée et `resource`) |
 | `conformance-reuse-plan.patch` | patch du driver : `create_test_plan` idempotent (réutilise le plan existant quand sa config n'a pas changé) |
 | `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) ou, à défaut, un PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode witness) |
 | `capture_screenshots.py` | rejoue les 4 scénarios de relecture contre l'OP déployé (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver |

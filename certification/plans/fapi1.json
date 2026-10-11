@@ -5,6 +5,41 @@
   "server": {
     "discoveryUrl": "{OPURL}/.well-known/openid-configuration"
   },
+  "resource": {
+    "resourceUrl": "{OPURL}/protected-resource"
+  },
+  "client": {
+    "client_id": "puridentityserver-fapi1-client",
+    "scope": "openid profile offline_access",
+    "jwks": {
+      "keys": [
+        {
+          "kty": "RSA",
+          "d": "CXMZlhJNGTf_tqTQqCMN8FCaUV6mcZIu5TSj7e5w0d1mAN1cGj0o0b2qbxvhNpIIAMlp6KyblWn-O-ld9QOTu6cl1-QQy9rtRfXWtWuOfZ1E6kLbvyPjqmdrioD9k6_o8A9p7plMJ9aoXIL4jbSflZfb1T_mdAt-HuQWL75yZgsOfeuASWNSNejrWA-D5p0Y3dxJYdIdq-LH4DtKG6GBRKGQz9Q0iDvN5kSrL1TjbrjjUKa6OivZqdOnPSqETVijbiUI1zRW0aRSA1Iq4919JSoh3Z03bz9N2KNp_EvHZRswUCWo-U-hIaYIWCQsPyyU9Vn8NzXuCFwyJ6eSQvHniQ",
+          "e": "AQAB",
+          "kid": "puridentityserver-fapi1-client-20261011",
+          "alg": "PS256",
+          "n": "27WKNdOdKbsr5lsM6EttzRkzJ7YTH3Iec0pwuIWdqxTsHnAcYWocGu1aI81Pg7psJDw1Adu5pU_TPykGL2q3nwW2GFyzO9Iv8YJQShLfZUJSiLnch3O-g6NbdxwllLGFhQy_5X2t7hnxTWUQlftx5Pm6BFM50qzePoi-WJaN5bXdKl0xVVYH4Tjf_aoOfHWIDmhl1NOgPQ-hnRzlztWds7weBRbk3WGgx7X12rAeeGE6uQXjjJreHV5svDX_ftz7UzAQb8rQB7AHCtdydbWtZW2COp6JvE2qS8JzUuWldP919xmi8y5SpBz9LnfFwQE7TGtOlAp1xlZ-ZC94H6nnmw"
+        }
+      ]
+    }
+  },
+  "client2": {
+    "client_id": "puridentityserver-fapi1-client2",
+    "scope": "openid profile offline_access",
+    "jwks": {
+      "keys": [
+        {
+          "kty": "RSA",
+          "d": "AnhQN78Toz4ZLPzzxT6lTlWR0UudELT71n6300-G3SHdRKQMXb71QixvM_w1Fec9DvC-RygSFCKOnBmyDzEoTaHv7gp7QzaFTACrZ--Xe5Xif1HzWRJ8zA2X9GXsyZ7kSL_aJDTq4Sx4BKivka40tfMth4Fw0Yfjxn8sVSgPP_biD0js_LvOXqhJKJiBS5tRzhaaq70P6fLUfZR5mwiVg9Upn33R23q9L52_x8u3pejJd9DL7vjTCxRn640NBjIzkJgO8lk8clp8yOW6xSBSS0M6LDGAK0RZoVXQ16BljLPE8LFFrpb3c5PiS-4wbKt6MqC-vCVI-Xmd05Ir6ciC4Q",
+          "e": "AQAB",
+          "kid": "puridentityserver-fapi1-client2-20261011",
+          "alg": "PS256",
+          "n": "uwDU81VS3Vt4bcHlqddG3F0OHl3uIOpjI_xl5BUybws-4hzpIVRl699unrZFT1E0zjhUQZwJFLR5TMxBeSH4xCWT05zedDxVecxK2nowxoze5paB6Rr8DnV8K-G913Zz5d4IE4lJL4hIMseeN-b6UO0HjwS3f5ABTBnTqZytdWr26Y9-0n1uoyX97FJ1ww78t7nEbIzl_qUQzSa3f0e2iFVEPPSlhNVLk53gJWYllp70e8dID_wn2eLfOCRpe04z_sp04zUqpXe8HCsj_EUSCDA6r5X61qyDS8wBIxRCYFGUblojS5hBx-n1MheUh1KHtQVImMJJd97JlHVVJ1-WSQ"
+        }
+      ]
+    }
+  },
   "browser": [
     {
       "match": "{OPURL}/authorize*",

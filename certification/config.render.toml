@@ -14,8 +14,14 @@
 #   dynamique OUVERT (RFC 7591) pour que la suite puisse s'auto-enregistrer
 #   (`client_registration = dynamic_client`). À ne JAMAIS utiliser hors de
 #   cette instance de démonstration/qualité.
-# - pas de `clients_seed` : les clients des tests sont créés dynamiquement
-#   par la suite (nouvelle plané = nouveaux clients).
+# - `clients_seed` FAPI (issue #113) : 4 clients statiques obligatoires pour
+#   les plans fapi1/fapi2 (la suite n'expose aucune variante
+#   `client_registration` sur ces plans : client statique forcé).
+#   JWKS public (private_key_jwt, PS256, RSA 2048) côté OP ; la clé privée
+#   correspondante vit dans certification/plans/fapi1.json / fapi2.json
+#   (config client de la suite). redirect_uris = callback de la suite (alias
+#   du plan) + variante à query des modules « second client »
+#   (`AddRedirectUriQuerySuffix` = ?dummy1=lorem&dummy2=ipsum).
 # L'issuer public est surchargé par `PURIDENTITYSERVER_ISSUER` (blueprint
 # `render.yaml`) : https://puridentityserver-certification.onrender.com
 
@@ -111,3 +117,58 @@ password = "password"
 [settings.identity_seed_users.bob]
 email = "bob@example.com"
 password = "password"
+
+# Clients statiques FAPI (issue #113) : voir l'en-tête.
+[[settings.clients_seed]]
+client_id = "puridentityserver-fapi1-client"
+redirect_uris = [
+    "https://www.certification.openid.net/test/a/puridentityserver-fapi1/callback",
+    "https://www.certification.openid.net/test/a/puridentityserver-fapi1/callback?dummy1=lorem&dummy2=ipsum",
+]
+scopes = "openid profile offline_access"
+client_type = "confidential"
+token_endpoint_auth_method = "private_key_jwt"
+fapi_enabled = true
+require_consent = true
+jwks = [{ kty = "RSA", e = "AQAB", kid = "puridentityserver-fapi1-client-20261011", alg = "PS256", n = "27WKNdOdKbsr5lsM6EttzRkzJ7YTH3Iec0pwuIWdqxTsHnAcYWocGu1aI81Pg7psJDw1Adu5pU_TPykGL2q3nwW2GFyzO9Iv8YJQShLfZUJSiLnch3O-g6NbdxwllLGFhQy_5X2t7hnxTWUQlftx5Pm6BFM50qzePoi-WJaN5bXdKl0xVVYH4Tjf_aoOfHWIDmhl1NOgPQ-hnRzlztWds7weBRbk3WGgx7X12rAeeGE6uQXjjJreHV5svDX_ftz7UzAQb8rQB7AHCtdydbWtZW2COp6JvE2qS8JzUuWldP919xmi8y5SpBz9LnfFwQE7TGtOlAp1xlZ-ZC94H6nnmw" }]
+
+[[settings.clients_seed]]
+client_id = "puridentityserver-fapi1-client2"
+redirect_uris = [
+    "https://www.certification.openid.net/test/a/puridentityserver-fapi1/callback",
+    "https://www.certification.openid.net/test/a/puridentityserver-fapi1/callback?dummy1=lorem&dummy2=ipsum",
+]
+scopes = "openid profile offline_access"
+client_type = "confidential"
+token_endpoint_auth_method = "private_key_jwt"
+fapi_enabled = true
+require_consent = true
+jwks = [{ kty = "RSA", e = "AQAB", kid = "puridentityserver-fapi1-client2-20261011", alg = "PS256", n = "uwDU81VS3Vt4bcHlqddG3F0OHl3uIOpjI_xl5BUybws-4hzpIVRl699unrZFT1E0zjhUQZwJFLR5TMxBeSH4xCWT05zedDxVecxK2nowxoze5paB6Rr8DnV8K-G913Zz5d4IE4lJL4hIMseeN-b6UO0HjwS3f5ABTBnTqZytdWr26Y9-0n1uoyX97FJ1ww78t7nEbIzl_qUQzSa3f0e2iFVEPPSlhNVLk53gJWYllp70e8dID_wn2eLfOCRpe04z_sp04zUqpXe8HCsj_EUSCDA6r5X61qyDS8wBIxRCYFGUblojS5hBx-n1MheUh1KHtQVImMJJd97JlHVVJ1-WSQ" }]
+
+[[settings.clients_seed]]
+client_id = "puridentityserver-fapi2-client"
+redirect_uris = [
+    "https://www.certification.openid.net/test/a/puridentityserver-fapi2/callback",
+    "https://www.certification.openid.net/test/a/puridentityserver-fapi2/callback?dummy1=lorem&dummy2=ipsum",
+]
+scopes = "openid profile offline_access"
+client_type = "confidential"
+token_endpoint_auth_method = "private_key_jwt"
+fapi2_enabled = true
+require_consent = true
+require_dpop = true
+jwks = [{ kty = "RSA", e = "AQAB", kid = "puridentityserver-fapi2-client-20261011", alg = "PS256", n = "uefT_6K_7U6LSwTta9yqKqixqUUGRkCNl9ktqM-BuUCtLXACwjllhobJglWwaOu8fba7EAJZggBEGyXPkSKxFrOwdI9ZTBbFxn_MvGW6NtA4PrwwAfMt0tEPjjSU1p4NeuLR_mY6NWPobxns57rlF2vYpcYfp_ya4VGv1S-hY3RsCdsjZ_r3SuwcpdBYzbgU8VmhYcVXlCOT3oMnF4u01OeUhcgpa80tmXvHCRxIxc55gbMihvUubCWHzfPAoqjiuQvy5KiBy-Ntzxk1d2HFACfxOxGe4G8Dx5BLpzlyX98jlV6rBsQc2-pQYhijzX8safOYMvT6Wm3RKdl2yyVpow" }]
+
+[[settings.clients_seed]]
+client_id = "puridentityserver-fapi2-client2"
+redirect_uris = [
+    "https://www.certification.openid.net/test/a/puridentityserver-fapi2/callback",
+    "https://www.certification.openid.net/test/a/puridentityserver-fapi2/callback?dummy1=lorem&dummy2=ipsum",
+]
+scopes = "openid profile offline_access"
+client_type = "confidential"
+token_endpoint_auth_method = "private_key_jwt"
+fapi2_enabled = true
+require_consent = true
+require_dpop = true
+jwks = [{ kty = "RSA", e = "AQAB", kid = "puridentityserver-fapi2-client2-20261011", alg = "PS256", n = "0ZageizBn1mdYVtlnvfOx7n-J3_MXhgXgttj7WS3OW1nNc0t9DzeRCzNo2ri3sxqZJyLuNWiCQSjZTZnpixqetRwZhMRfEF0LTp3415IJIePJvH32VoKLchVbF-ZZGt7rWFvZRhquDTS7BgjEZGOhT8C8BaSmgcNNI-GfqNWWQZNmsYtGy3X58J2X7XPyEHHyPDFC8SlRzIAp1fJLFYMNW3kH5EQ5PhCF-aa4PNYeaqQswCRXmZLTRkBHvFM7t3IvIxhOLvbDYRXs5bGtsFBy0j5dkYzUpm72uOPwCjhIhlx2MI0XtnXhzE0C_bxkAZ9Mj_oX6ogleKHi6cxVL92dw" }]
