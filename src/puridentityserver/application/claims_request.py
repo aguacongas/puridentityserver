@@ -43,7 +43,9 @@ def parse_claims_parameter(value: str) -> ClaimsRequest | None:
 
     Structure attendue (OIDC Core 1.0 §5.5.1) : un objet JSON dont les
     membres ``userinfo`` et ``id_token`` sont des objets associant un nom de
-    claim à un objet de contraintes. Les membres inconnus sont ignorés ;
+    claim à un objet de contraintes — ou à ``null``, forme admise pour
+    demander le claim sans contrainte (la suite de certification l'envoie,
+    ``ClaimRequestType.AsNull``). Les membres inconnus sont ignorés ;
     un membre connu de forme invalide — ou un JSON non objet — rend
     ``None``, que ``validate_authorization_request`` traduit en réponse
     ``invalid_request`` (OIDC Core 1.0 §3.1.2.1).
@@ -63,7 +65,7 @@ def parse_claims_parameter(value: str) -> ClaimsRequest | None:
             return None
         names: list[str] = []
         for name, constraints in claims_object.items():
-            if not isinstance(constraints, dict):
+            if constraints is not None and not isinstance(constraints, dict):
                 return None
             names.append(str(name))
         members[member] = tuple(names)

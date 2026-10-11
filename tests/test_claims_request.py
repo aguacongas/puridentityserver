@@ -209,6 +209,18 @@ class TestParseClaimsParameter:
         assert parse_claims_parameter(json.dumps({"userinfo": ["name"]})) is None
         assert parse_claims_parameter(json.dumps({"id_token": "name"})) is None
 
+    def test_accepts_null_claim_constraint(self) -> None:
+        """Contrainte ``null`` = claim demandé par défaut (OIDC Core 1.0 §5.5.1).
+
+        Forme réellement envoyée par la suite de certification
+        (``ClaimRequestType.AsNull``), antérieurement rejetée en 400.
+        """
+        value = json.dumps({"userinfo": {"given_name": None}, "id_token": {"name": None}})
+
+        parsed = parse_claims_parameter(value)
+
+        assert parsed == ClaimsRequest(userinfo=("given_name",), id_token=("name",))
+
     def test_rejects_constraint_of_wrong_shape(self) -> None:
         assert parse_claims_parameter(json.dumps({"userinfo": {"name": "essential"}})) is None
 

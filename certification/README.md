@@ -92,7 +92,7 @@ des modules (`release-v5.2.4`) ont été extraites dans
 
 ```bash
 # rejeu in-process (FastAPI via ASGITransport) — 435 scénarios :
-# 433 passed, 2 skipped (claims FAPI2, optionnel OIDC)
+# 435 passed, 0 skipped
 uv run --no-sync --no-build --locked python -m pytest -m conformance --no-cov -p no:cacheprovider
 
 # variante contre un VRAI serveur uvicorn (sous-processus, port 8121,
@@ -109,7 +109,7 @@ uv run python samples/conformance-smoke/smoke_test.py
   parcours de démonstration `samples/fapi1-client/`.
 - **Plan FAPI2 (#111)** : `tests/conformance/test_plan_fapi2.py` rejoue
   les 61 scénarios consolidés des plans Final + ID2 (127 modules, 114
-  applicables) → 107 tests (105 verts + 2 skippés `claims`) ; le plan
+  applicables) → 107 tests (107 verts) ; le plan
   de certification officiel est `certification/plans/fapi2.json` et le
   parcours de démonstration `samples/fapi2-client/`.
 - **Plus aucun skip** : `alg=none` est émis (id_token non signé) et les

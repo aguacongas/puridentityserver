@@ -17,6 +17,7 @@ rejetée) et les 5 modules ID2 seuls (audience acceptée) ont des tests dédiés
 
 from __future__ import annotations
 
+import json
 import secrets
 import time
 from typing import Any
@@ -24,6 +25,7 @@ from urllib.parse import urlencode
 
 import pytest
 from checks import (
+    check_userinfo_response,
     expect_authorization_error,
     expect_callback_success,
     expect_invalid_grant,
@@ -41,6 +43,116 @@ _CALLBACK_ERRORS = (
 
 #: Scopes de la base : ``offline_access`` alimente ``refresh-token``.
 _SCOPES = "openid profile offline_access"
+
+#: Claims standards d'OIDC Core 1.0 §5.1 (liste ``oidcClaims`` de la suite).
+_OIDC_STANDARD_CLAIMS = (
+    "sub",
+    "name",
+    "given_name",
+    "family_name",
+    "middle_name",
+    "nickname",
+    "preferred_username",
+    "profile",
+    "picture",
+    "website",
+    "email",
+    "email_verified",
+    "gender",
+    "birthdate",
+    "zoneinfo",
+    "locale",
+    "phone_number",
+    "phone_number_verified",
+    "address",
+    "updated_at",
+)
+
+#: Claims non identité retirés de l'id_token par ``getIdTokenIdentityClaims``.
+_ID_TOKEN_NON_IDENTITY_CLAIMS = frozenset(
+    {
+        "iss",
+        "aud",
+        "exp",
+        "iat",
+        "auth_time",
+        "nonce",
+        "acr",
+        "amr",
+        "azp",
+        "c_hash",
+        "at_hash",
+        "s_hash",
+        "jti",
+        "nbf",
+        "verified_claims",
+    }
+)
+
+
+def _claims_parameter(requested: list[str]) -> str:
+    """``claims`` du module : formes variées + localisation inconnue.
+
+    Rejoue ``AddAllSupportedStandardClaimsToAuthorizationEndpoint…`` (chaque
+    claim demandé dans les members ``id_token``/``userinfo``, cycle
+    ``ClaimRequestType`` : null, vide, ``essential``, membre aléatoire,
+    ``essential:false``) et
+    ``AddRandomLocationClaimsToAuthorizationEndpointRequest`` (localisation
+    inconnue que l'OP doit ignorer, OIDCC-5.5).
+    """
+    forms: tuple[object, ...] = (
+        None,
+        {},
+        {"essential": True},
+        {"zz9random0": "zz9random1"},
+        {"essential": False},
+    )
+    members: dict[str, object] = {
+        location: {name: forms[index % len(forms)] for index, name in enumerate(requested)}
+        for location in ("id_token", "userinfo")
+    }
+    members["loc10random"] = {"claim10random": None}
+    return json.dumps(members)
+
+
+def _check_requested_identity_claims(
+    id_token_claims: dict[str, Any],
+    userinfo: dict[str, Any],
+    requested: list[str],
+) -> None:
+    """``EnsureIdentityClaimsContainRequestedClaims`` (suite : WARNING → strict)."""
+    identity = {**id_token_claims, **userinfo}
+    missing = [name for name in requested if name not in identity]
+    assert not missing, f"claims demandés absents de l'union id_token+userinfo : {missing}"
+
+
+def _check_id_token_identity_claims(id_token_claims: dict[str, Any]) -> None:
+    """``CheckForUnexpectedClaimsInIdToken`` : claims identité tous standards."""
+    standard = set(_OIDC_STANDARD_CLAIMS)
+    unexpected = [
+        name
+        for name in id_token_claims
+        if name not in _ID_TOKEN_NON_IDENTITY_CLAIMS and name not in standard
+    ]
+    assert not unexpected, f"claims non standards dans l'id_token : {unexpected}"
+
+
+def _check_userinfo_updated_at(userinfo: dict[str, Any]) -> None:
+    """``EnsureUserInfoUpdatedAtValid`` : présent ⇒ entre 1990 et now+300 s."""
+    updated_at = userinfo.get("updated_at")
+    if updated_at is None:
+        return
+    assert isinstance(updated_at, int), f"updated_at non numérique : {updated_at!r}"
+    assert 631152000 <= updated_at <= int(time.time()) + 300, (
+        f"updated_at hors bornes [1990, now+300 s] : {updated_at}"
+    )
+
+
+def _check_userinfo_known_claims(userinfo: dict[str, Any], supported: set[str]) -> None:
+    """``CheckForUnexpectedClaimsInUserinfo`` : claims annoncés par la discovery."""
+    standard = set(_OIDC_STANDARD_CLAIMS)
+    unexpected = [name for name in userinfo if name not in standard and name not in supported]
+    assert not unexpected, f"claims userinfo non annoncés : {unexpected}"
 
 
 def _check_code_callback(result: FlowResult, state: str) -> None:
@@ -259,13 +371,34 @@ def test_fapi2_other_scope_order_succeeds(fapi2_harness: Fapi2Harness, plan: str
 @pytest.mark.conformance
 @pytest.mark.parametrize("plan", ["final", "id2"])
 def test_fapi2_claims_parameter_identity_claims(fapi2_harness: Fapi2Harness, plan: str) -> None:
-    """Module ``test-claims-parameter-identity-claims`` (les 2 plans, optionnel).
+    """Module ``test-claims-parameter-identity-claims`` (les 2 plans).
 
-    ``CheckForClaimsParameterInAuthorizationRequest`` (OIDCC-10) : le param
-    ``claims`` est optionnel ; la suite le traite en WARNING quand l'OP ne le
-    supporte pas — skip local (non implémenté côté OP, issue #111).
+    ``CheckIfOidcStandardClaimsSupported`` puis ``fireTestSkipped`` si
+    ``claims_parameter_supported`` n'est pas ``true`` (OIDCC-10, comportement
+    admis) : tous les claims standards annoncés sont demandés dans les
+    members ``id_token``/``userinfo`` sous les 5 formes de ``ClaimRequestType``
+    (null, vide, ``essential``, membre aléatoire, ``essential:false``), plus
+    une localisation inconnue ignorée par l'OP (OIDCC-5.5, dont
+    ``"given_name": null`` — forme valide OIDCC §5.5.1). Réussite = flux
+    nominal FAPI2 + userinfo 200, ``sub`` commun, tous les claims demandés
+    présents dans l'union id_token identité + userinfo.
     """
-    pytest.skip("claims request parameter non supporté (optionnel OIDC Core 1.0 §6)")
+    metadata = fapi2_harness.discovery()
+    if metadata.get("claims_parameter_supported") is not True:
+        pytest.skip("claims_parameter_supported != true (OIDCC-10, skip admis)")
+    supported = set(metadata.get("claims_supported", ()))
+    requested = [name for name in _OIDC_STANDARD_CLAIMS if name in supported]
+    if not requested:
+        pytest.skip("aucun claim standard dans claims_supported (OIDCC-5.1, skip admis)")
+
+    _, tokens = _happy(fapi2_harness, claims=_claims_parameter(requested))
+    id_token_claims = decode_id_token_claims(str(tokens["id_token"]))
+    response = fapi2_harness.userinfo(str(tokens["access_token"]))
+    userinfo = check_userinfo_response(response, str(id_token_claims["sub"]))
+    _check_requested_identity_claims(id_token_claims, userinfo, requested)
+    _check_id_token_identity_claims(id_token_claims)
+    _check_userinfo_updated_at(userinfo)
+    _check_userinfo_known_claims(userinfo, supported)
 
 
 @pytest.mark.conformance

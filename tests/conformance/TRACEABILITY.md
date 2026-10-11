@@ -397,7 +397,7 @@ de modules couvertes. Fiches détaillées :
 | `…ensure-authorization-request-without-nonce-success` | `test_fapi2_without_nonce_success[plan]` | nonce absent accepté (code seul), id_token sans `nonce` |
 | `…ensure-authorization-request-with-64-char-nonce-success` (Final) / `…request-object-with-64-char-nonce-success` (ID2) | `test_fapi2_64_char_nonce_success[plan]` | nonce 64 caractères écho intact dans l'id_token |
 | `…ensure-other-scope-order-succeeds` | `test_fapi2_other_scope_order_succeeds[plan]` | ordre de `scope` inversé accepté (RFC 6749 §3.3) |
-| `test-claims-parameter-identity-claims` | `test_fapi2_claims_parameter_identity_claims[plan]` | **skip** : paramètre `claims` optionnel (OIDCC-10, WARNING suite) — non implémenté (issue #8) |
+| `test-claims-parameter-identity-claims` | `test_fapi2_claims_parameter_identity_claims[plan]` | tous les claims standards de `claims_supported` demandés dans `id_token`/`userinfo` (5 formes de contrainte dont `null`, OIDCC-5.5.1, + localisation inconnue ignorée) : union id_token+userinfo les contient tous, `sub` commun, `updated_at` dans les bornes |
 | `access-token-type-header-case-sensitivity` | `test_fapi2_access_token_type_case_sensitivity[plan]` | scheme du RS insensible à la casse (`dPoP`/`bearer`) |
 | `check-dpop-proof-nbf-exp` | `test_fapi2_dpop_proof_nbf_exp[plan]` | preuve `nbf`/`exp` dans le futur proche acceptée (skew 300 s) |
 | `…ensure-dpopproof-with-iat-10seconds-{before,after}-succeeds` | `test_fapi2_dpop_iat_skew_accepted[skew,plan]` | `iat` ±10 s acceptée (RFC 9449 §11.1, skew 300 s) |
@@ -495,11 +495,11 @@ sont réservés aux profils cbuae/ksa où leurs contreparties ID2 sont exclues).
   suite) ; leeway 60 s sur `nbf`/`iat` des assertions client.
 - **Bornes OP assumées** (issues admises par les modules) : Final 54-56
   `aud` acceptée (RFC 7523/9126, cf. tableau ci-dessus), holder-of-key TLS
-  non rejouable (rejet sans preuve rejoué à la place), paramètre `claims`
-  non implémenté (skip, optionnel), TTL code 60 s porté par le seed client
-  (`authorization_code_lifetime_seconds`), réutilisation du code → révocation
-  des jetons (RFC 6749 §4.1.2 « SHOULD revoke »).
-- Rejeu local : **105 passed, 2 skipped** (claims ×2) en ≈ 11 min 45
+  non rejouable (rejet sans preuve rejoué à la place), TTL code 60 s porté
+  par le seed client (`authorization_code_lifetime_seconds`),
+  réutilisation du code → révocation des jetons (RFC 6749 §4.1.2 « SHOULD
+  revoke »).
+- Rejeu local : **107 passed, 0 skipped** en ≈ 10 min
   (`uv run --no-sync python -m pytest tests/conformance/test_plan_fapi2.py
   -m conformance --no-cov -p no:cacheprovider`).
 
@@ -601,6 +601,15 @@ ils passent.
   PKCE `S256`, algos d'assertion, discovery FAPI, mode FAPI `/authorize`,
   liaison code↔client) ; smoke étendu aux seeds FAPI1 → rejeu local
   **106 passed** (total conformance 328).
+- **Issue #118 (2 skips `test-claims-parameter-identity-claims`)** : la
+  contrainte `null` d'OIDCC-5.5.1 (forme `ClaimRequestType.AsNull` de la
+  suite) était rejetée par `parse_claims_parameter` → PAR 400
+  `invalid_request` et skip du module pour « claims non implémenté »
+  (motif faux : `claims_parameter_supported=true` depuis #80). Contraintes
+  `null` acceptées (claim demandé par défaut) et module rejoué pour de
+  vrai — 5 formes de contrainte + localisation inconnue ignorée,
+  skips miroirs de la suite → plan FAPI2 **107 passed, 0 skipped**,
+  conformance **435 passed, 0 skipped**.
 
 ## DPoP (issue #49, RFC 9449) — matrice suite → plans
 
