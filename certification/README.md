@@ -27,7 +27,9 @@ retenue :
   (`oidcc-basic-`, `oidcc-implicit-`, `oidcc-hybrid-certification-test-plan`, `fapi-ciba-id1-test-plan` — witness CIBA),
   le détail des modules testés et leur verdict (PASSED / FAILED / WARNING /
   REVIEW / SKIPPED) dans le résumé du run ;
-- l'artefact `certification-results` contient les JSON exportés ;
+- les artefacts `certification-results-<plan>` (un par plan) contiennent les
+  exports bruts ; le job final les fusionne dans l'artefact
+  `certification-results` ;
 - l'artefact `certification-screenshots` contient les captures d'écran réelles
   téléversées aux modules de relecture (voir
   « Captures d'écran des modules de relecture ») ;
@@ -61,8 +63,11 @@ retenue :
   photographie les `kid` du JWKS, déclenche le deploy hook puis patiente
   (15 min max) jusqu'à ce que les `kid` changent — preuve que le build est
   terminé **et** que le disque éphémère (donc l'état) a été recréé avant le
-  premier enregistrement de client ; démarre ensuite la suite, joue chaque
-  plan, génère le rapport et déploie la page GitHub Pages.
+  premier enregistrement de client ; joue ensuite les **quatre plans en
+  parallèle** (4 jobs matrix, `fail-fast: false` — ~40 min au lieu de ~3 h
+  séquentielles, issue #122), chaque plan exportant son propre artefact,
+  puis un job final fusionne les exports, génère le rapport et déploie la
+  page GitHub Pages.
 - **En local** : (optionnel) pour reproduire le même principe contre un
   serveur local :
 
@@ -161,7 +166,9 @@ uv run python samples/conformance-smoke/smoke_test.py
   s'entre-stoppent sur l'instance hébergée (ou échouent en `409 ... alias ... in
   use`). Chaque plan doit porter un alias distinct ; le workflow applique le patch
   `conformance-reuse-plan.patch`, qui réutilise le plan existant (même config) au
-  lieu de le recréer à chaque run.
+  lieu de le recréer à chaque run. C'est aussi cette garantie qui rend la
+  **parallélisation intra-run** sûre (issue #122) : les 4 jobs matrix ne
+  partagent aucun alias et `release_alias` ne stoppe que le sien.
 - **« Stopping test due to alias conflict »** : la suite réserve l'alias à la
   *création* de chaque module ; si le module précédent n'est pas encore terminé
   (timeout `CONFORMANCE_MODULE_TIMEOUT` dépassé, run annulé en cours de route…),
@@ -193,7 +200,7 @@ uv run python samples/conformance-smoke/smoke_test.py
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |
 | `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés ; recopie les captures réelles dans `_site/screenshots/` (`--screenshots`) et les affiche dans la section du module correspondant |
-| `../.github/workflows/certification.yml` | workflow witness : deploy + suite + plans + rapport |
+| `../.github/workflows/certification.yml` | workflow witness en 3 jobs : `prepare` (deploy + captures, une fois), `plan` (les 4 plans en parallèle, un job matrix chacun), `report` (fusion des exports + Pages) |
 
 ## Captures d'écran des modules de relecture (mode witness)
 
@@ -305,4 +312,5 @@ Le patch `conformance-alias-release.patch` ajoute `Conformance.release_alias(ali
 Deux compléments côté workflow : `concurrency.cancel-in-progress: false` sérialise
 les runs (un run en cours n'est plus tué en laissant ses modules orphelins), et les
 modules qui restent bloqués sont arrêtés à la fin du plan plutôt que d'attendre le
-prochain run.
+prochain run. Au sein d'un run, les plans parallèles (issue #122) ne se gênent pas :
+alias distincts par plan + `release_alias` limité au sien.

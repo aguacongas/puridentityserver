@@ -3,11 +3,25 @@ name: Certification OIDC
 # Suite de certification officielle OpenID Foundation (openid/conformance-suite),
 # jouée contre l'instance Render publique seedee (certification/config.render.toml).
 #
-# PR 1 : job WITNESS — non bloquant pour la CI. Déclenchement au merge sur
+# PR 1 : jobs WITNESS — non bloquants pour la CI. Déclenchement au merge sur
 # main, manuel ou hebdomadaire ; les gaps Core (modules ne passant pas encore)
 # NE font pas échouer le workflow : chaque run produit un rapport brut + une
 # page GitHub Pages. Le passage en gate bloquant (PR 2) interviendra une fois
 # les plans Core stables.
+#
+# Issue #122 : les 4 plans s'exécutent EN PARALLÈLE (matrix de jobs, même
+# patron que conformance-tests.yml) : ~3 h séquentielles deviennent la durée
+# du plan le plus long (~40 min) :
+# - job `prepare` UNIQUE : matrice depuis l'input `plan`, deploy hook Render
+#   (UNE SEULE fois — un redejob par plan remplacerait l'OP en plein run) et
+#   captures Playwright (artefact partagé) ;
+# - job `plan` ×4 (`fail-fast: false`) : clone + patches de la suite, un seul
+#   plan joué en mode witness, export → artefact `certification-results-<plan>`.
+#   Parallélisation sûre : chaque plan porte un alias distinct
+#   (`puridentityserver-<plan>`) et `release_alias` ne stoppe que son propre
+#   alias — voir certification/README.md (« Conflits d'alias ») ;
+# - job `report` : fusion des exports, `certification/report.py`, déploiement
+#   GitHub Pages — publie même si un plan échoue (`if: always()`).
 #
 # Pré-requis :
 # - service Render libre (render.yaml) : https://puridentityserver-certification.onrender.com
@@ -20,7 +34,7 @@ on:
     inputs:
       plan:
         # Permet un cycle de diagnostic rapide : ne lancer qu'un seul plan au
-        # lieu des quatre (~30 min au lieu de ~3 h).
+        # lieu des quatre (~30 min, même en parallèle le gain est nul).
         description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + CIBA)"
         type: choice
         required: false
@@ -68,15 +82,53 @@ concurrency:
   # Les runs se SERIALISENT (au lieu d'en annuler un en cours de route) : annuler un
   # run laissait ses tests actifs sur l'instance hébergée de la Fondation, et le run
   # suivant les interrompait alors avec « Stopping test due to alias conflict ».
+  # Intra-run, les plans parallèles sont sûrs : alias distincts + release_alias
+  # ne stoppe que le sien.
   cancel-in-progress: false
 
 jobs:
-  certification:
-    name: Suite de certification OIDC (witness)
+  prepare:
+    name: Préparation (OP, déploiement, captures)
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Checkout du dépôt
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Matrice des plans à jouer
+        # Produit un JSON `{"include":[{"plan":…,"selector":…},…]}` consommé
+        # par le job matrix `plan`. Échoue SEC sur un input inconnu, avant
+        # toute consommation d'infra (deploy hook, Playwright, clone).
+        id: matrix
+        env:
+          # Vide sur push/schedule : les quatre plans sont joués.
+          PLAN_FILTER: ${{ inputs.plan || 'all' }}
+        run: |
+          set -euo pipefail
+          selector_for() {
+            case "$1" in
+              basic) echo 'oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
+              implicit) echo 'oidcc-implicit-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
+              hybrid) echo 'oidcc-hybrid-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
+              # CIBA : plan FAPI-CIBA-ID1 en mode witness (poll + Basic ne sont
+              # pas des variants valides pour ce plan : private_key_jwt exigé,
+              # JAR signé hors périmètre — issues dédiées).
+              ciba) echo 'fapi-ciba-id1-test-plan[client_registration=dynamic_client][client_auth_type=private_key_jwt][ciba_mode=poll][fapi_ciba_profile=plain_fapi]' ;;
+              *) return 1 ;;
+            esac
+          }
+          plans=(basic implicit hybrid ciba)
+          if [ "$PLAN_FILTER" != "all" ]; then
+            selector_for "$PLAN_FILTER" > /dev/null || { echo "::error::Plan inconnu : $PLAN_FILTER"; exit 1; }
+            plans=("$PLAN_FILTER")
+          fi
+          entries=()
+          for p in "${plans[@]}"; do
+            entries+=("{\"plan\":\"$p\",\"selector\":\"$(selector_for "$p")\"}")
+          done
+          echo "matrix={\"include\":[$(IFS=,; echo "${entries[*]}")]}" >> "$GITHUB_OUTPUT"
+          echo "Plans du run : ${plans[*]}" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Attente de l'OP sur $OP_URL (discovery opérationnel)
         # Placé AVANT le deploy hook : le hook répond immédiatement mais le
@@ -98,12 +150,15 @@ jobs:
           echo "::error::L'OP $OP_URL n'a pas répondu sous 15 minutes" && exit 1
 
       - name: Redéploiement de l'OP sur Render (deploy hook)
-        # Le remplacement de l'instance n'est pas observable via le discovery
-        # (ancienne et nouvelle répondent pareil) : on compare les `kid`
-        # relevés avant le hook. Le disque éphémère de Render est recréé à
-        # chaque déploiement, la nouvelle instance publie donc d'autres clés —
-        # c'est le seul signal fiable du swap. Sans lui la suite courrait le
-        # risque d'enregistrer un client sur l'instance qui s'apprête à partir.
+        # ÉTAPE CRITIQUE DU JOB UNIQUE : le remplacement de l'instance n'est
+        # pas observable via le discovery (ancienne et nouvelle répondent
+        # pareil) : on compare les `kid` relevés avant le hook. Le disque
+        # éphémère de Render est recréé à chaque déploiement, la nouvelle
+        # instance publie donc d'autres clés — c'est le seul signal fiable du
+        # swap. Sans lui la suite courrait le risque d'enregistrer un client
+        # sur l'instance qui s'apprête à partir. Le deploy doit être déclenché
+        # UNE SEULE fois avant la matrice : 4 appels parallèles remplaceraient
+        # l'OP pendant que les plans jouent.
         run: |
           jwks_kids() {
             curl -fsS --max-time 15 "$OP_URL/.well-known/jwks.json" \
@@ -139,6 +194,87 @@ jobs:
       - name: Vérification de la validité des fichiers de plans
         run: python3 -c "import json,glob; [json.load(open(p)) for p in glob.glob('certification/plans/*.json')]"
 
+      - name: Vérification de la présence du secret CONFORMANCE_TOKEN
+        # Mode witness hébergé : l'accès à l'API de certification.openid.net
+        # passe par un Bearer token délivré par l'OpenID Foundation. Un secret
+        # manquant doit échouer SEC maintenant (message clair), pas via un
+        # KeyError/traceback du driver en plein milieu du run — et surtout pas
+        # dans chacun des 4 jobs matrix (4 clones + 4 attentes avant d'échouer).
+        run: |
+          if [ -z "$CONFORMANCE_TOKEN" ]; then
+            echo "::error::Secret CONFORMANCE_TOKEN absent. Le créer ainsi :"
+            echo "::error::  gh secret set CONFORMANCE_TOKEN -R \${{ github.repository }} --body '<token OIDF>'"
+            exit 1
+          fi
+          echo "Token CONFORMANCE présent (36 caractères attendus)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Attente de l'API de certification.openid.net (Bearer $CONFORMANCE_TOKEN)
+        # L'automation navigateur (WebRunner/Selenium) tourne dans l'infra stable
+        # de l'OpenID Foundation qui atteint notre OP Render public : plus aucune
+        # suite/driver docker à démarrer sur le runner éphémère.
+        run: |
+          deadline=$((SECONDS + 600))
+          until [ $SECONDS -ge $deadline ]; do
+            if [ $(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' \
+                -H "Authorization: Bearer $CONFORMANCE_TOKEN" \
+                "$CONFORMANCE_SERVER"api/runner/available) = 200 ]; then
+              echo "API de certification accessible (instance hébergée) : OK"
+              exit 0
+            fi
+            echo "API de certification pas encore joignable…"
+            sleep 10
+          done
+          echo "::error::L'API de certification.openid.net n'a pas répondu (token invalide ou réseau) en 10 min" && exit 1
+
+      - name: Captures d'écran réelles des modules de relecture (Playwright)
+        # Les modules Core en verdict REVIEW (oidcc-response-type-missing,
+        # oidcc-ensure-registered-redirect-uri, oidcc-prompt-login,
+        # oidcc-max-age-1) exigent une capture téléversée via l'ImageAPI de la
+        # suite : ce script rejoue ces 4 scénarios contre l'OP déposé avec
+        # chromium headless et dépose <testName>.png dans screenshots/. Une
+        # échec (installation navigateur, OP indisponible…) laisse le
+        # répertoire vide : conformance-screenshots.patch retombe alors sur son
+        # PNG de secours et le run se poursuit — étape non bloquante.
+        # Une seule exécution par run : les 4 jobs matrix téléchargent le
+        # résultat en artefact (lancer Playwright ×4 ferait ×4 le temps de
+        # build navigateur et 4 relevés concurrents du même OP).
+        continue-on-error: true
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/screenshots"
+          python3 -m pip install --disable-pip-version-check --quiet playwright
+          python3 -m playwright install --with-deps chromium
+          python3 certification/capture_screenshots.py \
+            --base-url "$OP_URL" \
+            --out "$GITHUB_WORKSPACE/screenshots"
+          ls -l "$GITHUB_WORKSPACE/screenshots"
+
+      - name: Upload des captures d'écran réelles
+        # Les PNG téléversés aux modules de relecture (ImageAPI) sont gardés
+        # sous la main pour contrôle humain : c'est la preuve visible des
+        # verdicts REVIEW, au même titre que le rapport sur GitHub Pages.
+        # Le répertoire est créé par l'étape précédente (même échouée) : un
+        # répertoire vide produit simplement aucun artefact.
+        uses: actions/upload-artifact@v7
+        with:
+          name: certification-screenshots
+          path: screenshots/
+          if-no-files-found: ignore
+
+  plan:
+    name: Plan ${{ matrix.plan }} (witness)
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      # Chaque plan continue même si un autre échoue : le rapport consolidé
+      # doit montrer l'état complet du run, pas s'arrêter au premier plan
+      # rouge (mode witness : aucun job ne bloque la CI).
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+
+    steps:
+      - name: Checkout du dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Clone de la suite de certification (version pinnée)
         run: |
           git clone --depth 1 --branch "$SUITE_VERSION" \
@@ -157,23 +293,10 @@ jobs:
           done
           grep -h '"match"' certification/plans/*.json | sort -u
 
-      - name: Vérification de la présence du secret CONFORMANCE_TOKEN
-        # Mode witness hébergé : l'accès à l'API de certification.openid.net
-        # passe par un Bearer token délivré par l'OpenID Foundation. Un secret
-        # manquant doit échouer SEC maintenant (message clair), pas via un
-        # KeyError/traceback du driver en plein milieu du run.
-        run: |
-          if [ -z "$CONFORMANCE_TOKEN" ]; then
-            echo "::error::Secret CONFORMANCE_TOKEN absent. Le créer ainsi :"
-            echo "::error::  gh secret set CONFORMANCE_TOKEN -R \${{ github.repository }} --body '<token OIDF>'"
-            exit 1
-          fi
-          echo "Token CONFORMANCE présent (36 caractères attendus)" | tee -a "$GITHUB_STEP_SUMMARY"
-
       - name: Attente de l'API de certification.openid.net (Bearer $CONFORMANCE_TOKEN)
-        # L'automation navigateur (WebRunner/Selenium) tourne dans l'infra stable
-        # de l'OpenID Foundation qui atteint notre OP Render public : plus aucune
-        # suite/driver docker à démarrer sur le runner éphémère.
+        # Reprise du garde-fou de `prepare` (le secret a été validé là-bas) :
+        # sortie immédiate si l'API répond, 10 min max sinon — un plan qui
+        # partirait contre une API morte perdrait son tour de 600 s par module.
         run: |
           deadline=$((SECONDS + 600))
           until [ $SECONDS -ge $deadline ]; do
@@ -202,7 +325,9 @@ jobs:
         # 3) la suite réserve l'alias à la création de chaque module : un module
         #    encore actif (timeout dépassé, run annulé…) serait interrompu par le
         #    module suivant (« Stopping test due to alias conflict »). Le driver
-        #    libère donc l'alias lui-même avant chaque création de module.
+        #    libère donc l'alias lui-même avant chaque création de module — et
+        #    comme chaque plan a UN alias distinct, les 4 jobs parallèles ne
+        #    peuvent pas s'interrompre mutuellement.
         # 4) un module qui passe en INTERRUPTED ne donne dans la CI qu'un
         #    « has moved to INTERRUPTED » : on y ajoute la cause réelle (statut,
         #    résultat + 10 dernières entrées de son journal) pour distinguer un
@@ -225,31 +350,36 @@ jobs:
           sed -i 's/def wait_for_state(self, module_id, required_states, timeout=240):/def wait_for_state(self, module_id, required_states, timeout=int(os.getenv("CONFORMANCE_MODULE_TIMEOUT", "240"))):/' scripts/conformance.py
           grep -n "CONFORMANCE_MODULE_TIMEOUT" scripts/conformance.py
 
-      - name: Captures d'écran réelles des modules de relecture (Playwright)
-        # Les modules Core en verdict REVIEW (oidcc-response-type-missing,
-        # oidcc-ensure-registered-redirect-uri, oidcc-prompt-login,
-        # oidcc-max-age-1) exigent une capture téléversée via l'ImageAPI de la
-        # suite : ce script rejoue ces 4 scénarios contre l'OP déposé avec
-        # chromium headless et dépose <testName>.png dans screenshots/. Une
-        # échec (installation navigateur, OP indisponible…) laisse le
-        # répertoire vide : conformance-screenshots.patch retombe alors sur son
-        # PNG de secours et le run se poursuit — étape non bloquante.
+      - name: Récupération des captures d'écran réelles (artefact prepare)
+        # Capture échouée ou absente = pas d'artefact : le driver retombe sur
+        # son PNG de secours (patch) — comme en local sans Playwright.
         continue-on-error: true
-        run: |
-          python3 -m pip install --disable-pip-version-check --quiet playwright
-          python3 -m playwright install --with-deps chromium
-          python3 certification/capture_screenshots.py \
-            --base-url "$OP_URL" \
-            --out "$GITHUB_WORKSPACE/screenshots"
-          ls -l "$GITHUB_WORKSPACE/screenshots"
+        uses: actions/download-artifact@v8
+        with:
+          name: certification-screenshots
+          path: screenshots
 
-      - name: Lancement des plans Core (Basic / Implicit / Hybrid)
+      - name: Emplacement des captures d'écran
+        # L'artefact peut être déposé à plat (screenshots/*.png) ou avec son
+        # répertoire (screenshots/screenshots/*.png) : le driver ne lit que
+        # le premier niveau, on aplatit donc au besoin.
+        run: |
+          if [ -d screenshots ]; then
+            find screenshots -mindepth 2 -type f -name '*.png' -exec mv -t screenshots/ {} + 2>/dev/null || true
+            ls -l screenshots
+          else
+            echo "Aucune capture : le driver utilisera le PNG de secours."
+          fi
+
+      - name: Lancement du plan ${{ matrix.plan }} (witness)
+        # Un seul plan par job (matrice) : chaque plan exporte ses .zip dans
+        # certification-results-<plan>. Toute la boucle séquentielle d'origine
+        # (PLAN_FILTER + for) disparaît — `fail-fast: false` + step non
+        # bloquant gardent le contrat witness (gaps acceptés).
         continue-on-error: true
         working-directory: conformance-suite
         env:
-          # Vide sur push/schedule : les trois plans sont joués.
-          PLAN_FILTER: ${{ inputs.plan || 'all' }}
-          # Captures réelles produites par l'étape Playwright : le driver les
+          # Captures réelles produites par le job `prepare` : le driver les
           # téléverse à la place du PNG de secours (absence = secours).
           SCREENSHOTS_DIR: ${{ github.workspace }}/screenshots
         run: |
@@ -257,34 +387,74 @@ jobs:
           # Le driver écrit les exports (.zip) dans --export-dir : le créer
           # sinon chaque téléchargement échoue en FileNotFoundError.
           mkdir -p "$GITHUB_WORKSPACE/results"
-          plans=(
-            "oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|basic"
-            "oidcc-implicit-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|implicit"
-            "oidcc-hybrid-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]|hybrid"
-            # CIBA : plan FAPI-CIBA-ID1 en mode witness (poll + Basic ne sont
-            # pas des variants valides pour ce plan : private_key_jwt exigé,
-            # JAR signé hors périmètre — issues dédiées).
-            "fapi-ciba-id1-test-plan[client_registration=dynamic_client][client_auth_type=private_key_jwt][ciba_mode=poll][fapi_ciba_profile=plain_fapi]|ciba"
-          )
-          if [ "$PLAN_FILTER" != "all" ]; then
-            selected=()
-            for plan in "${plans[@]}"; do
-              [ "${plan##*|}" = "$PLAN_FILTER" ] && selected+=("$plan")
-            done
-            plans=("${selected[@]}")
-            echo "Filtre de plan actif : $PLAN_FILTER"
+          echo "### Plan ${{ matrix.plan }} : ${{ matrix.selector }}" | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 scripts/run-test-plan.py \
+            --export-dir "$GITHUB_WORKSPACE/results" \
+            "${{ matrix.selector }}" \
+            "$GITHUB_WORKSPACE/certification/plans/${{ matrix.plan }}.json" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          code=${PIPESTATUS[0]}
+          echo "- exit code : $code (les gaps sont acceptés en mode witness)" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$code" -eq 0 ] || echo "plan ${{ matrix.plan }} en échec partiel (witness)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload des exports du plan
+        # Un artefact par plan → le job `report` les fusionne. Aucun export
+        # (plan mort avant le premier module) = pas d'artefact, acceptable :
+        # le rapport consolidé affichera le plan manquant.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: certification-results-${{ matrix.plan }}
+          path: results/
+          if-no-files-found: ignore
+
+  report:
+    name: Rapport statique + GitHub Pages
+    needs: [prepare, plan]
+    # Publie même si un plan échoue — c'est précisément le mode witness. Un
+    # `prepare` rouge (OP hors ligne, secret absent…) bloque la publication :
+    # rien n'a été joué, le rapport serait vide et masquerait la cause réelle.
+    if: ${{ always() && needs.prepare.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Téléversement des exports de tous les plans
+        # `merge-multiple` : les artefacts certification-results-<plan> sont
+        # fusionnés dans le répertoire de travail (patron éprouvé par
+        # conformance-tests.yml / PR #117), quel que soit le chemin interne
+        # retenu par upload-artifact.
+        uses: actions/download-artifact@v8
+        with:
+          pattern: certification-results-*
+          merge-multiple: true
+
+      - name: Fusion des exports dans results/
+        # report.py lit un répertoire plat (results/*.zip) : on y déplace les
+        # .zip livrés par chaque job matrix, qu'ils arrivent à la racine ou
+        # sous results/. Les .zip des plans sont nommés par plan (preuve du
+        # run séquentiel historique) : pas de collision.
+        run: |
+          mkdir -p results
+          find . -type f -name '*.zip' -not -path './results/*' -not -path './.git/*' \
+            -exec mv -t results/ {} + 2>/dev/null || true
+          ls -lh results | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Téléversement des captures d'écran réelles
+        # Artefact absent (captures en échec) : le rapport est publié sans
+        # image plutôt que de planter (continue-on-error, comme l'étape
+        # Playwright elle-même).
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: certification-screenshots
+          path: screenshots
+
+      - name: Emplacement des captures d'écran
+        run: |
+          if [ -d screenshots ]; then
+            find screenshots -mindepth 2 -type f -name '*.png' -exec mv -t screenshots/ {} + 2>/dev/null || true
           fi
-          for plan in "${plans[@]}" ; do
-            selector="${plan%%|*}"; name="${plan##*|}"
-            echo "### Plan $name : $selector" | tee -a "$GITHUB_STEP_SUMMARY"
-            python3 scripts/run-test-plan.py \
-              --export-dir "$GITHUB_WORKSPACE/results" \
-              "$selector" \
-              "$GITHUB_WORKSPACE/certification/plans/$name.json" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
-            code=${PIPESTATUS[0]}
-            echo "- exit code : $code (les gaps sont acceptés en mode witness)" | tee -a "$GITHUB_STEP_SUMMARY"
-            [ "$code" -eq 0 ] || echo "plan $name en échec partiel (witness)" | tee -a "$GITHUB_STEP_SUMMARY"
-          done
 
       - name: Génération du rapport statique (GitHub Pages)
         # --screenshots : les captures réelles des modules de relecture sont
@@ -296,7 +466,7 @@ jobs:
             --site _site \
             --screenshots "$GITHUB_WORKSPACE/screenshots"
 
-      - name: Upload des artefacts (rapports bruts)
+      - name: Upload des artefacts (rapports bruts consolidés)
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -304,17 +474,6 @@ jobs:
           path: |
             results/
             _site/
-          if-no-files-found: ignore
-
-      - name: Upload des captures d'écran réelles
-        # Les PNG téléversés aux modules de relecture (ImageAPI) sont gardés
-        # sous la main pour contrôle humain : c'est la preuve visible des
-        # verdicts REVIEW, au même titre que le rapport sur GitHub Pages.
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: certification-screenshots
-          path: screenshots/
           if-no-files-found: ignore
 
       - name: Configuration GitHub Pages
