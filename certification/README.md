@@ -184,6 +184,17 @@ uv run python samples/conformance-smoke/smoke_test.py
   complète le message de `wait_for_state` avec la cause réelle (statut, résultat,
   10 dernières entrées de `GET api/log/{id}`) pour la lire directement dans le log
   du job.
+- **500 `test module not found`** : la suite hébergée a renommé ou supprimé un
+  test alors que le plan réutilisé référence encore l'ancien id : chaque
+  création de module échoue alors de façon déterministe (jusqu'à 28 réessais ×
+  `CONFORMANCE_RETRY_TIMEOUT` par module). Le patch
+  `conformance-stale-plan-recovery.patch` valide la membership du plan
+  réutilisé contre le catalogue (`api/runner/available`) **avant** le run et
+  recrée le plan si un module n'existe plus : la membership fraîche prend effet
+  dès ce run (les tests renommés y repassent, les tests supprimés en
+  disparaissent proprement). Ce 500 n'est jamais réessayé (1 tentative au lieu
+  de 28). Le run suivant réutilise le plan ainsi recréé (plan le plus récent
+  privilégié par `_plan_matching_configuration`).
 - **ERREUR sur Redis/nginx** : relancer ; le premier pull des images
   `registry.gitlab.com/openid/conformance-suite` est long (~10 min).
 
@@ -199,6 +210,7 @@ uv run python samples/conformance-smoke/smoke_test.py
 | `capture_screenshots.py` | rejoue les 4 scénarios de relecture contre l'OP déployé (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver |
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |
 | `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
+| `conformance-stale-plan-recovery.patch` | patch du driver : n'est jamais réessaie le 500 déterministe « test module not found » (1 tentative au lieu de 28) et valide la membership du plan réutilisé contre le catalogue avant le run — recréation automatique du plan stale (membership fraîche dès le premier run), plan le plus récent privilégié à la réutilisation |
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés ; recopie les captures réelles dans `_site/screenshots/` (`--screenshots`) et les affiche dans la section du module correspondant |
 | `../.github/workflows/certification.yml` | workflow witness en 3 jobs : `prepare` (deploy + captures, une fois), `plan` (les 4 plans en parallèle, un job matrix chacun), `report` (fusion des exports + Pages) |
 

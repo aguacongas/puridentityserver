@@ -314,7 +314,7 @@ jobs:
       - name: Dépendances Python du driver officiel (httpx)
         run: python3 -m pip install --disable-pip-version-check --quiet httpx
 
-      - name: Patch du driver (plans par alias + captures de relecture + libération d'alias + diagnostic d'interruption)
+      - name: Patch du driver (plans par alias + captures de relecture + libération d'alias + diagnostic d'interruption + plan stale)
         # 1) au lieu de recréer un plan à chaque lancement (POST /api/plan), ce
         #    qui accumule les plans et re-claime l'alias d'un run précédent, on
         #    réutilise le plan existant du user quand sa config est inchangée.
@@ -332,6 +332,12 @@ jobs:
         #    « has moved to INTERRUPTED » : on y ajoute la cause réelle (statut,
         #    résultat + 10 dernières entrées de son journal) pour distinguer un
         #    conflit d'alias d'une erreur de configuration du test.
+        # 5) la suite hébergée peut renommer ou supprimer un test : le plan
+        #    réutilisé garde alors l'ancien id et chaque création de module
+        #    échoue en 500 « test module not found ». On valide la membership
+        #    du plan réutilisé contre le catalogue et on le recrée si besoin
+        #    (membership fraîche dès le premier run), et ce 500 déterministe
+        #    n'est jamais réessayé (1 tentative au lieu de 28).
         run: |
           git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-reuse-plan.patch"
           grep -n "def _plan_matching_configuration" conformance-suite/scripts/conformance.py
@@ -341,6 +347,8 @@ jobs:
           grep -n "release_alias" conformance-suite/scripts/conformance.py conformance-suite/scripts/run-test-plan.py
           git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-interrupted-diagnostics.patch"
           grep -n "describe_interruption" conformance-suite/scripts/conformance.py
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-stale-plan-recovery.patch"
+          grep -n "test module not found" conformance-suite/scripts/conformance.py
 
       - name: Timeout par module piloté par CONFORMANCE_MODULE_TIMEOUT
         # Le driver upstream hardcode timeout=240 dans wait_for_state : on rend
