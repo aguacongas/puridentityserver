@@ -9,13 +9,13 @@ name: Certification OIDC
 # page GitHub Pages. Le passage en gate bloquant (PR 2) interviendra une fois
 # les plans Core stables.
 #
-# Issue #122 : les 4 plans s'exécutent EN PARALLÈLE (matrix de jobs, même
+# Issue #122 : les 6 plans s'exécutent EN PARALLÈLE (matrix de jobs, même
 # patron que conformance-tests.yml) : ~3 h séquentielles deviennent la durée
 # du plan le plus long (~40 min) :
 # - job `prepare` UNIQUE : matrice depuis l'input `plan`, deploy hook Render
 #   (UNE SEULE fois — un redejob par plan remplacerait l'OP en plein run) et
 #   captures Playwright (artefact partagé) ;
-# - job `plan` ×4 (`fail-fast: false`) : clone + patches de la suite, un seul
+# - job `plan` ×6 (`fail-fast: false`) : clone + patches de la suite, un seul
 #   plan joué en mode witness, export → artefact `certification-results-<plan>`.
 #   Parallélisation sûre : chaque plan porte un alias distinct
 #   (`puridentityserver-<plan>`) et `release_alias` ne stoppe que son propre
@@ -34,8 +34,8 @@ on:
     inputs:
       plan:
         # Permet un cycle de diagnostic rapide : ne lancer qu'un seul plan au
-        # lieu des quatre (~30 min, même en parallèle le gain est nul).
-        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + CIBA)"
+        # lieu des six (~30 min, même en parallèle le gain est nul).
+        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + CIBA + FAPI1 + FAPI2)"
         type: choice
         required: false
         default: all
@@ -45,6 +45,8 @@ on:
           - implicit
           - hybrid
           - ciba
+          - fapi1
+          - fapi2
   schedule:
     - cron: "0 2 * * MON"
   # Déclenchement UNIQUEMENT au merge sur main : aucune exécution sur les PR
@@ -102,7 +104,7 @@ jobs:
         # toute consommation d'infra (deploy hook, Playwright, clone).
         id: matrix
         env:
-          # Vide sur push/schedule : les quatre plans sont joués.
+          # Vide sur push/schedule : les six plans sont joués.
           PLAN_FILTER: ${{ inputs.plan || 'all' }}
         run: |
           set -euo pipefail
@@ -115,10 +117,18 @@ jobs:
               # pas des variants valides pour ce plan : private_key_jwt exigé,
               # JAR signé hors périmètre — issues dédiées).
               ciba) echo 'fapi-ciba-id1-test-plan[client_registration=dynamic_client][client_auth_type=private_key_jwt][ciba_mode=poll][fapi_ciba_profile=plain_fapi]' ;;
+              # FAPI1 Advanced Final (issue #113) : plain_fapi + private_key_jwt,
+              # request object by_value (défaut conseillé par la suite — l'OP
+              # expose aussi PAR, à valider en certification) + réponse plain.
+              fapi1) echo 'fapi1-advanced-final-test-plan[fapi_profile=plain_fapi][client_auth_type=private_key_jwt][fapi_auth_request_method=by_value][fapi_response_mode=plain_response]' ;;
+              # FAPI2 Security Profile Final : avec fapi_profile=plain_fapi la
+              # suite déclare client_auth_type inapplicable (notApplicableWhen) ;
+              # l'OP supporte DPoP (RFC 9449) et n'a pas de grant management.
+              fapi2) echo 'fapi2-security-profile-final-test-plan[fapi_profile=plain_fapi][authorization_request_type=simple][grant_management=disabled][openid=openid_connect][sender_constrain=dpop]' ;;
               *) return 1 ;;
             esac
           }
-          plans=(basic implicit hybrid ciba)
+          plans=(basic implicit hybrid ciba fapi1 fapi2)
           if [ "$PLAN_FILTER" != "all" ]; then
             selector_for "$PLAN_FILTER" > /dev/null || { echo "::error::Plan inconnu : $PLAN_FILTER"; exit 1; }
             plans=("$PLAN_FILTER")
@@ -199,7 +209,7 @@ jobs:
         # passe par un Bearer token délivré par l'OpenID Foundation. Un secret
         # manquant doit échouer SEC maintenant (message clair), pas via un
         # KeyError/traceback du driver en plein milieu du run — et surtout pas
-        # dans chacun des 4 jobs matrix (4 clones + 4 attentes avant d'échouer).
+        # dans chacun des 6 jobs matrix (6 clones + 6 attentes avant d'échouer).
         run: |
           if [ -z "$CONFORMANCE_TOKEN" ]; then
             echo "::error::Secret CONFORMANCE_TOKEN absent. Le créer ainsi :"
@@ -235,8 +245,8 @@ jobs:
         # échec (installation navigateur, OP indisponible…) laisse le
         # répertoire vide : conformance-screenshots.patch retombe alors sur son
         # PNG de secours et le run se poursuit — étape non bloquante.
-        # Une seule exécution par run : les 4 jobs matrix téléchargent le
-        # résultat en artefact (lancer Playwright ×4 ferait ×4 le temps de
+        # Une seule exécution par run : les 6 jobs matrix téléchargent le
+        # résultat en artefact (lancer Playwright ×6 ferait ×6 le temps de
         # build navigateur et 4 relevés concurrents du même OP).
         continue-on-error: true
         run: |
@@ -326,7 +336,7 @@ jobs:
         #    encore actif (timeout dépassé, run annulé…) serait interrompu par le
         #    module suivant (« Stopping test due to alias conflict »). Le driver
         #    libère donc l'alias lui-même avant chaque création de module — et
-        #    comme chaque plan a UN alias distinct, les 4 jobs parallèles ne
+        #    comme chaque plan a UN alias distinct, les 6 jobs parallèles ne
         #    peuvent pas s'interrompre mutuellement.
         # 4) un module qui passe en INTERRUPTED ne donne dans la CI qu'un
         #    « has moved to INTERRUPTED » : on y ajoute la cause réelle (statut,

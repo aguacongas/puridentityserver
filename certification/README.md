@@ -24,7 +24,9 @@ retenue :
 ## Résultat attendu
 
 - Le workflow `Certification OIDC` se termine avec, pour chaque plan
-  (`oidcc-basic-`, `oidcc-implicit-`, `oidcc-hybrid-certification-test-plan`, `fapi-ciba-id1-test-plan` — witness CIBA),
+  (`oidcc-basic-`, `oidcc-implicit-`, `oidcc-hybrid-certification-test-plan`,
+  `fapi-ciba-id1-test-plan` — witness CIBA, `fapi1-advanced-final-test-plan`,
+  `fapi2-security-profile-final-test-plan`),
   le détail des modules testés et leur verdict (PASSED / FAILED / WARNING /
   REVIEW / SKIPPED) dans le résumé du run ;
 - les artefacts `certification-results-<plan>` (un par plan) contiennent les
@@ -63,9 +65,11 @@ retenue :
   photographie les `kid` du JWKS, déclenche le deploy hook puis patiente
   (15 min max) jusqu'à ce que les `kid` changent — preuve que le build est
   terminé **et** que le disque éphémère (donc l'état) a été recréé avant le
-  premier enregistrement de client ; joue ensuite les **quatre plans en
-  parallèle** (4 jobs matrix, `fail-fast: false` — ~40 min au lieu de ~3 h
-  séquentielles, issue #122), chaque plan exportant son propre artefact,
+  premier enregistrement de client ; joue ensuite les **six plans en
+  parallèle** (6 jobs matrix, `fail-fast: false` — ~40 min au lieu de ~3 h
+  séquentielles, issue #122 ; les plans FAPI1 Advanced et FAPI2 Security
+  Profile ont été ajoutés par l'issue #113), chaque plan exportant son propre
+  artefact,
   puis un job final fusionne les exports, génère le rapport et déploie la
   page GitHub Pages.
 - **En local** : (optionnel) pour reproduire le même principe contre un
@@ -204,7 +208,7 @@ uv run python samples/conformance-smoke/smoke_test.py
 | --- | --- |
 | `render.yaml` / `Dockerfile` / `.dockerignore` | déploiement de l'OP sur Render (SQLite, disque éphémère) |
 | `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`) |
-| `plans/basic|implicit|hybrid|ciba.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent) |
+| `plans/basic|implicit|hybrid|ciba|fapi1|fapi2.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent) |
 | `conformance-reuse-plan.patch` | patch du driver : `create_test_plan` idempotent (réutilise le plan existant quand sa config n'a pas changé) |
 | `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) ou, à défaut, un PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode witness) |
 | `capture_screenshots.py` | rejoue les 4 scénarios de relecture contre l'OP déployé (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver |
@@ -212,7 +216,7 @@ uv run python samples/conformance-smoke/smoke_test.py
 | `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
 | `conformance-stale-plan-recovery.patch` | patch du driver : n'est jamais réessaie le 500 déterministe « test module not found » (1 tentative au lieu de 28) et valide la membership du plan réutilisé contre le catalogue avant le run — recréation automatique du plan stale (membership fraîche dès le premier run), plan le plus récent privilégié à la réutilisation |
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés ; recopie les captures réelles dans `_site/screenshots/` (`--screenshots`) et les affiche dans la section du module correspondant |
-| `../.github/workflows/certification.yml` | workflow witness en 3 jobs : `prepare` (deploy + captures, une fois), `plan` (les 4 plans en parallèle, un job matrix chacun), `report` (fusion des exports + Pages) |
+| `../.github/workflows/certification.yml` | workflow witness en 3 jobs : `prepare` (deploy + captures, une fois), `plan` (les 6 plans en parallèle, un job matrix chacun), `report` (fusion des exports + Pages) |
 
 ## Captures d'écran des modules de relecture (mode witness)
 
