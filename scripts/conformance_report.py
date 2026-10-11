@@ -1,9 +1,10 @@
 """Rapport markdown du rejeu des checks de certification OIDC (marker ``conformance``).
 
-Lit le rapport JUnit XML produit par ``pytest -m conformance`` et construit un
-résumé publié directement dans la pull request (sur le modèle du Quality Gate
-SonarCloud), pour voir sans ouvrir les logs du workflow quels checks passent
-et lesquels échouent :
+Lit un ou plusieurs rapports JUnit XML produits par ``pytest -m conformance``
+(un fichier par plan depuis la matrice CI) et construit un résumé publié
+directement dans la pull request (sur le modèle du Quality Gate SonarCloud),
+pour voir sans ouvrir les logs du workflow quels checks passent et lesquels
+échouent :
 
 - ``--markdown <fichier>`` : écrit le rapport pour le workflow ;
 - ``$GITHUB_STEP_SUMMARY`` : l'ajoute à l'onglet du workflow (si défini) ;
@@ -11,7 +12,7 @@ et lesquels échouent :
 
 Usage:
     uv run python scripts/conformance_report.py junit-conformance.xml
-    uv run python scripts/conformance_report.py junit.xml --markdown rapport.md
+    uv run python scripts/conformance_report.py junit-*.xml --markdown rapport.md
 """
 
 from __future__ import annotations
@@ -134,11 +135,17 @@ def render(results: Sequence[_CheckResult]) -> str:
 def main(argv: Sequence[str] | None = None) -> int:
     """Génère le rapport, l'écrit dans les sorties demandées et affiche un résumé."""
     parser = argparse.ArgumentParser(description="Rapport markdown du rejeu conformance.")
-    parser.add_argument("junit", type=Path, help="Rapport JUnit XML écrit par pytest")
+    parser.add_argument(
+        "junit",
+        type=Path,
+        nargs="+",
+        help="Rapport(s) JUnit XML écrit(s) par pytest (un par plan depuis la matrice CI)",
+    )
     parser.add_argument("--markdown", type=Path, help="Fichier markdown à écrire")
     args = parser.parse_args(argv)
 
-    body = render(_parse(args.junit))
+    results = [result for path in args.junit for result in _parse(path)]
+    body = render(results)
     if args.markdown is not None:
         args.markdown.write_text(body + "\n", encoding="utf-8")
     step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
