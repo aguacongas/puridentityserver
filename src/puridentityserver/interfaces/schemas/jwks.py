@@ -48,8 +48,8 @@ class JWKKeyResponse(BaseModel):
             number = public_key.public_numbers()
             common.update(
                 crv=key_pair.algorithm.curve,
-                x=_int_to_base64url(number.x),
-                y=_int_to_base64url(number.y),
+                x=_ec_coord_to_base64url(number.x, public_key.curve),
+                y=_ec_coord_to_base64url(number.y, public_key.curve),
             )
         return cls(**common)
 
@@ -64,6 +64,17 @@ def _int_to_base64url(value: int) -> str:
     """Encode un entier non signé en base64url (RFC 7515 §6.1)."""
     byte_length = max(1, (value.bit_length() + 7) // 8)
     return _to_base64url(value.to_bytes(byte_length, "big"))
+
+
+def _ec_coord_to_base64url(value: int, curve: ec.EllipticCurve) -> str:
+    """Encode une coordonnée EC à longueur de champ fixe (RFC 7518 §6.2.1).
+
+    Les coordonnées ``x``/``y`` font exactement la taille de la courbe
+    arrondie au-dessus (P-256 : 32, P-521 : 66 octets) avec zéros de tête,
+    sous peine de rejet à la lecture (``Coords should be N bytes for
+    curve …``).
+    """
+    return _to_base64url(value.to_bytes((curve.key_size + 7) // 8, "big"))
 
 
 def _to_base64url(value: bytes) -> str:

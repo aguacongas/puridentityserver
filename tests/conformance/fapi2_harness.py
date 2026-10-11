@@ -66,9 +66,13 @@ def _ec_jwk(key: EllipticCurvePrivateKey, kid: str) -> dict[str, str]:
 
 
 def _b64url_int(value: int) -> str:
-    """Entier big-endian encodé base64url sans padding (RFC 7515 §2)."""
-    length = (value.bit_length() + 7) // 8
-    return base64.urlsafe_b64encode(value.to_bytes(length, "big")).rstrip(b"=").decode("ascii")
+    """Coordonnée P-256 encodée base64url sans padding, longueur fixe 32 octets.
+
+    RFC 7518 §6.2.1 : ``x``/``y`` font la pleine taille de la courbe avec
+    zéros de tête — encodage à longueur variable (0,8 % des clés) rendait la
+    ``jwk`` illisible pour l'OP (``Coords should be 32 bytes …``).
+    """
+    return base64.urlsafe_b64encode(value.to_bytes(32, "big")).rstrip(b"=").decode("ascii")
 
 
 def _ec_thumbprint(jwk: dict[str, str]) -> str:

@@ -119,6 +119,8 @@ def test_jwks_endpoint_keys_are_verifiable_with_pyjwt() -> None:
 
     public_key = pyjwt.algorithms.RSAAlgorithm.from_jwk(key_set[0])
     assert public_key is not None
+    for key in (entry for entry in key_set if entry["kty"] == "EC"):
+        assert pyjwt.PyJWK(key, algorithm=key["alg"]).key is not None
 
 
 def test_discovery_advertises_jwks_uri() -> None:
@@ -333,6 +335,43 @@ def test_jwk_response_handles_unknown_key_family() -> None:
     assert jwk.crv is None
     assert jwk.x is None
     assert jwk.y is None
+
+
+def test_ec_coordinates_use_full_curve_field_length() -> None:
+    """Coordonnées EC sur la pleine taille de courbe (RFC 7518 §6.2.1).
+
+    Reproduit le tirage (~0,8 % des clés) dont une coordonnée tête nulle
+    n'occupait que 31 octets : l'encodage à longueur variable tronquait les
+    zéros de tête et rendait le JWK émis illisible
+    (``Coords should be 32 bytes for curve P-256``).
+    """
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    private_key: ec.EllipticCurvePrivateKey | None = None
+    for _ in range(5000):
+        candidate = ec.generate_private_key(ec.SECP256R1())
+        numbers = candidate.public_key().public_numbers()
+        if numbers.x.bit_length() <= 248 or numbers.y.bit_length() <= 248:
+            private_key = candidate
+            break
+    assert private_key is not None, "aucune coordonnée tête nulle en 5000 tirages P-256"
+
+    pub_pem = (
+        private_key.public_key()
+        .public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+        .decode("ascii")
+    )
+    jwk = JWKKeyResponse.from_key_pair(
+        KeyPair(algorithm=JWTAlgorithm.ES256, public_key_pem=pub_pem)
+    )
+
+    assert pyjwt.PyJWK(jwk.model_dump(exclude_none=True), algorithm="ES256").key is not None
+    for coordinate in (jwk.x, jwk.y):
+        assert coordinate is not None
+        padded = coordinate + "=" * (-len(coordinate) % 4)
+        assert len(base64.urlsafe_b64decode(padded)) == 32
 
 
 def _is_valid_base64url(value: str) -> bool:
