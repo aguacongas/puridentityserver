@@ -145,6 +145,23 @@ CIBA_REQUEST_SIGNING_ALGORITHMS: tuple[str, ...] = (
     JWTAlgorithm.RS256.value,
 )
 
+#: Algorithmes JWS admis pour signer une preuve DPoP (RFC 9449 §4.2) : les
+#: familles PSS (``PS*``) et ECDSA (``ES*``) uniquement. La famille RS*
+#: (PKCS#1 v1.5) est refusée : la suite Certification FAPI2 l'attend
+#: (module ``dpop-negative-tests``, cas « DPoP proof signed using RS256 »,
+#: FAPI2-SP-FINAL-5.4). ``none`` et les familles symétriques HS* restent
+#: interdits par la RFC. Publiés au discovery sous
+#: ``dpop_signing_alg_values_supported`` et contrôlés à la validation de
+#: chaque preuve.
+DPOP_SIGNING_ALGORITHMS: tuple[str, ...] = (
+    JWTAlgorithm.PS256.value,
+    JWTAlgorithm.PS384.value,
+    JWTAlgorithm.PS512.value,
+    JWTAlgorithm.ES256.value,
+    JWTAlgorithm.ES384.value,
+    JWTAlgorithm.ES512.value,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class KeyPair:

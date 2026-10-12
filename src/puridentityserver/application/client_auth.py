@@ -112,7 +112,7 @@ async def _authenticate_assertion(
     """Vérifie une ``client_assertion`` (RFC 7523 §2.2) ; ``None`` si absente/invalide."""
     if assertions is None:
         return ASSERTION_INVALID_ERROR
-    if assertion_type and assertion_type != CLIENT_ASSERTION_TYPE_URN:
+    if assertion_type != CLIENT_ASSERTION_TYPE_URN:
         return ASSERTION_INVALID_ERROR
     if not assertion:
         return ASSERTION_INVALID_ERROR
@@ -123,6 +123,10 @@ async def _authenticate_assertion(
         require_iss_eq_sub=True,
     )
     if claims is None:
+        return ASSERTION_INVALID_ERROR
+    if client.fapi2_enabled and not isinstance(claims.get("aud"), str):
+        # FAPI2-SP-FINAL-5.3.2.1-8 : ``aud`` tableau refusé (PyJWT admet
+        # le tableau contenant l'issuer).
         return ASSERTION_INVALID_ERROR
     return None
 

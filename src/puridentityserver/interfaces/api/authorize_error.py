@@ -37,7 +37,9 @@ def error_redirect(result: AuthorizeError) -> RedirectResponse:
 
     Les erreurs des flows retournant des jetons (implicit/hybrid) sont
     placées dans le fragment de l'URL (RFC 6749 §4.2.2.1), les autres dans
-    la query string (RFC 6749 §4.1.2.1).
+    la query string (RFC 6749 §4.1.2.1). Une ``redirect_uri`` déjà
+    porteuse d'une query impose ``&`` pour ne pas créer une seconde query
+    string (``CheckMatchingCallbackParameters`` de la suite).
     """
     parts = [f"error={result.error}"]
     if result.error_description:
@@ -46,7 +48,10 @@ def error_redirect(result: AuthorizeError) -> RedirectResponse:
     if result.state:
         parts.append(f"state={result.state}")
     params = "&".join(parts)
-    separator = "#" if result.response_mode is ResponseMode.FRAGMENT else "?"
+    if result.response_mode is ResponseMode.FRAGMENT:
+        separator = "#"
+    else:
+        separator = "&" if "?" in result.redirect_uri else "?"
     location = f"{result.redirect_uri}{separator}{params}"
     return RedirectResponse(location, status_code=302)
 

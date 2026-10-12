@@ -405,13 +405,13 @@ de modules couvertes. Fiches détaillées :
 | `…ensure-token-endpoint-fails-with-mismatched-dpop-proof-jkt` | `test_fapi2_token_fails_with_mismatched_dpop_proof_jkt[plan]` | preuve token signée par une autre clé EC que le `dpop_jkt` → rejet |
 | `…ensure-dpopproof-at-par-endpoint-binding-success` | `test_fapi2_dpopproof_at_par_binding_success[plan]` | même clé au PAR et au token → succès + ressource 200 |
 | `…ensure-dpop-auth-code-binding-success` | `test_fapi2_dpop_auth_code_binding_success[plan]` | code lié au `dpop_jkt` : échange + userinfo (scheme `DPoP`) acceptés |
-| `…ensure-different-nonce-inside-and-outside-request-object` | `test_fapi2_different_nonce_inside_and_outside[plan]` | nonce divergent ajouté en paramètre plat → `invalid_request` JSON (RFC 9126 §6.2) |
+| `…ensure-different-nonce-inside-and-outside-request-object` | `test_fapi2_different_nonce_inside_and_outside[plan]` | nonce divergent en paramètre plat ignoré (`request_uri` prime), nonce poussé intact dans l'id_token, flux complet |
 
 ### Paramètres divergents, longueurs et `response_type` (10 scénarios)
 
 | Module de la suite | Nodeid pytest | Assertion |
 | --- | --- | --- |
-| `…ensure-different-state-inside-and-outside-request-object` | `test_fapi2_different_state_inside_and_outside[plan]` | state divergent hors push → rejet JSON (issues admises) |
+| `…ensure-different-state-inside-and-outside-request-object` | `test_fapi2_different_state_inside_and_outside[plan]` | state divergent hors push ignoré, state poussé fait autorité au callback, flux complet |
 | `…ensure-authorization-request-with-long-nonce` (Final) / `…request-object-with-long-nonce` (ID2) | `test_fapi2_long_nonce_accepted[plan]` | nonce 384 caractères accepté, jamais tronqué |
 | `…ensure-authorization-request-with-long-state` (Final) / `…request-object-with-long-state` (ID2) | `test_fapi2_long_state_accepted[plan]` | state 1000 caractères accepté |
 | `state-only-outside-request-object-not-used` | `test_fapi2_state_only_outside_not_used[plan]` | `state` ajouté après coup ignoré (aucun `state` au callback), flux complet |
@@ -454,25 +454,27 @@ de modules couvertes. Fiches détaillées :
 | `…par-plain-pkce-rejected` | `test_fapi2_plain_pkce_rejected[plan]` | `code_challenge_method=plain` → rejet (S256 seul) |
 | `…par-without-duplicate-parameters` | `test_fapi2_par_without_duplicate_parameters[plan]` | redirect `request_uri` sans doublons accepté |
 
-### Audience des assertions : Final vs ID2 (8 scénarios — écart assumé)
+### Audience des assertions : Final vs ID2 (8 scénarios)
 
-Les modules Final `par-test-*-as-audience-fails` attendent le **rejet** de
-`aud` tableau / URL PAR / URL token ; en profil `plain_fapi`, les modules ID2
-positifs correspondants attendent l'**acceptation**. Notre OP suit RFC 7523
-§3 / RFC 9126 §6.1 et accepte les deux formes : les tests Final assertent
-l'acceptation avec l'écart documenté ici (les modules Final les plus stricts
-sont réservés aux profils cbuae/ksa où leurs contreparties ID2 sont exclues).
+L'OP n'admet que l'**issuer** comme ``aud`` d'une ``client_assertion``
+FAPI2 (``fapi2_enabled`` : PAR et token, gate ``isinstance(aud, str)`` —
+FAPI2-SP-FINAL-5.3.2.1-8, le plan Final signe avec
+``CreateClientAuthenticationAssertionClaimsWithIssAudience``). Les modules
+Final `par-test-*-as-audience-fails` attendent le **rejet** : alignés. Les
+modules ID2 positifs correspondants attendent l'**acceptation** : écart
+documenté (le plan ID2 n'est pas joué en certification) ; les clients non
+FAPI2 (FAPI1, Basic) gardent RFC 7523 §3 / RFC 9126 §6.1 inchangés.
 
 | Module de la suite | Nodeid pytest | Assertion |
 | --- | --- | --- |
-| `par-test-array-as-audience-fails` (Final seul) | `test_fapi2_final_array_as_audience_rejected` | `aud` tableau accepté (RFC 7523 §3) — écart vs module Final |
-| `par-test-par-endpoint-url-as-audience-fails` (Final seul) | `test_fapi2_final_par_url_as_audience_rejected` | `aud` = URL PAR accepté — écart vs module Final |
-| `par-test-token-endpoint-url-as-audience-fails` (Final seul) | `test_fapi2_final_token_url_as_audience_rejected` | `aud` = URL token accepté — écart vs module Final |
+| `par-test-array-as-audience-fails` (Final seul) | `test_fapi2_final_array_as_audience_rejected` | `aud` tableau → `invalid_client` (aligné Final) |
+| `par-test-par-endpoint-url-as-audience-fails` (Final seul) | `test_fapi2_final_par_url_as_audience_rejected` | `aud` = URL PAR → refus (aligné Final) |
+| `par-test-token-endpoint-url-as-audience-fails` (Final seul) | `test_fapi2_final_token_url_as_audience_rejected` | `aud` = URL token → refus (aligné Final) |
 | `…ensure-request-object-with-multiple-aud-succeeds` (ID2 seul) | `test_fapi2_id2_multiple_aud_in_request_object` | `aud` tableau hors schéma ignoré, flux réussi |
-| `…ensure-client-assertion-with-token-endpoint-aud-succeeds` (ID2 seul) | `test_fapi2_id2_token_endpoint_aud_succeeds` | `aud` = token_endpoint accepté (refresh 200) |
-| `…par-test-pushed-authorization-url-as-audience-for-client-jwt-assertion` (ID2 seul) | `test_fapi2_id2_par_url_aud_succeeds` | `aud` = URL PAR accepté au push |
-| `…par-test-token-endpoint-url-as-audience-for-client-jwt-assertion` (ID2 seul) | `test_fapi2_id2_token_url_aud_at_par_succeeds` | `aud` = URL token accepté au push |
-| `…test-array-as-audience-for-client-jwt-assertion` (ID2 seul) | `test_fapi2_id2_array_audience_par_and_token` | `aud` tableau accepté au push et au token (RFC 7523 §3) |
+| `…ensure-client-assertion-with-token-endpoint-aud-succeeds` (ID2 seul) | `test_fapi2_id2_token_endpoint_aud_succeeds` | `aud` = token_endpoint → refus (écart vs ID2 attendu) |
+| `…par-test-pushed-authorization-url-as-audience-for-client-jwt-assertion` (ID2 seul) | `test_fapi2_id2_par_url_aud_succeeds` | `aud` = URL PAR → refus (écart vs ID2 attendu) |
+| `…par-test-token-endpoint-url-as-audience-for-client-jwt-assertion` (ID2 seul) | `test_fapi2_id2_token_url_aud_at_par_succeeds` | `aud` = URL token → refus (écart vs ID2 attendu) |
+| `…test-array-as-audience-for-client-jwt-assertion` (ID2 seul) | `test_fapi2_id2_array_audience_par_and_token` | `aud` tableau → refus (écart vs ID2 attendu) |
 
 ### PAR : `redirect_uri` non enregistré
 

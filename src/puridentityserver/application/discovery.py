@@ -21,8 +21,8 @@ from puridentityserver.domain.jwe import (
 )
 from puridentityserver.domain.jwks import (
     ALL_SIGNING_ALGORITHMS,
-    ASYMMETRIC_ALGORITHMS,
     CIBA_REQUEST_SIGNING_ALGORITHMS,
+    DPOP_SIGNING_ALGORITHMS,
     JWTAlgorithm,
 )
 from puridentityserver.interfaces.repositories.readers import (
@@ -63,9 +63,7 @@ class DiscoveryConfig:
         "urn:ietf:params:oauth:grant-type:jwt-bearer",
     )
     request_object_signing_algorithms: tuple[str, ...] = PUBLISHED_REQUEST_OBJECT_SIGNING_ALGORITHMS
-    dpop_signing_algorithms: tuple[str, ...] = tuple(
-        algorithm.value for algorithm in ASYMMETRIC_ALGORITHMS
-    )
+    dpop_signing_algorithms: tuple[str, ...] = DPOP_SIGNING_ALGORITHMS
 
 
 class DiscoveryUseCase:

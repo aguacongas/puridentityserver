@@ -462,7 +462,7 @@ class TestParIntegrationHTTP:
         assert second.status_code == 400
         assert second.json()["error"] == "invalid_request_uri"
 
-    def test_authorize_rejects_extra_param_with_request_uri(self) -> None:
+    def test_authorize_ignores_extra_params_with_request_uri(self) -> None:
         with TestClient(_app()) as client:
             push = client.post(
                 "/par",
@@ -471,6 +471,7 @@ class TestParIntegrationHTTP:
                     "client_id": _CLIENT_ID,
                     "redirect_uri": "https://app.example/callback",
                     "scope": "openid",
+                    "state": "st-pushed",
                 },
             )
             request_uri = push.json()["request_uri"]
@@ -480,12 +481,16 @@ class TestParIntegrationHTTP:
                 params={
                     "client_id": _CLIENT_ID,
                     "request_uri": request_uri,
-                    "scope": "openid",
+                    "scope": "openid profile",
+                    "state": "st-query",
+                    "response_type": "token",
                 },
                 follow_redirects=False,
             )
-        assert resp.status_code == 400
-        assert resp.json()["error"] == "invalid_request"
+        assert resp.status_code == 302
+        query = _redirect_query(resp.headers["location"])
+        assert query["code"]
+        assert query["state"] == ["st-pushed"]
 
     def test_authorize_rejects_unknown_request_uri(self) -> None:
         with TestClient(_app()) as client:

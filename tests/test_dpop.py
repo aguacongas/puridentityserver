@@ -848,7 +848,8 @@ class TestDpopHttpEndpoints:
             metadata = client.get("/.well-known/openid-configuration").json()
 
         algorithms = metadata["dpop_signing_alg_values_supported"]
-        assert "RS256" in algorithms
+        assert "PS256" in algorithms
+        assert "RS256" not in algorithms
         assert "none" not in algorithms
         assert not any(name.startswith("HS") for name in algorithms)
 

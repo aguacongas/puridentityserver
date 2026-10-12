@@ -6,8 +6,9 @@ Lance un serveur PurIdentityServer en sous-processus avec une configuration
 **spécifique à ce test** (générée par ``smoke_common.py`` : port 8110, un
 client seed public **avec ``require_dpop = true``**) puis joue le scénario :
 
-1. le discovery annonce ``dpop_signing_alg_values_supported`` (RS256, sans
-   ``none`` ni famille symétrique HS*) ;
+1. le discovery annonce ``dpop_signing_alg_values_supported`` (familles
+   ``PS*``/``ES*``, sans ``RS256``, sans ``none`` ni famille symétrique
+   HS*) ;
 2. ``/token`` échange du code **sans** preuve DPoP -> ``400 invalid_request``
    : le client exige une preuve (RFC 9449 §5.2) ;
 3. ``/token`` avec une preuve valide -> ``200`` ``token_type: DPoP`` et
@@ -183,7 +184,8 @@ def _run_scenario() -> None:
     with httpx.Client(follow_redirects=False, timeout=_HTTP_TIMEOUT) as http:
         metadata = http.get(f"{SERVER_URL}/.well-known/openid-configuration").json()
         algorithms = metadata["dpop_signing_alg_values_supported"]
-        assert "RS256" in algorithms, algorithms
+        assert "ES256" in algorithms, algorithms
+        assert "RS256" not in algorithms, algorithms
         assert "none" not in algorithms, algorithms
         assert not any(name.startswith("HS") for name in algorithms), algorithms
         print(f"  [1/8] discovery OK (dpop_signing_alg_values_supported={algorithms})")
