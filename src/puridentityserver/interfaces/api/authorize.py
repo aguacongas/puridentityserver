@@ -7,7 +7,7 @@ import json
 import time
 from dataclasses import dataclass
 from typing import Annotated
-from urllib.parse import parse_qs, quote, urlencode
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -172,7 +172,6 @@ def authorize_router(
         user: CurrentUserOptional,
     ) -> RedirectResponse | HTMLResponse | Response:
         auth_request, pushed_reference = await _authorize_entry(
-            request,
             params,
             par_usecase=par_usecase,
             request_object_resolver=request_object_resolver,
@@ -522,7 +521,6 @@ def _authorize_url_from_base(base_url: str, http_request: Request) -> str:
 
 
 async def _authorize_entry(
-    request: Request,
     params: dict[str, str],
     *,
     par_usecase: PushedAuthorizationUseCase | None,
@@ -540,7 +538,7 @@ async def _authorize_entry(
     request_uri = params.get("request_uri", "")
     if request_uri and is_pushed_request_uri(request_uri):
         resolved = await _resolve_pushed_request(
-            request, params.get("client_id", ""), request_uri, par_usecase
+            params.get("client_id", ""), request_uri, par_usecase
         )
         return resolved, request_uri
     built = await _direct_authorize_request(
@@ -552,16 +550,19 @@ async def _authorize_entry(
 
 
 async def _resolve_pushed_request(
-    request: Request,
     client_id: str,
     request_uri: str,
     par_usecase: PushedAuthorizationUseCase | None,
 ) -> AuthorizeRequest | Response:
-    """Résout une référence poussée (RFC 9126 §6.2).
+    """Résout une référence poussée (RFC 9126 §4).
 
-    La query string brute de ``/authorize`` ne doit contenir que ``client_id``
-    et ``request_uri`` : le serveur ignore les paramètres déjà poussés et
-    rejette tout paramètre supplémentaire. Les erreurs de résolution
+    La query string de ``/authorize`` peut contenir d'autres paramètres que
+    ``client_id`` et ``request_uri`` (la suite de certification en ajoute) :
+    ils sont ignorés — seule la charge utile poussée fait foi (RFC 9126 §4 :
+    la requête issue du PAR se valide comme n'importe quelle requête
+    d'autorisation, son contenu venant du ``request_uri`` ; §7.5 : l'intégrité
+    de la requête est portée par la charge poussée, les paramètres de la
+    redirection ne peuvent donc rien y changer). Les erreurs de résolution
     (référence inconnue, expirée, consommée → ``invalid_request_uri`` ;
     client incohérent → ``invalid_request`` ; PAR désactivé →
     ``invalid_request``) répondent en JSON OAuth top-level (RFC 6749 §5.2,
@@ -572,20 +573,6 @@ async def _resolve_pushed_request(
             PushError(
                 error="invalid_request",
                 error_description="Pushed Authorization Request désactivé",
-                status_code=400,
-            )
-        )
-
-    allowed = {"client_id", "request_uri"}
-    unexpected = [
-        name for name in parse_qs(request.url.query, keep_blank_values=True) if name not in allowed
-    ]
-    if unexpected:
-        return _pushed_param_response(
-            PushError(
-                error="invalid_request",
-                error_description="Les paramètres supplémentaires sont interdits "
-                "avec request_uri (RFC 9126 §6.2)",
                 status_code=400,
             )
         )

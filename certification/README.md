@@ -209,12 +209,14 @@ uv run python samples/conformance-smoke/smoke_test.py
   (« couldn't find required object … mutual_tls_authentication »). Corriger
   la config du plan (`plans/<plan>.json`, `config.render.toml`) ou le
   sélecteur de `certification.yml`.
-- **`mtls.cert` / `mtls.key` obligatoires (plan fapi1)** : la suite FAPI1
-  Advanced Final valide le certificat client en X.509 à chaque module
+- **`mtls` / `mtls2` obligatoires (plan fapi1)** : la suite FAPI1 Advanced Final
+  valide le certificat client en X.509 à chaque module
   (`ValidateMTLSCertificatesAsX509`, precondition = interruption fatale même
-  en mode continue) — les deux clients du plan `fapi1.json` portent un couple
-  PEM auto-signé (cert + clé PKCS8) ; `fapi2` n'a pas besoin de certs (contrôle
-  conditionnel au variant `client_auth_type=mtls`).
+  en mode continue) et lit `config.mtls.*` / `config.mtls2.*` — soit les clés
+  de **racine** du plan (pas dans `client`) : `fapi1.json` porte `mtls`,
+  `mtls2` et `mtls.ca`/`mtls2.ca` (certificats auto-signés PEM, clé PKCS8) ;
+  `fapi2` n'a pas besoin de certs (contrôle conditionnel au variant
+  `client_auth_type=mtls`).
 - **OP déployé sans la config de la branche** (`error=invalid_client` au PAR) :
   `render.yaml` verrouille `branch: main` — le workflow ajoute `ref=$GITHUB_SHA`
   au deploy hook Render pour déployer le commit exact du run.
