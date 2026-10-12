@@ -341,7 +341,8 @@ class Fapi2Harness(ConformanceHarness):
         ``push=False`` saute le push (modules ``…without-using-par-fails``) ;
         ``params`` surcharge les paramètres plats poussés ; ``extra`` ajoute
         des paramètres à l'appel ``/authorize`` (modules divergents — notre OP
-        les rejette en ``invalid_request``, RFC 9126 §6.2).
+        les ignore quand ``request_uri`` est présent : la demande poussée
+        prime, RFC 9126 §6.2).
         """
         form = params if params is not None else self.authorize_params()
         if not push:
@@ -372,7 +373,7 @@ class Fapi2Harness(ConformanceHarness):
             payload["client_assertion"] = (
                 assertion
                 if assertion is not None
-                else self.assertion(audience=self.token_endpoint if audience is None else audience)
+                else self.assertion(audience=self.issuer if audience is None else audience)
             )
             payload["client_assertion_type"] = ASSERTION_TYPE
         request_headers = dict(headers or {})

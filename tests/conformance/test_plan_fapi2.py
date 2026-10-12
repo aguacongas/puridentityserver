@@ -563,29 +563,24 @@ def test_fapi2_dpop_auth_code_binding_success(fapi2_harness: Fapi2Harness, plan:
 def test_fapi2_different_nonce_inside_and_outside(fapi2_harness: Fapi2Harness, plan: str) -> None:
     """Module ``ensure-different-nonce-inside-and-outside-request-object``.
 
-    En profil ``unsigned``, le nonce divergent est ajouté en paramètre
-    supplémentaire de ``/authorize`` (``AddIncorrectNonceToAuthorization-
-    EndpointRequest``) : notre OP rejette en ``invalid_request`` JSON
-    (RFC 9126 §6.2, issue 1 admise par le module).
+    En profil ``unsigned``, le nonce divergent ajouté en paramètre plat de
+    ``/authorize`` est ignoré quand ``request_uri`` est présent (la demande
+    poussée prime, RFC 9126 §6.2) : le flux se poursuit et le nonce poussé
+    revient intact dans l'id_token.
     """
     state = secrets.token_urlsafe(16)
+    nonce = secrets.token_urlsafe(16)
     verifier = secrets.token_urlsafe(48)
-    params = fapi2_harness.authorize_params(state=state, code_challenge=pkce_challenge(verifier))
-    request_uri = fapi2_harness.push_ok(params)
-    response = fapi2_harness.raw_get(
-        "/authorize?"
-        + urlencode(
-            {
-                "request_uri": request_uri,
-                "client_id": fapi2_harness.client.client_id,
-                "nonce": "incorrect-nonce-divergent",
-            }
-        )
+    params = fapi2_harness.authorize_params(
+        state=state, nonce=nonce, code_challenge=pkce_challenge(verifier)
     )
-    assert response.status_code == 400, (
-        f"HTTP {response.status_code} attendu : {response.text[:300]}"
+    result = fapi2_harness.start_authorization(params, verifier=verifier, nonce="abcdefghij")
+    _check_code_callback(result, state)
+    tokens = fapi2_harness.exchange_code(result, verifier)
+    claims = decode_id_token_claims(str(tokens["id_token"]))
+    assert claims.get("nonce") == nonce, (
+        f"nonce poussé non repris dans l'id_token : {claims.get('nonce')!r}"
     )
-    assert response.json().get("error") == "invalid_request", response.text[:300]
 
 
 @pytest.mark.conformance
@@ -593,27 +588,20 @@ def test_fapi2_different_nonce_inside_and_outside(fapi2_harness: Fapi2Harness, p
 def test_fapi2_different_state_inside_and_outside(fapi2_harness: Fapi2Harness, plan: str) -> None:
     """Module ``ensure-different-state-inside-and-outside-request-object``.
 
-    Même mécanisme que le nonce divergent : paramètre ``state`` additionnel
-    sur ``/authorize`` → ``invalid_request`` (RFC 9126 §6.2).
+    Même mécanisme que le nonce divergent : le ``state`` divergent ajouté en
+    paramètre plat de ``/authorize`` est ignoré avec ``request_uri``, le
+    ``state`` poussé fait autorité au callback (RFC 9126 §6.2) puis le code
+    s'échange normalement.
     """
     state = secrets.token_urlsafe(16)
     verifier = secrets.token_urlsafe(48)
     params = fapi2_harness.authorize_params(state=state, code_challenge=pkce_challenge(verifier))
-    request_uri = fapi2_harness.push_ok(params)
-    response = fapi2_harness.raw_get(
-        "/authorize?"
-        + urlencode(
-            {
-                "request_uri": request_uri,
-                "client_id": fapi2_harness.client.client_id,
-                "state": "incorrect-state-divergent",
-            }
-        )
+    result = fapi2_harness.start_authorization(
+        params, verifier=verifier, state="incorrect-state-divergent"
     )
-    assert response.status_code == 400, (
-        f"HTTP {response.status_code} attendu : {response.text[:300]}"
-    )
-    assert response.json().get("error") == "invalid_request", response.text[:300]
+    _check_code_callback(result, state)
+    tokens = fapi2_harness.exchange_code(result, verifier)
+    assert tokens.get("id_token"), "échange du code sans id_token"
 
 
 @pytest.mark.conformance
@@ -652,26 +640,19 @@ def test_fapi2_long_state_accepted(fapi2_harness: Fapi2Harness, plan: str) -> No
 def test_fapi2_state_only_outside_not_used(fapi2_harness: Fapi2Harness, plan: str) -> None:
     """Module ``state-only-outside-request-object-not-used`` (les 2 plans).
 
-    En profil ``unsigned``, le ``state`` poussé fait autorité ; un
-    ``state`` supplémentaire à l'appel ``/authorize`` est rejeté
-    (``invalid_request``, RFC 9126 §6.2) — issue admise par le module.
+    Le ``state`` n'existe que hors de la demande poussée : il est ignoré
+    avec ``request_uri`` (FAPI2-SP-5.3.2.2, RFC 9126 §6.2), le callback
+    revient sans ``state`` puis le code s'échange normalement.
     """
-    state = secrets.token_urlsafe(16)
     verifier = secrets.token_urlsafe(48)
-    params = fapi2_harness.authorize_params(state=state, code_challenge=pkce_challenge(verifier))
-    request_uri = fapi2_harness.push_ok(params)
-    response = fapi2_harness.raw_get(
-        "/authorize?"
-        + urlencode(
-            {
-                "request_uri": request_uri,
-                "client_id": fapi2_harness.client.client_id,
-                "state": secrets.token_urlsafe(8),
-            }
-        )
+    params = fapi2_harness.authorize_params(code_challenge=pkce_challenge(verifier))
+    params.pop("state")
+    result = fapi2_harness.start_authorization(
+        params, verifier=verifier, state=secrets.token_urlsafe(8)
     )
-    assert response.status_code == 400, response.text[:300]
-    assert response.json().get("error") == "invalid_request", response.text[:300]
+    _check_code_callback(result, "")
+    tokens = fapi2_harness.exchange_code(result, verifier)
+    assert tokens.get("id_token"), "échange du code sans id_token"
 
 
 @pytest.mark.conformance
@@ -874,7 +855,7 @@ def test_fapi2_assertion_rs256_fails(fapi2_harness: Fapi2Harness, plan: str) -> 
     supported`` (PS256 uniquement) : ``invalid_client`` (RFC 7523 §3,
     FAPI2-SP-5.3.2.2-13).
     """
-    assertion = fapi2_harness.assertion(audience=fapi2_harness.token_endpoint, algorithm="RS256")
+    assertion = fapi2_harness.assertion(audience=fapi2_harness.issuer, algorithm="RS256")
     response = fapi2_harness.token_request(
         {"grant_type": "client_credentials"}, assertion=assertion
     )
@@ -915,7 +896,7 @@ def test_fapi2_assertion_exp_in_past_fails(fapi2_harness: Fapi2Harness, plan: st
     ``exp`` de 5 minutes dans le passé : ``invalid_client`` (RFC 7523 §3).
     """
     now = int(time.time())
-    assertion = fapi2_harness.assertion(audience=fapi2_harness.token_endpoint, exp=now - 300)
+    assertion = fapi2_harness.assertion(audience=fapi2_harness.issuer, exp=now - 300)
     response = fapi2_harness.token_request(
         {"grant_type": "client_credentials"}, assertion=assertion
     )
@@ -930,8 +911,8 @@ def test_fapi2_assertion_exp_in_past_fails(fapi2_harness: Fapi2Harness, plan: st
 def test_fapi2_assertion_wrong_aud_fails(fapi2_harness: Fapi2Harness, plan: str) -> None:
     """Module ``ensure-client-assertion-with-wrong-aud-fails`` (les 2 plans).
 
-    ``aud`` hors {issuer, token_endpoint, par_endpoint} : ``invalid_client``
-    (RFC 7523 §3).
+    ``aud`` hors de l'issuer (seule audience admise pour un client FAPI2)
+    : ``invalid_client`` (RFC 7523 §3, FAPI2-SP-FINAL-5.3.2.1-8).
     """
     assertion = fapi2_harness.assertion(audience="https://evil.example/token")
     response = fapi2_harness.token_request(
@@ -951,7 +932,7 @@ def test_fapi2_assertion_no_sub_fails(fapi2_harness: Fapi2Harness, plan: str) ->
     ``sub`` absent (``RemoveSubFromClientAssertionClaims``) :
     ``invalid_client`` (RFC 7523 §2.2).
     """
-    assertion = fapi2_harness.assertion(audience=fapi2_harness.token_endpoint, remove=("sub",))
+    assertion = fapi2_harness.assertion(audience=fapi2_harness.issuer, remove=("sub",))
     response = fapi2_harness.token_request(
         {"grant_type": "client_credentials"}, assertion=assertion
     )
@@ -1011,11 +992,14 @@ def test_fapi2_dpop_negative_tests(fapi2_harness: Fapi2Harness, plan: str) -> No
 @pytest.mark.conformance
 @pytest.mark.parametrize("plan", ["final", "id2"])
 def test_fapi2_refresh_token(fapi2_harness: Fapi2Harness, plan: str) -> None:
-    """Module ``refresh-token`` (les 2 plans) : rotation + preuve + binding.
+    """Module ``refresh-token`` (les 2 plans) : non-rotation + preuve DPoP.
 
-    ``CallTokenEndpoint`` (refresh) avec preuve DPoP fraîche : rotation de
-    l'access token et du refresh token ; le refresh token devenu obsolète
-    est refusé (RFC 6749 §6, RFC 9449 §7.3).
+    ``CallTokenEndpoint`` (refresh) avec preuve DPoP fraîche : l'accès
+    et l'id_token tournent, ``refresh_token`` est **omis** (FAPI2 n'exige
+    pas la rotation — ``ValidateRefreshTokenNotRotated`` accepte l'absence
+    de champ, RFC 6749 §6 : l'ancien demeure valide) et l'ancien refresh
+    token reste réutilisable (``RefreshTokenRequestSteps`` le conserve
+    pour ses contrôles ultérieurs).
     """
     _, tokens = _happy(fapi2_harness)
     refresh_token = str(tokens["refresh_token"])
@@ -1023,9 +1007,9 @@ def test_fapi2_refresh_token(fapi2_harness: Fapi2Harness, plan: str) -> None:
     assert first.status_code == 200, first.text[:300]
     rotated = dict(first.json())
     assert rotated.get("access_token") != tokens.get("access_token")
-    assert rotated.get("refresh_token") != refresh_token, "le refresh token doit tourner"
+    assert "refresh_token" not in rotated, "le refresh token ne doit pas tourner"
     replay = fapi2_harness.refresh(refresh_token)
-    expect_invalid_grant(replay)
+    assert replay.status_code == 200, replay.text[:300]
 
 
 @pytest.mark.conformance
@@ -1267,54 +1251,61 @@ def test_fapi2_par_without_duplicate_parameters(fapi2_harness: Fapi2Harness, pla
     assert tokens.get("access_token")
 
 
-# --- Modules Final seuls : audience rejetée (RFC écart vs ID2) ---
+# --- Modules Final seuls : audience rejetée (aligné FAPI2-SP-FINAL-5.3.2.1-8) ---
 
 
 @pytest.mark.conformance
 def test_fapi2_final_array_as_audience_rejected(fapi2_harness: Fapi2Harness) -> None:
     """Module Final ``par-test-array-as-audience-fails`` (Final seul).
 
-    Le module Final attend le rejet d'une ``aud`` tableau ; notre OP suit
-    RFC 7523 §3 / RFC 9126 §6.1 et **accepte** (comme les modules ID2
-    positifs ``*-as-audience-for-client-jwt-assertion``) — écart documenté
-    dans TRACEABILITY.md, l'acceptation est assertée ici.
+    ``aud`` tableau : notre OP le refuse pour un client FAPI2
+    (gate ``isinstance(aud, str)``, FAPI2-SP-FINAL-5.3.2.1-8), PyJWT
+    admettrait le tableau contenant l'issuer.
     """
     form = fapi2_harness.authorize_params()
     response = fapi2_harness.push_form(
         form,
         audience=[fapi2_harness.issuer, fapi2_harness.token_endpoint],
     )
-    assert response.status_code == 201, (
-        f"aud tableau accepté (RFC 7523) : {response.status_code} {response.text[:200]}"
+    assert response.status_code in (400, 401), (
+        f"aud tableau accepté : {response.status_code} {response.text[:200]}"
     )
+    assert response.json().get("error") in ("invalid_client", "invalid_request"), response.text[
+        :200
+    ]
 
 
 @pytest.mark.conformance
 def test_fapi2_final_par_url_as_audience_rejected(fapi2_harness: Fapi2Harness) -> None:
     """Module Final ``par-test-par-endpoint-url-as-audience-fails`` (Final seul).
 
-    ``aud`` = URL du PAR : notre OP l'accepte (RFC 9126 §6.1, audience
-    légitime) — écart vs module Final documenté, comme le positif ID2
-    ``par-test-pushed-authorization-url-as-audience-for-client-jwt-assertion``.
+    ``aud`` = URL du PAR : refusée pour un client FAPI2 (issuer seul,
+    FAPI2-SP-FINAL-5.3.2.1-8).
     """
     form = fapi2_harness.authorize_params()
     response = fapi2_harness.push_form(form, audience=fapi2_harness.par_endpoint)
-    assert response.status_code == 201, response.text[:200]
+    assert response.status_code in (400, 401), response.text[:200]
+    assert response.json().get("error") in ("invalid_client", "invalid_request"), response.text[
+        :200
+    ]
 
 
 @pytest.mark.conformance
 def test_fapi2_final_token_url_as_audience_rejected(fapi2_harness: Fapi2Harness) -> None:
     """Module Final ``par-test-token-endpoint-url-as-audience-fails`` (Final seul).
 
-    ``aud`` = URL du token endpoint : accepté (RFC 7523 §2.1 audience
-    standard) — écart vs module Final documenté.
+    ``aud`` = URL du token endpoint : refusée pour un client FAPI2
+    (issuer seul, FAPI2-SP-FINAL-5.3.2.1-8).
     """
     form = fapi2_harness.authorize_params()
     response = fapi2_harness.push_form(form, audience=fapi2_harness.token_endpoint)
-    assert response.status_code == 201, response.text[:200]
+    assert response.status_code in (400, 401), response.text[:200]
+    assert response.json().get("error") in ("invalid_client", "invalid_request"), response.text[
+        :200
+    ]
 
 
-# --- Modules ID2 seuls : audience acceptée ---
+# --- Modules ID2 seuls : le plan ID2 attend l'acceptation, l'OP s'aligne sur Final ---
 
 
 @pytest.mark.conformance
@@ -1333,55 +1324,64 @@ def test_fapi2_id2_multiple_aud_in_request_object(fapi2_harness: Fapi2Harness) -
 def test_fapi2_id2_token_endpoint_aud_succeeds(fapi2_harness: Fapi2Harness) -> None:
     """Module ID2 ``ensure-client-assertion-with-token-endpoint-aud-succeeds``.
 
-    ``aud`` = token_endpoint sur l'assertion du token endpoint : accepté
-    (RFC 7523 §2.1 ; rejet = WARNING dans le module).
+    Le module ID2 attend l'acceptation (RFC 7523 §2.1) ; notre OP
+    s'aligne sur le profil Final et n'admet que l'issuer comme ``aud``
+    d'une ``client_assertion`` (FAPI2-SP-FINAL-5.3.2.1-8) — écart
+    documenté, le plan ID2 n'est pas joué en certification.
     """
-    _, tokens = _happy(fapi2_harness)
-    assert tokens.get("access_token")
-    refresh = fapi2_harness.refresh(
-        str(tokens["refresh_token"]),
+    code, _, verifier = _push_and_get_code(fapi2_harness)
+    response = fapi2_harness.token_request(
+        {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": fapi2_harness._redirect_uri,
+            "code_verifier": verifier,
+        },
+        audience=fapi2_harness.token_endpoint,
     )
-    assert refresh.status_code == 200, refresh.text[:300]
+    assert response.status_code in (400, 401), response.text[:300]
+    assert response.json().get("error") in ("invalid_client", "invalid_request"), response.text[
+        :300
+    ]
 
 
 @pytest.mark.conformance
 def test_fapi2_id2_par_url_aud_succeeds(fapi2_harness: Fapi2Harness) -> None:
-    """Module ID2 ``par-test-pushed-authorization-url-as-audience-…`` (accepté)."""
+    """Module ID2 ``par-test-pushed-authorization-url-as-audience-…``.
+
+    Le module ID2 attend l'acceptation (RFC 9126 §6.1) ; notre OP refuse
+    (issuer seul, FAPI2-SP-FINAL-5.3.2.1-8) — écart documenté.
+    """
     form = fapi2_harness.authorize_params()
     response = fapi2_harness.push_form(form, audience=fapi2_harness.par_endpoint)
-    assert response.status_code == 201, response.text[:200]
+    assert response.status_code in (400, 401), response.text[:200]
 
 
 @pytest.mark.conformance
 def test_fapi2_id2_token_url_aud_at_par_succeeds(fapi2_harness: Fapi2Harness) -> None:
     """Module ID2 ``par-test-token-endpoint-url-as-audience-for-client-jwt-…``.
 
-    ``aud`` = token_endpoint sur l'assertion du push : accepté (RFC 9126 §6.1).
+    Le module ID2 attend l'acceptation (RFC 9126 §6.1) ; notre OP refuse
+    (issuer seul, FAPI2-SP-FINAL-5.3.2.1-8) — écart documenté.
     """
     form = fapi2_harness.authorize_params()
     response = fapi2_harness.push_form(form, audience=fapi2_harness.token_endpoint)
-    assert response.status_code == 201, response.text[:200]
+    assert response.status_code in (400, 401), response.text[:200]
 
 
 @pytest.mark.conformance
 def test_fapi2_id2_array_audience_par_and_token(fapi2_harness: Fapi2Harness) -> None:
     """Module ID2 ``test-array-as-audience-for-client-jwt-assertion`` (RFC 7523 §3).
 
-    ``aud`` tableau acceptée au push et au token : le flux complet doit
-    réussir avec l'assertion tableau sur les deux endpoints.
+    Le module ID2 attend l'acceptation du ``aud`` tableau ; notre OP le
+    refuse (FAPI2-SP-FINAL-5.3.2.1-8) — écart documenté.
     """
-    state = secrets.token_urlsafe(16)
-    verifier = secrets.token_urlsafe(48)
-    params = fapi2_harness.authorize_params(state=state, code_challenge=pkce_challenge(verifier))
-    params["dpop_jkt"] = fapi2_harness.dpop.thumbprint
-    audience = [fapi2_harness.issuer, fapi2_harness.token_endpoint]
-    request_uri = fapi2_harness.push_ok(params, audience=audience)
-    result = fapi2_harness.run_flow(
-        request_uri=request_uri, client_id=fapi2_harness.client.client_id
+    form = fapi2_harness.authorize_params()
+    response = fapi2_harness.push_form(
+        form,
+        audience=[fapi2_harness.issuer, fapi2_harness.token_endpoint],
     )
-    _check_code_callback(result, state)
-    tokens = fapi2_harness.exchange_code(result, verifier, audience=audience)
-    _check_dpop_token(tokens, fapi2_harness.dpop.thumbprint)
+    assert response.status_code in (400, 401), response.text[:200]
 
 
 @pytest.mark.conformance

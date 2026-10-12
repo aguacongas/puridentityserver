@@ -410,7 +410,16 @@ class TokenUseCase:
         )
 
     async def _refresh(self, request: TokenRequest) -> TokenResponse | TokenError:
-        """Renouvelle les jetons à partir d'un refresh token opque (rotation)."""
+        """Renouvelle les jetons à partir d'un refresh token opaque.
+
+        Sauf profil FAPI2, le refresh token est **tourné** : l'ancien est
+        consommé et un nouveau est émis (RFC 6749 §6 + rotation). En
+        profil FAPI2 la rotation est sautée : l'accès/id_token changent,
+        le refresh token n'est pas renouvelé et le champ ``refresh_token``
+        est omis de la réponse (l'ancien demeure valide), comportement
+        admis par ``FAPI2SPFinalRefreshToken`` qui conserve le jeton pour
+        ses contrôles ultérieurs.
+        """
         if not request.refresh_token:
             return self._error("invalid_grant", "Paramètre refresh_token manquant")
 
@@ -436,15 +445,18 @@ class TokenUseCase:
         if isinstance(resources, TokenError):
             return resources
 
-        await self._refresh_tokens.consume(stored.token_hash)
-        refresh_token = await self._issue_refresh_token(
-            client,
-            stored.subject,
-            scopes,
-            now,
-            dpop_jkt=self._refresh_dpop_jkt(client, stored, binding),
-            resources=resources,
-        )
+        if client.fapi2_enabled:
+            refresh_token = ""
+        else:
+            await self._refresh_tokens.consume(stored.token_hash)
+            refresh_token = await self._issue_refresh_token(
+                client,
+                stored.subject,
+                scopes,
+                now,
+                dpop_jkt=self._refresh_dpop_jkt(client, stored, binding),
+                resources=resources,
+            )
         issued = await self._issue_tokens(
             client,
             stored.subject,
@@ -984,9 +996,12 @@ class TokenUseCase:
     ) -> TokenError | None:
         """Authentifie le client selon sa ``token_endpoint_auth_method`` (RFC 6749 §2.3).
 
-        L'``aud`` admise pour la ``client_assertion`` couvre l'issuer et le
-        token endpoint (RFC 7523 §3) : la suite FAPI1 signe avec l'issuer
-        (module ``EnsureClientAssertionWithIssAudSucceeds``).
+        L'``aud`` admise pour la ``client_assertion`` est l'issuer seul
+        pour un client FAPI2 (FAPI2-SP-FINAL-5.3.2.1-8 : le plan Final
+        signe avec ``CreateClientAuthenticationAssertionClaimsWithIss-
+        Audience``), l'issuer et le token endpoint sinon (RFC 7523 §3) —
+        la suite FAPI1 signe aussi avec l'issuer (module
+        ``EnsureClientAssertionWithIssAudSucceeds``).
         """
         detail = await authenticate_client(
             client,
@@ -994,12 +1009,23 @@ class TokenUseCase:
             assertions=self._client_assertions,
             assertion_type=request.client_assertion_type,
             assertion=request.client_assertion,
-            assertion_audience=(self._config.issuer.rstrip("/"), self._token_endpoint()),
+            assertion_audience=self._assertion_audiences(client),
             tls_certificate=request.tls_certificate,
         )
         if detail is None:
             return None
         return self._error("invalid_client", detail)
+
+    def _assertion_audiences(self, client: Client) -> tuple[str, ...]:
+        """Audiences admises de la ``client_assertion`` du token endpoint.
+
+        Issuer seul pour un client FAPI2, issuer et URL du token endpoint
+        sinon (sans doublon ni barre finale).
+        """
+        if client.fapi2_enabled:
+            issuer = self._config.issuer.rstrip("/")
+            return (issuer,) if issuer else ()
+        return (self._config.issuer.rstrip("/"), self._token_endpoint())
 
     def _token_endpoint(self) -> str:
         """URL du token endpoint, valeur de ``aud`` attendue des assertions."""
@@ -1165,13 +1191,22 @@ class TokenUseCase:
         dpop_jkt: str = "",
         resources: tuple[str, ...] = (),
     ) -> str:
-        """Génère, persiste (empreinte) et retourne un nouveau refresh token opque.
+        """Génère, persiste (empreinte) et retourne un nouveau refresh token opaque.
 
         ``dpop_jkt`` non vide lie le refresh token à la clé DPoP (RFC
-        9449 §5) : chaque renouvellement devra then présenter une preuve
+        9449 §5) : chaque renouvellement devra alors présenter une preuve
         signée par cette même clé. ``resources`` fixe les resource
         indicators (RFC 8707) que tout renouvellement devra reprendre.
+
+        Un client **confidentiel** ne porte jamais cette liaison : il
+        s'authentifie par ``private_key_jwt`` (ou mTLS) et la suite
+        Certification FAPI2 renouvelle la preuve DPoP avec une **nouvelle
+        clé** à chaque appel du refresh grant (``RefreshTokenRequestSteps``)
+        — seuls les clients publics, dont le refresh token est le unique
+        facteur de possession, restent liés à la clé prouvée.
         """
+        if client.client_type is ClientType.CONFIDENTIAL:
+            dpop_jkt = ""
         ttl = resolve_lifetime_seconds(
             client.refresh_token_lifetime_seconds, self._config.refresh_token_ttl_seconds
         )

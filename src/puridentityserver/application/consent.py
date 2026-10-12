@@ -27,15 +27,20 @@ class ConsentUseCase:
         """Vrai si le client exige un consentement que ``subject`` n'a pas encore donné.
 
         Un client non marqué ``require_consent`` ne passe jamais par la
-        page de consentement ; pour les autres, la demande est déjà
-        couverte quand le consentement stocké inclut tous les scopes
-        demandés (``Consent.covers``). ``force`` (``prompt=consent``,
-        OIDC Core 1.0 §3.1.2.1) impose l'écran même quand le
-        consentement stocké couvre la demande : réafficher le choix est
-        exactement l'objet de la demande.
+        page de consentement. Pour un client **FAPI/FAPI2**, l'écran est
+        exigé à **chaque** demande (drapeau ou non) : la suite
+        Certification doit pouvoir refuser même après un consentement
+        mémorisé (``user-rejects-authentication``). Pour les autres, la
+        demande est déjà couverte quand le consentement stocké inclut
+        tous les scopes demandés (``Consent.covers``). ``force``
+        (``prompt=consent``, OIDC Core 1.0 §3.1.2.1) impose l'écran même
+        quand le consentement stocké couvre la demande : réafficher le
+        choix est exactement l'objet de la demande.
         """
         if not client.require_consent:
             return False
+        if client.fapi_enabled or client.fapi2_enabled:
+            return True
         if force:
             return True
         stored = await self._repository.find(subject, client.client_id)

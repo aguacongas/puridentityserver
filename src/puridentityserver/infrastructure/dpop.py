@@ -17,6 +17,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 import jwt as pyjwt
 from jwt.api_jwk import PyJWK
@@ -29,7 +30,7 @@ from puridentityserver.domain.dpop import (
     DPoPReplay,
     jti_hash,
 )
-from puridentityserver.domain.jwks import ASYMMETRIC_ALGORITHMS
+from puridentityserver.domain.jwks import DPOP_SIGNING_ALGORITHMS
 from puridentityserver.interfaces.domain.dpop import DpopValidationError
 from puridentityserver.interfaces.repositories.dpop_replay_repository import (
     DpopReplayRepository,
@@ -38,10 +39,11 @@ from puridentityserver.interfaces.repositories.dpop_replay_repository import (
 if TYPE_CHECKING:
     from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
 
-#: Algorithmes JWS acceptés pour une preuve : les familles asymétriques
-#: supportées par le serveur (RFC 9449 §4.2 — ``none`` et les algorithmes
-#: symétriques HS* y sont explicitement interdits).
-_DPOP_ALGORITHMS = frozenset(algorithm.value for algorithm in ASYMMETRIC_ALGORITHMS)
+#: Algorithmes JWS acceptés pour une preuve : les familles PSS et ECDSA
+#: publiées au discovery (RFC 9449 §4.2 — ``none``, la famille symétrique
+#: HS* et la famille RS* (PKCS#1 v1.5) y sont explicitement interdits ;
+#: FAPI2-SP-FINAL-5.4 exige le rejet d'une preuve ``RS256``).
+_DPOP_ALGORITHMS = frozenset(DPOP_SIGNING_ALGORITHMS)
 
 #: Membres JWK révélant une clé privée ou symétrique (RFC 7517 §2 : le
 #: proof-of-possession transporte exclusivement la clé **publique**).
@@ -204,7 +206,7 @@ def _check_payload(
     htu_claim = claims.get("htu")
     if not isinstance(htu_claim, str) or not htu_claim:
         return _reject("Claim 'htu' absente")
-    if _strip_query_fragment(htu_claim) != htu:
+    if not _htu_matches(_strip_query_fragment(htu_claim), htu):
         return _reject("Claim 'htu' ne correspond pas à l'endpoint appelé")
 
     now = datetime.now(timezone.utc)
@@ -296,6 +298,39 @@ def _check_signature(
 def _strip_query_fragment(url: str) -> str:
     """Retire la query string et le fragment d'une URL (RFC 9449 §4.3)."""
     return url.partition("?")[0].partition("#")[0]
+
+
+def _htu_matches(claim_url: str, endpoint_url: str) -> bool:
+    """Compare ``htu`` après normalisation scheme-based (RFC 3986 §6.2.3).
+
+    La suite Certification attend que ``HTTPS://HOST:443/path`` et
+    ``https://host/path`` désignent la même ressource : schéma et hôte se
+    comparent indépendamment de la casse et le port par défaut (80/443)
+    est supprimé avant l'égalité.
+    """
+    return _normalize_htu(claim_url) == _normalize_htu(_strip_query_fragment(endpoint_url))
+
+
+def _normalize_htu(url: str) -> str:
+    """Normalise une URL pour la comparaison ``htu`` (RFC 3986 §6.2.3).
+
+    ``urlsplit`` met déjà schéma et hôte en minuscules ; la fonction
+    retire le port par défaut du schéma et garantit un chemin non vide.
+    """
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    default_port = {"http": 80, "https": 443}.get(parts.scheme)
+    if port is None or (default_port is not None and port == default_port):
+        netloc = host
+    else:
+        netloc = f"{host}:{port}"
+    return f"{parts.scheme}://{netloc}{parts.path or '/'}"
 
 
 @dataclass(frozen=True, slots=True)

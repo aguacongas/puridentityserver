@@ -51,7 +51,8 @@ class PushedAuthorizationConfig:
     ``issuer``, ``token_endpoint`` et ``par_endpoint`` sont les audiences
     admises pour la ``client_assertion`` du push : l'AS **doit** accepter
     son issuer, l'URL du token endpoint et l'URL du endpoint PAR (RFC 9126
-    §2, exigence FAPI1 ``PAR-2``).
+    §2, exigence FAPI1 ``PAR-2``) — sauf pour un client FAPI2, où
+    l'issuer seul est admis (FAPI2-SP-FINAL-5.3.2.1-8).
     """
 
     ttl_seconds: int = 90
@@ -161,12 +162,18 @@ class PushedAuthorizationUseCase:
         self._client_assertions = client_assertions
         self._request_object_resolver = request_object_resolver
 
-    def _assertion_audiences(self) -> tuple[str, ...]:
+    def _assertion_audiences(self, client: Client) -> tuple[str, ...]:
         """Audiences admises de la ``client_assertion`` du push (RFC 9126 §2).
 
-        Issuer, URL du token endpoint et URL du endpoint PAR, sans
-        doublon ni barre finale.
+        Pour un client FAPI2, l'issuer seul : ni l'URL du token endpoint ni
+        celle du ``/par`` ne sont admises (FAPI2-SP-FINAL-5.3.2.1-8, le plan
+        Final signe avec ``CreateClientAuthenticationAssertionClaimsWithIss-
+        Audience``). Sinon issuer, URL du token endpoint et URL du endpoint
+        PAR (RFC 9126 §6.1), sans doublon ni barre finale.
         """
+        if client.fapi2_enabled:
+            issuer = self._config.issuer.rstrip("/")
+            return (issuer,) if issuer else ()
         values = (
             self._config.issuer,
             self._config.token_endpoint,
@@ -181,12 +188,12 @@ class PushedAuthorizationUseCase:
         ``iss`` non vérifié de la ``client_assertion`` (formulaire
         ``private_key_jwt`` — la signature reste intégralement contrôlée).
         La ``client_assertion`` est vérifiée avec la même chaîne que le
-        token endpoint (RFC 7523 §2.2) mais pour l'**issuer, l'URL du
-        token endpoint et l'URL du ``/par``** comme audiences : l'AS doit
-        accepter ces trois valeurs (RFC 9126 §2, exigence FAPI1
-        ``PAR-2``), toute autre ``aud`` étant refusée. Un client
-        confidentiel sans aucun secret ni assertion est refusé (RFC 6749
-        §2.3.1).
+        token endpoint (RFC 7523 §2.2) et les audiences de
+        :meth:`_assertion_audiences` — l'issuer seul pour un client FAPI2
+        (FAPI2-SP-FINAL-5.3.2.1-8), issuer, URL du token endpoint et URL
+        du ``/par`` sinon (RFC 9126 §2, exigence FAPI1 ``PAR-2``) —,
+        toute autre ``aud`` étant refusée. Un client confidentiel sans
+        aucun secret ni assertion est refusé (RFC 6749 §2.3.1).
         """
         client_id = params.get("client_id", "")
         assertion = params.get("client_assertion", "")
@@ -212,7 +219,7 @@ class PushedAuthorizationUseCase:
             assertions=self._client_assertions,
             assertion_type=params.get("client_assertion_type", ""),
             assertion=assertion,
-            assertion_audience=self._assertion_audiences(),
+            assertion_audience=self._assertion_audiences(client),
         )
         if detail is not None:
             return PushError(

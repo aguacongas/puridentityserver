@@ -809,8 +809,17 @@ class AuthorizeUseCase:
     def _build_redirect_uri(
         self, redirect_uri: str, response_mode: ResponseMode, params: list[str]
     ) -> str:
-        """Construit l'URL de retour : query (query string) ou fragment (#...)."""
-        separator = "#" if response_mode is ResponseMode.FRAGMENT else "?"
+        """Construit l'URL de retour : query (query string) ou fragment (#...).
+
+        Une ``redirect_uri`` déjà porteuse d'une query (paramètres statiques
+        du RP) impose ``&`` : un second ``?`` séparerait deux query strings
+        et la suite de certification ne lirait plus les paramètres de retour
+        (``CheckMatchingCallbackParameters``).
+        """
+        if response_mode is ResponseMode.FRAGMENT:
+            separator = "#"
+        else:
+            separator = "&" if "?" in redirect_uri else "?"
         return f"{redirect_uri.rstrip('/')}{separator}{'&'.join(params)}"
 
 

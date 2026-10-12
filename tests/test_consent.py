@@ -128,6 +128,35 @@ def test_is_required_force_overrides_stored_consent() -> None:
     assert run(usecase.is_required(plain, "alice", frozenset({Scope.OPENID}), force=True)) is False
 
 
+def test_is_required_fapi_client_reprompts_despite_stored_consent() -> None:
+    """Un client FAPI exige l'écran à chaque demande (suite doit pouvoir refuser)."""
+    usecase = ConsentUseCase(InMemoryConsentRepository())
+    client = Client(
+        client_id="app-with-consent",
+        redirect_uris=frozenset({_REDIRECT_URI}),
+        scopes=frozenset({Scope.OPENID, Scope.PROFILE}),
+        require_consent=True,
+        fapi_enabled=True,
+    )
+    run(usecase.grant("alice", client.client_id, frozenset({Scope.OPENID, Scope.PROFILE})))
+
+    assert run(usecase.is_required(client, "alice", frozenset({Scope.OPENID}))) is True
+
+
+def test_is_required_fapi_flag_without_require_consent_skips_page() -> None:
+    """Le drapeau FAPI seul (sans ``require_consent``) n'active pas l'écran."""
+    usecase = ConsentUseCase(InMemoryConsentRepository())
+    client = Client(
+        client_id="app-with-consent",
+        redirect_uris=frozenset({_REDIRECT_URI}),
+        scopes=frozenset({Scope.OPENID}),
+        require_consent=False,
+        fapi2_enabled=True,
+    )
+
+    assert run(usecase.is_required(client, "alice", frozenset({Scope.OPENID}))) is False
+
+
 def test_grant_unions_scopes_across_approvals() -> None:
     repository = InMemoryConsentRepository()
     usecase = ConsentUseCase(repository)
