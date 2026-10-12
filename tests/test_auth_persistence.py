@@ -42,6 +42,10 @@ _CLIENT = Client(
     frontchannel_logout_session_required=True,
     backchannel_logout_uri="https://ssr.example/back-logout",
     backchannel_logout_session_required=True,
+    par_required=True,
+    require_consent=True,
+    require_dpop=True,
+    fapi_enabled=True,
 )
 
 _T = TypeVar("_T")

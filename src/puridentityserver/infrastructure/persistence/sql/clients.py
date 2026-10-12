@@ -96,6 +96,8 @@ class ClientRow(PersistenceBase):
     par_required: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
     require_consent: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
     require_dpop: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
+    fapi_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
+    fapi2_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
 
 
 class SQLClientRepository:
@@ -199,6 +201,8 @@ def _to_row(client: Client) -> ClientRow:
         par_required=client.par_required,
         require_consent=client.require_consent,
         require_dpop=client.require_dpop,
+        fapi_enabled=client.fapi_enabled,
+        fapi2_enabled=client.fapi2_enabled,
     )
 
 
@@ -276,4 +280,6 @@ def _from_row(row: ClientRow) -> Client:
         par_required=row.par_required,
         require_consent=row.require_consent,
         require_dpop=row.require_dpop,
+        fapi_enabled=row.fapi_enabled,
+        fapi2_enabled=row.fapi2_enabled,
     )
