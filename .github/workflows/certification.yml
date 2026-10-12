@@ -177,6 +177,16 @@ jobs:
             curl -fsS --max-time 15 "$OP_URL/.well-known/jwks.json" \
               | python3 -c 'import json,sys;print(",".join(sorted(str(k.get("kid","")) for k in json.load(sys.stdin)["keys"])))' 2>/dev/null || true
           }
+          # `ref=$GITHUB_SHA` : deploy du commit EXACT du run. `render.yaml`
+          # verrouille `branch: main` : sans ce paramètre, une validation sur
+          # branche de PR déploierait main et l'OP ne recevrait jamais la
+          # config de la branche (ex. clients_seed FAPI, issue #113). Sur
+          # main, le SHA est la tête de branche : comportement identique.
+          hook="$RENDER_DEPLOY_HOOK_URL"
+          case "$hook" in
+            *\?*) hook="${hook}&ref=${GITHUB_SHA}" ;;
+            *) hook="${hook}?ref=${GITHUB_SHA}" ;;
+          esac
           before="$(jwks_kids)"
           if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
             echo "Secret RENDER_DEPLOY_HOOK_URL absent : redéploiement manuel requis."
@@ -184,11 +194,11 @@ jobs:
           fi
           if [ -z "$before" ]; then
             echo "::warning::JWKS injoignable avant le hook : le remplacement de l'instance ne sera pas confirmé."
-            curl -sSf -X POST "$RENDER_DEPLOY_HOOK_URL"
+            curl -sSf -X POST "$hook"
             exit 0
           fi
-          curl -sSf -X POST "$RENDER_DEPLOY_HOOK_URL"
-          echo "Déploiement déclenché — kid avant : $before"
+          curl -sSf -X POST "$hook"
+          echo "Déploiement déclenché (ref $GITHUB_SHA) — kid avant : $before"
           deadline=$((SECONDS + 900))
           while [ $SECONDS -lt $deadline ]; do
             after="$(jwks_kids)"

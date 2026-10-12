@@ -203,10 +203,21 @@ uv run python samples/conformance-smoke/smoke_test.py
   crashé avant tout module terminé (`run-test-plan` en code retour non nul,
   `results/` vide) alors que le job resterait vert en mode witness. Causes
   vécues (issue #113) : client statique absent de la config
-  (« must contain a client configuration ») ou variante de plan manquante au
-  sélecteur (« requires a value for variant … »). Corriger la config du plan
-  (`plans/<plan>.json`, `config.render.toml`) ou le sélecteur de
-  `certification.yml`.
+  (« must contain a client configuration »), variante de plan manquante au
+  sélecteur (« requires a value for variant … »), ou
+  `ValidateMTLSCertificatesAsX509` en précondition échouée
+  (« couldn't find required object … mutual_tls_authentication »). Corriger
+  la config du plan (`plans/<plan>.json`, `config.render.toml`) ou le
+  sélecteur de `certification.yml`.
+- **`mtls.cert` / `mtls.key` obligatoires (plan fapi1)** : la suite FAPI1
+  Advanced Final valide le certificat client en X.509 à chaque module
+  (`ValidateMTLSCertificatesAsX509`, precondition = interruption fatale même
+  en mode continue) — les deux clients du plan `fapi1.json` portent un couple
+  PEM auto-signé (cert + clé PKCS8) ; `fapi2` n'a pas besoin de certs (contrôle
+  conditionnel au variant `client_auth_type=mtls`).
+- **OP déployé sans la config de la branche** (`error=invalid_client` au PAR) :
+  `render.yaml` verrouille `branch: main` — le workflow ajoute `ref=$GITHUB_SHA`
+  au deploy hook Render pour déployer le commit exact du run.
 - **ERREUR sur Redis/nginx** : relancer ; le premier pull des images
   `registry.gitlab.com/openid/conformance-suite` est long (~10 min).
 
