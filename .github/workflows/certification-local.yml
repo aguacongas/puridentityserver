@@ -107,9 +107,13 @@ jobs:
 
       - name: Lancement du plan fapi1 (witness)
         env:
-          # Suite self-hosted en mode dev : le DummyUserFilter injecte un
-          # utilisateur — AVEC un token Bearer la demande est rejetée (401). On
-          # n'envoie donc AUCUN header Authorization (token vide -> None).
+          # Mode dev OFFICIEL de la suite pour du self-hosted : le driver met
+          # alors token=None (AUCUN header Authorization — la suite en dev
+          # injecte un utilisateur via DummyUserFilter et REJETTE un Bearer
+          # invalide en 401 ; un token vide donnerait « Illegal header value »)
+          # et désactive la vérification SSL (cert auto-signé de l'OP).
+          CONFORMANCE_DEV_MODE: "1"
+          # Sans effet en dev_mode (token neutralisé) — conservé par sécurité.
           CONFORMANCE_TOKEN: ""
           DISABLE_SSL_VERIFY: "1"
           CONFORMANCE_MODULE_TIMEOUT: "600"
