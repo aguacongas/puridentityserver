@@ -737,6 +737,26 @@ def test_max_age_expired_on_unrelated_session_reprompts(
     assert response.headers["location"].startswith("/login?next=")
 
 
+def test_max_age_fresh_session_does_not_reprompt() -> None:
+    """``max_age=1`` non dépassé : le code est émis sans reconnexion."""
+    with TestClient(_require_login_app()) as client:
+        login = client.post(
+            "/login",
+            data={"username": "alice@example.com", "password": "password", "next": "/"},
+            follow_redirects=False,
+        )
+        assert login.status_code == 302
+
+        response = client.get(
+            "/authorize",
+            params={**_authorize_login_params(), "max_age": "1"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert response.headers["location"].startswith("https://app.example/callback?")
+
+
 def test_max_age_expired_login_for_this_request_does_not_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
