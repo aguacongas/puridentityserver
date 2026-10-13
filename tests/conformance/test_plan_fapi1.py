@@ -769,12 +769,16 @@ def test_fapi1_refresh_token(fapi_harness: FapiHarness, method: str) -> None:
     (STOP OIDC 11) ajoute ``prompt=consent`` quand ``offline_access`` est
     demandé → ``refresh_token`` obligatoire (``fireTestSkipped`` sinon),
     caractères RFC 6749 §A.17, puis ``RefreshTokenRequestSteps`` : refresh en
-    200 avec ``access_token`` + ``id_token``. Le second client rejoue le flux
-    (state 128), puis un refresh **cross-client** (refresh_token du client 2
-    avec l'assertion du client 1) doit échouer. Exclus du rejeu : refresh
-    avec cert mTLS falsifié (``CallTokenEndpointAllowingTLSFailure``,
-    FAPI1-ADV-5.2.2-6) et ``switchToClient1AndTryClient2AccessToken`` —
-    voir ``TRACEABILITY.md``.
+    200 avec ``access_token`` + ``id_token``. Le bloc « MTLS sender
+    constrained refresh_token without proof of possession » rejoue un
+    renouvellement **sans certificat** (en-tête ``X-SSL-Client-Cert``
+    retiré, FAPI1-ADV-5.2.2-6) → 400 + ``invalid_client``/``invalid_grant``.
+    Le second client rejoue le flux (state 128), puis un refresh
+    **cross-client** (refresh_token du client 2 avec l'assertion du
+    client 1) doit échouer, et ``switchToClient1AndTryClient2AccessToken``
+    appelle la ressource avec le certificat du client 1 et l'access token
+    lié du client 2 → 401 (RFC 8705 §3.3). Exclu du rejeu : les vérifications
+    TLS/ciphers des endpoints — voir ``TRACEABILITY.md``.
     """
 
     def _allowed_chars(value: str) -> bool:
@@ -797,6 +801,20 @@ def test_fapi1_refresh_token(fapi_harness: FapiHarness, method: str) -> None:
     assert first_tokens.get("id_token"), sorted(first_tokens)
     rotated = str(first_tokens.get("refresh_token", refresh_token))
     assert _allowed_chars(rotated), "refresh_token rotaté hors RFC 6749 §A.17"
+
+    poisoned = fapi_harness.token_request(
+        {"grant_type": "refresh_token", "refresh_token": rotated},
+        present_certificate=False,
+    )
+    assert poisoned.status_code == 400, (
+        f"refresh sans certificat accepté ({poisoned.status_code}) : {poisoned.text[:300]}"
+    )
+    poisoned_payload = dict(poisoned.json())
+    assert poisoned_payload.get("error") in (
+        "invalid_client",
+        "invalid_grant",
+        "invalid_request",
+    ), poisoned_payload
 
     fapi_harness.switch(FAPI_CLIENT_2)
     verifier2 = new_verifier() if method == "pushed" else ""
@@ -821,6 +839,12 @@ def test_fapi1_refresh_token(fapi_harness: FapiHarness, method: str) -> None:
     cross_payload = dict(cross.json())
     assert cross_payload.get("error") in ("invalid_grant", "invalid_client", "invalid_request"), (
         cross_payload
+    )
+
+    resource_cross = fapi_harness.resource(str(tokens2["access_token"]))
+    assert resource_cross.status_code == 401, (
+        f"jeton client 2 accepté avec le certificat du client 1 "
+        f"({resource_cross.status_code}) : {resource_cross.text[:300]}"
     )
 
 

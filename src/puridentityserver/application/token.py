@@ -295,6 +295,7 @@ class TokenUseCase:
 
         await self._codes.consume(auth_code.code)
 
+        tls_cert_hash = _tls_certificate_bound_hash(client, request)
         refresh_token = ""
         if Scope.OFFLINE_ACCESS in auth_code.scopes:
             refresh_token = await self._issue_refresh_token(
@@ -304,6 +305,7 @@ class TokenUseCase:
                 now,
                 dpop_jkt=binding.jkt if binding.bound else "",
                 resources=resources,
+                tls_cert_hash=tls_cert_hash,
             )
         issued = await self._issue_tokens(
             client,
@@ -317,7 +319,7 @@ class TokenUseCase:
             claims=auth_code.claims,
             dpop_jkt=binding.jkt if binding.bound else "",
             resources=resources,
-            tls_cert_hash=_tls_certificate_bound_hash(client, request),
+            tls_cert_hash=tls_cert_hash,
         )
         if isinstance(issued, TokenError):
             return issued
@@ -436,6 +438,14 @@ class TokenUseCase:
             return resolved
         stored, scopes = resolved
 
+        tls_cert_hash = _tls_certificate_bound_hash(client, request)
+        if stored.tls_cert_hash and tls_cert_hash != stored.tls_cert_hash:
+            return self._error(
+                "invalid_grant",
+                "Refresh token lié au certificat client mTLS (RFC 8705 §3.3) : "
+                "certificat absent ou différent de celui d'émission",
+            )
+
         now = datetime.now(timezone.utc)
         binding = await self._evaluate_dpop(client, request, bound_jkt=stored.dpop_jkt)
         if isinstance(binding, TokenError):
@@ -456,6 +466,7 @@ class TokenUseCase:
                 now,
                 dpop_jkt=self._refresh_dpop_jkt(client, stored, binding),
                 resources=resources,
+                tls_cert_hash=tls_cert_hash,
             )
         issued = await self._issue_tokens(
             client,
@@ -465,7 +476,7 @@ class TokenUseCase:
             now=now,
             dpop_jkt=binding.jkt if binding.bound else "",
             resources=resources,
-            tls_cert_hash=_tls_certificate_bound_hash(client, request),
+            tls_cert_hash=tls_cert_hash,
         )
         if isinstance(issued, TokenError):
             return issued
@@ -728,6 +739,7 @@ class TokenUseCase:
                 now,
                 dpop_jkt=dpop_jkt,
                 resources=resources,
+                tls_cert_hash=tls_cert_hash,
             )
         issued = await self._issue_tokens(
             client,
@@ -867,6 +879,7 @@ class TokenUseCase:
                 now,
                 dpop_jkt=dpop_jkt,
                 resources=resources,
+                tls_cert_hash=tls_cert_hash,
             )
         issued = await self._issue_tokens(
             client,
@@ -1002,7 +1015,20 @@ class TokenUseCase:
         Audience``), l'issuer et le token endpoint sinon (RFC 7523 §3) —
         la suite FAPI1 signe aussi avec l'issuer (module
         ``EnsureClientAssertionWithIssAudSucceeds``).
+
+        Un client ``tls_client_certificate_bound_access_tokens`` (RFC 8705
+        §3.1) doit en plus présenter un certificat client à chaque appel,
+        au-delà de sa méthode d'authentification : sans certificat, la
+        demande est refusée ``invalid_client`` (FAPI1-ADV-5.2.2-6).
         """
+        if client.tls_client_certificate_bound_access_tokens and (
+            request.tls_certificate is None or request.tls_certificate.der is None
+        ):
+            return self._error(
+                "invalid_client",
+                "Certificat client mTLS requis (RFC 8705 §3.1, "
+                "tls_client_certificate_bound_access_tokens)",
+            )
         detail = await authenticate_client(
             client,
             client_secret=request.client_secret,
@@ -1190,6 +1216,7 @@ class TokenUseCase:
         *,
         dpop_jkt: str = "",
         resources: tuple[str, ...] = (),
+        tls_cert_hash: str = "",
     ) -> str:
         """Génère, persiste (empreinte) et retourne un nouveau refresh token opaque.
 
@@ -1197,8 +1224,11 @@ class TokenUseCase:
         9449 §5) : chaque renouvellement devra alors présenter une preuve
         signée par cette même clé. ``resources`` fixe les resource
         indicators (RFC 8707) que tout renouvellement devra reprendre.
+        ``tls_cert_hash`` non vide lie le refresh token au certificat
+        client mTLS présenté (RFC 8705 §3.3) : tout renouvellement devra
+        présenter le même certificat.
 
-        Un client **confidentiel** ne porte jamais cette liaison : il
+        Un client **confidentiel** ne porte jamais la liaison DPoP : il
         s'authentifie par ``private_key_jwt`` (ou mTLS) et la suite
         Certification FAPI2 renouvelle la preuve DPoP avec une **nouvelle
         clé** à chaque appel du refresh grant (``RefreshTokenRequestSteps``)
@@ -1220,6 +1250,7 @@ class TokenUseCase:
                 expires_at=now + timedelta(seconds=ttl),
                 dpop_jkt=dpop_jkt,
                 resource_uris=resources,
+                tls_cert_hash=tls_cert_hash,
             )
         )
         return value
@@ -1314,16 +1345,22 @@ def _access_token_additional_claims(
 def _tls_certificate_bound_hash(client: Client, request: TokenRequest) -> str:
     """Empreinte du certificat client liant l'access token émis (RFC 8705 §3.3).
 
-    Le jeton n'est lié que si le client s'authentifie par certificat
-    mTLS (``tls_client_auth`` / ``self_signed_tls_client_auth``) et si
-    la requête porte réellement ce certificat : ``cnf.x5t#S256`` reprend
-    l'empreinte base64url(SHA-256(DER)). Chaîne vide = jeton porteur
-    classique (aucune autre méthode d'authentification ne voit son jeton
-    lié, y compris derrière un proxy qui poserait des en-têtes TLS).
+    Le jeton est lié si le client s'authentifie par certificat mTLS
+    (``tls_client_auth`` / ``self_signed_tls_client_auth``) ou s'il est
+    enregistré ``tls_client_certificate_bound_access_tokens`` (RFC 8705
+    §3.1) — auquel cas la présence du certificat est déjà exigée par
+    ``_authenticate_client`` — et si la requête porte réellement ce
+    certificat : ``cnf.x5t#S256`` reprend l'empreinte
+    base64url(SHA-256(DER)). Chaîne vide = jeton porteur classique
+    (aucune autre méthode d'authentification ne voit son jeton lié, y
+    compris derrière un proxy qui poserait des en-têtes TLS).
     """
-    if client.token_endpoint_auth_method not in (
-        TokenEndpointAuthMethod.TLS_CLIENT_AUTH,
-        TokenEndpointAuthMethod.SELF_SIGNED_TLS_CLIENT_AUTH,
+    if not client.tls_client_certificate_bound_access_tokens and (
+        client.token_endpoint_auth_method
+        not in (
+            TokenEndpointAuthMethod.TLS_CLIENT_AUTH,
+            TokenEndpointAuthMethod.SELF_SIGNED_TLS_CLIENT_AUTH,
+        )
     ):
         return ""
     certificate = request.tls_certificate

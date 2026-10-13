@@ -5,9 +5,16 @@ Le certificat est lu depuis deux sources complémentaires :
 - le contexte TLS de l'appareil (``request.scope["ssl_object"]``, un
   ``ssl.SSLSocket``) quand uvicorn termine la TLS — typiquement un
   déploiement ``https`` direct ;
-- les en-têtes posés par un proxy de terminaison TLS (nginx ``$ssl_client_cert``
-  sous ``X-SSL-Client-Cert``, Envoy ``X-Forwarded-Client-Cert``) et le sujet
-  ``$ssl_client_s_dn`` sous ``X-SSL-Client-S-DN`` — le déploiement web usuel.
+- les en-têtes posés par un proxy de terminaison TLS (Cloudflare
+  Transform Rules RFC 9440 ``cf.tls_client_auth.*``, nginx
+  ``$ssl_client_cert``/``$ssl_client_s_dn``, Envoy, HAProxy…) — le
+  déploiement web usuel.
+
+Les noms de ces en-têtes sont **configurables** (``ClientCertificateHeaderNames``,
+renseignés par ``Settings.client_certificate_header`` /
+``client_certificate_dn_header``) pour s'adapter à n'importe quelle
+plateforme de terminaison. Valeur du port PEM : elle est dé-URL encodée
+si besoin (les proxies peuvent encoder les sauts de ligne en ``%0A``).
 
 Le résultat normalisé (``ClientCertificate``, domaine) permet ensuite au
 token endpoint de comparer le certificat au lien enregistré pour le client.
@@ -15,6 +22,7 @@ token endpoint de comparer le certificat au lien enregistré pour le client.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from ssl import SSLSocket
 from typing import cast
 from urllib.parse import unquote
@@ -26,7 +34,27 @@ from fastapi import Request
 from puridentityserver.domain.authorization import ClientCertificate
 
 
-def extract_client_certificate(request: Request) -> ClientCertificate:
+@dataclass(frozen=True, slots=True)
+class ClientCertificateHeaderNames:
+    """Noms d'en-têtes HTTP portant le certificat client mTLS (proxy).
+
+    ``certificate`` reçoit le PEM du certificat client (éventuellement
+    URL-encodé) ; ``subject_dn`` reçoit le sujet RFC 4514 (repli quand le
+    PEM n'est pas transmis, ex. ``tls_client_auth`` par sujet).
+    """
+
+    certificate: str = "X-SSL-Client-Cert"
+    subject_dn: str = "X-SSL-Client-S-DN"
+
+
+#: Noms d'en-têtes par défaut (nginx / déploiements existants).
+DEFAULT_CLIENT_CERTIFICATE_HEADERS = ClientCertificateHeaderNames()
+
+
+def extract_client_certificate(
+    request: Request,
+    header_names: ClientCertificateHeaderNames = DEFAULT_CLIENT_CERTIFICATE_HEADERS,
+) -> ClientCertificate:
     """Extrait le certificat client de la requête (contexte TLS puis en-têtes)."""
     ssl_object = getattr(request, "scope", {}).get("ssl_object")
     if isinstance(ssl_object, SSLSocket):
@@ -34,40 +62,36 @@ def extract_client_certificate(request: Request) -> ClientCertificate:
         if der:
             return _from_der(der)
 
-    der = _der_from_headers(request)
+    der = _der_from_headers(request, header_names)
     if der is not None:
         return _from_der(der)
 
-    subject_dn = request.headers.get("X-SSL-Client-S-DN", "")
-    if not subject_dn:
-        subject_dn = request.headers.get("X-SSL-Client-SN", "")
+    subject_dn = request.headers.get(header_names.subject_dn, "")
     if subject_dn:
-        return ClientCertificate(der=None, subject_dn=subject_dn)
+        return ClientCertificate(der=None, subject_dn=_normalize_header_value(subject_dn))
     return ClientCertificate()
 
 
-def _der_from_headers(request: Request) -> bytes | None:
+def _normalize_header_value(value: str) -> str:
+    r"""Dé-URL-encode puis rétablit les sauts de ligne (``%0A`` ou ``\n`` littéral).
+
+    Les proxies de terminaison TLS encodent le PEM différemment : URL
+    encoding (``%0A``) ou séquences ``\n`` deux-caractères dans l'en-tête.
+    """
+    return unquote(value).replace("\\n", "\n").replace("\\r", "\r").strip()
+
+
+def _der_from_headers(request: Request, header_names: ClientCertificateHeaderNames) -> bytes | None:
     """Retourne la forme DER d'un certificat PEM reçu par en-tête de proxy."""
-    pem = request.headers.get("X-SSL-Client-Cert", "")
+    pem = _normalize_header_value(request.headers.get(header_names.certificate, ""))
     if not pem:
-        xfcc = request.headers.get("X-Forwarded-Client-Cert", "")
-        if xfcc:
-            pem = unquote(xfcc)
-    pem_user = _clean_pem(pem)
-    if not pem_user:
         return None
     try:
-        return x509.load_pem_x509_certificate(pem_user.encode("ascii")).public_bytes(
+        return x509.load_pem_x509_certificate(pem.encode("ascii")).public_bytes(
             cast(Encoding, Encoding.DER)
         )
     except ValueError:
         return None
-
-
-def _clean_pem(pem: str) -> str:
-    r"""Normalise un PEM reçu par en-tête (sauts de ligne échappés en ``\\n``)."""
-    cleaned = pem.replace("\\n", "\n").replace("\\r", "\r")
-    return cleaned.strip()
 
 
 def _from_der(der: bytes) -> ClientCertificate:

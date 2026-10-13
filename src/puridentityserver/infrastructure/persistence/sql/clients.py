@@ -54,6 +54,9 @@ class ClientRow(PersistenceBase):
     tls_client_certificate_hash: Mapped[str] = mapped_column(
         String(64), default="", server_default=text("''")
     )
+    tls_client_certificate_bound_access_tokens: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("0")
+    )
     id_token_signed_response_alg: Mapped[str] = mapped_column(
         String(32), default="", server_default=text("''")
     )
@@ -177,6 +180,7 @@ def _to_row(client: Client) -> ClientRow:
         jwks=list(client.jwks),
         tls_client_auth_subject_dn=client.tls_client_auth_subject_dn,
         tls_client_certificate_hash=client.tls_client_certificate_hash,
+        tls_client_certificate_bound_access_tokens=client.tls_client_certificate_bound_access_tokens,
         id_token_signed_response_alg=client.id_token_signed_response_alg,
         id_token_encrypted_response_alg=client.id_token_encrypted_response_alg,
         id_token_encrypted_response_enc=client.id_token_encrypted_response_enc,
@@ -254,6 +258,7 @@ def _from_row(row: ClientRow) -> Client:
         jwks=tuple(dict(key) for key in (row.jwks or ())),
         tls_client_auth_subject_dn=_text(row.tls_client_auth_subject_dn),
         tls_client_certificate_hash=_text(row.tls_client_certificate_hash),
+        tls_client_certificate_bound_access_tokens=row.tls_client_certificate_bound_access_tokens,
         id_token_signed_response_alg=_text(row.id_token_signed_response_alg),
         id_token_encrypted_response_alg=_text(row.id_token_encrypted_response_alg),
         id_token_encrypted_response_enc=_text(row.id_token_encrypted_response_enc),

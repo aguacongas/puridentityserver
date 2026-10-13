@@ -175,6 +175,12 @@ class Client:
     ``jwks`` portent les clés publiques des
     clients ``private_key_jwt`` ; ``tls_client_auth_subject_dn`` et
     ``tls_client_certificate_hash`` lient le client à son certificat mTLS.
+    ``tls_client_certificate_bound_access_tokens`` (RFC 8705 §3.1) rend ce
+    lien **obligatoire quelle que soit la méthode d'authentification** :
+    tout appel client (token endpoint, ``/bc-authorize``) doit présenter un
+    certificat client, les access tokens émis portent ``cnf.x5t#S256`` et
+    les refresh tokens sont liés au certificat d'émission — usage type
+    ``private_key_jwt`` + holder-of-key (Open Banking, FAPI1-ADV-5.2.2-6).
     ``id_token_signed_response_alg`` (OIDC Core 1.0 §3.1.3.7) impose un
     algorithme de signature d'``id_token`` par client : une valeur vide
     retombe sur l'algorithme de signature principal du serveur, une valeur
@@ -231,6 +237,7 @@ class Client:
     jwks: tuple[dict[str, object], ...] = ()
     tls_client_auth_subject_dn: str = ""
     tls_client_certificate_hash: str = ""
+    tls_client_certificate_bound_access_tokens: bool = False
     id_token_signed_response_alg: str = ""
     id_token_encrypted_response_alg: str = ""
     id_token_encrypted_response_enc: str = ""
@@ -359,6 +366,13 @@ class RefreshToken:
     ``resource_uris`` (RFC 8707 §4) porte les resource indicators de
     l'accord initial : un renouvellement demandant ``resource`` doit s'y
     limiter (sous-ensemble).
+
+    ``tls_cert_hash`` (RFC 8705 §3.3) lie le jeton au certificat client
+    présenté à son émission pour un client
+    ``tls_client_certificate_bound_access_tokens`` : tout renouvellement
+    doit présenter le même certificat (empreinte
+    base64url(SHA-256(DER))), sinon ``invalid_grant``. Vide = jeton
+    porteur (aucun certificat exigé au renouvellement).
     """
 
     token_hash: str
@@ -369,6 +383,7 @@ class RefreshToken:
     is_consumed: bool = False
     dpop_jkt: str = ""
     resource_uris: tuple[str, ...] = ()
+    tls_cert_hash: str = ""
 
 
 class DeviceAuthorizationStatus(str, Enum):

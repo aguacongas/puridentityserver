@@ -32,6 +32,18 @@
 #                    en clair) — facultatif pour un client "public" ; un client
 #                    confidentiel sans redirect_uris est adapté au flow
 #                    machine à machine (client_credentials)
+# Authentification TLS mutuelle (RFC 8705) :
+# - tls_client_certificate_hash : empreinte SHA-256 (base64url) du
+#                    certificat client exigé pour s'authentifier (méthode
+#                    `tls_client_auth` ou `self_signed_tls_client_auth`) —
+#                    hachage de la forme DER, jamais le PEM en clair
+# - tls_client_certificate_bound_access_tokens : (RFC 8705 §3.1) rend les
+#                    access tokens liés au certificat client (`cnf.x5t#S256`)
+#                    et exige la présentation d'un certificat à chaque appel
+#                    au token endpoint (et `/bc-authorize` pour CIBA) — le
+#                    refresh token est lié au certificat d'émission ; le
+#                    PEM est transmis par le proxy via l'en-tête configurable
+#                    `client_certificate_header` (voir plus bas)
 # Terminaison de session OIDC (Front/Back-Channel Logout) :
 # - frontchannel_logout_uri              : iframe de déconnexion chargée par
 #                                          /end_session (iss/sid en query) —
@@ -293,6 +305,18 @@ par_ttl_seconds = 90
 #   Le `resource.resourceUrl` des plans de certification y pointe.
 # Surchargeable via `PURIDENTITYSERVER_PROTECTED_RESOURCE_ENABLED`.
 protected_resource_enabled = true
+
+# Certificat client mTLS (RFC 8705) transmis par le proxy de terminaison
+# TLS : noms d'en-têtes configurables selon la plateforme (Cloudflare
+# Transform Rules RFC 9440 `cf.tls_client_auth.*`, nginx `$ssl_client_cert`
+# /`$ssl_client_s_dn`, Envoy, HAProxy…). `client_certificate_header` porte
+# le PEM du certificat (éventuellement URL-encodé), `client_certificate_dn_header`
+# le sujet RFC 4514 (repli quand le PEM n'est pas transmis). Le contexte
+# TLS direct (ssl_object d'uvicorn) prime quand présent.
+# Surchargeables via `PURIDENTITYSERVER_CLIENT_CERTIFICATE_HEADER` et
+# `PURIDENTITYSERVER_CLIENT_CERTIFICATE_DN_HEADER`.
+client_certificate_header = "X-SSL-Client-Cert"
+client_certificate_dn_header = "X-SSL-Client-S-DN"
 
 # seed utilisateurs (user store) : clé = subject (sub), valeur = claims
 # exposés selon les scopes accordés au jeton (openid > sub, profile >

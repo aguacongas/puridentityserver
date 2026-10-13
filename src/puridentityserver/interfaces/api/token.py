@@ -15,14 +15,27 @@ from puridentityserver.application.token import (
     TokenResponse,
     TokenUseCase,
 )
-from puridentityserver.infrastructure.client_tls import extract_client_certificate
+from puridentityserver.infrastructure.client_tls import (
+    ClientCertificateHeaderNames,
+    extract_client_certificate,
+)
 from puridentityserver.interfaces.api.dpop_proof import extract_dpop_proof
 from puridentityserver.interfaces.api.error_description import ascii_error_description
 from puridentityserver.interfaces.api.http_client_auth import parse_basic_auth
 
 
-def token_router(usecase: TokenUseCase) -> APIRouter:
-    """Construit le routeur FastAPI exposant ``POST /token``."""
+def token_router(
+    usecase: TokenUseCase,
+    client_certificate_headers: ClientCertificateHeaderNames | None = None,
+) -> APIRouter:
+    """Construit le routeur FastAPI exposant ``POST /token``.
+
+    ``client_certificate_headers`` nomme les en-têtes de proxy mTLS lus
+    par ``extract_client_certificate`` (``Settings.client_certificate_header``
+    / ``client_certificate_dn_header``) ; ``None`` utilise les noms par
+    défaut (``X-SSL-Client-Cert`` / ``X-SSL-Client-S-DN``).
+    """
+    certificate_headers = client_certificate_headers or ClientCertificateHeaderNames()
     router = APIRouter(tags=["token"])
 
     @router.post("/token", summary="Endpoint de jetons OAuth 2.0")
@@ -50,7 +63,7 @@ def token_router(usecase: TokenUseCase) -> APIRouter:
             client_assertion_type=_form_field(form, "client_assertion_type"),
             client_assertion=_form_field(form, "client_assertion"),
             assertion=_form_field(form, "assertion"),
-            tls_certificate=extract_client_certificate(request),
+            tls_certificate=extract_client_certificate(request, certificate_headers),
             dpop_proof=dpop_proof,
         )
         result = await usecase.execute(token_request)

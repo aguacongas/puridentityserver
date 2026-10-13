@@ -25,6 +25,7 @@ même pilote, seul le transport change.
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import secrets
 import time
 from collections.abc import Sequence
@@ -33,8 +34,11 @@ from typing import Any
 
 import httpx
 import jwt as pyjwt
-from cryptography.hazmat.primitives import serialization
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
+from cryptography.x509.oid import NameOID
 from fastapi import FastAPI
 from harness import ConformanceHarness, FlowResult, pkce_challenge
 
@@ -118,6 +122,33 @@ def _b64url(value: int) -> str:
     return base64.urlsafe_b64encode(value.to_bytes(length, "big")).rstrip(b"=").decode("ascii")
 
 
+def _self_signed_certificate_pem(common_name: str) -> str:
+    """Certificat client auto-signé (PEM) pour le rejeu local mTLS.
+
+    L'application lit le certificat présenté via l'en-tête proxy
+    ``X-SSL-Client-Cert`` (``infrastructure/client_tls.py``) : le harness
+    simule ainsi le certificat que Cloudflare transmettrait après
+    validation au bord (RFC 8705 §3.1, ``tls_client_certificate_bound_
+    access_tokens``). Un couple clé/cert distinct est généré par client
+    pour rejouer les contrôles cross-certificate de la suite.
+    """
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
+    now = dt.datetime.now(dt.timezone.utc)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - dt.timedelta(days=1))
+        .not_valid_after(now + dt.timedelta(days=3650))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    return certificate.public_bytes(serialization.Encoding.PEM).decode("ascii")
+
+
 @dataclass(frozen=True)
 class FapiClient:
     """Client FAPI seedé : identité, redirect_uri, clé privée statique."""
@@ -127,6 +158,7 @@ class FapiClient:
     private_pem: str
     kid: str
     scope: str = FAPI_SCOPE
+    certificate_pem: str = ""
 
     @property
     def private_key(self) -> RSAPrivateKey:
@@ -155,12 +187,14 @@ FAPI_CLIENT_1 = FapiClient(
     redirect_uri=REDIRECT_URI,
     private_pem=_PEM_CLIENT_1,
     kid="fapi-client1",
+    certificate_pem=_self_signed_certificate_pem("fapi-app"),
 )
 FAPI_CLIENT_2 = FapiClient(
     client_id="fapi-app-2",
     redirect_uri=REDIRECT_URI_OTHER,
     private_pem=_PEM_CLIENT_2,
     kid="fapi-client2",
+    certificate_pem=_self_signed_certificate_pem("fapi-app-2"),
 )
 
 
@@ -170,6 +204,8 @@ def _seed_of(client: FapiClient) -> dict[str, object]:
     ``require_consent`` : l'écran de consentement est le point de refus
     rejoué par ``fapi1-advanced-final-user-rejects-authentication`` (il
     n'existe pas de bouton « annuler » sur l'écran de connexion).
+    ``tls_client_certificate_bound_access_tokens`` (RFC 8705 §3.1) lie
+    les jetons au certificat du harness (en-tête ``X-SSL-Client-Cert``).
     """
     return {
         "client_id": client.client_id,
@@ -179,6 +215,7 @@ def _seed_of(client: FapiClient) -> dict[str, object]:
         "token_endpoint_auth_method": "private_key_jwt",
         "fapi_enabled": True,
         "require_consent": True,
+        "tls_client_certificate_bound_access_tokens": True,
         "id_token_signed_response_alg": "PS256",
         "jwks": [client.jwk],
     }
@@ -460,12 +497,16 @@ class FapiHarness(ConformanceHarness):
         *,
         audience: str | Sequence[str] | None = None,
         assertion: str | None = None,
+        present_certificate: bool = True,
     ) -> httpx.Response:
         """POST ``/token`` avec ``private_key_jwt`` (défaut) ou ``client_id`` seul.
 
         ``assertion`` fournit une ``client_assertion`` déjà construite
         (mutations des modules ``ensure-client-assertion-*-fails``) au lieu
-        de l'assertion fraîche standard.
+        de l'assertion fraîche standard. ``present_certificate=False``
+        retire l'en-tête ``X-SSL-Client-Cert`` (bloc
+        « MTLS sender constrained refresh_token without proof of possession »,
+        FAPI1-ADV-5.2.2-6).
         """
         payload = dict(data)
         if auth_method == "private_key_jwt":
@@ -475,7 +516,12 @@ class FapiHarness(ConformanceHarness):
                 else self.assertion(audience=self.token_endpoint if audience is None else audience)
             )
             payload["client_assertion_type"] = ASSERTION_TYPE
-        return self._client.post("/token", data=payload)
+        headers = self._certificate_headers() if present_certificate else None
+        return self._client.post("/token", data=payload, headers=headers)
+
+    def _certificate_headers(self) -> dict[str, str]:
+        """En-tête proxy portant le certificat client du client courant."""
+        return {"X-SSL-Client-Cert": self.client.certificate_pem}
 
     def refresh(self, refresh_token: str, auth_method: str = "private_key_jwt") -> httpx.Response:
         """``POST /token`` (grant ``refresh_token``, assertion fraîche)."""
@@ -493,9 +539,13 @@ class FapiHarness(ConformanceHarness):
         """``GET /protected-resource`` (Bearer + ``x-fapi-interaction-id``, FAPI §7.4).
 
         ``scheme`` inverse la casse du ``token_type``
-        (``SetAccessTokenTypeToInvertedCase``, RFC 9110 §11.1).
+        (``SetAccessTokenTypeToInvertedCase``, RFC 9110 §11.1). Le
+        certificat du client courant accompagne l'appel : un access token
+        lié (``cnf.x5t#S256``) est alors accepté, un jeton lié à un autre
+        certificat rejeté (RFC 8705 §3.3).
         """
         headers = {"Authorization": f"{scheme} {access_token}"}
+        headers.update(self._certificate_headers())
         if interaction_id:
             headers["x-fapi-interaction-id"] = interaction_id
         return self._client.get("/protected-resource", headers=headers)
