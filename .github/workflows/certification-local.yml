@@ -84,7 +84,7 @@ jobs:
               hybrid) echo 'oidcc-hybrid-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
               ciba) echo 'fapi-ciba-id1-test-plan[client_registration=dynamic_client][client_auth_type=private_key_jwt][ciba_mode=poll][fapi_ciba_profile=plain_fapi]' ;;
               fapi1) echo 'fapi1-advanced-final-test-plan[fapi_profile=plain_fapi][client_auth_type=private_key_jwt][fapi_auth_request_method=by_value][fapi_response_mode=plain_response]' ;;
-              fapi2) echo 'fapi2-security-profile-final-test-plan[fapi_profile=plain_fapi][client_auth_type=private_key_jwt][authorization_request_type=simple][grant_management=disabled][openid=openid_connect][sender_constrain=dpop]' ;;
+              fapi2) echo 'fapi2-security-profile-final-test-plan[fapi_profile=plain_fapi][client_auth_type=private_key_jwt][authorization_request_type=simple][openid=openid_connect][sender_constrain=dpop]' ;;
               *) return 1 ;;
             esac
           }
