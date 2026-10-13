@@ -4,9 +4,11 @@ import asyncio
 import hashlib
 from collections.abc import Awaitable
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import TypeVar
 from urllib.parse import parse_qs, unquote, urlparse
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -22,6 +24,7 @@ from puridentityserver.infrastructure.persistence.memory.codes import (
     InMemoryAuthorizationCodeRepository,
 )
 from puridentityserver.infrastructure.settings import Settings
+from puridentityserver.interfaces.api import authorize as authorize_api
 from puridentityserver.server import create_app
 
 _T = TypeVar("_T")
@@ -694,6 +697,85 @@ def test_require_login_post_issues_code_after_authentication() -> None:
     location = response.headers["location"]
     assert location.startswith("https://app.example/callback?")
     assert _redirect_query(location)["state"] == ["st-auth"]
+
+
+def _advance_clock(monkeypatch: pytest.MonkeyPatch, seconds: float) -> None:
+    """Simule une latence ``/login`` → ``/authorize`` de ``seconds`` secondes.
+
+    Seule l'horloge vue par le contrôle ``max_age`` de l'API authorize est
+    décalée : ``auth_time`` (posé au login) garde l'heure réelle, l'écart
+    mesuré à l'autorisation vaut donc ``seconds``.
+    """
+    real_time = authorize_api.time.time
+    monkeypatch.setattr(
+        authorize_api,
+        "time",
+        SimpleNamespace(time=lambda: real_time() + seconds),
+    )
+
+
+def test_max_age_expired_on_unrelated_session_reprompts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``max_age=1`` dépassé sur une session d'une autre URL : reconnexion."""
+    with TestClient(_require_login_app()) as client:
+        login = client.post(
+            "/login",
+            data={"username": "alice@example.com", "password": "password", "next": "/"},
+            follow_redirects=False,
+        )
+        assert login.status_code == 302
+        _advance_clock(monkeypatch, 5)
+
+        response = client.get(
+            "/authorize",
+            params={**_authorize_login_params(), "max_age": "1"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert response.headers["location"].startswith("/login?next=")
+
+
+def test_max_age_expired_login_for_this_request_does_not_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#137 : le login déclenché par la demande valide un ``max_age>0`` expiré.
+
+    Sans l'anti-boucle, la latence simulée (5 s > ``max_age=1``) rendrait
+    chaque relogin suivi d'un ``/authorize`` déjà trop vieux : boucle
+    infinie (module ``oidcc-max-age-1`` de la suite de certification).
+    """
+    with TestClient(_require_login_app()) as client:
+        first = client.get(
+            "/authorize",
+            params={**_authorize_login_params(), "max_age": "1"},
+            follow_redirects=False,
+        )
+        assert first.status_code == 302
+        assert first.headers["location"].startswith("/login?next=")
+        next_target = _redirect_query(first.headers["location"])["next"][0]
+        _advance_clock(monkeypatch, 5)
+
+        login = client.post(
+            "/login",
+            data={
+                "username": "alice@example.com",
+                "password": "password",
+                "next": next_target,
+            },
+            follow_redirects=False,
+        )
+        assert login.status_code == 302
+
+        target = urlparse(next_target)
+        response = client.get(
+            f"{target.path}?{target.query}",
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert response.headers["location"].startswith("https://app.example/callback?")
 
 
 def test_authorize_post_issues_code_for_authenticated_user() -> None:
