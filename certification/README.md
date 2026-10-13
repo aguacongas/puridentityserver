@@ -28,7 +28,7 @@ retenue :
 
 - Le workflow `Certification OIDC` se termine avec, pour chaque plan
   (`oidcc-basic-`, `oidcc-implicit-`, `oidcc-hybrid-certification-test-plan`,
-  `fapi-ciba-id1-test-plan` — witness CIBA, `fapi1-advanced-final-test-plan`,
+  `fapi-ciba-id1-test-plan`, `fapi1-advanced-final-test-plan`,
   `fapi2-security-profile-final-test-plan`),
   le détail des modules testés et leur verdict (PASSED / FAILED / WARNING /
   REVIEW / SKIPPED) dans le résumé du run ;
@@ -258,7 +258,7 @@ uv run python samples/conformance-smoke/smoke_test.py
 | `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`, 4 clients statiques FAPI `private_key_jwt` + JWKS public pour les plans fapi1/fapi2) |
 | `plans/basic|implicit|hybrid|ciba|fapi1|fapi2.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; fapi1/fapi2 portent aussi `client`/`client2` en clé privée et `resource`) |
 | `conformance-reuse-plan.patch` | patch du driver : `create_test_plan` idempotent (réutilise le plan existant quand sa config n'a pas changé) |
-| `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) ou, à défaut, un PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode witness) |
+| `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) ou, à défaut, un PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode hébergé) |
 | `capture_screenshots.py` | rejoue les 4 scénarios de relecture contre l'OP déployé (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver |
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |
 | `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
@@ -266,7 +266,7 @@ uv run python samples/conformance-smoke/smoke_test.py
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés ; recopie les captures réelles dans `_site/screenshots/` (`--screenshots`) et les affiche dans la section du module correspondant |
 | `../.github/workflows/certification.yml` | workflow strict en 3 jobs : `prepare` (deploy + captures, une fois), `plan` (les 6 plans en parallèle, un job matrix chacun, code non nul du driver = job en échec), `report` (fusion des exports + Pages, publié même en échec) |
 
-## Captures d'écran des modules de relecture (mode witness)
+## Captures d'écran des modules de relecture (mode hébergé)
 
 Certains modules Core s'arrêtent sur un événement **REVIEW** demandant une capture
 d'écran : sans intervention, le driver attend jusqu'au timeout

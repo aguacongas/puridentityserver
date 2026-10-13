@@ -17,7 +17,7 @@ name: Certification OIDC
 #   (UNE SEULE fois — un redejob par plan remplacerait l'OP en plein run) et
 #   captures Playwright (artefact partagé) ;
 # - job `plan` ×6 (`fail-fast: false`) : clone + patches de la suite, un seul
-#   plan joué en mode witness, export → artefact `certification-results-<plan>`.
+#   plan joué en mode hébergé, export → artefact `certification-results-<plan>`.
 #   Parallélisation sûre : chaque plan porte un alias distinct
 #   (`puridentityserver-<plan>`) et `release_alias` ne stoppe que son propre
 #   alias — voir certification/README.md (« Conflits d'alias ») ;
@@ -69,7 +69,8 @@ permissions:
 
 env:
   OP_URL: ${{ vars.CERTIFICATION_OP_URL || 'https://puridentityserver-certification.onrender.com' }}
-  # Mode witness sur l'instance HÉBERGÉE officielle (OpenID Foundation) : le
+  # Mode hébergé (pilotage par l'API de l'instance officielle OpenID
+  # Foundation) : le
   # driver constructeur (run-test-plan.py) ne fait que des appels API REST
   # authenticate Bearer (CONFORMANCE_TOKEN). L'automation navigateur
   # (WebRunner/HtmlUnit/Selenium) tourne dans l'infra stable de la Fondation,
@@ -114,7 +115,7 @@ jobs:
               basic) echo 'oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
               implicit) echo 'oidcc-implicit-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
               hybrid) echo 'oidcc-hybrid-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
-              # CIBA : plan FAPI-CIBA-ID1 en mode witness (poll + Basic ne sont
+              # CIBA : plan FAPI-CIBA-ID1 en mode hébergé (poll + Basic ne sont
               # pas des variants valides pour ce plan : private_key_jwt exigé,
               # JAR signé hors périmètre — issues dédiées).
               ciba) echo 'fapi-ciba-id1-test-plan[client_registration=dynamic_client][client_auth_type=private_key_jwt][ciba_mode=poll][fapi_ciba_profile=plain_fapi]' ;;
@@ -219,7 +220,7 @@ jobs:
         run: python3 -c "import json,glob; [json.load(open(p)) for p in glob.glob('certification/plans/*.json')]"
 
       - name: Vérification de la présence du secret CONFORMANCE_TOKEN
-        # Mode witness hébergé : l'accès à l'API de certification.openid.net
+        # Mode hébergé : l'accès à l'API de certification.openid.net
         # passe par un Bearer token délivré par l'OpenID Foundation. Un secret
         # manquant doit échouer SEC maintenant (message clair), pas via un
         # KeyError/traceback du driver en plein milieu du run — et surtout pas
@@ -285,7 +286,7 @@ jobs:
           if-no-files-found: ignore
 
   plan:
-    name: Plan ${{ matrix.plan }} (witness)
+    name: Plan ${{ matrix.plan }}
     needs: prepare
     runs-on: ubuntu-latest
     strategy:
@@ -346,7 +347,7 @@ jobs:
         # 2) certains modules Core (ex. oidcc-response-type-missing) se bloquent
         #    sur un événement REVIEW « upload une capture d'écran » ; on remplit
         #    ces placeholders automatiquement côté driver pour que la suite
-        #    puisse se terminer sans intervention humaine (mode witness).
+        #    puisse se terminer sans intervention humaine (mode hébergé).
         # 3) la suite réserve l'alias à la création de chaque module : un module
         #    encore actif (timeout dépassé, run annulé…) serait interrompu par le
         #    module suivant (« Stopping test due to alias conflict »). Le driver
@@ -404,7 +405,7 @@ jobs:
             echo "Aucune capture : le driver utilisera le PNG de secours."
           fi
 
-      - name: Lancement du plan ${{ matrix.plan }} (witness)
+      - name: Lancement du plan ${{ matrix.plan }}
         # Un seul plan par job (matrice) : chaque plan exporte ses .zip dans
         # certification-results-<plan>. Sortie stricte : le code retour du
         # driver (1 sur modules FAILED / INTERRUPTED / warnings inattendus,
@@ -462,7 +463,8 @@ jobs:
   report:
     name: Rapport statique + GitHub Pages
     needs: [prepare, plan]
-    # Publie même si un plan échoue — c'est précisément le mode witness. Un
+    # Publie même si un plan échoue : le rapport consolidé reste consultable.
+    # Un
     # `prepare` rouge (OP hors ligne, secret absent…) bloque la publication :
     # rien n'a été joué, le rapport serait vide et masquerait la cause réelle.
     if: ${{ always() && needs.prepare.result == 'success' }}
