@@ -18,8 +18,11 @@ retenue :
 3. chaque run produit un rapport brut (artefact + commentaire) et une page
    **GitHub Pages** publique consolidée.
 
-> Mode **witness** (PR 1) : le job CI est informatif, non bloquant. Le passage
-> en gate bloquant sera ajouté quand les plans Core seront stables.
+> Sortie **stricte** : chaque job plan échoue dès qu'un module est FAILED ou
+> INTERRUPTED (ou que le driver remonte un warning inattendu) — le run
+> `Certification OIDC` est alors rouge, même si le rapport GitHub Pages reste
+> publié. Les modules REVIEW (relecture humaine, captures d'écran) restent
+> tolérés.
 
 ## Résultat attendu
 
@@ -201,8 +204,8 @@ uv run python samples/conformance-smoke/smoke_test.py
   privilégié par `_plan_matching_configuration`).
 - **« Aucun export pour le plan » (garde-fou du workflow)** : le plan a
   crashé avant tout module terminé (`run-test-plan` en code retour non nul,
-  `results/` vide) alors que le job resterait vert en mode witness. Causes
-  vécues (issue #113) : client statique absent de la config
+  `results/` vide) — le step Lancement échoue aussi (code non nul propagé).
+  Causes vécues (issue #113) : client statique absent de la config
   (« must contain a client configuration »), variante de plan manquante au
   sélecteur (« requires a value for variant … »), ou
   `ValidateMTLSCertificatesAsX509` en précondition échouée
@@ -235,8 +238,10 @@ uv run python samples/conformance-smoke/smoke_test.py
   environnemental** : la liste de cipher du edge Cloudflare accepte un
   certificat ECDSA (`TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256`) que le check
   `DisallowInsecureCipher` (FAPI1-ADV-8.5-x, liste RSA-only) rejette — les
-  modules `ensure-mtls-holder-of-key` / `bare` resterontFAILED sur ce seul
+  modules `ensure-mtls-holder-of-key` / `bare` resteront FAILED sur ce seul
   check derrière CF ; le module `refresh-token` peut devenir 100 % vert.
+  Tant que ces deux points ne sont pas levés (CF mTLS + flip des seeds), le
+  plan **fapi1 reste rouge** en certification (sortie stricte du workflow).
   Démo locale hermétique : `samples/mtls-holder-of-key-client/` (en-têtes
   proxy personnalisés, PEM `\n`-échappé, 8 étapes).
 - **OP déployé sans la config de la branche** (`error=invalid_client` au PAR) :
@@ -259,7 +264,7 @@ uv run python samples/conformance-smoke/smoke_test.py
 | `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
 | `conformance-stale-plan-recovery.patch` | patch du driver : n'est jamais réessaie le 500 déterministe « test module not found » (1 tentative au lieu de 28) et valide la membership du plan réutilisé contre le catalogue avant le run — recréation automatique du plan stale (membership fraîche dès le premier run), plan le plus récent privilégié à la réutilisation |
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés ; recopie les captures réelles dans `_site/screenshots/` (`--screenshots`) et les affiche dans la section du module correspondant |
-| `../.github/workflows/certification.yml` | workflow witness en 3 jobs : `prepare` (deploy + captures, une fois), `plan` (les 6 plans en parallèle, un job matrix chacun), `report` (fusion des exports + Pages) |
+| `../.github/workflows/certification.yml` | workflow strict en 3 jobs : `prepare` (deploy + captures, une fois), `plan` (les 6 plans en parallèle, un job matrix chacun, code non nul du driver = job en échec), `report` (fusion des exports + Pages, publié même en échec) |
 
 ## Captures d'écran des modules de relecture (mode witness)
 

@@ -3,11 +3,12 @@ name: Certification OIDC
 # Suite de certification officielle OpenID Foundation (openid/conformance-suite),
 # jouée contre l'instance Render publique seedee (certification/config.render.toml).
 #
-# PR 1 : jobs WITNESS — non bloquants pour la CI. Déclenchement au merge sur
-# main, manuel ou hebdomadaire ; les gaps Core (modules ne passant pas encore)
-# NE font pas échouer le workflow : chaque run produit un rapport brut + une
-# page GitHub Pages. Le passage en gate bloquant (PR 2) interviendra une fois
-# les plans Core stables.
+# Sortie stricte : chaque job plan échoue dès que `run-test-plan.py` sort en
+# code non nul — module FAILED (condition inattendue), module INTERRUPTED /
+# did-not-complete, ou warning inattendu. Le run est alors rouge, même si le
+# rapport consolidé reste publié. `fail-fast: false` : les plans restants
+# jouent quand même et le rapport Pages couvre tout le run.
+# Déclenchement au merge sur main, manuel ou hebdomadaire.
 #
 # Issue #122 : les 6 plans s'exécutent EN PARALLÈLE (matrix de jobs, même
 # patron que conformance-tests.yml) : ~3 h séquentielles deviennent la durée
@@ -290,7 +291,8 @@ jobs:
     strategy:
       # Chaque plan continue même si un autre échoue : le rapport consolidé
       # doit montrer l'état complet du run, pas s'arrêter au premier plan
-      # rouge (mode witness : aucun job ne bloque la CI).
+      # rouge. Le job lui-même échoue dès que le driver sort en code non nul
+      # (FAILED / INTERRUPTED / warnings inattendus) — voir le step Lancement.
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
 
@@ -404,10 +406,11 @@ jobs:
 
       - name: Lancement du plan ${{ matrix.plan }} (witness)
         # Un seul plan par job (matrice) : chaque plan exporte ses .zip dans
-        # certification-results-<plan>. Toute la boucle séquentielle d'origine
-        # (PLAN_FILTER + for) disparaît — `fail-fast: false` + step non
-        # bloquant gardent le contrat witness (gaps acceptés).
-        continue-on-error: true
+        # certification-results-<plan>. Sortie stricte : le code retour du
+        # driver (1 sur modules FAILED / INTERRUPTED / warnings inattendus,
+        # cf. `run-test-plan.py` — analyze_plan_results + sys.exit) échoue le
+        # job. L'upload des exports et le garde-fou restent en `if: always()`
+        # pour préserver le rapport même en échec.
         working-directory: conformance-suite
         env:
           # Captures réelles produites par le job `prepare` : le driver les
@@ -424,8 +427,11 @@ jobs:
             "${{ matrix.selector }}" \
             "$GITHUB_WORKSPACE/certification/plans/${{ matrix.plan }}.json" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
           code=${PIPESTATUS[0]}
-          echo "- exit code : $code (les gaps sont acceptés en mode witness)" | tee -a "$GITHUB_STEP_SUMMARY"
-          [ "$code" -eq 0 ] || echo "plan ${{ matrix.plan }} en échec partiel (witness)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- exit code : $code" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$code" -ne 0 ]; then
+            echo "plan ${{ matrix.plan }} en échec (modules FAILED, INTERRUPTED ou warnings inattendus)" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit "$code"
+          fi
 
       - name: Upload des exports du plan
         # Un artefact par plan → le job `report` les fusionne. Aucun export
@@ -440,11 +446,12 @@ jobs:
 
       - name: "Garde-fou : export du plan présent"
         # Un plan crashé (config invalide, variante refusée…) ne produit
-        # AUCUN export alors que le reste du job reste vert (mode witness) :
-        # sans ce garde-fou, la config fapi1/fapi2 de l'issue #113 était partie
-        # en crash silencieux et le job affichait « success ». Seule
-        # l'absence TOTALE d'export échoue — les gaps (modules FAILED/REVIEW)
-        # produisent des exports et restent tolérés.
+        # AUCUN export : ce garde-fou l'annonce explicitement, y compris quand
+        # le step Lancement a déjà échoué (`if: always()`), pour distinguer un
+        # crash de démarrage d'un échec de modules (les exports de ces
+        # derniers sont bien présents). Seule l'absence TOTALE d'export échoue
+        # ici.
+        if: always()
         run: |
           if [ -z "$(find results -mindepth 1 -print -quit 2>/dev/null)" ]; then
             echo "::error::Aucun export pour le plan ${{ matrix.plan }} : exécution crashée avant tout module terminé (voir l'étape « Lancement »)"
