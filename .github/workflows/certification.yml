@@ -250,12 +250,13 @@ jobs:
           echo "::error::L'API de certification.openid.net n'a pas répondu (token invalide ou réseau) en 10 min" && exit 1
 
       - name: Captures d'écran réelles des modules de relecture (Playwright)
-        # Les modules Core en verdict REVIEW (oidcc-response-type-missing,
-        # oidcc-ensure-registered-redirect-uri, oidcc-prompt-login,
-        # oidcc-max-age-1) exigent une capture téléversée via l'ImageAPI de la
-        # suite : ce script rejoue ces 4 scénarios contre l'OP déposé avec
-        # chromium headless et dépose <testName>.png dans screenshots/. Une
-        # échec (installation navigateur, OP indisponible…) laisse le
+        # Les modules laissés en REVIEW par la suite (4 modules Core + 16 FAPI1
+        # + 4 FAPI2, issue #138) exigent une capture téléversée via l'ImageAPI
+        # de la suite : ce script rejoue ces 24 scénarios contre l'OP déposé
+        # avec chromium headless et dépose <testName>.png dans screenshots/.
+        # PyJWT + cryptography signent les request objects des scénarios FAPI
+        # avec les clés des clients statiques (certification/plans/).
+        # Une échec (installation navigateur, OP indisponible…) laisse le
         # répertoire vide : conformance-screenshots.patch retombe alors sur son
         # PNG de secours et le run se poursuit — étape non bloquante.
         # Une seule exécution par run : les 6 jobs matrix téléchargent le
@@ -264,7 +265,7 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p "$GITHUB_WORKSPACE/screenshots"
-          python3 -m pip install --disable-pip-version-check --quiet playwright
+          python3 -m pip install --disable-pip-version-check --quiet playwright "pyjwt[cryptography]"
           python3 -m playwright install --with-deps chromium
           python3 certification/capture_screenshots.py \
             --base-url "$OP_URL" \
