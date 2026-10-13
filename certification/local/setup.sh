@@ -122,9 +122,18 @@ log "suite prête"
 
 log "attente de l'OP via le nginx mTLS (localhost:$MTLS_PORT)…"
 deadline=$((SECONDS + 120))
-until curl -sk --max-time 10 -o /dev/null \
+# --fail obligatoire : sans lui curl sort en 0 sur le 502 de nginx (OP en
+# cours d'amorçage) et la readiness passe à tort — le driver démarre alors
+# sur un OP absent et les premiers modules tombent en 502 (abort
+# « conformance server appears to be unhealthy » avant tout export).
+until curl -skf --max-time 10 -o /dev/null \
     "https://localhost:$MTLS_PORT/.well-known/openid-configuration"; do
-  [ $SECONDS -lt $deadline ] || { echo "::error::OP non joignable via nginx mTLS"; exit 1; }
+  [ $SECONDS -lt $deadline ] || {
+    echo "::error::OP non joignable via nginx mTLS (502 ou hors service)"
+    echo "--- dernières lignes de op.log ---"
+    tail -n 60 "$LOCAL_DIR/op.log" || true
+    exit 1
+  }
   sleep 3
 done
 log "OP prêt (issuer https://$OP_ALIAS:$MTLS_PORT)"

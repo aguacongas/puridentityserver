@@ -178,6 +178,14 @@ jobs:
           path: results/
           if-no-files-found: ignore
 
+      - name: Journal de l'OP (diagnostic d'échec)
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: certification-local-oplog-${{ matrix.plan }}
+          path: .harness-local/op.log
+          if-no-files-found: ignore
+
   report:
     name: Rapport statique local (artefact, sans Pages)
     needs: [matrix, plan]
