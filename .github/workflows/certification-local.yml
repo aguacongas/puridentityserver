@@ -67,7 +67,11 @@ jobs:
       - name: Installation de uv (OP local)
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
-          enable-cache: true
+          # Cache désactivé : le post-cleanup « Pruning cache » de setup-uv
+          # échouait (exit 2) et passait le run en failure alors que le harness
+          # tournait de bout en bout. Le « uv sync » du OP est rapide ; pas de
+          # cache nécessaire pour valider le harness.
+          enable-cache: false
 
       - name: Bootstrap du harness local (suite docker + OP + nginx mTLS)
         # Monte la suite (mongodb/server/nginx), génère le cert auto-signé +
