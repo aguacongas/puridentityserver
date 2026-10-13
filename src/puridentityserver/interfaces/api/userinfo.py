@@ -13,13 +13,20 @@ from puridentityserver.application.userinfo import (
     UserInfoResponse,
     UserInfoUseCase,
 )
-from puridentityserver.infrastructure.client_tls import extract_client_certificate
+from puridentityserver.infrastructure.client_tls import (
+    ClientCertificateHeaderNames,
+    extract_client_certificate,
+)
 from puridentityserver.interfaces.api.dpop_proof import extract_dpop_proof
 from puridentityserver.interfaces.api.security import split_authorization
 
 
-def userinfo_router(usecase: UserInfoUseCase) -> APIRouter:
+def userinfo_router(
+    usecase: UserInfoUseCase,
+    client_certificate_headers: ClientCertificateHeaderNames | None = None,
+) -> APIRouter:
     """Construit le routeur FastAPI exposant ``GET /userinfo``."""
+    certificate_headers = client_certificate_headers or ClientCertificateHeaderNames()
     router = APIRouter(tags=["userinfo"])
 
     @router.get("/userinfo", summary="Endpoint UserInfo (claims de l'utilisateur)")
@@ -65,7 +72,7 @@ def userinfo_router(usecase: UserInfoUseCase) -> APIRouter:
                 dpop_proof=proof,
                 htu=str(request.url),
                 htm=request.method,
-                tls_certificate=extract_client_certificate(request),
+                tls_certificate=extract_client_certificate(request, certificate_headers),
             )
         )
         if isinstance(result, UserInfoError):

@@ -24,7 +24,10 @@ from puridentityserver.application.protected_resource import (
     ProtectedResourceResponse,
     ProtectedResourceUseCase,
 )
-from puridentityserver.infrastructure.client_tls import extract_client_certificate
+from puridentityserver.infrastructure.client_tls import (
+    ClientCertificateHeaderNames,
+    extract_client_certificate,
+)
 from puridentityserver.interfaces.api.dpop_proof import extract_dpop_proof
 from puridentityserver.interfaces.api.security import split_authorization
 
@@ -32,8 +35,12 @@ from puridentityserver.interfaces.api.security import split_authorization
 _FAPI_INTERACTION_ID = "x-fapi-interaction-id"
 
 
-def protected_resource_router(usecase: ProtectedResourceUseCase) -> APIRouter:
+def protected_resource_router(
+    usecase: ProtectedResourceUseCase,
+    client_certificate_headers: ClientCertificateHeaderNames | None = None,
+) -> APIRouter:
     """Construit le routeur FastAPI exposant ``GET /protected-resource``."""
+    certificate_headers = client_certificate_headers or ClientCertificateHeaderNames()
     router = APIRouter(tags=["resource"])
 
     @router.get(
@@ -72,7 +79,7 @@ def protected_resource_router(usecase: ProtectedResourceUseCase) -> APIRouter:
         result = await usecase.execute(
             ProtectedResourceRequest(
                 access_token=token,
-                tls_certificate=extract_client_certificate(request),
+                tls_certificate=extract_client_certificate(request, certificate_headers),
                 auth_scheme=scheme,
                 dpop_proof=proof,
                 htu=_htu(request),

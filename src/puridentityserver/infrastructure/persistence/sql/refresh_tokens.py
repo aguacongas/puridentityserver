@@ -37,6 +37,7 @@ class RefreshTokenRow(PersistenceBase):
     resource_uris: Mapped[list[str]] = mapped_column(
         JSON, default=list, server_default=text("'[]'")
     )
+    tls_cert_hash: Mapped[str] = mapped_column(String(64), default="", server_default=text("''"))
 
 
 class SQLRefreshTokenRepository:
@@ -103,6 +104,7 @@ def _to_row(token: RefreshToken) -> RefreshTokenRow:
         is_consumed=token.is_consumed,
         dpop_jkt=token.dpop_jkt,
         resource_uris=list(token.resource_uris),
+        tls_cert_hash=token.tls_cert_hash,
     )
 
 
@@ -120,4 +122,5 @@ def _from_row(row: RefreshTokenRow) -> RefreshToken:
         is_consumed=row.is_consumed,
         dpop_jkt=row.dpop_jkt or "",
         resource_uris=tuple(row.resource_uris or ()),
+        tls_cert_hash=row.tls_cert_hash or "",
     )

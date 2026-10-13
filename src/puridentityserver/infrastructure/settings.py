@@ -108,6 +108,9 @@ def _parse_client(raw: dict[str, object]) -> Client:
         jwks=jwks,
         tls_client_auth_subject_dn=str(raw.get("tls_client_auth_subject_dn", "")),
         tls_client_certificate_hash=str(raw.get("tls_client_certificate_hash", "")),
+        tls_client_certificate_bound_access_tokens=bool(
+            raw.get("tls_client_certificate_bound_access_tokens")
+        ),
         id_token_signed_response_alg=str(raw.get("id_token_signed_response_alg", "")),
         id_token_encrypted_response_alg=str(raw.get("id_token_encrypted_response_alg", "")),
         id_token_encrypted_response_enc=str(raw.get("id_token_encrypted_response_enc", "")),
@@ -425,9 +428,22 @@ class Settings(BaseSettings):
     # (RFC 8707 + profil FAPI-R-6.2.1 de la suite de certification) :
     # valide l'en-tête Bearer (signature, expiration, révocation), renvoie
     # un JSON 200 et renvoie toujours l'en-tête `x-fapi-interaction-id`
-    # (écho de la requête, ou UUID généré). Désactivé par défaut ; les
-    # déploiements de certification le rallument via `config.toml`.
+    # (écho de la requête, ou UUID généré quand le client n'en envoie
+    # pas). Désactivé par défaut ; les déploiements de certification le
+    # rallument via `config.toml`.
     protected_resource_enabled: bool = False
+
+    # Certificat client mTLS (RFC 8705) transmis par le proxy de
+    # terminaison TLS : noms d'en-têtes configurables pour s'adapter à
+    # n'importe quelle plateforme (Cloudflare Transform Rules RFC 9440
+    # `cf.tls_client_auth.*`, nginx `$ssl_client_cert`/`$ssl_client_s_dn`,
+    # Envoy `X-Forwarded-Client-Cert`, HAProxy…). `client_certificate_header`
+    # porte le PEM du certificat (éventuellement URL-encodé),
+    # `client_certificate_dn_header` le sujet RFC 4514 (repli quand le PEM
+    # n'est pas transmis). Le contexte TLS direct (ssl_object) prime quand
+    # il est présent ; ces en-têtes ne sont lus qu'en son absence.
+    client_certificate_header: str = "X-SSL-Client-Cert"
+    client_certificate_dn_header: str = "X-SSL-Client-S-DN"
 
     # Authentification à l'endpoint /authorize.
     # `require_login = false` (défaut de démo) : l'utilisateur non connecté est

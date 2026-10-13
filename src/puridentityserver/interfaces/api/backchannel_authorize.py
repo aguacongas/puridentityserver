@@ -31,15 +31,22 @@ from puridentityserver.application.backchannel_authorize import (
     CibaApprovalUseCase,
 )
 from puridentityserver.application.resource_indicators import encode_resource_parameter
-from puridentityserver.infrastructure.client_tls import extract_client_certificate
+from puridentityserver.infrastructure.client_tls import (
+    ClientCertificateHeaderNames,
+    extract_client_certificate,
+)
 from puridentityserver.interfaces.api.error_description import ascii_error_description
 from puridentityserver.interfaces.api.http_client_auth import parse_basic_auth
 
 _JSON_MEDIA_TYPE = "application/json"
 
 
-def backchannel_authorization_router(usecase: BackchannelAuthenticationUseCase) -> APIRouter:
+def backchannel_authorization_router(
+    usecase: BackchannelAuthenticationUseCase,
+    client_certificate_headers: ClientCertificateHeaderNames | None = None,
+) -> APIRouter:
     """Construit le routeur FastAPI exposant ``POST /bc-authorize`` (CIBA §7)."""
+    certificate_headers = client_certificate_headers or ClientCertificateHeaderNames()
     router = APIRouter(tags=["backchannel-authentication"])
 
     @router.post(
@@ -67,7 +74,7 @@ def backchannel_authorization_router(usecase: BackchannelAuthenticationUseCase) 
             client_assertion=_form_value(form, "client_assertion"),
             request=_form_value(form, "request"),
             request_uri=_form_value(form, "request_uri"),
-            tls_certificate=extract_client_certificate(request),
+            tls_certificate=extract_client_certificate(request, certificate_headers),
         )
         result = await usecase.execute(params)
         if isinstance(result, BackchannelAuthenticationError):

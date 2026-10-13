@@ -69,6 +69,7 @@ from puridentityserver.infrastructure.backchannel import (
 from puridentityserver.infrastructure.bearer import build_bearer_verifier
 from puridentityserver.infrastructure.claims import UserStoreClaimsProvider
 from puridentityserver.infrastructure.client_assertions import PyJWTClientAssertionVerifier
+from puridentityserver.infrastructure.client_tls import ClientCertificateHeaderNames
 from puridentityserver.infrastructure.dpop import PyJWTDpopProofValidator
 from puridentityserver.infrastructure.jwe import JWEIdTokenEncrypter
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
@@ -219,6 +220,10 @@ class ProtocolDependencies:
         self.secret_cipher = AsymmetricSecretCipher(self.secret_key_manager)
         self.id_token_encrypter = JWEIdTokenEncrypter()
         self.client_assertions = PyJWTClientAssertionVerifier(self.secret_cipher)
+        self.client_certificate_headers = ClientCertificateHeaderNames(
+            certificate=settings.client_certificate_header,
+            subject_dn=settings.client_certificate_dn_header,
+        )
         self.bearer_verifier = build_bearer_verifier(settings, self.token_manager)
         self.dpop_validator = PyJWTDpopProofValidator(stores.dpop_replay)
         self.signed_request_objects = PyJWTSignedRequestObjectVerifier(stores.dpop_replay)
@@ -473,16 +478,24 @@ class ProtocolDependencies:
             require_login=self.settings.require_login,
             base_url=self.settings.base_url or self.settings.issuer,
         )
-        app.include_router(token_router(self.token_usecase))
+        app.include_router(token_router(self.token_usecase, self.client_certificate_headers))
         app.include_router(device_authorization_router(self.device_usecase))
         app.include_router(device_page_router(self.device_usecase))
         if self.settings.ciba_enabled:
-            app.include_router(backchannel_authorization_router(self.backchannel_authorize_usecase))
+            app.include_router(
+                backchannel_authorization_router(
+                    self.backchannel_authorize_usecase, self.client_certificate_headers
+                )
+            )
         if self.settings.ciba_approval_enabled:
             app.include_router(ciba_approval_router(self.ciba_approval_usecase))
-        app.include_router(userinfo_router(self.userinfo_usecase))
+        app.include_router(userinfo_router(self.userinfo_usecase, self.client_certificate_headers))
         if self.protected_resource_usecase is not None:
-            app.include_router(protected_resource_router(self.protected_resource_usecase))
+            app.include_router(
+                protected_resource_router(
+                    self.protected_resource_usecase, self.client_certificate_headers
+                )
+            )
         app.include_router(introspect_router(self.introspect_usecase))
         app.include_router(revocation_router(self.revocation_usecase))
         app.include_router(logout_router(self.logout_usecase))

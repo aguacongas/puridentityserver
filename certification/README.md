@@ -217,6 +217,28 @@ uv run python samples/conformance-smoke/smoke_test.py
   `mtls2` et `mtls.ca`/`mtls2.ca` (certificats auto-signés PEM, clé PKCS8) ;
   `fapi2` n'a pas besoin de certs (contrôle conditionnel au variant
   `client_auth_type=mtls`).
+- **Liaison mTLS des jetons (RFC 8705, issue #127)** : le flag
+  `tls_client_certificate_bound_access_tokens` (par client) exige la
+  présentation d'un certificat à chaque appel `/token` (et `/bc-authorize`),
+  émet `cnf.x5t#S256` sur les access tokens et lie les refresh tokens au
+  certificat d'émission. L'OP lit le PEM via deux sources : le contexte TLS
+  direct d'uvicorn, ou — derrière un proxy de terminaison — les en-têtes
+  dont les noms sont configurables (`client_certificate_header` /
+  `client_certificate_dn_header` dans `config.toml`, défauts
+  `X-SSL-Client-Cert` / `X-SSL-Client-S-DN`). Sur l'instance Render derrière
+  Cloudflare : activer mTLS sur le hostname (CA managée — le certificat CF
+  est alors injecté dans `mtls.cert`/`mtls.key` du plan — ou BYOCA, plan
+  Enterprise), poser une Transform Rule RFC 9440 (`cf.tls_client_auth.cert`
+  → `X-SSL-Client-Cert`, gate `cert_verified`, Remove avant Set), puis
+  activer dans cet ordre : (1) CF mTLS + Transform Rules, (2) déploiement du
+  code, (3) flip des seeds `config.render.toml`, (4) rejeu. **Plafond
+  environnemental** : la liste de cipher du edge Cloudflare accepte un
+  certificat ECDSA (`TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256`) que le check
+  `DisallowInsecureCipher` (FAPI1-ADV-8.5-x, liste RSA-only) rejette — les
+  modules `ensure-mtls-holder-of-key` / `bare` resterontFAILED sur ce seul
+  check derrière CF ; le module `refresh-token` peut devenir 100 % vert.
+  Démo locale hermétique : `samples/mtls-holder-of-key-client/` (en-têtes
+  proxy personnalisés, PEM `\n`-échappé, 8 étapes).
 - **OP déployé sans la config de la branche** (`error=invalid_client` au PAR) :
   `render.yaml` verrouille `branch: main` — le workflow ajoute `ref=$GITHUB_SHA`
   au deploy hook Render pour déployer le commit exact du run.

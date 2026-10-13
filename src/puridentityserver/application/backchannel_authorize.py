@@ -191,12 +191,27 @@ class BackchannelAuthenticationUseCase:
     async def _authenticate_client(
         self, params: BackchannelAuthenticationParams
     ) -> Client | BackchannelAuthenticationError:
-        """Charge le client puis l'authentifie selon sa méthode déclarée (§7.2)."""
+        """Charge le client puis l'authentifie selon sa méthode déclarée (§7.2).
+
+        Un client ``tls_client_certificate_bound_access_tokens`` (RFC 8705
+        §3.1) doit en plus présenter un certificat client à cet endpoint,
+        au-delà de sa méthode d'authentification : sans certificat, la
+        demande est refusée ``invalid_client`` (CIBA §13, 401).
+        """
         client_id = params.client_id or self._deduced_client_id(params)
         client = await self._clients.find_by_id(client_id)
         if client is None or not client.is_active:
             return BackchannelAuthenticationError(
                 "invalid_client", CLIENT_UNKNOWN_ERROR, status_code=401
+            )
+        if client.tls_client_certificate_bound_access_tokens and (
+            params.tls_certificate is None or params.tls_certificate.der is None
+        ):
+            return BackchannelAuthenticationError(
+                "invalid_client",
+                "Certificat client mTLS requis (RFC 8705 §3.1, "
+                "tls_client_certificate_bound_access_tokens)",
+                status_code=401,
             )
         detail = await authenticate_client(
             client,
