@@ -298,12 +298,17 @@ class Settings(BaseSettings):
     # urn:openid:params:grant-type:ciba (désactivé par défaut). La durée de
     # vie de l'auth_req_id (`requested_expiry` inclus est borné) et
     # l'intervalle minimal de poll avant slow_down se règlent ici.
+    # `ciba_min_ttl_seconds` est le plancher appliqué à `requested_expiry` :
+    # l'OP peut choisir de ne pas honorer une expiration trop courte (§7.1),
+    # ce qui évite qu'un auth_req_id n'expire entre deux polls à cause de
+    # la latence réseau (cas de la suite de certification sur Render).
     # `ciba_approval_enabled` expose POST /ciba/approve : endpoint
     # d'approbation automatisé (harness de certification, §9), lui aussi
     # désactivé par défaut — sans lui, la route répond 404.
     ciba_enabled: bool = False
     ciba_approval_enabled: bool = False
     ciba_ttl_seconds: int = 600
+    ciba_min_ttl_seconds: int = 60
     ciba_interval_seconds: int = 5
     clients_seed: Annotated[tuple[dict[str, object], ...], NoDecode] = ()
 

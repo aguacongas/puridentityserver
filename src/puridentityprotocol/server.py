@@ -308,6 +308,7 @@ class ProtocolDependencies:
                 issuer=settings.issuer,
                 base_url=settings.base_url,
                 ttl_seconds=settings.ciba_ttl_seconds,
+                min_ttl_seconds=settings.ciba_min_ttl_seconds,
                 interval_seconds=settings.ciba_interval_seconds,
                 token_endpoint=f"{protocol_base_url}/token",
                 bc_authorize_endpoint=f"{protocol_base_url}/bc-authorize",

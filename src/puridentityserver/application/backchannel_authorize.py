@@ -86,11 +86,17 @@ class BackchannelAuthenticationConfig:
     ``request_signing_algorithms`` liste les algorithmes de ``request``
     signé admis pour un client sans algorithme enregistré (publiés au
     discovery sous ``backchannel_authentication_request_signing_alg_values_supported``).
+
+    ``min_ttl_seconds`` est le plancher appliqué à ``requested_expiry`` :
+    l'OP peut choisir de ne pas honorer une expiration trop courte (§7.1),
+    ce qui garantit que les polls du client restent dans la fenêtre de
+    validité malgré la latence réseau.
     """
 
     issuer: str
     base_url: str = ""
     ttl_seconds: int = 600
+    min_ttl_seconds: int = 60
     interval_seconds: int = 5
     token_endpoint: str = ""
     bc_authorize_endpoint: str = ""
@@ -533,7 +539,13 @@ class BackchannelAuthenticationUseCase:
         return token
 
     def _resolve_ttl(self, requested_expiry: str) -> int | BackchannelAuthenticationError:
-        """Durée de vie de l'``auth_req_id`` : ``requested_expiry`` bornée au défaut (§7.1)."""
+        """Durée de vie de l'``auth_req_id`` : ``requested_expiry`` bornée (§7.1).
+
+        La valeur demandée est plafonnée au défaut du serveur (``ttl_seconds``)
+        et relever à ``min_ttl_seconds`` : l'OP peut choisir de ne pas
+        honorer une expiration trop courte, ce qui évite qu'un ``auth_req_id``
+        n'expire entre deux polls du client à cause de la latence réseau.
+        """
         if not requested_expiry:
             return self._config.ttl_seconds
         try:
@@ -546,7 +558,8 @@ class BackchannelAuthenticationUseCase:
             return BackchannelAuthenticationError(
                 "invalid_request", "requested_expiry doit être un entier positif"
             )
-        return min(requested, self._config.ttl_seconds)
+        floor = min(self._config.min_ttl_seconds, self._config.ttl_seconds)
+        return max(floor, min(requested, self._config.ttl_seconds))
 
     def _assertion_audiences(self) -> tuple[str, ...]:
         """Valeurs d'``aud`` admises des assertions au backchannel endpoint (§7.1)."""
