@@ -48,14 +48,10 @@ Sortie attendue (8 × `OK`, 6 à 10 s) :
 
 ## Rejeu de la suite de certification complète
 
-Le même parcours, décliné en 107 tests (114 exécutions de modules des
-plans Final + ID2), se rejoue avec le plan
-`tests/conformance/test_plan_fapi2.py` :
-
-```bash
-uv run python -m pytest tests/conformance/test_plan_fapi2.py \
-  -m conformance --no-cov -p no:cacheprovider
-```
+Le parcours complet se rejoue avec la vraie suite de certification en docker
+(harness local, plan `fapi2`) : workflow GitHub `Certification OIDC (local)`
+(`.github/workflows/certification-local.yml`, matrix des 6 plans), voir
+`certification/README.md` section « Rejeu local auto-hébergé ».
 
 ## À quoi sert FAPI 2.0 Security Profile ?
 

@@ -520,8 +520,15 @@ class FapiHarness(ConformanceHarness):
         return self._client.post("/token", data=payload, headers=headers)
 
     def _certificate_headers(self) -> dict[str, str]:
-        """En-tête proxy portant le certificat client du client courant."""
-        return {"X-SSL-Client-Cert": self.client.certificate_pem}
+        r"""En-tête proxy portant le certificat client du client courant.
+
+        Le PEM est échappé en séquences ``\n`` littérales : une valeur
+        d'en-tête HTTP ne peut pas porter de saut de ligne réel (httpx/h11
+        refuserait l'envoi contre un vrai serveur) ; l'OP rétablit les lignes
+        à la lecture (``client_tls._normalize_header_value``), comme un proxy
+        de terminaison TLS le fait en production.
+        """
+        return {"X-SSL-Client-Cert": self.client.certificate_pem.replace("\n", "\\n")}
 
     def refresh(self, refresh_token: str, auth_method: str = "private_key_jwt") -> httpx.Response:
         """``POST /token`` (grant ``refresh_token``, assertion fraîche)."""

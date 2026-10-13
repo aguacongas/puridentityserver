@@ -135,7 +135,7 @@ def render_server_config(
     ``issuer`` fixe ``issuer`` **et** ``base_url`` (défaut : ``issuer`` =
     ``http://127.0.0.1:port`` et ``base_url`` vide) — nécessaire quand le
     client attend un issuer canonique quelconque, ex. ``https://id.example``
-    pour ``tests/conformance/``.
+    pour ``samples/oidc_harness/``.
     ``users_seed`` déclare les profils de claims
     (``[settings.users_seed.<subject>]``, sous-dictes = sous-tables TOML) que
     ``/userinfo`` rend pour les scopes accordés.
