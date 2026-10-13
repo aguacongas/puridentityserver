@@ -464,11 +464,17 @@ class TestBackchannelAuthorizeUseCase:
         result = run(uc.execute(_params(login_hint=_USER_SUBJECT)))
         assert isinstance(result, AuthenticationAck)
 
-    def test_honors_requested_expiry(self) -> None:
+    def test_floors_short_requested_expiry_to_server_minimum(self) -> None:
         uc, *_ = _make_usecase()
         result = run(uc.execute(_params(login_hint=_USER_SUBJECT, requested_expiry="10")))
         assert isinstance(result, AuthenticationAck)
-        assert result.expires_in == 10
+        assert result.expires_in == 60
+
+    def test_honors_requested_expiry_above_minimum(self) -> None:
+        uc, *_ = _make_usecase()
+        result = run(uc.execute(_params(login_hint=_USER_SUBJECT, requested_expiry="120")))
+        assert isinstance(result, AuthenticationAck)
+        assert result.expires_in == 120
 
     def test_bounds_requested_expiry_to_server_ttl(self) -> None:
         uc, *_ = _make_usecase()
