@@ -1,0 +1,162 @@
+name: Certification OIDC (local)
+
+# Mode auto-hébergé : la suite openid/conformance-suite (release-v5.2.4) tourne
+# EN DOCKER sur le runner, avec l'OP PurIdentityServer local derrière un nginx
+# mTLS — aucun dépendance à l'infra hébergée de la Fondation ni à Render.
+#
+# Objectif (issue prototype du 2026-10-13) : assurance conformité COURANTE et
+# déterministe, en COMPLÉMENT du run hébergé officiel (certification.yml). Ce
+# workflow ne publie PAS sur GitHub Pages (le job hébergé en reste propriétaire)
+# : il téléverse les exports + le rapport statique en artefacts, visibles dans
+# le résumé du run.
+#
+# Mode WITNESS : comme le job hébergé, les modules FAILED/REVIEW ne font pas
+# échouer le workflow — seul un crash du harness (aucun export) est signalé.
+# Les lacunes d'enforcement mTLS connues de l'OP (holder-of-key) sont donc
+# tolérées ici tant que les fixes produit ne sont pas posés.
+#
+# Déclenchement : manuel (workflow_dispatch) pour l'instant, en attendant la
+# validation du harness sur GitHub. On ajoutera push/schedule ensuite.
+
+on:
+  workflow_dispatch:
+    inputs:
+      plan:
+        description: "Plan local à jouer"
+        type: choice
+        required: false
+        default: fapi1
+        options:
+          - fapi1
+  # TEMPORAIRE (validation du harness, issue #142) : déclencheur PR pour que ce
+  # workflow s'exécute sur la PR de validation SANS être mergé sur main (le
+  # workflow_dispatch seul exige la présence du fichier sur la branche par
+  # défaut). À RETIRER avant le merge — le workflow final reste un dispatch,
+  # l'extension push/schedule sera décidée ensuite.
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "certification/**"
+      - ".github/workflows/certification-local.yml"
+
+permissions:
+  contents: read
+
+env:
+  SUITE_VERSION: release-v5.2.4
+  # {SUITEURL} / API du driver : accessible depuis l'hôte (alias ->127.0.0.1
+  # posé par setup.sh) et depuis le conteneur (alias réseau docker).
+  CONFORMANCE_SERVER: https://localhost.emobix.co.uk:8443/
+  # {OPURL} : point d'entrée mTLS de l'OP, joignable par le navigateur HtmlUnit
+  # (conteneur, via l'alias réseau `op`) — l'OP uvicorn est sur l'hôte.
+  OP_URL: https://op:9443
+  SUITE_URL: https://localhost.emobix.co.uk:8443/
+
+concurrency:
+  group: certification-local
+  cancel-in-progress: true
+
+jobs:
+  fapi1:
+    name: Plan fapi1 (local, witness)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Installation de uv (OP local)
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          enable-cache: true
+
+      - name: Bootstrap du harness local (suite docker + OP + nginx mTLS)
+        # Monte la suite (mongodb/server/nginx), génère le cert auto-signé +
+        # le nginx mTLS « op », la config OP locale et démarre l'OP uvicorn ;
+        # attend la disponibilité de la suite et de l'OP avant de rendre la main.
+        run: bash certification/local/setup.sh
+
+      - name: Substitution des URLs dans les plans (mode local)
+        # {OPURL} -> nginx mTLS de l'OP (https://op:9443) ; {SUITEURL} -> base
+        # de la suite locale (les tâches « attente » ne doivent matcher QUE le
+        # callback de la suite).
+        run: |
+          for f in certification/plans/fapi1.json; do
+            sed -i "s#{OPURL}#${OP_URL}#g" "$f"
+            sed -i "s#{SUITEURL}#${SUITE_URL}#g" "$f"
+          done
+          grep -h '"match"' certification/plans/fapi1.json | sort -u
+
+      - name: Dépendances Python du driver officiel (httpx)
+        run: python3 -m pip install --disable-pip-version-check --quiet httpx
+
+      - name: Patch du driver (5 patches, idem job hébergé)
+        # Le clone de la suite a été posé par setup.sh (conformance-suite/).
+        run: |
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-reuse-plan.patch"
+          grep -n "def _plan_matching_configuration" conformance-suite/scripts/conformance.py
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-screenshots.patch"
+          grep -n "fill_required_screenshots" conformance-suite/scripts/conformance.py conformance-suite/scripts/run-test-plan.py
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-alias-release.patch"
+          grep -n "release_alias" conformance-suite/scripts/conformance.py conformance-suite/scripts/run-test-plan.py
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-interrupted-diagnostics.patch"
+          grep -n "describe_interruption" conformance-suite/scripts/conformance.py
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-stale-plan-recovery.patch"
+          # Timeout module surchargeable (comme le job hébergé).
+          sed -i 's/timeout=240/timeout=int(os.getenv("CONFORMANCE_MODULE_TIMEOUT", "240"))/' \
+            conformance-suite/scripts/conformance.py
+
+      - name: Lancement du plan fapi1 (witness)
+        env:
+          # Suite self-hosted en mode dev : le DummyUserFilter injecte un
+          # utilisateur — AVEC un token Bearer la demande est rejetée (401). On
+          # n'envoie donc AUCUN header Authorization (token vide -> None).
+          CONFORMANCE_TOKEN: ""
+          DISABLE_SSL_VERIFY: "1"
+          CONFORMANCE_MODULE_TIMEOUT: "600"
+        run: |
+          set +e
+          mkdir -p results
+          cd conformance-suite
+          python3 scripts/run-test-plan.py \
+            --export-dir "$GITHUB_WORKSPACE/results" \
+            "fapi1-advanced-final-test-plan[fapi_profile=plain_fapi][client_auth_type=private_key_jwt][fapi_auth_request_method=by_value][fapi_response_mode=plain_response]" \
+            "$GITHUB_WORKSPACE/certification/plans/fapi1.json" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          code=${PIPESTATUS[0]}
+          echo "- exit code : $code (witness : les gaps module ne bloquent pas)" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$code" -eq 0 ] || echo "plan fapi1 local en échec partiel (attendu tant que le mTLS n'est pas corrigé)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: "Garde-fou : export du plan présent"
+        # Seule l'absence TOTALE d'export (harness crashé avant tout module) est
+        # un échec — les gaps FAILED/REVIEW produisent des exports et sont
+        # tolérés (mode witness).
+        run: |
+          if [ -z "$(find results -mindepth 1 -print -quit 2>/dev/null)" ]; then
+            echo "::error::Aucun export pour le plan fapi1 local : harness crashé avant tout module"
+            exit 1
+          fi
+          echo "Export du plan fapi1 local présent : OK"
+
+      - name: Upload des exports du plan
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: certification-local-results-fapi1
+          path: results/
+          if-no-files-found: ignore
+
+      - name: Génération du rapport statique (artefact, sans Pages)
+        if: always()
+        run: |
+          mkdir -p screenshots
+          python3 certification/report.py \
+            --results results \
+            --site _site \
+            --screenshots screenshots
+
+      - name: Upload du rapport statique
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: certification-local-report
+          path: _site/
+          if-no-files-found: ignore
