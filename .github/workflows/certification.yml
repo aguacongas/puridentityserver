@@ -10,7 +10,7 @@ name: Certification OIDC
 # les plans Core stables.
 #
 # Issue #122 : les 6 plans s'exécutent EN PARALLÈLE (matrix de jobs, même
-# patron que conformance-tests.yml) : ~3 h séquentielles deviennent la durée
+# patron que certification-local.yml) : ~3 h séquentielles deviennent la durée
 # du plan le plus long (~40 min) :
 # - job `prepare` UNIQUE : matrice depuis l'input `plan`, deploy hook Render
 #   (UNE SEULE fois — un redejob par plan remplacerait l'OP en plein run) et
@@ -468,7 +468,7 @@ jobs:
       - name: Téléversement des exports de tous les plans
         # `merge-multiple` : les artefacts certification-results-<plan> sont
         # fusionnés dans le répertoire de travail (patron éprouvé par
-        # conformance-tests.yml / PR #117), quel que soit le chemin interne
+        # certification-local.yml), quel que soit le chemin interne
         # retenu par upload-artifact.
         uses: actions/download-artifact@v8
         with:
