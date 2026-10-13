@@ -1,24 +1,32 @@
-r"""Capture les pages de relecture de l'OP pour la certification (issue #90).
+r"""Capture les pages de relecture de l'OP pour la certification (issues #90, #138).
 
 La suite officielle attend une capture d'écran pour 4 modules Core
 (``oidcc-response-type-missing``, ``oidcc-ensure-registered-redirect-uri``,
-``oidcc-max-age-1``, ``oidcc-prompt-login``) : sans elle le module reste en
-``WAITING`` jusqu'au timeout. En mode witness, ``conformance-screenshots.patch``
-remplit les placeholders avec un PNG 1x1 de secours — le verdict ``REVIEW``
-tombe juste, mais la preuve est un artifice.
+``oidcc-max-age-1``, ``oidcc-prompt-login``) et laisse 20 modules FAPI
+(``fapi1-advanced-final-*``, ``fapi2-security-profile-final-*``) en verdict
+``REVIEW`` avec un placeholder « upload a screenshot of the error page » :
+sans image, le mode witness remplit ces placeholders avec un PNG 1x1 de
+secours — le verdict tombe juste, mais la preuve est un artifice.
 
-Ce script rejoue les 4 scénarios contre l'OP réellement déployé avec un
+Ce script rejoue les 24 scénarios contre l'OP réellement déployé avec un
 navigateur headless (Playwright/chromium) et produit, pour chaque module,
 une capture authentique de la page servie par l'OP :
 
-1. ``response_type`` absent → page d'erreur HTTP 400 (``<code>`` du motif) ;
-2. ``redirect_uri`` non enregistrée (query ajoutée) → page d'erreur HTTP 400 ;
-3. ``prompt=login`` → second formulaire de connexion (après un flux complet) ;
-4. ``max_age=1`` → idem, une seconde plus tard.
+1. les 4 scénarios Core (paramètre absent, ``redirect_uri`` non enregistrée,
+   second ``prompt=login``, second ``max_age=1``) ;
+2. les 16 scénarios FAPI1 : un request object (JAR, ``by_value``) défectueux
+   par module — claim absent, bornes ``exp``/``nbf``, ``aud``/signature,
+   ``alg=none``/``RS256``, clé inconnue, request object absent, ``redirect_uri``
+   non enregistrée — signé avec la clé privée du client statique seedé par
+   ``certification/config.render.toml`` (l'enregistrement dynamique ne crée
+   pas de client ``fapi_enabled``) ;
+3. les 4 scénarios FAPI2 : requête signée sans PAR, réutilisation d'un
+   ``request_uri``, ``request_uri`` expiré, ``request_uri`` d'un autre client.
 
 Chaque capture est validée (statut, marqueurs de la page) avant export : un
-échec sort avec un code non nul et la certification retombe sur le PNG de
-secours, elle ne s'arrête jamais.
+échec logue l'erreur et le scénario suivant est tenté ; si un fichier attendu
+manque, le code de sortie non nul fait retomber la certification sur le PNG
+de secours, elle ne s'arrête jamais.
 
 Usage (depuis la racine du dépôt, dans la certification CI) :
 
@@ -32,12 +40,19 @@ du driver les lit ensuite via la variable ``SCREENSHOTS_DIR``.
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
+import json
 import logging
+import secrets
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlencode
 
+import jwt as pyjwt
+from cryptography.hazmat.primitives.asymmetric import rsa
+from jwt import PyJWK
 from playwright.sync_api import (
     APIRequestContext,
     Error,
@@ -67,6 +82,120 @@ _REDIRECT_URI = "https://rp.example.invalid/callback"
 _CLIENT_NAME = "certification-captures"
 # Limite de l'ImageAPI de la suite : data URI <= 500 Ko.
 _MAX_IMAGE_BYTES = 500 * 1024
+# Clients statiques FAPI seedés par certification/config.render.toml : leur
+# request object (JAR) exige une ``redirect_uri`` enregistrée, celle du
+# callback de la suite pour le plan correspondant.
+_FAPI1_REDIRECT_URI = "https://www.certification.openid.net/test/a/puridentityserver-fapi1/callback"
+_FAPI2_REDIRECT_URI = "https://www.certification.openid.net/test/a/puridentityserver-fapi2/callback"
+# Forme compacte des erreurs OAuth JSON (RFC 6749 §5.2) servies à la place
+# d'une page HTML (obligation PAR, résolution d'une référence poussée).
+_JSON_ERROR_MARKERS = {
+    "invalid_request": '"error":"invalid_request"',
+    "invalid_request_uri": '"error":"invalid_request_uri"',
+}
+
+#: Modules Core laissés en REVIEW par la suite (placeholders de capture).
+_CORE_TEST_NAMES = (
+    "oidcc-response-type-missing",
+    "oidcc-ensure-registered-redirect-uri",
+    "oidcc-prompt-login",
+    "oidcc-max-age-1",
+)
+
+#: Modules FAPI1 du plan fapi1-advanced-final laissés en REVIEW : un request
+#: object défectueux par module, servis en page HTML 400 portant le ``<code>``
+#: du motif (RFC 6749 §4.1.2.1, RFC 9101 §6.3).
+_FAPI1_JAR_SCENARIOS: tuple[tuple[str, str, str], ...] = (
+    (
+        "fapi1-advanced-final-ensure-authorization-request-without-request-object-fails",
+        "absent",
+        "invalid_request",
+    ),
+    (
+        "fapi1-advanced-final-ensure-expired-request-object-fails",
+        "exp-past",
+        "invalid_request_object",
+    ),
+    (
+        "fapi1-advanced-final-ensure-matching-key-in-authorization-request",
+        "foreign-key",
+        "invalid_request_object",
+    ),
+    (
+        "fapi1-advanced-final-ensure-redirect-uri-in-authorization-request",
+        "no-redirect-uri",
+        "invalid_request_object",
+    ),
+    (
+        "fapi1-advanced-final-ensure-registered-redirect-uri",
+        "unregistered-redirect-uri",
+        "invalid_redirect_uri",
+    ),
+    (
+        "fapi1-advanced-final-ensure-request-object-signature-algorithm-is-not-none",
+        "alg-none",
+        "invalid_request_object",
+    ),
+    (
+        "fapi1-advanced-final-ensure-request-object-with-bad-aud-fails",
+        "bad-aud",
+        "invalid_request_object",
+    ),
+    (
+        "fapi1-advanced-final-ensure-request-object-with-exp-over-60-fails",
+        "exp-over-60",
+        "invalid_request_object",
+    ),
+    (
+        "fapi1-advanced-final-ensure-request-object-with-invalid-signature-fails",
+        "tampered",
+        "invalid_request_object",
+    ),
+    (
+        "fapi1-advanced-final-ensure-request-object-with-nbf-over-60-fails",
+        "nbf-over-60",
+        "invalid_request_object",
+    ),
+    (
+        "fapi1-advanced-final-ensure-request-object-without-exp-fails",
+        "no-exp",
+        "invalid_request_object",
+    ),
+    (
+        "fapi1-advanced-final-ensure-request-object-without-nbf-fails",
+        "no-nbf",
+        "invalid_request_object",
+    ),
+    (
+        "fapi1-advanced-final-ensure-request-object-without-nonce-fails",
+        "no-nonce",
+        "invalid_request_object",
+    ),
+    (
+        "fapi1-advanced-final-ensure-request-object-without-redirect-uri-fails",
+        "no-redirect-uri",
+        "invalid_request_object",
+    ),
+    (
+        "fapi1-advanced-final-ensure-request-object-without-scope-fails",
+        "no-scope",
+        "invalid_request_object",
+    ),
+    (
+        "fapi1-advanced-final-ensure-signed-request-object-with-RS256-fails",
+        "rs256",
+        "invalid_request_object",
+    ),
+)
+
+#: Modules FAPI2 du plan fapi2-security-profile-final laissés en REVIEW : les
+#: erreurs de la voie poussée (PAR) sont servies en JSON OAuth top-level.
+_FAPI2_TEST_NAMES = (
+    "fapi2-security-profile-final-ensure-unsigned-authorization-request-without-using-par-fails",
+    "fapi2-security-profile-final-par-attempt-reuse-request_uri",
+    "fapi2-security-profile-final-par-attempt-to-use-expired-request_uri",
+    "fapi2-security-profile-final-par-attempt-to-use-request_uri-for-different-client",
+)
 
 
 @dataclass
@@ -75,6 +204,22 @@ class RegisteredClient:
 
     client_id: str
     registration_access_token: str = ""
+
+
+@dataclass
+class PlanSigningClient:
+    """Client FAPI statique seedé par la config de certification.
+
+    ``private_key`` / ``kid`` viennent du JWKS committé dans le plan de
+    certification (membres privés ``d``) : l'enregistrement dynamique ne
+    crée pas de client ``fapi_enabled`` / ``fapi2_enabled``, ces seeds sont
+    les seuls clients du profil signé côté OP.
+    """
+
+    client_id: str
+    private_key: object
+    kid: str
+    redirect_uri: str
 
 
 def _authorize_url(
@@ -139,6 +284,188 @@ def _unregister_client(request: APIRequestContext, base_url: str, client: Regist
         _LOGGER.warning("DELETE /register/%s : HTTP %s", client.client_id, response.status)
 
 
+def _load_plan_signing_client(plan_path: Path, redirect_uri: str) -> PlanSigningClient:
+    """Charge le client statique d'un plan de certification et sa clé privée.
+
+    Le plan commetté porte le JWKS complet du client seed (membres privés
+    ``d``) : ``PyJWK`` en déduit la clé de signature PS256 utilisée pour
+    signer les request objects des scénarios.
+    """
+    payload = json.loads(plan_path.read_text(encoding="utf-8"))
+    client = payload["client"]
+    key_data = client["jwks"]["keys"][0]
+    return PlanSigningClient(
+        client_id=str(client["client_id"]),
+        private_key=PyJWK.from_dict(key_data).key,
+        kid=str(key_data.get("kid", "")),
+        redirect_uri=redirect_uri,
+    )
+
+
+def _other_plan_client_id(plan_path: Path) -> str:
+    """Retourne le ``client_id`` du second client seed d'un plan (« client2 »)."""
+    payload = json.loads(plan_path.read_text(encoding="utf-8"))
+    return str(payload["client2"]["client_id"])
+
+
+def _now() -> int:
+    """Horloge Unix courante en secondes."""
+    return int(time.time())
+
+
+def _fapi1_claims(client: PlanSigningClient, base_url: str, mode: str) -> dict[str, object]:
+    """Claims du request object FAPI1, ajustés pour le défaut du scénario.
+
+    La base porte les claims exigés par FAPI1-ADV-5.2.2 (``iss``/``aud``/
+    ``exp``/``nbf``/``scope``/``nonce``/``redirect_uri``) ; ``mode`` applique
+    le défaut module (claim retiré, valeur hors borne, ``redirect_uri``
+    inconnue…). Les valeurs ``None`` retirent le claim du jeton.
+    """
+    now = _now()
+    claims: dict[str, object | None] = {
+        "iss": client.client_id,
+        "aud": base_url.rstrip("/"),
+        "exp": now + 300,
+        "nbf": now - 60,
+        "scope": "openid profile",
+        "nonce": "capture-nonce",
+        "redirect_uri": client.redirect_uri,
+        "response_type": "code id_token",
+        "client_id": client.client_id,
+        "state": "capture-state",
+    }
+    overrides: dict[str, object | None] = {
+        "exp-past": {"exp": now - 120},
+        "exp-over-60": {"exp": now + 3700},
+        "nbf-over-60": {"nbf": now - 3700, "exp": now + 200},
+        "bad-aud": {"aud": "https://rp.example.invalid/wrong-audience"},
+        "no-exp": {"exp": None},
+        "no-nbf": {"nbf": None},
+        "no-nonce": {"nonce": None},
+        "no-redirect-uri": {"redirect_uri": None},
+        "no-scope": {"scope": None},
+        "unregistered-redirect-uri": {"redirect_uri": "https://rp.example.invalid/not-registered"},
+    }.get(mode, {})
+    claims.update(overrides)
+    return {name: value for name, value in claims.items() if value is not None}
+
+
+def _sign(claims: dict[str, object], key: object, kid: str, algorithm: str = "PS256") -> str:
+    """Signe un request object avec PyJWT (jamais de crypto maison)."""
+    return str(pyjwt.encode(claims, key, algorithm=algorithm, headers={"kid": kid}))
+
+
+def _sign_unsigned(claims: dict[str, object]) -> str:
+    """Émet un request object ``alg=none`` (deux segments, sans signature)."""
+    return str(pyjwt.encode(claims, key=None, algorithm="none"))
+
+
+def _tamper(jar: str) -> str:
+    """Altère la signature d'un JWT compact (dernier caractère changé)."""
+    head, payload, signature = jar.rsplit(".", 2)
+    replacement = "A" if not signature.endswith("A") else "B"
+    return f"{head}.{payload}.{signature[:-1]}{replacement}"
+
+
+def _fapi1_jar(
+    client: PlanSigningClient,
+    claims: dict[str, object],
+    mode: str,
+    foreign_key: object,
+) -> str | None:
+    """Construit le request object du scénario, ``None`` s'il est absent."""
+    if mode == "absent":
+        return None
+    if mode == "foreign-key":
+        return _sign(claims, foreign_key, "capture-foreign-key", "PS256")
+    if mode == "alg-none":
+        return _sign_unsigned(claims)
+    if mode == "rs256":
+        return _sign(claims, client.private_key, client.kid, "RS256")
+    if mode == "tampered":
+        return _tamper(_sign(claims, client.private_key, client.kid, "PS256"))
+    return _sign(claims, client.private_key, client.kid, "PS256")
+
+
+def _fapi1_request_url(
+    base_url: str,
+    client: PlanSigningClient,
+    claims: dict[str, object],
+    mode: str,
+    foreign_key: object,
+) -> str:
+    """URL ``/authorize`` du scénario FAPI1 (``request`` par valeur, ou sans)."""
+    jar = _fapi1_jar(client, claims, mode, foreign_key)
+    params = {"client_id": client.client_id}
+    if jar is not None:
+        params["request"] = jar
+    return f"{base_url.rstrip('/')}/authorize?{urlencode(params)}"
+
+
+def _pkce_pair() -> tuple[str, str]:
+    """Génère le couple ``code_verifier`` / ``code_challenge`` S256 (RFC 7636)."""
+    verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
+    digest = hashlib.sha256(verifier.encode()).digest()
+    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    return verifier, challenge
+
+
+def _client_assertion(client: PlanSigningClient, issuer: str) -> str:
+    """Assertion ``private_key_jwt`` du push PAR (RFC 7523 §2.2).
+
+    FAPI2 n'admet que l'issuer comme ``audience`` (FAPI2-SP-FINAL-5.3.2.1-8).
+    """
+    now = _now()
+    return _sign(
+        {
+            "iss": client.client_id,
+            "sub": client.client_id,
+            "aud": issuer.rstrip("/"),
+            "jti": f"capture-{now}-{client.client_id}",
+            "iat": now,
+            "exp": now + 300,
+        },
+        client.private_key,
+        client.kid,
+    )
+
+
+def _push_par(
+    request: APIRequestContext,
+    base_url: str,
+    client: PlanSigningClient,
+    code_challenge: str,
+) -> str:
+    """Pousse une demande valide (``POST /par``) et retourne son ``request_uri``."""
+    response = request.post(
+        f"{base_url.rstrip('/')}/par",
+        form={
+            "response_type": "code",
+            "client_id": client.client_id,
+            "redirect_uri": client.redirect_uri,
+            "scope": "openid profile",
+            "state": "capture-state",
+            "nonce": "capture-nonce",
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+            "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+            "client_assertion": _client_assertion(client, base_url),
+        },
+    )
+    if response.status not in (200, 201):
+        raise RuntimeError(f"POST /par a répondu HTTP {response.status} : {response.text()[:300]}")
+    request_uri = str(response.json().get("request_uri", ""))
+    if not request_uri:
+        raise RuntimeError(f"request_uri absente de la réponse PAR : {response.text()[:300]}")
+    return request_uri
+
+
+def _authorize_with_uri(base_url: str, client_id: str, request_uri: str) -> str:
+    """URL ``/authorize`` d'une visite par référence poussée (RFC 9126 §4)."""
+    query = urlencode({"client_id": client_id, "request_uri": request_uri})
+    return f"{base_url.rstrip('/')}/authorize?{query}"
+
+
 def _attached(page: Page, selector: str) -> bool:
     """Attend l'apparition du marqueur ``selector`` ; vrai s'il est présent."""
     try:
@@ -199,6 +526,21 @@ def _run_flow(page: Page, url: str, username: str, password: str) -> None:
             raise
 
 
+def _complete_flow_quietly(page: Page, url: str, username: str, password: str) -> None:
+    """Consomme une demande poussée sans exiger le succès de la navigation finale.
+
+    Le ``redirect_uri`` enregistré des clients FAPI est celui de la suite de
+    certification (hébergé, joignable depuis la CI) : l'issue de la
+    navigation finale est sans consommé pour la capture (seule la
+    consommation du ``request_uri`` à l'émission compte), toute erreur de
+    navigation y est donc absorbée.
+    """
+    try:
+        _run_flow(page, url, username, password)
+    except Error as error:
+        _LOGGER.info("Navigation finale du push PAR absorbée : %s", error)
+
+
 def _assert_status(page: Page, url: str, expected: int) -> None:
     """Contrôle le statut HTTP de la page affichée (la navigation peut échouer)."""
     response = _goto(page, url)
@@ -216,6 +558,21 @@ def _capture_error_page(page: Page, url: str, error_code: str, path: Path) -> No
     _assert_status(page, url, 400)
     if f"<code>{error_code}</code>" not in page.content():
         raise RuntimeError(f"motif {error_code!r} absent de la page d'erreur {url}")
+    _screenshot(page, path)
+
+
+def _capture_json_error(page: Page, url: str, error_code: str, path: Path) -> None:
+    """Capture la réponse d'erreur JSON OAuth (RFC 6749 §5.2) affichée par le navigateur.
+
+    Les erreurs de la voie poussée (obligation PAR, ``request_uri`` expiré,
+    réutilisé ou d'un autre client) sont servies en JSON compact au lieu
+    d'une page HTML : le corps affiché porte ``"error":"<code>"``.
+    """
+    marker = _JSON_ERROR_MARKERS[error_code]
+    _assert_status(page, url, 400)
+    body = page.locator("body").inner_text().replace(" ", "").replace("\n", "")
+    if marker not in body:
+        raise RuntimeError(f"motif {error_code!r} absent de la réponse JSON {url} : {body[:200]}")
     _screenshot(page, path)
 
 
@@ -281,71 +638,201 @@ def _screenshot(page: Page, path: Path) -> None:
     _LOGGER.info("Capture %s (%d octets)", path, size)
 
 
+def _capture_core_scenarios(
+    page: Page,
+    context_request: APIRequestContext,
+    base_url: str,
+    out: Path,
+    username: str,
+    password: str,
+) -> None:
+    """Rejoue les 4 scénarios Core (client enregistré dynamiquement)."""
+    client = _register_client(context_request, base_url)
+    try:
+        # `response_type` absent : la validation des paramètres précède le
+        # login, la page d'erreur tombe même sur session vierge.
+        _capture_error_page(
+            page,
+            _authorize_url(base_url, client.client_id, extra={"response_type": None}),
+            "response_type",
+            out / "oidcc-response-type-missing.png",
+        )
+        # Établissement de la session : `redirect_uri`, `prompt` et
+        # `max_age` ne sont arbitrés qu'après login/consentement.
+        _run_flow(page, _authorize_url(base_url, client.client_id), username, password)
+        _capture_error_after_flow(
+            page,
+            _authorize_url(
+                base_url,
+                client.client_id,
+                extra={"redirect_uri": f"{_REDIRECT_URI}?unregistered=1"},
+            ),
+            "invalid_redirect_uri",
+            username,
+            password,
+            out / "oidcc-ensure-registered-redirect-uri.png",
+        )
+        _capture_second_login(
+            page,
+            base_url,
+            client.client_id,
+            username,
+            password,
+            {"prompt": "login"},
+            out / "oidcc-prompt-login.png",
+        )
+        _capture_second_login(
+            page,
+            base_url,
+            client.client_id,
+            username,
+            password,
+            {"max_age": "1"},
+            out / "oidcc-max-age-1.png",
+        )
+    finally:
+        _unregister_client(context_request, base_url, client)
+
+
+def _capture_fapi1_scenarios(page: Page, base_url: str, plans_dir: Path, out: Path) -> None:
+    """Rejoue les 16 scénarios FAPI1 (request object défectueux par module)."""
+    client = _load_plan_signing_client(plans_dir / "fapi1.json", _FAPI1_REDIRECT_URI)
+    foreign_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    for test_name, mode, error_code in _FAPI1_JAR_SCENARIOS:
+        claims = _fapi1_claims(client, base_url, mode)
+        url = _fapi1_request_url(base_url, client, claims, mode, foreign_key)
+        _capture_error_page(page, url, error_code, out / f"{test_name}.png")
+
+
+def _capture_fapi2_scenarios(
+    page: Page,
+    request: APIRequestContext,
+    base_url: str,
+    plans_dir: Path,
+    out: Path,
+    par_ttl_seconds: int,
+    username: str,
+    password: str,
+) -> None:
+    """Rejoue les 4 scénarios FAPI2 (demande poussée, ``request_uri``)."""
+    client = _load_plan_signing_client(plans_dir / "fapi2.json", _FAPI2_REDIRECT_URI)
+    other_client_id = _other_plan_client_id(plans_dir / "fapi2.json")
+    _capture_unsigned_without_par(page, base_url, client.client_id, out)
+    _, challenge = _pkce_pair()
+    _capture_par_reuse(page, request, base_url, client, challenge, out, username, password)
+    _capture_par_expired(page, request, base_url, client, challenge, out, par_ttl_seconds)
+    _capture_par_other_client(page, request, base_url, client, other_client_id, challenge, out)
+
+
+def _capture_unsigned_without_par(page: Page, base_url: str, client_id: str, out: Path) -> None:
+    """FAPI2 n'admet que les demandes poussées : une requête directe est refusée."""
+    url = _authorize_url(
+        base_url,
+        client_id,
+        extra={"redirect_uri": _FAPI2_REDIRECT_URI, "code_challenge_method": "S256"},
+    )
+    _capture_json_error(
+        page,
+        url,
+        "invalid_request",
+        out / f"{_FAPI2_TEST_NAMES[0]}.png",
+    )
+
+
+def _capture_par_reuse(
+    page: Page,
+    request: APIRequestContext,
+    base_url: str,
+    client: PlanSigningClient,
+    code_challenge: str,
+    out: Path,
+    username: str,
+    password: str,
+) -> None:
+    """Le ``request_uri`` est à usage unique : la seconde visite est refusée."""
+    request_uri = _push_par(request, base_url, client, code_challenge)
+    url = _authorize_with_uri(base_url, client.client_id, request_uri)
+    _complete_flow_quietly(page, url, username, password)
+    _capture_json_error(page, url, "invalid_request_uri", out / f"{_FAPI2_TEST_NAMES[1]}.png")
+
+
+def _capture_par_expired(
+    page: Page,
+    request: APIRequestContext,
+    base_url: str,
+    client: PlanSigningClient,
+    code_challenge: str,
+    out: Path,
+    par_ttl_seconds: int,
+) -> None:
+    """Un ``request_uri`` expiré (TTL PAR) est refusé (RFC 9126 §4)."""
+    request_uri = _push_par(request, base_url, client, code_challenge)
+    time.sleep(par_ttl_seconds + 2)
+    url = _authorize_with_uri(base_url, client.client_id, request_uri)
+    _capture_json_error(page, url, "invalid_request_uri", out / f"{_FAPI2_TEST_NAMES[2]}.png")
+
+
+def _capture_par_other_client(
+    page: Page,
+    request: APIRequestContext,
+    base_url: str,
+    client: PlanSigningClient,
+    other_client_id: str,
+    code_challenge: str,
+    out: Path,
+) -> None:
+    """La référence poussée n'est résoluble que pour le client qui l'a émise."""
+    request_uri = _push_par(request, base_url, client, code_challenge)
+    url = _authorize_with_uri(base_url, other_client_id, request_uri)
+    _capture_json_error(page, url, "invalid_request", out / f"{_FAPI2_TEST_NAMES[3]}.png")
+
+
 def capture_all(
     playwright: Playwright,
     base_url: str,
     out: Path,
     username: str,
     password: str,
+    *,
+    plans_dir: Path,
+    par_ttl_seconds: int,
 ) -> list[Path]:
-    """Rejoue les 4 scénarios et écrit les PNG nommés ``<testName>.png``."""
+    """Rejoue les 24 scénarios et écrit les PNG nommés ``<testName>.png``.
+
+    Les familles FAPI sont indépendantes : l'échec d'une famille est logué
+    sans interrompre les autres (la certification retombe sur le PNG de
+    secours pour les fichiers manquants).
+    """
     out.mkdir(parents=True, exist_ok=True)
     browser = playwright.chromium.launch()
     try:
         context = browser.new_context(viewport={"width": 1024, "height": 768})
-        client = _register_client(context.request, base_url)
+        page = context.new_page()
+        _capture_core_scenarios(page, context.request, base_url, out, username, password)
         try:
-            page = context.new_page()
-            # `response_type` absent : la validation des paramètres précède le
-            # login, la page d'erreur tombe même sur session vierge.
-            _capture_error_page(
+            _capture_fapi1_scenarios(page, base_url, plans_dir, out)
+        except Exception as error:
+            _LOGGER.error("Captures fapi1 impossibles : %s", error)
+        try:
+            _capture_fapi2_scenarios(
                 page,
-                _authorize_url(base_url, client.client_id, extra={"response_type": None}),
-                "response_type",
-                out / "oidcc-response-type-missing.png",
-            )
-            # Établissement de la session : `redirect_uri`, `prompt` et
-            # `max_age` ne sont arbitrés qu'après login/consentement.
-            _run_flow(page, _authorize_url(base_url, client.client_id), username, password)
-            _capture_error_after_flow(
-                page,
-                _authorize_url(
-                    base_url,
-                    client.client_id,
-                    extra={"redirect_uri": f"{_REDIRECT_URI}?unregistered=1"},
-                ),
-                "invalid_redirect_uri",
-                username,
-                password,
-                out / "oidcc-ensure-registered-redirect-uri.png",
-            )
-            _capture_second_login(
-                page,
+                context.request,
                 base_url,
-                client.client_id,
+                plans_dir,
+                out,
+                par_ttl_seconds,
                 username,
                 password,
-                {"prompt": "login"},
-                out / "oidcc-prompt-login.png",
             )
-            _capture_second_login(
-                page,
-                base_url,
-                client.client_id,
-                username,
-                password,
-                {"max_age": "1"},
-                out / "oidcc-max-age-1.png",
-            )
-        finally:
-            _unregister_client(context.request, base_url, client)
+        except Exception as error:
+            _LOGGER.error("Captures fapi2 impossibles : %s", error)
     finally:
         browser.close()
     return sorted(out.glob("*.png"))
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Capture les pages ; renvoie 0 si les 4 fichiers sont produits."""
+    """Capture les pages ; renvoie 0 si les 24 fichiers sont produits."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--base-url",
@@ -355,19 +842,35 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", default="screenshots", help="répertoire des PNG")
     parser.add_argument("--username", default="alice@example.com", help="compte de connexion")
     parser.add_argument("--password", default="password", help="mot de passe du compte")
+    parser.add_argument(
+        "--plans-dir",
+        default="certification/plans",
+        help="dossier des plans de certification (clés des clients FAPI statiques)",
+    )
+    parser.add_argument(
+        "--par-ttl-seconds",
+        type=int,
+        default=30,
+        help="TTL PAR de l'OP, aligné sur par_ttl_seconds (scénario request_uri expiré)",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     out = Path(args.out)
-    expected = {
-        "oidcc-response-type-missing.png",
-        "oidcc-ensure-registered-redirect-uri.png",
-        "oidcc-prompt-login.png",
-        "oidcc-max-age-1.png",
-    }
+    expected = {f"{name}.png" for name in _CORE_TEST_NAMES}
+    expected |= {f"{name}.png" for name, _mode, _error in _FAPI1_JAR_SCENARIOS}
+    expected |= {f"{name}.png" for name in _FAPI2_TEST_NAMES}
     try:
         with sync_playwright() as playwright:
-            produced = capture_all(playwright, args.base_url, out, args.username, args.password)
+            produced = capture_all(
+                playwright,
+                args.base_url,
+                out,
+                args.username,
+                args.password,
+                plans_dir=Path(args.plans_dir),
+                par_ttl_seconds=args.par_ttl_seconds,
+            )
     except Exception as error:
         _LOGGER.error("Capture impossible : %s", error)
         return 1
