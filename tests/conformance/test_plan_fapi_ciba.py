@@ -289,15 +289,19 @@ def test_ciba_multiple_calls_to_token_endpoint(ciba_harness: CibaHarness) -> Non
 def test_ciba_auth_req_id_expired(ciba_harness: CibaHarness) -> None:
     """Module ``fapi-ciba-id1-auth-req-id-expired`` (``requested_expiry`` 10 s).
 
-    ``SleepUntilAuthReqExpires`` : la suite dort jusqu'à l'expiration de
-    l'``auth_req_id`` puis attend ``expired_token`` (CIBA-11). Les deux polls
-    en attente précèdent le sommeil (les sleeps d'intervalle sont supprimés).
+    L'OP releve un ``requested_expiry`` trop court au plancher
+    (``ciba_min_ttl_seconds``) : ``expires_in`` vaut 60 (CIBA §7.1 — l'OP
+    peut choisir de ne pas honorer une expiration trop courte, ce qui
+    absorbe la latence réseau entre deux polls). ``SleepUntilAuthReqExpires``
+    : la suite dort jusqu'à l'expiration de l'``auth_req_id`` puis attend
+    ``expired_token`` (CIBA-11). Les deux polls en attente précèdent le
+    sommeil (les sleeps d'intervalle sont supprimés).
     """
     client = ciba_harness.register(name="ciba-expired")
     auth_req_id = _start_authentication(
-        ciba_harness, client, requested_expiry=10, ack_expires_in=10
+        ciba_harness, client, requested_expiry=10, ack_expires_in=60
     )
-    time.sleep(11)
+    time.sleep(61)
     check_token_error(
         ciba_harness.poll(client, auth_req_id),
         ("expired_token",),
@@ -331,12 +335,12 @@ def test_ciba_requested_expiry_as_string_succeeds(
 ) -> None:
     """Module ``...requested-expiry-as-string-succeeds`` (CIBA-7.1.1).
 
-    ``requested_expiry`` est accepté en chaîne ou en nombre :
-    ``expires_in`` vaut 30.
+    ``requested_expiry`` est accepté en chaîne ou en nombre : la valeur
+    30 est relevée au plancher, ``expires_in`` vaut 60.
     """
     client = ciba_harness.register(name="ciba-expiry-string")
     auth_req_id = _start_authentication(
-        ciba_harness, client, requested_expiry="30", ack_expires_in=30
+        ciba_harness, client, requested_expiry="30", ack_expires_in=60
     )
     tokens, _claims = _finish_authentication(ciba_harness, client, auth_req_id)
     _check_resource(ciba_harness, tokens)

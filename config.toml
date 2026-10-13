@@ -172,12 +172,18 @@ device_code_interval_seconds = 5
 # - ciba_ttl_seconds / ciba_interval_seconds : durée de vie de
 #   l'auth_req_id (`requested_expiry` borné) et intervalle minimal de
 #   poll avant `slow_down`.
+# - ciba_min_ttl_seconds : plancher appliqué à `requested_expiry` —
+#   l'OP peut choisir de ne pas honorer une expiration trop courte
+#   (CIBA §7.1), ce qui évite qu'un auth_req_id n'expire entre deux
+#   polls à cause de la latence réseau.
 # Surchargeables via `PURIDENTITYSERVER_CIBA_ENABLED`,
-# `PURIDENTITYSERVER_CIBA_APPROVAL_ENABLED`, `PURIDENTITYSERVER_CIBA_TTL_SECONDS`
+# `PURIDENTITYSERVER_CIBA_APPROVAL_ENABLED`, `PURIDENTITYSERVER_CIBA_TTL_SECONDS`,
+# `PURIDENTITYSERVER_CIBA_MIN_TTL_SECONDS`
 # et `PURIDENTITYSERVER_CIBA_INTERVAL_SECONDS`.
 ciba_enabled = true
 ciba_approval_enabled = true
 ciba_ttl_seconds = 600
+ciba_min_ttl_seconds = 60
 ciba_interval_seconds = 5
 
 # identité (FastAPI Users, spike) : durée par défaut du cookie et comptes de
