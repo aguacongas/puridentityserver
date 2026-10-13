@@ -152,44 +152,14 @@ secours), **3 FAILED = lacunes d'enforcement mTLS de l'OP** (holder-of-key :
 accepte le mauvais certificat sur un jeton mTLS-bound, n'exige pas le cert au
 refresh) — correctifs produit à venir, tolérés ici en witness.
 
-## Rejeu local sans la suite
+## Rejeu local pytest (supprimé)
 
-Le chantier « rejouer la certification OIDC en tests Python locaux » rejoue les
-checks des plans Core, FAPI-CIBA-ID1 et **FAPI1 Advanced Final** (issue #110)
-**sans docker ni suite de la Fondation** : les définitions
-des modules (`release-v5.2.4`) ont été extraites dans
-`tests/conformance/` (traçabilité complète : matrices module → test dans
-`tests/conformance/TRACEABILITY.md`).
-
-```bash
-# rejeu in-process (FastAPI via ASGITransport) — 435 scénarios :
-# 435 passed, 0 skipped
-uv run --no-sync --no-build --locked python -m pytest -m conformance --no-cov -p no:cacheprovider
-
-# variante contre un VRAI serveur uvicorn (sous-processus, port 8121,
-# seeds alignés sur le harness) — même résultat, preuve du rejeu en réel
-uv run python samples/conformance-smoke/smoke_test.py
-```
-
-- Les tests sont exclus du gate (`addopts` porte `-m "not conformance"`) et
-  `--no-cov` est requis : ce sous-ensemble ne couvre pas le seuil de 80 %.
-- **Plan FAPI1 (#110)** : `tests/conformance/test_plan_fapi1.py` rejoue
-  106 exécutions (44 by-value + 62 pushed) sur les 63 modules applicables
-  des 68 du plan (exclusions documentées dans `TRACEABILITY.md`) ; le plan
-  de certification officiel est `certification/plans/fapi1.json` et le
-  parcours de démonstration `samples/fapi1-client/`.
-- **Plan FAPI2 (#111)** : `tests/conformance/test_plan_fapi2.py` rejoue
-  les 61 scénarios consolidés des plans Final + ID2 (127 modules, 114
-  applicables) → 107 tests (107 verts) ; le plan
-  de certification officiel est `certification/plans/fapi2.json` et le
-  parcours de démonstration `samples/fapi2-client/`.
-- **Plus aucun skip** : `alg=none` est émis (id_token non signé) et les
-  request objects `request`/`request_uri` (RFC 9101) sont traités — les 19
-  scénarios qui sautaient (`oidcc-idtoken-unsigned` ×1, modules
-  `request`/`request_uri` ×6 ×3 plans) rejouent pour de vrai, voir issue
-  #76. L'access_token dans le corps de `/userinfo` est accepté (#83).
-- Le smoke propage le code retour de pytest et borne la durée (`watchdog`) ;
-  il sert de vérification « OP réel » du même rejeu.
+L'ancien rejeu « sans docker » (`tests/conformance/`, 435 scénarios rejoués
+in-process, marker `conformance`, job `conformance-tests.yml`) a été **supprimé** :
+le harness local docker (section précédente) rejoue la vraie suite et couvre
+les mêmes plans de bout en bout. Le mini-RP client qu'il embarquait vit
+maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
+`samples/fapi1-client/` et `samples/fapi2-client/`).
 
 ## Dépannage
 
