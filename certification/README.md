@@ -144,14 +144,16 @@ driver (hôte) --API--> suite docker nginx :8443 (alias localhost.emobix.co.uk)
   `X-SSL-Client-Cert` **URL-encodé** (`$ssl_client_escaped_cert`, dé-encodé par
   l'OP) ;
 - l'OP local est lancé avec `PURIDENTITYSERVER_REQUEST_URI_ALLOW_LOCAL_TARGETS=true`
-  et `SSL_CERT_FILE` pointant sur la chaîne TLS extraite du nginx de la suite
-  (concaténée au bundle système) : les modules `oidcc-request-uri-*` font fetcher
+  et `SSL_CERT_FILE` pointant sur un certificat **SAN** (`localhost.emobix.co.uk`,
+  `localhost`, `127.0.0.1`) que `setup.sh` substitue dans le nginx de la suite
+  (concaténé au bundle système) : les modules `oidcc-request-uri-*` font fetcher
   par l'OP le document servi par la suite sur `localhost.emobix.co.uk:8443`
-  (alias → 127.0.0.1), destination loopback qui serait sinon **refusée par la
-  garde anti-SSRF** du fetcher `request_uri` (l'OP bind `0.0.0.0`) et **rejetée
-  à la vérification du certificat** auto-signé — le module basculait alors en
-  WAITING puis INTERRUPTED (issue #152). Jamais à activer sur un déploiement
-  exposé.
+  (alias → 127.0.0.1). Deux blocages levés (issue #152) : la destination loopback
+  serait sinon **refusée par la garde anti-SSRF** du fetcher `request_uri` (l'OP
+  bind `0.0.0.0`), et le cert cuit dans l'image de la suite (`CN=localhost`
+  **sans SAN**) **échoue au hostname matching** OpenSSL/Python pour
+  `localhost.emobix.co.uk` même en trusté — le module basculait alors en WAITING
+  puis INTERRUPTED. Jamais à activer sur un déploiement exposé.
 
 Lancer en local (Linux, prérequis : docker, uv, openssl) :
 
