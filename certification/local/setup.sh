@@ -10,7 +10,7 @@
 #        HtmlUnit --(authorize/token)--> OP nginx mTLS (conteneur "op", :9443)
 #        --> OP uvicorn (hôte :8000)
 #
-# - la suite (release-v5.2.4) tourne en docker (mongodb + server + nginx) ;
+# - la suite (dernière release publiée) tourne en docker (mongodb + server + nginx) ;
 # - l'OP PurIdentityServer tourne sur l'hôte (uvicorn :8000), config locale
 #   générée à partir de certification/config.render.toml (issuer = https://op:9443,
 #   redirect_uris = callbacks de la suite LOCALE, SQLite éphémère) ;
@@ -23,7 +23,9 @@
 set -euo pipefail
 
 # --- Configuration (surchargeable par env) ------------------------------------
-SUITE_VERSION="${SUITE_VERSION:-release-v5.2.4}"
+# Par défaut : dernière release connue. Les workflows la résolvent à
+# l'exécution (git ls-remote, cf. issue #150) et exportent SUITE_VERSION.
+SUITE_VERSION="${SUITE_VERSION:-release-v5.3.3}"
 REPO_ROOT="${REPO_ROOT:-$(pwd)}"
 SUITE_DIR="${SUITE_DIR:-$REPO_ROOT/conformance-suite}"
 LOCAL_DIR="${LOCAL_DIR:-$REPO_ROOT/.harness-local}"

@@ -13,32 +13,47 @@ retenue :
    SQLite) — configuration committée dans `render.yaml` + `Dockerfile` +
    `certification/config.render.toml` ;
 2. la suite de certification tourne dans le **runner GitHub** (docker) et est
-   pilotée par `.github/workflows/certification.yml` via le script officiel
+   pilotée par deux workflows partageant les mêmes plans :
+   `.github/workflows/certification.yml` (**Certification OIDC**, instance
+   hébergée de la Fondation, à la demande) et
+   `.github/workflows/certification-local.yml` (**Certification OIDC
+   (Local)**, harness auto-hébergé) — via le script officiel
    `scripts/run-test-plan.py` de la suite ;
-3. chaque run produit un rapport brut (artefact + commentaire) et une page
-   **GitHub Pages** publique consolidée.
+3. chaque run du workflow **local** produit un rapport brut (artefact) et
+   publie une page **GitHub Pages** publique consolidée — sauf sur les PR,
+   qui ne publient qu'en artefact. Le workflow hébergé ne publie plus sur
+   Pages : ses résultats seront soumis directement à l'OpenID Foundation
+   (à venir, issue #150).
 
-> Mode **witness** (PR 1) : le job CI est informatif, non bloquant. Le passage
-> en gate bloquant sera ajouté quand les plans Core seront stables.
+> Sortie **stricte** (workflow local, issue #130) : chaque job plan échoue
+> dès qu'un module est FAILED ou INTERRUPTED (ou que le driver remonte un
+> warning inattendu) — le run `Certification OIDC (Local)` est alors rouge,
+> même si le rapport GitHub Pages reste publié. Les modules REVIEW (relecture
+> humaine, captures d'écran) restent tolérés. Le workflow hébergé reste en
+> mode witness et ne s'exécute plus qu'à la demande.
 
 ## Résultat attendu
 
-- Le workflow `Certification OIDC` se termine avec, pour chaque plan
+- Le workflow `Certification OIDC (Local)` se termine avec, pour chaque plan
   (`oidcc-basic-`, `oidcc-implicit-`, `oidcc-hybrid-certification-test-plan`,
-  `fapi-ciba-id1-test-plan` — witness CIBA, `fapi1-advanced-final-test-plan`,
+  `fapi-ciba-id1-test-plan`, `fapi1-advanced-final-test-plan`,
   `fapi2-security-profile-final-test-plan`),
   le détail des modules testés et leur verdict (PASSED / FAILED / WARNING /
   REVIEW / SKIPPED) dans le résumé du run ;
-- les artefacts `certification-results-<plan>` (un par plan) contiennent les
-  exports bruts ; le job final les fusionne dans l'artefact
-  `certification-results` ;
-- l'artefact `certification-screenshots` contient les captures d'écran réelles
-  téléversées aux modules de relecture (voir
-  « Captures d'écran des modules de relecture ») ;
+- les artefacts `certification-local-results-<plan>` (un par plan) contiennent
+  les exports bruts ; le job final les fusionne dans l'artefact
+  `certification-local-report` ;
 - une page `https://<owner>.github.io/puridentityserver/certification/`
-  consolide les derniers résultats **et affiche, dans la section du module,
-  la capture d'écran réelle téléversée** (fichiers aussi disponibles sous
-  `<page>/screenshots/<testName>.png`).
+  consolide les derniers résultats (publish réservé aux runs sur `main` ou
+  lancés à la main) ; les **captures d'écran réelles** des modules de
+  relecture restent consultables dans l'artefact `certification-screenshots`
+  du run hébergé (fichiers aussi disponibles sous
+  `<page>/screenshots/<testName>.png` quand ils sont présents) ;
+- le workflow hébergé `Certification OIDC` téléverse ses exports
+  (`certification-results-<plan>` puis `certification-results`) et l'artefact
+  `certification-screenshots` (captures réelles des modules de relecture,
+  voir « Captures d'écran des modules de relecture ») — sans publication
+  Pages (issue #150).
 
 ## Mise en place (une fois)
 
@@ -59,8 +74,15 @@ retenue :
 
 ## Lancer un run
 
-- **En CI** : *Actions → Certification OIDC → Run workflow* (ou laisser le
-  cron hebdomadaire). Le workflow : attend que
+- **En CI — local (courant)** : automatique à **chaque merge sur `main`**
+  (sans filtre de chemins) et sur chaque PR touchant `certification/**` ;
+  manuellement : *Actions → Certification OIDC (Local) → Run workflow* avec
+  le plan souhaité (défaut : les six). Seuls les runs sur `main` ou lancés à
+  la main publient sur GitHub Pages.
+- **En CI — hébergé (à la demande)** : *Actions → Certification OIDC → Run
+  workflow* (plus de cron ni de déclenchement au merge pour l'instant — le
+  déclenchement automatique reviendra à la publication d'une release,
+  issue #150). Le workflow : attend que
   `/.well-known/openid-configuration` réponde (réveil de l'instance),
   photographie les `kid` du JWKS, déclenche le deploy hook puis patiente
   (15 min max) jusqu'à ce que les `kid` changent — preuve que le build est
@@ -69,16 +91,17 @@ retenue :
   parallèle** (6 jobs matrix, `fail-fast: false` — ~40 min au lieu de ~3 h
   séquentielles, issue #122 ; les plans FAPI1 Advanced et FAPI2 Security
   Profile ont été ajoutés par l'issue #113), chaque plan exportant son propre
-  artefact,
-  puis un job final fusionne les exports, génère le rapport et déploie la
-  page GitHub Pages.
+  artefact, puis un job final fusionne les exports et téléverse le rapport
+  consolidé en artefact.
 - **En local** : (optionnel) pour reproduire le même principe contre un
   serveur local :
 
   ```bash
   # 1. configurer un mini-serveur public atteignable par la suite (ici Render)
-  # 2. cloner et démarrer la suite, comme le workflow :
-  git clone --depth 1 --branch release-v5.2.4 https://gitlab.com/openid/conformance-suite.git
+  # 2. cloner et démarrer la suite, comme le workflow (release-vX.Y.Z = dernière
+  #    release publiée : les workflows la résolvent à l'exécution via
+  #    git ls-remote, cf. issue #150 ; l'exemple ci-dessous la pinne) :
+  git clone --depth 1 --branch release-v5.3.3 https://gitlab.com/openid/conformance-suite.git
   cd conformance-suite && docker compose -f docker-compose-prebuilt.yml up -d
   # 3. substituer {OPURL} et {SUITEURL} dans les plans puis jouer un plan :
   export CONFORMANCE_SERVER=https://localhost.emobix.co.uk:8443/
@@ -110,7 +133,7 @@ driver (hôte) --API--> suite docker nginx :8443 (alias localhost.emobix.co.uk)
                      OP uvicorn (hôte :8000)
 ```
 
-- la **suite** (`release-v5.2.4`) tourne en docker (mongodb + server + nginx) ;
+- la **suite** (dernière release publiée, ex. `release-v5.3.3`) tourne en docker (mongodb + server + nginx) ;
 - l'**OP local** tourne sur l'hôte (uvicorn), avec une config générée à partir de
   `config.render.toml` (issuer `https://op:9443`, `redirect_uris` = callbacks de
   la **suite locale**, SQLite éphémère) ;
@@ -134,7 +157,7 @@ sed -i "s#{OPURL}#https://op:9443#g; s#{SUITEURL}#$CONFORMANCE_SERVER#g" \
 # le driver tourne SANS token (la suite en mode dev injecte un utilisateur via
 # DummyUserFilter) et ignore le cert auto-signé :
 export CONFORMANCE_TOKEN="" DISABLE_SSL_VERIFY=1
-git clone --depth 1 --branch release-v5.2.4 https://gitlab.com/openid/conformance-suite.git  # déjà cloné par setup.sh
+git clone --depth 1 --branch release-v5.3.3 https://gitlab.com/openid/conformance-suite.git  # déjà cloné par setup.sh
 # appliquer les 5 patches du driver (voir certification-local.yml), puis :
 cd conformance-suite
 python3 scripts/run-test-plan.py --export-dir ../results \
@@ -142,15 +165,16 @@ python3 scripts/run-test-plan.py --export-dir ../results \
   ../certification/plans/fapi1.json
 ```
 
-En CI : le workflow `Certification OIDC (local)`
-(`.github/workflows/certification-local.yml`) exécute exactement cette séquence
-en mode **witness** (les gaps module ne bloquent pas ; seule l'absence d'export
-signale un crash du harness) et téléverse les exports + le rapport en artefacts
-(pas de deploy Pages : le job hébergé en reste propriétaire). État attendu au
-2026-10-13 : 46 modules, ~26 PASSED, ~16 REVIEW (pages d'erreur, captures de
-secours), **3 FAILED = lacunes d'enforcement mTLS de l'OP** (holder-of-key :
-accepte le mauvais certificat sur un jeton mTLS-bound, n'exige pas le cert au
-refresh) — correctifs produit à venir, tolérés ici en witness.
+En CI : le workflow `Certification OIDC (Local)`
+(`.github/workflows/certification-local.yml`) exécute exactement cette
+séquence en **sortie stricte** (issue #130) : le code retour non nul du
+driver fait échouer le job plan (modules FAILED, INTERRUPTED ou warnings
+inattendus ; seule l'absence totale d'export signale un crash du harness) et
+téléverse les exports + le rapport en artefacts ; le rapport est **publié sur
+GitHub Pages** pour les runs sur `main` ou lancés à la main (pas pour les
+PR). Les modules REVIEW restent tolérés (capturés en PNG de secours). Les
+lacunes d'enforcement mTLS CIBA sont corrigées (#147, #149) : le plan ciba
+est à 35/35 PASSED (run 38575847610).
 
 ## Rejeu local pytest (supprimé)
 
@@ -198,6 +222,13 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
   du plan) avant toute émission.
 - **Plan inconnu** : la version de la suite peut renommer un plan/sélecteur ;
   l'erreur de `run-test-plan.py` liste les identifiants disponibles.
+- **`git apply` échoue sur un patch `certification/*.patch`** : une nouvelle
+  release publiée de la suite a dérivé le contexte des patches (la
+  certification joue toujours la dernière release, issue #150) — rafraîchir le
+  patch fautif : rejouer ses changements sur
+  `$SUITE_DIR/scripts/conformance.py` puis le regénérer avec
+  `git diff scripts/conformance.py` (valider la séquence complète des 5
+  patches dans l'ordre du workflow).
 - **Conflit d'alias entre plans** : deux plans qui partagent le même `alias`
   s'entre-stoppent sur l'instance hébergée (ou échouent en `409 ... alias ... in
   use`). Chaque plan doit porter un alias distinct ; le workflow applique le patch
@@ -233,8 +264,8 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
   privilégié par `_plan_matching_configuration`).
 - **« Aucun export pour le plan » (garde-fou du workflow)** : le plan a
   crashé avant tout module terminé (`run-test-plan` en code retour non nul,
-  `results/` vide) alors que le job resterait vert en mode witness. Causes
-  vécues (issue #113) : client statique absent de la config
+  `results/` vide) — le step Lancement échoue aussi (code non nul propagé).
+  Causes vécues (issue #113) : client statique absent de la config
   (« must contain a client configuration »), variante de plan manquante au
   sélecteur (« requires a value for variant … »), ou
   `ValidateMTLSCertificatesAsX509` en précondition échouée
@@ -270,8 +301,12 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
   environnemental** : la liste de cipher du edge Cloudflare accepte un
   certificat ECDSA (`TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256`) que le check
   `DisallowInsecureCipher` (FAPI1-ADV-8.5-x, liste RSA-only) rejette — les
-  modules `ensure-mtls-holder-of-key` / `bare` resterontFAILED sur ce seul
+  modules `ensure-mtls-holder-of-key` / `bare` resteront FAILED sur ce seul
   check derrière CF ; le module `refresh-token` peut devenir 100 % vert.
+  Tant que ces deux points ne sont pas levés (CF mTLS + flip des seeds), le
+  plan **fapi1 garde ses modules FAILED sur le run hébergé** (actuellement en
+  mode witness, exécuté à la demande ; la sortie stricte #130 concerne le
+  workflow local, où fapi1 passe).
   Démo locale hermétique : `samples/mtls-holder-of-key-client/` (en-têtes
   proxy personnalisés, PEM `\n`-échappé, 8 étapes).
 - **OP déployé sans la config de la branche** (`error=invalid_client` au PAR) :
@@ -288,7 +323,7 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
 | `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`, 4 clients statiques FAPI `private_key_jwt` + JWKS public pour les plans fapi1/fapi2) |
 | `plans/basic|implicit|hybrid|ciba|fapi1|fapi2.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; fapi1/fapi2 portent aussi `client`/`client2` en clé privée et `resource`) |
 | `conformance-reuse-plan.patch` | patch du driver : `create_test_plan` idempotent (réutilise le plan existant quand sa config n'a pas changé) |
-| `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) ou, à défaut, un PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode witness) |
+| `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) ou, à défaut, un PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode hébergé) |
 | `capture_screenshots.py` | rejoue les 4 scénarios de relecture contre l'OP déployé (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver |
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |
 | `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
@@ -296,10 +331,10 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés ; recopie les captures réelles dans `_site/screenshots/` (`--screenshots`) et les affiche dans la section du module correspondant |
 | `local/setup.sh` | bootstrap du harness **auto-hébergé** : alias réseau, clone + déploiement docker de la suite, cert auto-signé + nginx mTLS `op`, config OP locale (issuer `https://op:9443`), OP uvicorn, attente de disponibilité |
 | `local/nginx-mtls.conf` | nginx de terminaison mTLS devant l'OP local : certificat client optionnel (`optional_no_ca`), extraction `$ssl_client_escaped_cert` → `X-SSL-Client-Cert` (pas de newline brute), proxy vers l'OP uvicorn de l'hôte |
-| `../.github/workflows/certification.yml` | workflow witness en 3 jobs : `prepare` (deploy + captures, une fois), `plan` (les 6 plans en parallèle, un job matrix chacun), `report` (fusion des exports + Pages) |
-| `../.github/workflows/certification-local.yml` | workflow **auto-hébergé** witness (1 job fapi1) : `setup.sh`, substitution des URLs locales, 5 patches, run du plan, exports + rapport en artefacts (sans Pages) |
+| `../.github/workflows/certification.yml` | workflow hébergé à la demande (`workflow_dispatch` uniquement) : `prepare` (deploy + captures, une fois), `plan` (les 6 plans en parallèle, un job matrix chacun, mode witness), `report` (fusion des exports en artefact — publication OIDC des résultats à venir) |
+| `../.github/workflows/certification-local.yml` | workflow **auto-hébergé strict** : déclenché à chaque merge sur `main`, sur les PR (`certification/**`) et à la demande ; 6 plans en matrix, code non nul du driver = job en échec, **publication GitHub Pages** (sauf sur les PR) |
 
-## Captures d'écran des modules de relecture (mode witness)
+## Captures d'écran des modules de relecture (mode hébergé)
 
 Certains modules Core s'arrêtent sur un événement **REVIEW** demandant une capture
 d'écran : sans intervention, le driver attend jusqu'au timeout
