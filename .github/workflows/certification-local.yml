@@ -1,24 +1,29 @@
-name: Certification OIDC (local)
+name: Certification OIDC (Local)
 
-# Mode auto-hébergé : la suite openid/conformance-suite (release-v5.2.4) tourne
-# EN DOCKER sur le runner, avec l'OP PurIdentityServer local derrière un nginx
-# mTLS — aucun dépendance à l'infra hébergée de la Fondation ni à Render.
+# Mode auto-hébergé : la suite openid/conformance-suite tourne EN DOCKER sur
+# le runner, avec l'OP PurIdentityServer local derrière un nginx mTLS — aucune
+# dépendance à l'infra hébergée de la Fondation ni à Render.
 #
-# Assurance conformité COURANTE et déterministe, en COMPLÉMENT du run hébergé
-# officiel (certification.yml). Les SIX plans sont joués en matrix (patron du
-# job hébergé, issue #122) : chaque job boot son propre harness docker (isolé,
-# aucun conflit d'alias) et exporte son artefact. Le job `report` fusionne les
-# exports et génère le rapport statique en ARTEFACT (le job hébergé reste
-# propriétaire de GitHub Pages).
+# Assurance conformité COURANTE et déterministe. Les SIX plans sont joués en
+# matrix (patron du job hébergé, issue #122) : chaque job boot son propre
+# harness docker (isolé, aucun conflit d'alias) et exporte son artefact. Le job
+# `report` fusionne les exports, génère le rapport statique et le PUBLIE sur
+# GitHub Pages — ce workflow est le SEUL propriétaire de la publication Pages
+# (issue #150), et SEULEMENT pour les runs sur `main` (push) ou lancés à la
+# main (workflow_dispatch) : les PR publient uniquement leur rapport en
+# artefact.
 #
-# Mode WITNESS : les modules FAILED/REVIEW ne font pas échouer le workflow —
-# seul un crash du harness (aucun export) est signalé. Les lacunes d'enforcement
-# mTLS connues de l'OP sont donc tolérées tant que les fixes produit ne sont
-# pas posés.
+# Sortie STRICTE (#130) : le code retour non nul du driver (modules FAILED,
+# INTERRUPTED / did-not-complete, warnings inattendus) fait échouer le job
+# plan — les exports et le garde-fou restent en `if: always()` pour préserver
+# le rapport. Les modules REVIEW (relecture humaine, captures d'écran) restent
+# tolérés. `fail-fast: false` : les autres plans jouent quand même.
 #
-# Déclenchement : chaque PR vers main (chemins certification/**), manuel
-# (workflow_dispatch) — ce workflow remplace l'ancien rejeu conformance
-# pytest (conformance-tests.yml, supprimé).
+# Déclenchement : chaque merge sur `main` (sans filtre de chemins), chaque PR
+# vers main touchant `certification/**`, et à la demande (workflow_dispatch,
+# choix du plan). La version de la suite est résolue À L'EXÉCUTION : dernier
+# tag `release-vX.Y.Z` listé par `git ls-remote` sur
+# gitlab.com/openid/conformance-suite (échec = run en erreur, cf. issue #150).
 
 on:
   workflow_dispatch:
@@ -41,12 +46,18 @@ on:
     paths:
       - "certification/**"
       - ".github/workflows/certification-local.yml"
+  # Chaque merge sur main joue l'intégralité des plans : la certification
+  # locale est l'assurance conformité courante du code réellement fusionné
+  # (aucun filtre de chemins — cf. issue #150).
+  push:
+    branches: ["main"]
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 env:
-  SUITE_VERSION: release-v5.2.4
   # {SUITEURL} / API du driver : accessible depuis l'hôte (alias ->127.0.0.1
   # posé par setup.sh) et depuis le conteneur (alias réseau docker).
   CONFORMANCE_SERVER: https://localhost.emobix.co.uk:8443/
@@ -100,17 +111,38 @@ jobs:
           echo "matrix=$(printf '{"include":[%s]}' "$(IFS=,; echo "${entries[*]}")")" >> "$GITHUB_OUTPUT"
 
   plan:
-    name: Plan ${{ matrix.plan }} (local, witness)
+    name: Plan ${{ matrix.plan }} (local)
     needs: matrix
     runs-on: ubuntu-latest
     strategy:
-      # Chaque plan continue même si un autre échoue (mode witness).
+      # Chaque plan continue même si un autre échoue : le rapport consolidé
+      # montre l'état complet du run. Le job lui-même échoue dès que le driver
+      # sort en code non nul (FAILED / INTERRUPTED / warnings inattendus) —
+      # voir le step Lancement.
       fail-fast: false
       matrix: ${{ fromJSON(needs.matrix.outputs.matrix) }}
 
     steps:
       - name: Checkout du dépôt
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Résolution de la dernière release publiée de la suite
+        # Dernier tag `release-vX.Y.Z` listé par `git ls-remote` sur
+        # gitlab.com/openid/conformance-suite (cf. issue #150) : la suite est
+        # toujours jouée dans sa dernière version publiée, par le même
+        # transport que le clone (pas d'API REST annexe). Exporté via
+        # $GITHUB_ENV : setup.sh lit SUITE_VERSION. Échec = run en erreur :
+        # sans tag fiable, le run ne pourrait pas certifier la « dernière »
+        # version.
+        run: |
+          latest=$(git ls-remote --tags https://gitlab.com/openid/conformance-suite.git "refs/tags/release-v*" \
+            | python3 -c 'import re,sys; tags=[l.split("refs/tags/")[1].strip() for l in sys.stdin if "refs/tags/" in l]; tags=[t for t in tags if re.fullmatch(r"release-v\d+\.\d+\.\d+", t)]; tags.sort(key=lambda v: tuple(map(int, v.split("-v")[1].split(".")))); print(tags[-1] if tags else "")') || latest=""
+          if [ -z "$latest" ]; then
+            echo "::error::Dernière release de la suite injoignable (git ls-remote) — impossible de résoudre SUITE_VERSION"
+            exit 1
+          fi
+          echo "SUITE_VERSION=$latest" >> "$GITHUB_ENV"
+          echo "Suite de certification : $latest" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Installation de uv (OP local)
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
@@ -143,7 +175,12 @@ jobs:
           sed -i 's/timeout=240/timeout=int(os.getenv("CONFORMANCE_MODULE_TIMEOUT", "240"))/' \
             conformance-suite/scripts/conformance.py
 
-      - name: Lancement du plan ${{ matrix.plan }} (witness)
+      - name: Lancement du plan ${{ matrix.plan }}
+        # Sortie stricte (#130) : le code retour du driver (1 sur modules
+        # FAILED / INTERRUPTED / warnings inattendus, cf. `run-test-plan.py` —
+        # analyze_plan_results + sys.exit) échoue le job. L'upload des exports
+        # et le garde-fou restent en `if: always()` pour préserver le rapport
+        # même en échec. Les modules REVIEW restent tolérés.
         env:
           # Mode dev OFFICIEL de la suite self-hosted : token=None (AUCUN header
           # Authorization) + vérification SSL désactivée (cert auto-signé).
@@ -160,9 +197,20 @@ jobs:
             "${{ matrix.selector }}" \
             "$GITHUB_WORKSPACE/certification/plans/${{ matrix.file }}" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
           code=${PIPESTATUS[0]}
-          echo "- exit code : $code (witness : les gaps module ne bloquent pas)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- exit code : $code" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$code" -ne 0 ]; then
+            echo "plan ${{ matrix.plan }} en échec (modules FAILED, INTERRUPTED ou warnings inattendus)" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit "$code"
+          fi
 
       - name: "Garde-fou : export du plan présent"
+        # Un plan crashé (config invalide, variante refusée…) ne produit AUCUN
+        # export : ce garde-fou l'annonce explicitement, y compris quand le
+        # step Lancement a déjà échoué (`if: always()`), pour distinguer un
+        # crash de démarrage d'un échec de modules (les exports de ces
+        # derniers sont bien présents). Seule l'absence TOTALE d'export échoue
+        # ici.
+        if: always()
         run: |
           if [ -z "$(find results -mindepth 1 -print -quit 2>/dev/null)" ]; then
             echo "::error::Aucun export pour le plan ${{ matrix.plan }} local : harness crashé avant tout module"
@@ -187,7 +235,7 @@ jobs:
           if-no-files-found: ignore
 
   report:
-    name: Rapport statique local (artefact, sans Pages)
+    name: Rapport statique local + GitHub Pages
     needs: [matrix, plan]
     if: ${{ always() && needs.matrix.result == 'success' }}
     runs-on: ubuntu-latest
@@ -208,15 +256,36 @@ jobs:
             -exec mv -t results/ {} + 2>/dev/null || true
           ls -lh results | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Génération du rapport statique (artefact)
+      - name: Génération du rapport statique
         run: |
           mkdir -p screenshots
           python3 certification/report.py --results results --site _site --screenshots screenshots
 
-      - name: Upload du rapport statique
+      - name: Upload du rapport statique (artefact)
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: certification-local-report
           path: _site/
           if-no-files-found: ignore
+
+      # Publication GitHub Pages : SEULEMENT pour les runs sur `main` (push) ou
+      # lancés à la main (workflow_dispatch) — jamais pour les PR (issue #150).
+      - name: Configuration GitHub Pages
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: actions/configure-pages@v6
+        with:
+          enablement: true
+
+      - name: Publication du rapport sur GitHub Pages
+        if: ${{ github.event_name != 'pull_request' }}
+        continue-on-error: true
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+      - name: Deploy GitHub Pages
+        if: ${{ github.event_name != 'pull_request' }}
+        continue-on-error: true
+        id: deployment
+        uses: actions/deploy-pages@v5

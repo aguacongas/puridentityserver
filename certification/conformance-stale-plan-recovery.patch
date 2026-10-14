@@ -24,7 +24,7 @@ index f0f7ced..769baf2 100644
                  print("httpx {} {} response (attempt {}, {:.0f}s elapsed) - retrying".format(
                      request.url, resp.status_code, attempt, elapsed))
 @@ -246,7 +260,7 @@ class Conformance(object):
-             certificationOfConformancePdf.close();
+         finally:
              clientSideData.close();
  
 -    async def create_test_plan(self, name, configuration, variant=None):

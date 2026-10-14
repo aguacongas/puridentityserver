@@ -3,12 +3,18 @@ name: Certification OIDC
 # Suite de certification officielle OpenID Foundation (openid/conformance-suite),
 # jouée contre l'instance Render publique seedee (certification/config.render.toml).
 #
-# Sortie stricte : chaque job plan échoue dès que `run-test-plan.py` sort en
-# code non nul — module FAILED (condition inattendue), module INTERRUPTED /
-# did-not-complete, ou warning inattendu. Le run est alors rouge, même si le
-# rapport consolidé reste publié. `fail-fast: false` : les plans restants
-# jouent quand même et le rapport Pages couvre tout le run.
-# Déclenchement au merge sur main, manuel ou hebdomadaire.
+# Déclenchement À LA DEMANDE UNIQUEMENT (workflow_dispatch) pour l'instant ;
+# le déclenchement automatique reviendra à la publication d'une release
+# (release: types: [published], cf. issue #150). Jobs WITNESS : les gaps Core
+# (modules ne passant pas encore) NE font pas échouer le workflow — la sortie
+# stricte (#130) s'applique au workflow local (certification-local.yml), seul
+# propriétaire de GitHub Pages. Ce workflow ne publie PLUS sur Pages : ses
+# résultats seront soumis directement à l'OpenID Foundation (à venir, #150).
+# Chaque run produit ses rapports en artefacts.
+#
+# La version de la suite est résolue À L'EXÉCUTION : dernier tag
+# `release-vX.Y.Z` listé par `git ls-remote` sur
+# gitlab.com/openid/conformance-suite (échec = run en erreur) — cf. issue #150.
 #
 # Issue #122 : les 6 plans s'exécutent EN PARALLÈLE (matrix de jobs, même
 # patron que certification-local.yml) : ~3 h séquentielles deviennent la durée
@@ -17,25 +23,25 @@ name: Certification OIDC
 #   (UNE SEULE fois — un redejob par plan remplacerait l'OP en plein run) et
 #   captures Playwright (artefact partagé) ;
 # - job `plan` ×6 (`fail-fast: false`) : clone + patches de la suite, un seul
-#   plan joué en mode hébergé, export → artefact `certification-results-<plan>`.
+#   plan joué en mode witness, export → artefact `certification-results-<plan>`.
 #   Parallélisation sûre : chaque plan porte un alias distinct
 #   (`puridentityserver-<plan>`) et `release_alias` ne stoppe que son propre
 #   alias — voir certification/README.md (« Conflits d'alias ») ;
-# - job `report` : fusion des exports, `certification/report.py`, déploiement
-#   GitHub Pages — publie même si un plan échoue (`if: always()`).
+# - job `report` : fusion des exports, `certification/report.py`, téléversement
+#   du rapport consolidé en artefact (Pages désormais gérée par le workflow
+#   local).
 #
 # Pré-requis :
 # - service Render libre (render.yaml) : https://puridentityserver-certification.onrender.com
 # - secret GitHub `RENDER_DEPLOY_HOOK_URL` (Render -> Service -> Settings -> Deploy Hook)
 # - variable optionnelle `CERTIFICATION_OP_URL` (URL publique de l'OP)
-# - GitHub Pages activé avec source "GitHub Actions"
 
 on:
   workflow_dispatch:
     inputs:
       plan:
         # Permet un cycle de diagnostic rapide : ne lancer qu'un seul plan au
-        # lieu des six (~30 min, même en parallèle le gain est nul).
+        # lieu des six (~30 min, même en parallèle le gain nul).
         description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + CIBA + FAPI1 + FAPI2)"
         type: choice
         required: false
@@ -48,29 +54,13 @@ on:
           - ciba
           - fapi1
           - fapi2
-  schedule:
-    - cron: "0 2 * * MON"
-  # Déclenchement UNIQUEMENT au merge sur main : aucune exécution sur les PR
-  # (la certification consomme ~1 h d'infra et doit viser le code réellement
-  # déployé sur Render, qui suit la branche main — voir render.yaml).
-  push:
-    branches: ["main"]
-    paths:
-      - "certification/**"
-      - "render.yaml"
-      - "Dockerfile"
-      - ".dockerignore"
-      - ".github/workflows/certification.yml"
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 env:
   OP_URL: ${{ vars.CERTIFICATION_OP_URL || 'https://puridentityserver-certification.onrender.com' }}
-  # Mode hébergé (pilotage par l'API de l'instance officielle OpenID
-  # Foundation) : le
+  # Mode witness sur l'instance HÉBERGÉE officielle (OpenID Foundation) : le
   # driver constructeur (run-test-plan.py) ne fait que des appels API REST
   # authenticate Bearer (CONFORMANCE_TOKEN). L'automation navigateur
   # (WebRunner/HtmlUnit/Selenium) tourne dans l'infra stable de la Fondation,
@@ -79,7 +69,6 @@ env:
   CONFORMANCE_SERVER: https://www.certification.openid.net/
   CONFORMANCE_TOKEN: ${{ secrets.CONFORMANCE_TOKEN }}
   CONFORMANCE_MODULE_TIMEOUT: '600'
-  SUITE_VERSION: release-v5.2.4
 
 concurrency:
   group: certification
@@ -115,7 +104,7 @@ jobs:
               basic) echo 'oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
               implicit) echo 'oidcc-implicit-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
               hybrid) echo 'oidcc-hybrid-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
-              # CIBA : plan FAPI-CIBA-ID1 en mode hébergé (poll + Basic ne sont
+              # CIBA : plan FAPI-CIBA-ID1 en mode witness (poll + Basic ne sont
               # pas des variants valides pour ce plan : private_key_jwt exigé,
               # JAR signé hors périmètre — issues dédiées).
               ciba) echo 'fapi-ciba-id1-test-plan[client_registration=dynamic_client][client_auth_type=private_key_jwt][ciba_mode=poll][fapi_ciba_profile=plain_fapi]' ;;
@@ -220,7 +209,7 @@ jobs:
         run: python3 -c "import json,glob; [json.load(open(p)) for p in glob.glob('certification/plans/*.json')]"
 
       - name: Vérification de la présence du secret CONFORMANCE_TOKEN
-        # Mode hébergé : l'accès à l'API de certification.openid.net
+        # Mode witness hébergé : l'accès à l'API de certification.openid.net
         # passe par un Bearer token délivré par l'OpenID Foundation. Un secret
         # manquant doit échouer SEC maintenant (message clair), pas via un
         # KeyError/traceback du driver en plein milieu du run — et surtout pas
@@ -287,14 +276,13 @@ jobs:
           if-no-files-found: ignore
 
   plan:
-    name: Plan ${{ matrix.plan }}
+    name: Plan ${{ matrix.plan }} (witness)
     needs: prepare
     runs-on: ubuntu-latest
     strategy:
       # Chaque plan continue même si un autre échoue : le rapport consolidé
       # doit montrer l'état complet du run, pas s'arrêter au premier plan
-      # rouge. Le job lui-même échoue dès que le driver sort en code non nul
-      # (FAILED / INTERRUPTED / warnings inattendus) — voir le step Lancement.
+      # rouge (mode witness : aucun job ne bloque la CI).
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
 
@@ -302,7 +290,24 @@ jobs:
       - name: Checkout du dépôt
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Clone de la suite de certification (version pinnée)
+      - name: Résolution de la dernière release publiée de la suite
+        # Dernier tag `release-vX.Y.Z` listé par `git ls-remote` sur
+        # gitlab.com/openid/conformance-suite (cf. issue #150) : la suite est
+        # toujours jouée dans sa dernière version publiée, par le même
+        # transport que le clone (pas d'API REST annexe). Échec = run en
+        # erreur : sans tag fiable, le run ne pourrait pas certifier la
+        # « dernière » version.
+        run: |
+          latest=$(git ls-remote --tags https://gitlab.com/openid/conformance-suite.git "refs/tags/release-v*" \
+            | python3 -c 'import re,sys; tags=[l.split("refs/tags/")[1].strip() for l in sys.stdin if "refs/tags/" in l]; tags=[t for t in tags if re.fullmatch(r"release-v\d+\.\d+\.\d+", t)]; tags.sort(key=lambda v: tuple(map(int, v.split("-v")[1].split(".")))); print(tags[-1] if tags else "")') || latest=""
+          if [ -z "$latest" ]; then
+            echo "::error::Dernière release de la suite injoignable (git ls-remote) — impossible de résoudre SUITE_VERSION"
+            exit 1
+          fi
+          echo "SUITE_VERSION=$latest" >> "$GITHUB_ENV"
+          echo "Suite de certification : $latest" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Clone de la suite de certification (version résolue)
         run: |
           git clone --depth 1 --branch "$SUITE_VERSION" \
             https://gitlab.com/openid/conformance-suite.git
@@ -348,7 +353,7 @@ jobs:
         # 2) certains modules Core (ex. oidcc-response-type-missing) se bloquent
         #    sur un événement REVIEW « upload une capture d'écran » ; on remplit
         #    ces placeholders automatiquement côté driver pour que la suite
-        #    puisse se terminer sans intervention humaine (mode hébergé).
+        #    puisse se terminer sans intervention humaine (mode witness).
         # 3) la suite réserve l'alias à la création de chaque module : un module
         #    encore actif (timeout dépassé, run annulé…) serait interrompu par le
         #    module suivant (« Stopping test due to alias conflict »). Le driver
@@ -406,13 +411,12 @@ jobs:
             echo "Aucune capture : le driver utilisera le PNG de secours."
           fi
 
-      - name: Lancement du plan ${{ matrix.plan }}
+      - name: Lancement du plan ${{ matrix.plan }} (witness)
         # Un seul plan par job (matrice) : chaque plan exporte ses .zip dans
-        # certification-results-<plan>. Sortie stricte : le code retour du
-        # driver (1 sur modules FAILED / INTERRUPTED / warnings inattendus,
-        # cf. `run-test-plan.py` — analyze_plan_results + sys.exit) échoue le
-        # job. L'upload des exports et le garde-fou restent en `if: always()`
-        # pour préserver le rapport même en échec.
+        # certification-results-<plan>. Toute la boucle séquentielle d'origine
+        # (PLAN_FILTER + for) disparaît — `fail-fast: false` + step non
+        # bloquant gardent le contrat witness (gaps acceptés).
+        continue-on-error: true
         working-directory: conformance-suite
         env:
           # Captures réelles produites par le job `prepare` : le driver les
@@ -429,11 +433,8 @@ jobs:
             "${{ matrix.selector }}" \
             "$GITHUB_WORKSPACE/certification/plans/${{ matrix.plan }}.json" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
           code=${PIPESTATUS[0]}
-          echo "- exit code : $code" | tee -a "$GITHUB_STEP_SUMMARY"
-          if [ "$code" -ne 0 ]; then
-            echo "plan ${{ matrix.plan }} en échec (modules FAILED, INTERRUPTED ou warnings inattendus)" | tee -a "$GITHUB_STEP_SUMMARY"
-            exit "$code"
-          fi
+          echo "- exit code : $code (les gaps sont acceptés en mode witness)" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$code" -eq 0 ] || echo "plan ${{ matrix.plan }} en échec partiel (witness)" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload des exports du plan
         # Un artefact par plan → le job `report` les fusionne. Aucun export
@@ -448,12 +449,11 @@ jobs:
 
       - name: "Garde-fou : export du plan présent"
         # Un plan crashé (config invalide, variante refusée…) ne produit
-        # AUCUN export : ce garde-fou l'annonce explicitement, y compris quand
-        # le step Lancement a déjà échoué (`if: always()`), pour distinguer un
-        # crash de démarrage d'un échec de modules (les exports de ces
-        # derniers sont bien présents). Seule l'absence TOTALE d'export échoue
-        # ici.
-        if: always()
+        # AUCUN export alors que le reste du job reste vert (mode witness) :
+        # sans ce garde-fou, la config fapi1/fapi2 de l'issue #113 était partie
+        # en crash silencieux et le job affichait « success ». Seule
+        # l'absence TOTALE d'export échoue — les gaps (modules FAILED/REVIEW)
+        # produisent des exports et restent tolérés.
         run: |
           if [ -z "$(find results -mindepth 1 -print -quit 2>/dev/null)" ]; then
             echo "::error::Aucun export pour le plan ${{ matrix.plan }} : exécution crashée avant tout module terminé (voir l'étape « Lancement »)"
@@ -462,12 +462,14 @@ jobs:
           echo "Export du plan ${{ matrix.plan }} présent : OK"
 
   report:
-    name: Rapport statique + GitHub Pages
+    name: Rapport statique (artefact, sans Pages)
     needs: [prepare, plan]
-    # Publie même si un plan échoue : le rapport consolidé reste consultable.
-    # Un
+    # Publie même si un plan échoue — le contrat witness. Un
     # `prepare` rouge (OP hors ligne, secret absent…) bloque la publication :
     # rien n'a été joué, le rapport serait vide et masquerait la cause réelle.
+    # GitHub Pages n'est PLUS publiée ici (cf. issue #150) : le workflow local
+    # (certification-local.yml) en est seul propriétaire ; les résultats de ce
+    # run hébergé seront soumis à l'OpenID Foundation (à venir).
     if: ${{ always() && needs.prepare.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
@@ -511,10 +513,12 @@ jobs:
             find screenshots -mindepth 2 -type f -name '*.png' -exec mv -t screenshots/ {} + 2>/dev/null || true
           fi
 
-      - name: Génération du rapport statique (GitHub Pages)
+      - name: Génération du rapport statique
         # --screenshots : les captures réelles des modules de relecture sont
         # copiées dans _site/screenshots/ et affichées dans la section du
         # module correspondant (répertoire absent = rapport sans image).
+        # Téléversé en artefact uniquement : la publication GitHub Pages est
+        # assurée par certification-local.yml (issue #150).
         run: |
           python3 certification/report.py \
             --results results \
@@ -530,22 +534,3 @@ jobs:
             results/
             _site/
           if-no-files-found: ignore
-
-      - name: Configuration GitHub Pages
-        if: always()
-        uses: actions/configure-pages@v6
-        with:
-          enablement: true
-
-      - name: Publication du rapport sur GitHub Pages
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-pages-artifact@v5
-        with:
-          path: _site
-
-      - name: Deploy GitHub Pages
-        if: always()
-        continue-on-error: true
-        id: deployment
-        uses: actions/deploy-pages@v5
