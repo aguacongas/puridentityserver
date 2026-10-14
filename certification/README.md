@@ -253,7 +253,10 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
   `tls_client_certificate_bound_access_tokens` (par client) exige la
   présentation d'un certificat à chaque appel `/token` (et `/bc-authorize`),
   émet `cnf.x5t#S256` sur les access tokens et lie les refresh tokens au
-  certificat d'émission. L'OP lit le PEM via deux sources : le contexte TLS
+  certificat d'émission. **Les 2 clients statiques FAPI1 de
+  `config.render.toml` portent le flag** (issue #144) : la suite FAPI1 impose
+  le sender-constrain mTLS, alors que les clients FAPI2 restent sans flag
+  (DPoP, aucun certificat). L'OP lit le PEM via deux sources : le contexte TLS
   direct d'uvicorn, ou — derrière un proxy de terminaison — les en-têtes
   dont les noms sont configurables (`client_certificate_header` /
   `client_certificate_dn_header` dans `config.toml`, défauts
