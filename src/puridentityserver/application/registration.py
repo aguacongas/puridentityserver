@@ -438,6 +438,7 @@ class RegistrationUseCase:
             refresh_token_lifetime_seconds=client.refresh_token_lifetime_seconds,
             device_code_lifetime_seconds=client.device_code_lifetime_seconds,
             device_code_interval_seconds=client.device_code_interval_seconds,
+            binding_message_max_length=client.binding_message_max_length,
             par_required=metadata.par_required,
             require_consent=metadata.require_consent,
             require_dpop=metadata.dpop_bound_access_tokens,

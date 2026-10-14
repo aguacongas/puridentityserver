@@ -208,6 +208,10 @@ class Client:
       endpoint : renseigné, la signature devient **obligatoire** pour lui et
       l'en-tête doit porter exactement cet algorithme (FAPI-CIBA ¶6) — vide =
       les demandes non signées restent acceptées.
+      ``binding_message_max_length`` (§16.1.1) plafonne le ``binding_message``
+      de ce client : ``None`` = plafond serveur par défaut
+      (``ciba_binding_message_max_length``). Au-delà, la demande est rejetée
+      avec ``invalid_binding_message`` (§13).
     """
 
     client_id: str
@@ -248,6 +252,7 @@ class Client:
     backchannel_token_delivery_mode: str = ""
     backchannel_client_notification_endpoint: str = ""
     backchannel_authentication_request_signing_alg: str = ""
+    binding_message_max_length: int | None = None
 
     @property
     def effective_auth_method(self) -> TokenEndpointAuthMethod:
