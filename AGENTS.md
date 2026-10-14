@@ -16,28 +16,20 @@ uv run python -m pytest -p no:cacheprovider -q   # tests + couverture >= 80 % (9
 - SonarCloud analyse le diff de chaque PR : **aucune nouvelle issue acceptée** (DoD).
 - Windows/PowerShell : pas de heredoc shell ; utiliser `--body-file` pour les loads dans gh.
 
-## Rejeu local de la certification OIDC (tests `conformance`)
+## Certification OIDC (suite officielle)
 
-```bash
-uv run python -m pytest -m conformance --no-cov -p no:cacheprovider
-uv run python samples/conformance-smoke/smoke_test.py   # idem, contre un vrai serveur uvicorn
-```
-
-- Exclus du gate : `addopts` porte `-m "not conformance"`, le marker `conformance`
-  ne s'exécute qu'à la demande (le dernier `-m` de la ligne de commande l'emporte).
-- `--no-cov` obligatoire : ce sous-ensemble ne couvre pas le seuil de 80 % (la
-  couverture est mesurée sur la suite complète par `ci.yml`).
-- Pas de `-q` : le résumé `N passed, M deselected` est la preuve visible que le
-  rejeu a bien eu lieu (avec `-q`, pytest n'affiche aucune ligne de fin).
-- Le smoke (`samples/conformance-smoke/`) démarre un serveur dédié (port 8121,
-  seeds alignés sur `tests/conformance/conftest.py`), exporte
-  `PURIDENTITYSERVER_CONFORMANCE_URL` (le harness bascule sur httpx réel) et
-  relance `pytest -m conformance` en sous-processus — preuve du rejeu contre un
-  OP réel, code retour de pytest propagé.
-- Traçabilité des checks extraits de la suite `release-v5.2.4` :
-  `tests/conformance/TRACEABILITY.md` ; job dédié
-  `.github/workflows/conformance-tests.yml` (PR vers `main`, `workflow_dispatch`
-  + nightly).
+- **Harness local (mode courant)** : la suite `release-v5.2.4` tourne en docker
+  sur le runner, OP local derrière un nginx mTLS — workflow
+  `.github/workflows/certification-local.yml`, matrix des 6 plans (basic,
+  implicit, hybrid, ciba, fapi1, fapi2), mode *witness* (les gaps module ne
+  bloquent pas), déclenché sur chaque PR vers `main` touchant `certification/**`
+  ou à la demande (`workflow_dispatch`, filtre de plan).
+- **Run hébergé officiel OIDF** : `.github/workflows/certification.yml` (secret
+  `CONFORMANCE_TOKEN`, publication GitHub Pages) — reste la référence finale de
+  certification.
+- L'ancien rejeu pytest `tests/conformance/` a été supprimé ; le mini-RP client
+  (harness de parcours) vit dans `samples/oidc_harness/` et sert les smoke
+  tests `samples/fapi1-client/` et `samples/fapi2-client/`.
 
 ## Complexité cognitive (SonarCloud S3776) — piège récurrent
 

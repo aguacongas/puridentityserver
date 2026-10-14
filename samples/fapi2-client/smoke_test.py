@@ -3,7 +3,7 @@ r"""Parcours de démonstration FAPI2 Security Profile (issue #111).
 Lance un serveur PurIdentityServer en sous-processus (port 8108,
 issuer ``https://id.example``, clients seedés ``fapi2-app`` / ``fapi2-app-2``
 à clés statiques, ``token_endpoint_auth_method=private_key_jwt`` et
-``fapi2_enabled=true``, repris de ``tests/conformance/fapi2_harness.py``)
+``fapi2_enabled=true``, repris de ``samples/oidc_harness/fapi2_harness.py``)
 puis joue le flux complet FAPI2 en 8 étapes :
 
 1. discovery : ``require_pushed_authorization_requests``,
@@ -48,21 +48,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from smoke_common import HOST, run_server, watchdog  # ruff: ignore[module-import-not-at-top-of-file]
 
-sys.path.insert(0, str(REPO_ROOT / "tests" / "conformance"))
+sys.path.insert(0, str(REPO_ROOT / "samples" / "oidc_harness"))
 
-from conftest import _IDENTITY_USERS  # ruff: ignore[module-import-not-at-top-of-file]
 from fapi2_harness import (  # ruff: ignore[module-import-not-at-top-of-file]
     FAPI2_CLIENT_2_SEED,
     FAPI2_CLIENT_SEED,
     Fapi2Harness,
 )
 from fastapi import FastAPI  # ruff: ignore[module-import-not-at-top-of-file]
-from harness import decode_id_token_claims, decode_id_token_header, pkce_challenge  # ruff: ignore[module-import-not-at-top-of-file]
+from harness import (  # ruff: ignore[module-import-not-at-top-of-file]
+    IDENTITY_USERS,
+    decode_id_token_claims,
+    decode_id_token_header,
+    pkce_challenge,
+)
 
 SERVER_PORT = 8108
 SERVER_URL = f"http://{HOST}:{SERVER_PORT}"
 
-#: Même canonique que ``tests/conformance/conftest.py`` : l'issuer des
+#: Même canonique que le harness : l'issuer des
 #: assertions client et des id_tokens ; le discovery publie les endpoints
 #: dérivés de la base URL réelle du serveur.
 ISSUER = "https://id.example"
@@ -203,7 +207,7 @@ def main() -> int:
         run_server(
             port=SERVER_PORT,
             clients=(FAPI2_CLIENT_SEED, FAPI2_CLIENT_2_SEED),
-            users=_IDENTITY_USERS,
+            users=IDENTITY_USERS,
             issuer=ISSUER,
             jwks_algorithms=("RS256", "PS256"),
             extra_settings={

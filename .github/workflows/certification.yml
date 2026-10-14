@@ -10,7 +10,7 @@ name: Certification OIDC
 # les plans Core stables.
 #
 # Issue #122 : les 6 plans s'exécutent EN PARALLÈLE (matrix de jobs, même
-# patron que conformance-tests.yml) : ~3 h séquentielles deviennent la durée
+# patron que certification-local.yml) : ~3 h séquentielles deviennent la durée
 # du plan le plus long (~40 min) :
 # - job `prepare` UNIQUE : matrice depuis l'input `plan`, deploy hook Render
 #   (UNE SEULE fois — un redejob par plan remplacerait l'OP en plein run) et
@@ -127,7 +127,7 @@ jobs:
               # L'OP supporte DPoP (RFC 9449, sender_constrain=dpop) et n'a pas
               # de grant management ; notApplicableWhen n'exclut que
               # client_attestation avec plain_fapi.
-              fapi2) echo 'fapi2-security-profile-final-test-plan[fapi_profile=plain_fapi][client_auth_type=private_key_jwt][authorization_request_type=simple][grant_management=disabled][openid=openid_connect][sender_constrain=dpop]' ;;
+              fapi2) echo 'fapi2-security-profile-final-test-plan[fapi_profile=plain_fapi][client_auth_type=private_key_jwt][authorization_request_type=simple][openid=openid_connect][sender_constrain=dpop]' ;;
               *) return 1 ;;
             esac
           }
@@ -468,7 +468,7 @@ jobs:
       - name: Téléversement des exports de tous les plans
         # `merge-multiple` : les artefacts certification-results-<plan> sont
         # fusionnés dans le répertoire de travail (patron éprouvé par
-        # conformance-tests.yml / PR #117), quel que soit le chemin interne
+        # certification-local.yml), quel que soit le chemin interne
         # retenu par upload-artifact.
         uses: actions/download-artifact@v8
         with:

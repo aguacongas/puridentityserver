@@ -42,6 +42,8 @@ CLIENT_SECRET = "super-secret"
 REDIRECT_URI = "https://app.example/callback"
 USERNAME = "alice@example.com"
 PASSWORD = "password"
+#: Seed du compte local ``alice`` (format ``users`` de ``run_server``).
+IDENTITY_USERS = {"alice": {"email": "alice@example.com", "password": "password"}}
 CODE_VERIFIER = "conformance-code-verifier-0123456789abcdefgh"
 MAX_HOPS = 12
 _REDIRECT_STATUSES = (302, 303, 307, 308)

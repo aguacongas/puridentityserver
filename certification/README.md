@@ -90,44 +90,76 @@ retenue :
     ../certification/plans/basic.json
   ```
 
-## Rejeu local sans la suite
+## Rejeu local auto-hébergé (harness sans Render ni Fondation)
 
-Le chantier « rejouer la certification OIDC en tests Python locaux » rejoue les
-checks des plans Core, FAPI-CIBA-ID1 et **FAPI1 Advanced Final** (issue #110)
-**sans docker ni suite de la Fondation** : les définitions
-des modules (`release-v5.2.4`) ont été extraites dans
-`tests/conformance/` (traçabilité complète : matrices module → test dans
-`tests/conformance/TRACEABILITY.md`).
+Le mode ci-dessus pilote un OP **public** (Render) avec la suite hébergée de la
+Fondation. Le harness `certification/local/` fait mieux : il monte **toute** la
+topologie en docker sur la machine (ou le runner CI), sans dépendre ni de
+Render ni de l'infra de la Fondation — assurance conformité **courante et
+déterministe**, en complément du run hébergé officiel.
 
-```bash
-# rejeu in-process (FastAPI via ASGITransport) — 435 scénarios :
-# 435 passed, 0 skipped
-uv run --no-sync --no-build --locked python -m pytest -m conformance --no-cov -p no:cacheprovider
+Topologie (voir `certification/local/setup.sh`) :
 
-# variante contre un VRAI serveur uvicorn (sous-processus, port 8121,
-# seeds alignés sur le harness) — même résultat, preuve du rejeu en réel
-uv run python samples/conformance-smoke/smoke_test.py
+```
+driver (hôte) --API--> suite docker nginx :8443 (alias localhost.emobix.co.uk)
+                              |
+                     navigateur HtmlUnit (conteneur)
+                              |
+                     OP nginx mTLS :9443 (conteneur, alias réseau `op`)
+                              |
+                     OP uvicorn (hôte :8000)
 ```
 
-- Les tests sont exclus du gate (`addopts` porte `-m "not conformance"`) et
-  `--no-cov` est requis : ce sous-ensemble ne couvre pas le seuil de 80 %.
-- **Plan FAPI1 (#110)** : `tests/conformance/test_plan_fapi1.py` rejoue
-  106 exécutions (44 by-value + 62 pushed) sur les 63 modules applicables
-  des 68 du plan (exclusions documentées dans `TRACEABILITY.md`) ; le plan
-  de certification officiel est `certification/plans/fapi1.json` et le
-  parcours de démonstration `samples/fapi1-client/`.
-- **Plan FAPI2 (#111)** : `tests/conformance/test_plan_fapi2.py` rejoue
-  les 61 scénarios consolidés des plans Final + ID2 (127 modules, 114
-  applicables) → 107 tests (107 verts) ; le plan
-  de certification officiel est `certification/plans/fapi2.json` et le
-  parcours de démonstration `samples/fapi2-client/`.
-- **Plus aucun skip** : `alg=none` est émis (id_token non signé) et les
-  request objects `request`/`request_uri` (RFC 9101) sont traités — les 19
-  scénarios qui sautaient (`oidcc-idtoken-unsigned` ×1, modules
-  `request`/`request_uri` ×6 ×3 plans) rejouent pour de vrai, voir issue
-  #76. L'access_token dans le corps de `/userinfo` est accepté (#83).
-- Le smoke propage le code retour de pytest et borne la durée (`watchdog`) ;
-  il sert de vérification « OP réel » du même rejeu.
+- la **suite** (`release-v5.2.4`) tourne en docker (mongodb + server + nginx) ;
+- l'**OP local** tourne sur l'hôte (uvicorn), avec une config générée à partir de
+  `config.render.toml` (issuer `https://op:9443`, `redirect_uris` = callbacks de
+  la **suite locale**, SQLite éphémère) ;
+- un **nginx mTLS** (conteneur `op-mtls`, alias réseau `op` sur le réseau de la
+  suite) termine le mTLS devant l'OP : certificat serveur auto-signé généré à la
+  volée, certificat client **optionnel** (`optional_no_ca` — les plans FAPI1
+  mélangent modules mTLS et `private_key_jwt`), cert extrait transmis via
+  `X-SSL-Client-Cert` **URL-encodé** (`$ssl_client_escaped_cert`, dé-encodé par
+  l'OP).
+
+Lancer en local (Linux, prérequis : docker, uv, openssl) :
+
+```bash
+# 1. monter le harness (suite + OP + nginx mTLS) et attendre la disponibilité
+bash certification/local/setup.sh
+
+# 2. substituer les URLs LOCALES dans le plan puis jouer fapi1
+export CONFORMANCE_SERVER=https://localhost.emobix.co.uk:8443/
+sed -i "s#{OPURL}#https://op:9443#g; s#{SUITEURL}#$CONFORMANCE_SERVER#g" \
+  certification/plans/fapi1.json
+# le driver tourne SANS token (la suite en mode dev injecte un utilisateur via
+# DummyUserFilter) et ignore le cert auto-signé :
+export CONFORMANCE_TOKEN="" DISABLE_SSL_VERIFY=1
+git clone --depth 1 --branch release-v5.2.4 https://gitlab.com/openid/conformance-suite.git  # déjà cloné par setup.sh
+# appliquer les 5 patches du driver (voir certification-local.yml), puis :
+cd conformance-suite
+python3 scripts/run-test-plan.py --export-dir ../results \
+  "fapi1-advanced-final-test-plan[fapi_profile=plain_fapi][client_auth_type=private_key_jwt][fapi_auth_request_method=by_value][fapi_response_mode=plain_response]" \
+  ../certification/plans/fapi1.json
+```
+
+En CI : le workflow `Certification OIDC (local)`
+(`.github/workflows/certification-local.yml`) exécute exactement cette séquence
+en mode **witness** (les gaps module ne bloquent pas ; seule l'absence d'export
+signale un crash du harness) et téléverse les exports + le rapport en artefacts
+(pas de deploy Pages : le job hébergé en reste propriétaire). État attendu au
+2026-10-13 : 46 modules, ~26 PASSED, ~16 REVIEW (pages d'erreur, captures de
+secours), **3 FAILED = lacunes d'enforcement mTLS de l'OP** (holder-of-key :
+accepte le mauvais certificat sur un jeton mTLS-bound, n'exige pas le cert au
+refresh) — correctifs produit à venir, tolérés ici en witness.
+
+## Rejeu local pytest (supprimé)
+
+L'ancien rejeu « sans docker » (`tests/conformance/`, 435 scénarios rejoués
+in-process, marker `conformance`, job `conformance-tests.yml`) a été **supprimé** :
+le harness local docker (section précédente) rejoue la vraie suite et couvre
+les mêmes plans de bout en bout. Le mini-RP client qu'il embarquait vit
+maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
+`samples/fapi1-client/` et `samples/fapi2-client/`).
 
 ## Dépannage
 
@@ -259,7 +291,10 @@ uv run python samples/conformance-smoke/smoke_test.py
 | `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
 | `conformance-stale-plan-recovery.patch` | patch du driver : n'est jamais réessaie le 500 déterministe « test module not found » (1 tentative au lieu de 28) et valide la membership du plan réutilisé contre le catalogue avant le run — recréation automatique du plan stale (membership fraîche dès le premier run), plan le plus récent privilégié à la réutilisation |
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés ; recopie les captures réelles dans `_site/screenshots/` (`--screenshots`) et les affiche dans la section du module correspondant |
+| `local/setup.sh` | bootstrap du harness **auto-hébergé** : alias réseau, clone + déploiement docker de la suite, cert auto-signé + nginx mTLS `op`, config OP locale (issuer `https://op:9443`), OP uvicorn, attente de disponibilité |
+| `local/nginx-mtls.conf` | nginx de terminaison mTLS devant l'OP local : certificat client optionnel (`optional_no_ca`), extraction `$ssl_client_escaped_cert` → `X-SSL-Client-Cert` (pas de newline brute), proxy vers l'OP uvicorn de l'hôte |
 | `../.github/workflows/certification.yml` | workflow witness en 3 jobs : `prepare` (deploy + captures, une fois), `plan` (les 6 plans en parallèle, un job matrix chacun), `report` (fusion des exports + Pages) |
+| `../.github/workflows/certification-local.yml` | workflow **auto-hébergé** witness (1 job fapi1) : `setup.sh`, substitution des URLs locales, 5 patches, run du plan, exports + rapport en artefacts (sans Pages) |
 
 ## Captures d'écran des modules de relecture (mode witness)
 
