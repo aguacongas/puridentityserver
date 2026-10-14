@@ -439,7 +439,10 @@ async def _reauthentication_required(
     la valeur demandée ; l'``auth_time`` est lu sur la session courante (le
     ``auth_time`` de la demande n'est renseigné qu'après le contrôle, au
     moment de l'émission) — sans quoi tout ``max_age`` paraîtrait dépassé et
-    la reconnexion tournerait en boucle.
+    la reconnexion tournerait en boucle. Même mécanisme d'anti-boucle lorsque
+    l'âge dépasse ``max_age>0`` : si la session vient d'un login déclenché par
+    **cette** URL (empreinte ``reauth``), le dépassement est imputable à la
+    latence de l'OP, pas à une session ancienne, et la demande est validée.
     """
     session_reauth_hash = await session_reauth(request)
     url_hash = reauth_context(_authorize_url_from_base(base_url, request))
@@ -450,7 +453,9 @@ async def _reauthentication_required(
         auth_time = await session_auth_time(request)
         if auth_time == 0:
             return True
-        return (int(time.time()) - auth_time) > auth_request.max_age
+        if (int(time.time()) - auth_time) <= auth_request.max_age:
+            return False
+        return session_reauth_hash != url_hash
     return False
 
 

@@ -53,9 +53,6 @@ from puridentityserver.interfaces.repositories.backchannel_authentication_reposi
 )
 from puridentityserver.interfaces.repositories.readers import ClientReader, UserReader
 
-#: Longueur maximale du ``binding_message`` persisté (message d'inter-verrouillage court).
-MAX_BINDING_MESSAGE_LENGTH = 512
-
 #: Syntaxe ``token68`` du bearer ``client_notification_token`` (RFC 6750 §2.1).
 _NOTIFICATION_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9\-._~+/]+=*\Z")
 
@@ -86,15 +83,28 @@ class BackchannelAuthenticationConfig:
     ``request_signing_algorithms`` liste les algorithmes de ``request``
     signé admis pour un client sans algorithme enregistré (publiés au
     discovery sous ``backchannel_authentication_request_signing_alg_values_supported``).
+
+    ``min_ttl_seconds`` est le plancher appliqué à ``requested_expiry`` :
+    l'OP peut choisir de ne pas honorer une expiration trop courte (§7.1),
+    ce qui garantit que les polls du client restent dans la fenêtre de
+    validité malgré la latence réseau.
+
+    ``binding_message_max_length`` plafonne le ``binding_message`` (§16.1.1 :
+    message destiné à l'affichage sur l'appareil d'authentification, 32
+    caractères recommandés). Au-delà, ``/bc-authorize`` rejette la demande
+    avec ``invalid_binding_message`` (§13). Un client peut outrepasser ce
+    défaut via son champ ``binding_message_max_length``.
     """
 
     issuer: str
     base_url: str = ""
     ttl_seconds: int = 600
+    min_ttl_seconds: int = 60
     interval_seconds: int = 5
     token_endpoint: str = ""
     bc_authorize_endpoint: str = ""
     request_signing_algorithms: tuple[str, ...] = CIBA_REQUEST_SIGNING_ALGORITHMS
+    binding_message_max_length: int = 32
 
 
 @dataclass(slots=True)
@@ -305,6 +315,12 @@ class BackchannelAuthenticationUseCase:
         registered = client.backchannel_authentication_request_signing_alg
         return (registered,) if registered else self._config.request_signing_algorithms
 
+    def _binding_message_limit(self, client: Client) -> int:
+        """Plafond effectif du ``binding_message`` : valeur du client, sinon défaut serveur."""
+        if client.binding_message_max_length is not None:
+            return client.binding_message_max_length
+        return self._config.binding_message_max_length
+
     async def _accept(
         self, client: Client, params: BackchannelAuthenticationParams
     ) -> AuthenticationAck | BackchannelAuthenticationError:
@@ -327,10 +343,11 @@ class BackchannelAuthenticationUseCase:
         )
         if isinstance(notification_token, BackchannelAuthenticationError):
             return notification_token
-        if len(params.binding_message) > MAX_BINDING_MESSAGE_LENGTH:
+        binding_limit = self._binding_message_limit(client)
+        if len(params.binding_message) > binding_limit:
             return BackchannelAuthenticationError(
                 "invalid_binding_message",
-                f"binding_message trop long (max {MAX_BINDING_MESSAGE_LENGTH} caractères)",
+                f"binding_message trop long (max {binding_limit} caractères)",
             )
         ttl = self._resolve_ttl(params.requested_expiry)
         if isinstance(ttl, BackchannelAuthenticationError):
@@ -533,7 +550,13 @@ class BackchannelAuthenticationUseCase:
         return token
 
     def _resolve_ttl(self, requested_expiry: str) -> int | BackchannelAuthenticationError:
-        """Durée de vie de l'``auth_req_id`` : ``requested_expiry`` bornée au défaut (§7.1)."""
+        """Durée de vie de l'``auth_req_id`` : ``requested_expiry`` bornée (§7.1).
+
+        La valeur demandée est plafonnée au défaut du serveur (``ttl_seconds``)
+        et relever à ``min_ttl_seconds`` : l'OP peut choisir de ne pas
+        honorer une expiration trop courte, ce qui évite qu'un ``auth_req_id``
+        n'expire entre deux polls du client à cause de la latence réseau.
+        """
         if not requested_expiry:
             return self._config.ttl_seconds
         try:
@@ -546,7 +569,8 @@ class BackchannelAuthenticationUseCase:
             return BackchannelAuthenticationError(
                 "invalid_request", "requested_expiry doit être un entier positif"
             )
-        return min(requested, self._config.ttl_seconds)
+        floor = min(self._config.min_ttl_seconds, self._config.ttl_seconds)
+        return max(floor, min(requested, self._config.ttl_seconds))
 
     def _assertion_audiences(self) -> tuple[str, ...]:
         """Valeurs d'``aud`` admises des assertions au backchannel endpoint (§7.1)."""

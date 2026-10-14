@@ -1,0 +1,222 @@
+name: Certification OIDC (local)
+
+# Mode auto-hébergé : la suite openid/conformance-suite (release-v5.2.4) tourne
+# EN DOCKER sur le runner, avec l'OP PurIdentityServer local derrière un nginx
+# mTLS — aucun dépendance à l'infra hébergée de la Fondation ni à Render.
+#
+# Assurance conformité COURANTE et déterministe, en COMPLÉMENT du run hébergé
+# officiel (certification.yml). Les SIX plans sont joués en matrix (patron du
+# job hébergé, issue #122) : chaque job boot son propre harness docker (isolé,
+# aucun conflit d'alias) et exporte son artefact. Le job `report` fusionne les
+# exports et génère le rapport statique en ARTEFACT (le job hébergé reste
+# propriétaire de GitHub Pages).
+#
+# Mode WITNESS : les modules FAILED/REVIEW ne font pas échouer le workflow —
+# seul un crash du harness (aucun export) est signalé. Les lacunes d'enforcement
+# mTLS connues de l'OP sont donc tolérées tant que les fixes produit ne sont
+# pas posés.
+#
+# Déclenchement : chaque PR vers main (chemins certification/**), manuel
+# (workflow_dispatch) — ce workflow remplace l'ancien rejeu conformance
+# pytest (conformance-tests.yml, supprimé).
+
+on:
+  workflow_dispatch:
+    inputs:
+      plan:
+        description: "Plan(s) local(aux) à jouer"
+        type: choice
+        required: false
+        default: all
+        options:
+          - all
+          - basic
+          - implicit
+          - hybrid
+          - ciba
+          - fapi1
+          - fapi2
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "certification/**"
+      - ".github/workflows/certification-local.yml"
+
+permissions:
+  contents: read
+
+env:
+  SUITE_VERSION: release-v5.2.4
+  # {SUITEURL} / API du driver : accessible depuis l'hôte (alias ->127.0.0.1
+  # posé par setup.sh) et depuis le conteneur (alias réseau docker).
+  CONFORMANCE_SERVER: https://localhost.emobix.co.uk:8443/
+  # {OPURL} : point d'entrée mTLS de l'OP, joignable par le navigateur HtmlUnit
+  # (conteneur, via l'alias réseau `op`) — l'OP uvicorn est sur l'hôte.
+  OP_URL: https://op:9443
+  SUITE_URL: https://localhost.emobix.co.uk:8443/
+
+concurrency:
+  group: certification-local
+  cancel-in-progress: true
+
+jobs:
+  matrix:
+    name: Matrice des plans locaux
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Checkout du dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Matrice des plans à jouer
+        # Produit {"include":[{"plan":…,"selector":…,"file":…},…]} consommé par
+        # le job matrix `plan`. Échec SEC sur un input inconnu.
+        id: matrix
+        env:
+          PLAN_FILTER: ${{ inputs.plan || 'all' }}
+        run: |
+          set -euo pipefail
+          selector_for() {
+            case "$1" in
+              basic) echo 'oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
+              implicit) echo 'oidcc-implicit-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
+              hybrid) echo 'oidcc-hybrid-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
+              ciba) echo 'fapi-ciba-id1-test-plan[client_registration=dynamic_client][client_auth_type=private_key_jwt][ciba_mode=poll][fapi_ciba_profile=plain_fapi]' ;;
+              fapi1) echo 'fapi1-advanced-final-test-plan[fapi_profile=plain_fapi][client_auth_type=private_key_jwt][fapi_auth_request_method=by_value][fapi_response_mode=plain_response]' ;;
+              fapi2) echo 'fapi2-security-profile-final-test-plan[fapi_profile=plain_fapi][client_auth_type=private_key_jwt][authorization_request_type=simple][openid=openid_connect][sender_constrain=dpop]' ;;
+              *) return 1 ;;
+            esac
+          }
+          plans=(basic implicit hybrid ciba fapi1 fapi2)
+          if [ "$PLAN_FILTER" != "all" ]; then
+            selector_for "$PLAN_FILTER" > /dev/null || { echo "::error::Plan inconnu : $PLAN_FILTER"; exit 1; }
+            plans=("$PLAN_FILTER")
+          fi
+          entries=()
+          for p in "${plans[@]}"; do
+            entries+=("{\"plan\":\"$p\",\"selector\":\"$(selector_for "$p")\",\"file\":\"$p.json\"}")
+          done
+          echo "matrix=$(printf '{"include":[%s]}' "$(IFS=,; echo "${entries[*]}")")" >> "$GITHUB_OUTPUT"
+
+  plan:
+    name: Plan ${{ matrix.plan }} (local, witness)
+    needs: matrix
+    runs-on: ubuntu-latest
+    strategy:
+      # Chaque plan continue même si un autre échoue (mode witness).
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix.outputs.matrix) }}
+
+    steps:
+      - name: Checkout du dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Installation de uv (OP local)
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          # Cache désactivé : le post-cleanup « Pruning cache » de setup-uv
+          # échouait (exit 2) et passait le run en failure alors que le harness
+          # tournait de bout en bout.
+          enable-cache: false
+
+      - name: Bootstrap du harness local (suite docker + OP + nginx mTLS)
+        run: bash certification/local/setup.sh
+
+      - name: Substitution des URLs dans le plan (mode local)
+        run: |
+          f="certification/plans/${{ matrix.file }}"
+          sed -i "s#{OPURL}#${OP_URL}#g" "$f"
+          sed -i "s#{SUITEURL}#${SUITE_URL}#g" "$f"
+          grep -h '"match"' "$f" | sort -u
+
+      - name: Dépendances Python du driver officiel (httpx)
+        run: python3 -m pip install --disable-pip-version-check --quiet httpx
+
+      - name: Patch du driver (5 patches, idem job hébergé)
+        run: |
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-reuse-plan.patch"
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-screenshots.patch"
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-alias-release.patch"
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-interrupted-diagnostics.patch"
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-stale-plan-recovery.patch"
+          sed -i 's/timeout=240/timeout=int(os.getenv("CONFORMANCE_MODULE_TIMEOUT", "240"))/' \
+            conformance-suite/scripts/conformance.py
+
+      - name: Lancement du plan ${{ matrix.plan }} (witness)
+        env:
+          # Mode dev OFFICIEL de la suite self-hosted : token=None (AUCUN header
+          # Authorization) + vérification SSL désactivée (cert auto-signé).
+          CONFORMANCE_DEV_MODE: "1"
+          CONFORMANCE_TOKEN: ""
+          DISABLE_SSL_VERIFY: "1"
+          CONFORMANCE_MODULE_TIMEOUT: "600"
+        run: |
+          set +e
+          mkdir -p results
+          cd conformance-suite
+          python3 scripts/run-test-plan.py \
+            --export-dir "$GITHUB_WORKSPACE/results" \
+            "${{ matrix.selector }}" \
+            "$GITHUB_WORKSPACE/certification/plans/${{ matrix.file }}" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          code=${PIPESTATUS[0]}
+          echo "- exit code : $code (witness : les gaps module ne bloquent pas)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: "Garde-fou : export du plan présent"
+        run: |
+          if [ -z "$(find results -mindepth 1 -print -quit 2>/dev/null)" ]; then
+            echo "::error::Aucun export pour le plan ${{ matrix.plan }} local : harness crashé avant tout module"
+            exit 1
+          fi
+          echo "Export du plan ${{ matrix.plan }} local présent : OK"
+
+      - name: Upload des exports du plan
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: certification-local-results-${{ matrix.plan }}
+          path: results/
+          if-no-files-found: ignore
+
+      - name: Journal de l'OP (diagnostic d'échec)
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: certification-local-oplog-${{ matrix.plan }}
+          path: .harness-local/op.log
+          if-no-files-found: ignore
+
+  report:
+    name: Rapport statique local (artefact, sans Pages)
+    needs: [matrix, plan]
+    if: ${{ always() && needs.matrix.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Téléversement des exports de tous les plans
+        uses: actions/download-artifact@v8
+        with:
+          pattern: certification-local-results-*
+          merge-multiple: true
+
+      - name: Fusion des exports dans results/
+        run: |
+          mkdir -p results
+          find . -type f -name '*.zip' -not -path './results/*' -not -path './.git/*' \
+            -exec mv -t results/ {} + 2>/dev/null || true
+          ls -lh results | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Génération du rapport statique (artefact)
+        run: |
+          mkdir -p screenshots
+          python3 certification/report.py --results results --site _site --screenshots screenshots
+
+      - name: Upload du rapport statique
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: certification-local-report
+          path: _site/
+          if-no-files-found: ignore

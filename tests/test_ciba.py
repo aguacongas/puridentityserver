@@ -464,11 +464,17 @@ class TestBackchannelAuthorizeUseCase:
         result = run(uc.execute(_params(login_hint=_USER_SUBJECT)))
         assert isinstance(result, AuthenticationAck)
 
-    def test_honors_requested_expiry(self) -> None:
+    def test_floors_short_requested_expiry_to_server_minimum(self) -> None:
         uc, *_ = _make_usecase()
         result = run(uc.execute(_params(login_hint=_USER_SUBJECT, requested_expiry="10")))
         assert isinstance(result, AuthenticationAck)
-        assert result.expires_in == 10
+        assert result.expires_in == 60
+
+    def test_honors_requested_expiry_above_minimum(self) -> None:
+        uc, *_ = _make_usecase()
+        result = run(uc.execute(_params(login_hint=_USER_SUBJECT, requested_expiry="120")))
+        assert isinstance(result, AuthenticationAck)
+        assert result.expires_in == 120
 
     def test_bounds_requested_expiry_to_server_ttl(self) -> None:
         uc, *_ = _make_usecase()
@@ -511,16 +517,35 @@ class TestBackchannelAuthorizeUseCase:
         assert stored.delivery_mode == "ping"
         assert stored.client_notification_token == "ntok-1"
 
-    def test_rejects_long_binding_message(self) -> None:
+    def test_rejects_binding_message_above_server_limit(self) -> None:
         uc, *_ = _make_usecase()
-        result = run(uc.execute(_params(login_hint=_USER_SUBJECT, binding_message="x" * 513)))
+        result = run(uc.execute(_params(login_hint=_USER_SUBJECT, binding_message="x" * 33)))
         assert isinstance(result, BackchannelAuthenticationError)
         assert result.error == "invalid_binding_message"
+
+    def test_accepts_binding_message_at_server_limit(self) -> None:
+        uc, *_ = _make_usecase()
+        result = run(uc.execute(_params(login_hint=_USER_SUBJECT, binding_message="x" * 32)))
+        assert isinstance(result, AuthenticationAck)
 
     def test_accepts_binding_message(self) -> None:
         uc, *_ = _make_usecase()
         result = run(uc.execute(_params(login_hint=_USER_SUBJECT, binding_message="code 1234")))
         assert isinstance(result, AuthenticationAck)
+
+    def test_client_override_raises_binding_message_limit(self) -> None:
+        uc, *_ = _make_usecase(replace(_CIBA_CLIENT, binding_message_max_length=64))
+        accepted = run(uc.execute(_params(login_hint=_USER_SUBJECT, binding_message="x" * 64)))
+        assert isinstance(accepted, AuthenticationAck)
+        rejected = run(uc.execute(_params(login_hint=_USER_SUBJECT, binding_message="x" * 65)))
+        assert isinstance(rejected, BackchannelAuthenticationError)
+        assert rejected.error == "invalid_binding_message"
+
+    def test_client_override_lowers_binding_message_limit(self) -> None:
+        uc, *_ = _make_usecase(replace(_CIBA_CLIENT, binding_message_max_length=4))
+        result = run(uc.execute(_params(login_hint=_USER_SUBJECT, binding_message="12345")))
+        assert isinstance(result, BackchannelAuthenticationError)
+        assert result.error == "invalid_binding_message"
 
     def test_rejects_request_object(self) -> None:
         uc, *_ = _make_usecase()
@@ -1309,6 +1334,69 @@ class TestCibaIntegrationHTTP:
             assert doc["backchannel_token_delivery_modes_supported"] == []
             assert doc["backchannel_authentication_request_signing_alg_values_supported"] == []
             assert CIBA_GRANT_TYPE not in doc["grant_types_supported"]
+
+    def test_binding_message_rejected_above_server_setting(self) -> None:
+        with TestClient(_app(ciba_binding_message_max_length=8)) as client:
+            rejected = client.post(
+                "/bc-authorize",
+                data={
+                    "scope": "openid profile",
+                    "login_hint": _DEMO_HINT_EMAIL,
+                    "binding_message": "x" * 9,
+                },
+                auth=(_CLIENT_ID, _CLIENT_SECRET),
+            )
+            assert rejected.status_code == 400
+            assert rejected.json()["error"] == "invalid_binding_message"
+
+    def test_binding_message_honors_client_seed_override(self) -> None:
+        app = _app(
+            clients_seed=(
+                {
+                    "client_id": _CLIENT_ID,
+                    "client_secret": _CLIENT_SECRET,
+                    "scopes": "openid profile offline_access",
+                    "client_type": "confidential",
+                    "backchannel_token_delivery_mode": "poll",
+                    "binding_message_max_length": 4,
+                },
+            ),
+        )
+        with TestClient(app) as client:
+            rejected = client.post(
+                "/bc-authorize",
+                data={
+                    "scope": "openid profile",
+                    "login_hint": _DEMO_HINT_EMAIL,
+                    "binding_message": "12345",
+                },
+                auth=(_CLIENT_ID, _CLIENT_SECRET),
+            )
+            assert rejected.status_code == 400
+            assert rejected.json()["error"] == "invalid_binding_message"
+            accepted = client.post(
+                "/bc-authorize",
+                data={
+                    "scope": "openid profile",
+                    "login_hint": _DEMO_HINT_EMAIL,
+                    "binding_message": "1234",
+                },
+                auth=(_CLIENT_ID, _CLIENT_SECRET),
+            )
+            assert accepted.status_code == 200
+
+
+class TestBindingMessageLimitSettings:
+    """Réglage serveur du plafond ``binding_message`` (CIBA §16.1.1, #148)."""
+
+    def test_settings_reads_limit_from_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("PURIDENTITYSERVER_CIBA_BINDING_MESSAGE_MAX_LENGTH", "64")
+        settings = Settings(_env_file=None)
+
+        assert settings.ciba_binding_message_max_length == 64
+
+    def test_settings_default_limit(self) -> None:
+        assert Settings(_env_file=None).ciba_binding_message_max_length == 32
 
 
 class TestCibaRegistrationMetadata:

@@ -47,13 +47,11 @@ Sortie attendue (8 × `OK`, 6 à 10 s) :
 
 ## Rejeu de la suite de certification complète
 
-Le même parcours, décliné en 106 exécutions (44 by-value + 62 pushed),
-se rejoue avec le plan `tests/conformance/test_plan_fapi1.py` :
-
-```bash
-uv run python -m pytest tests/conformance/test_plan_fapi1.py \
-  -m conformance --no-cov -p no:cacheprovider
-```
+Le parcours complet se rejoue avec la vraie suite de certification en docker
+(harness local, plan `fapi1`) : workflow GitHub
+`Certification OIDC (local)` (`.github/workflows/certification-local.yml`,
+matrix des 6 plans), voir `certification/README.md` section « Rejeu local
+auto-hébergé ».
 
 ## À quoi sert FAPI 1.0 Advanced Final ?
 

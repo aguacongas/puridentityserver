@@ -133,6 +133,7 @@ def _parse_client(raw: dict[str, object]) -> Client:
         backchannel_authentication_request_signing_alg=str(
             raw.get("backchannel_authentication_request_signing_alg", "")
         ),
+        binding_message_max_length=_optional_int(raw, "binding_message_max_length"),
         par_required=bool(raw.get("par_required")),
         fapi_enabled=fapi_enabled,
         fapi2_enabled=fapi2_enabled,
@@ -298,13 +299,26 @@ class Settings(BaseSettings):
     # urn:openid:params:grant-type:ciba (désactivé par défaut). La durée de
     # vie de l'auth_req_id (`requested_expiry` inclus est borné) et
     # l'intervalle minimal de poll avant slow_down se règlent ici.
+    # `ciba_min_ttl_seconds` est le plancher appliqué à `requested_expiry` :
+    # l'OP peut choisir de ne pas honorer une expiration trop courte (§7.1),
+    # ce qui évite qu'un auth_req_id n'expire entre deux polls à cause de
+    # la latence réseau (cas de la suite de certification sur Render).
     # `ciba_approval_enabled` expose POST /ciba/approve : endpoint
     # d'approbation automatisé (harness de certification, §9), lui aussi
     # désactivé par défaut — sans lui, la route répond 404.
     ciba_enabled: bool = False
     ciba_approval_enabled: bool = False
     ciba_ttl_seconds: int = 600
+    ciba_min_ttl_seconds: int = 60
     ciba_interval_seconds: int = 5
+    # `ciba_binding_message_max_length` plafonne le ``binding_message``
+    # (CIBA §16.1.1 : message destiné à l'affichage sur l'appareil
+    # d'authentification, recommandé court). Au-delà, le serveur rejette
+    # la demande avec ``invalid_binding_message`` (§13) — ce qui permet
+    # aussi à la suite de certification de rejeter un message trop long
+    # sans vérification humaine. Surchargeable par client via le champ
+    # `binding_message_max_length` de `clients_seed`.
+    ciba_binding_message_max_length: int = 32
     clients_seed: Annotated[tuple[dict[str, object], ...], NoDecode] = ()
 
     # UserInfo (OIDC Core §5.4) — seed du user store (`sub` -> claims)
