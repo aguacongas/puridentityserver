@@ -72,6 +72,34 @@ if [ -n "$SUITE_NGINX" ]; then
 fi
 log "réseau de la suite : ${SUITE_NET:-<inconnu>}"
 
+# ---3.5) Chaîne TLS de la suite : confiance de l'OP pour le fetch request_uri --
+# Le fetch HTTP de `request_uri` (RFC 9101 §6.2) doit accepter le certificat
+# auto-signé du nginx de la suite (localhost.emobix.co.uk:8443) : on en extrait
+# la chaîne servie et on la concatène au bundle système (OpenSSL lit
+# SSL_CERT_FILE et remplace le magasin par défaut, d'où la concaténation).
+# Sans cela, les modules `oidcc-request-uri-*` reçoivent invalid_request_uri
+# et le plan est interrompu (issue #152).
+SUITE_TRUST="$LOCAL_DIR/suite-trust.pem"
+log "extraction de la chaîne TLS de la suite (:$SUITE_PORT)"
+deadline=$((SECONDS + 120))
+until openssl s_client -connect "$SUITE_HOSTNAME:$SUITE_PORT" -showcerts \
+    </dev/null 2>/dev/null \
+    | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' \
+    | tee "$SUITE_TRUST" | grep -q "BEGIN CERTIFICATE"; do
+  [ $SECONDS -lt $deadline ] || {
+    echo "::error::certificat de la suite non extractible ($SUITE_HOSTNAME:$SUITE_PORT)"
+    exit 1
+  }
+  sleep 3
+done
+for bundle in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt; do
+  if [ -f "$bundle" ]; then
+    cat "$bundle" >> "$SUITE_TRUST"
+    break
+  fi
+done
+log "confiance OP → suite écrite dans $SUITE_TRUST"
+
 # ---4) Certificat serveur auto-signé pour l'OP nginx --------------------------
 if [ ! -f "$LOCAL_DIR/nginx.crt" ]; then
   log "génération du certificat serveur auto-signé (op, localhost, host.docker.internal)"
@@ -106,9 +134,15 @@ sed \
 log "installation des dépendances OP (uv sync --extra sql)"
 ( cd "$REPO_ROOT" && uv sync --extra sql --locked >/dev/null )
 log "démarrage de l'OP (uvicorn :$OP_PORT, issuer https://$OP_ALIAS:$MTLS_PORT)"
+# PURIDENTITYSERVER_REQUEST_URI_ALLOW_LOCAL_TARGETS : la suite sert le document
+# request_uri sur localhost.emobix.co.uk (→127.0.0.1), destination loopback
+# refusée par la garde anti-SSRF tant que l'OP bind 0.0.0.0 (issue #152).
+# SSL_CERT_FILE : chaîne TLS de la suite (cert auto-signé + bundle système).
 PURIDENTITYSERVER_SETTINGS_FILE="$LOCAL_DIR/op-config.toml" \
 PURIDENTITYSERVER_HOST="$OP_HOST" \
 PURIDENTITYSERVER_PORT="$OP_PORT" \
+PURIDENTITYSERVER_REQUEST_URI_ALLOW_LOCAL_TARGETS=true \
+SSL_CERT_FILE="$SUITE_TRUST" \
   nohup uv run python -m puridentityserver \
     >"$LOCAL_DIR/op.log" 2>&1 & echo $! > "$LOCAL_DIR/op.pid"
 

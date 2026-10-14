@@ -555,6 +555,78 @@ def test_authorize_fetches_request_uri_document(
     assert state.paths == ["/requesturi/abc"]
 
 
+def test_request_uri_allow_local_targets_env_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`PURIDENTITYSERVER_REQUEST_URI_ALLOW_LOCAL_TARGETS` ouvre les cibles locales."""
+    assert Settings(_env_file=None).request_uri_allow_local_targets is False
+
+    monkeypatch.setenv("PURIDENTITYSERVER_REQUEST_URI_ALLOW_LOCAL_TARGETS", "true")
+    assert Settings(_env_file=None).request_uri_allow_local_targets is True
+
+
+def _app_binding_all_interfaces(*, allow_local_targets: bool) -> FastAPI:
+    """Application avec l'OP bindé sur 0.0.0.0 (topologie du harness)."""
+    return create_app(
+        Settings(
+            issuer=_ISSUER,
+            base_url=_ISSUER,
+            host="0.0.0.0",
+            jwks_algorithms=("RS256",),
+            clients_seed=(_CLIENT,),
+            request_uri_allow_local_targets=allow_local_targets,
+        )
+    )
+
+
+def test_authorize_refuses_local_request_uri_when_harness_flag_is_absent(
+    document_server: tuple[str, _DocumentState],
+) -> None:
+    """Host non-loopback sans drapeau : garde anti-SSRF → page 400."""
+    url, _state = document_server
+    with TestClient(_app_binding_all_interfaces(allow_local_targets=False)) as client:
+        response = client.get(
+            "/authorize",
+            params={
+                "response_type": "code",
+                "client_id": "web-app",
+                "redirect_uri": "https://app.example/callback",
+                "scope": "openid profile",
+                "request_uri": f"{url}/requesturi/abc",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 400
+    assert "invalid_request_uri" in response.text
+
+
+def test_authorize_fetches_local_request_uri_with_harness_flag(
+    document_server: tuple[str, _DocumentState],
+) -> None:
+    """Harness de certification (#152) : drapeau explicite → fetch accepté."""
+    url, state = document_server
+    state.document = _request_object(
+        _base_params(
+            code_challenge=_s256_challenge("verifier-verifier"),
+            code_challenge_method="S256",
+        )
+    )
+    with TestClient(_app_binding_all_interfaces(allow_local_targets=True)) as client:
+        response = client.get(
+            "/authorize",
+            params={
+                "response_type": "code",
+                "client_id": "web-app",
+                "redirect_uri": "https://app.example/callback",
+                "scope": "openid profile",
+                "request_uri": f"{url}/requesturi/abc",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert state.paths == ["/requesturi/abc"]
+
+
 def test_authorize_issues_code_then_unsigned_id_token_for_none_client() -> None:
     """``oidcc-idtoken-unsigned`` : ``id_token_signed_response_alg=none``."""
     with TestClient(_app()) as client:
