@@ -32,6 +32,12 @@ from puridentityserver.application.backchannel_authorize import (
     BackchannelAuthenticationParams,
     BackchannelAuthenticationUseCase,
 )
+from puridentityserver.application.registration import (
+    RegisterRequest,
+    RegistrationConfig,
+    RegistrationError,
+    RegistrationUseCase,
+)
 from puridentityserver.application.token import (
     TokenConfig,
     TokenRequest,
@@ -612,3 +618,81 @@ class TestConfigurableCertificateHeaders:
 
         assert extracted.der is None
         assert extracted.subject_dn == ""
+
+
+class TestRegistrationTLSBound:
+    """Couvre ``tls_client_certificate_bound_access_tokens`` à l'enregistrement (RFC 8705 §3.1).
+
+    Le flag envoyé par la suite de certification dans le metadata RFC 7591
+    doit être parsé, persisté côté ``Client`` et échoyé dans la réponse
+    (issue #146 : les clients dynamiques du plan ciba en étaient privés).
+    """
+
+    @staticmethod
+    def _usecase() -> tuple[RegistrationUseCase, InMemoryClientRepository]:
+        config = RegistrationConfig(
+            issuer=_ISSUER,
+            base_url=_ISSUER,
+            requires_initial_access_token=False,
+        )
+        repository = InMemoryClientRepository()
+        return RegistrationUseCase(config, repository), repository
+
+    def test_echoes_tls_bound_flag(self) -> None:
+        usecase, _ = self._usecase()
+
+        result = run(
+            usecase.register(
+                RegisterRequest(
+                    metadata={
+                        "redirect_uris": [_REDIRECT_URI],
+                        "tls_client_certificate_bound_access_tokens": True,
+                    }
+                )
+            )
+        )
+
+        assert result.tls_client_certificate_bound_access_tokens is True
+
+    def test_persists_flag_on_stored_client(self) -> None:
+        usecase, repository = self._usecase()
+
+        result = run(
+            usecase.register(
+                RegisterRequest(
+                    metadata={
+                        "redirect_uris": [_REDIRECT_URI],
+                        "tls_client_certificate_bound_access_tokens": True,
+                    }
+                )
+            )
+        )
+
+        stored = run(repository.find_by_id(result.client_id))
+
+        assert stored is not None
+        assert stored.tls_client_certificate_bound_access_tokens is True
+
+    def test_defaults_flag_to_false(self) -> None:
+        usecase, _ = self._usecase()
+
+        result = run(usecase.register(RegisterRequest(metadata={"redirect_uris": [_REDIRECT_URI]})))
+
+        assert result.tls_client_certificate_bound_access_tokens is False
+
+    def test_rejects_non_boolean_flag(self) -> None:
+        usecase, _ = self._usecase()
+
+        result = run(
+            usecase.register(
+                RegisterRequest(
+                    metadata={
+                        "redirect_uris": [_REDIRECT_URI],
+                        "tls_client_certificate_bound_access_tokens": "oui",
+                    }
+                )
+            )
+        )
+
+        assert isinstance(result, RegistrationError)
+        assert result.error == "invalid_client_metadata"

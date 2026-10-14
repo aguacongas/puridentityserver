@@ -171,6 +171,7 @@ class RegistrationMetadata:
     backchannel_logout_uri: str = ""
     backchannel_logout_session_required: bool = False
     dpop_bound_access_tokens: bool = False
+    tls_client_certificate_bound_access_tokens: bool = False
     backchannel_token_delivery_mode: str = ""
     backchannel_client_notification_endpoint: str = ""
     backchannel_authentication_request_signing_alg: str = ""
@@ -248,6 +249,7 @@ class ClientRegistration:
     backchannel_logout_uri: str = ""
     backchannel_logout_session_required: bool = False
     dpop_bound_access_tokens: bool = False
+    tls_client_certificate_bound_access_tokens: bool = False
     backchannel_token_delivery_mode: str = ""
     backchannel_client_notification_endpoint: str = ""
     backchannel_authentication_request_signing_alg: str = ""
@@ -346,6 +348,9 @@ class RegistrationUseCase:
             par_required=metadata.par_required,
             require_consent=metadata.require_consent,
             require_dpop=metadata.dpop_bound_access_tokens,
+            tls_client_certificate_bound_access_tokens=(
+                metadata.tls_client_certificate_bound_access_tokens
+            ),
             id_token_signed_response_alg=metadata.id_token_signed_response_alg,
             id_token_encrypted_response_alg=metadata.id_token_encrypted_response_alg,
             id_token_encrypted_response_enc=metadata.id_token_encrypted_response_enc,
@@ -441,6 +446,9 @@ class RegistrationUseCase:
             par_required=metadata.par_required,
             require_consent=metadata.require_consent,
             require_dpop=metadata.dpop_bound_access_tokens,
+            tls_client_certificate_bound_access_tokens=(
+                metadata.tls_client_certificate_bound_access_tokens
+            ),
             id_token_signed_response_alg=metadata.id_token_signed_response_alg,
             id_token_encrypted_response_alg=metadata.id_token_encrypted_response_alg,
             id_token_encrypted_response_enc=metadata.id_token_encrypted_response_enc,
@@ -780,6 +788,9 @@ class RegistrationUseCase:
             require_pushed_authorization_requests=client.par_required,
             require_consent=client.require_consent,
             dpop_bound_access_tokens=client.require_dpop,
+            tls_client_certificate_bound_access_tokens=(
+                client.tls_client_certificate_bound_access_tokens
+            ),
             id_token_signed_response_alg=client.id_token_signed_response_alg,
             id_token_encrypted_response_alg=client.id_token_encrypted_response_alg,
             id_token_encrypted_response_enc=client.id_token_encrypted_response_enc,
@@ -837,6 +848,7 @@ def _parse_metadata(
         backchannel_logout_uri,
         backchannel_logout_session_required,
         dpop_bound_access_tokens,
+        tls_client_certificate_bound_access_tokens,
         backchannel_token_delivery_mode,
         backchannel_client_notification_endpoint,
         backchannel_authentication_request_signing_alg,
@@ -865,6 +877,7 @@ def _parse_metadata(
         backchannel_logout_uri=backchannel_logout_uri,
         backchannel_logout_session_required=backchannel_logout_session_required,
         dpop_bound_access_tokens=dpop_bound_access_tokens,
+        tls_client_certificate_bound_access_tokens=tls_client_certificate_bound_access_tokens,
         backchannel_token_delivery_mode=backchannel_token_delivery_mode,
         backchannel_client_notification_endpoint=backchannel_client_notification_endpoint,
         backchannel_authentication_request_signing_alg=(
@@ -895,6 +908,7 @@ def _parse_metadata_extras(
         str,
         bool,
         str,
+        bool,
         bool,
         bool,
         str,
@@ -957,6 +971,10 @@ def _parse_metadata_extras(
             lambda raw, _known: _parse_session_required(raw, "backchannel_logout_session_required"),
         ),
         ("dpop_bound_access_tokens", lambda raw, _known: _parse_dpop_bound(raw)),
+        (
+            "tls_client_certificate_bound_access_tokens",
+            lambda raw, _known: _parse_tls_bound(raw),
+        ),
         # CIBA (OIDC CIBA 1.0 §16.1.1) : mode de livraison + endpoint de
         # notification + algorithme de signature du request object (stocké :
         # il rend la signature obligatoire sur /bc-authorize, FAPI-CIBA-ID1
@@ -1001,6 +1019,7 @@ def _assemble_extras(
     str,
     bool,
     bool,
+    bool,
     str,
     str,
     str,
@@ -1024,6 +1043,7 @@ def _assemble_extras(
         cast(str, results["backchannel_logout_uri"]),
         cast(bool, results["backchannel_logout_session_required"]),
         cast(bool, results["dpop_bound_access_tokens"]),
+        cast(bool, results["tls_client_certificate_bound_access_tokens"]),
         cast(str, results["backchannel_token_delivery_mode"]),
         cast(str, results["backchannel_client_notification_endpoint"]),
         cast(str, results["backchannel_authentication_request_signing_alg"]),
@@ -1301,6 +1321,17 @@ def _parse_dpop_bound(raw: dict[str, object]) -> bool | RegistrationError:
     token endpoint pour ce client (``require_dpop`` côté serveur).
     """
     return _parse_bool_flag(raw, "dpop_bound_access_tokens", default=False)
+
+
+def _parse_tls_bound(raw: dict[str, object]) -> bool | RegistrationError:
+    """Lit ``tls_client_certificate_bound_access_tokens`` (RFC 8705 §3.1).
+
+    Par défaut false. ``true`` exige la présentation du certificat client
+    mTLS à chaque appel du token endpoint (et ``/bc-authorize``) pour ce
+    client, émet ``cnf.x5t#S256`` sur les access tokens et lie les refresh
+    tokens au certificat d'émission.
+    """
+    return _parse_bool_flag(raw, "tls_client_certificate_bound_access_tokens", default=False)
 
 
 def _parse_ciba_delivery_mode(raw: dict[str, object]) -> str | RegistrationError:
