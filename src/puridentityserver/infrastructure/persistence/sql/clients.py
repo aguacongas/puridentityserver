@@ -87,6 +87,7 @@ class ClientRow(PersistenceBase):
     backchannel_authentication_request_signing_alg: Mapped[str] = mapped_column(
         String(16), default="", server_default=text("''")
     )
+    binding_message_max_length: Mapped[int | None] = mapped_column(Integer, nullable=True)
     registration_access_token_hash: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -193,6 +194,7 @@ def _to_row(client: Client) -> ClientRow:
         backchannel_authentication_request_signing_alg=(
             client.backchannel_authentication_request_signing_alg
         ),
+        binding_message_max_length=client.binding_message_max_length,
         registration_access_token_hash=client.registration_access_token_hash,
         created_at=client.created_at,
         is_active=client.is_active,
@@ -273,6 +275,7 @@ def _from_row(row: ClientRow) -> Client:
         backchannel_authentication_request_signing_alg=_text(
             row.backchannel_authentication_request_signing_alg
         ),
+        binding_message_max_length=row.binding_message_max_length,
         registration_access_token_hash=_text(row.registration_access_token_hash),
         created_at=_utc(row.created_at),
         is_active=row.is_active,

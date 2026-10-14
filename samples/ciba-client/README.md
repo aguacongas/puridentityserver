@@ -100,6 +100,33 @@ discovery publie les algos admis dans
 > racine : `registration_enabled = true` +
 > `registration_initial_access_tokens = ["dev-registrar-token"]`).
 
+## Plafond du `binding_message` (CIBA §16.1.1)
+
+Le `binding_message` (message d'inter-verrouillage affiché sur
+l'appareil d'authentification) est plafonné à **32 caractères** par
+défaut. Au-delà, `/bc-authorize` rejette la demande avec l'erreur
+`invalid_binding_message` (400) — le message trop long ne pouvant pas
+être affiché de façon fiable.
+
+Réglages :
+
+- **serveur** : `ciba_binding_message_max_length` dans `config.toml`
+  (`[settings]`) ou variable d'environnement
+  `PURIDENTITYSERVER_CIBA_BINDING_MESSAGE_MAX_LENGTH` ;
+- **par client** : champ `binding_message_max_length` du client dans
+  `clients_seed` (`config.toml`) — `None` (défaut) = plafond serveur.
+
+Vérification rapide :
+
+```sh
+curl -u sample-ciba-client:ciba-demo-secret \
+  -d "scope=openid profile" \
+  -d "login_hint=alice.martin@example.com" \
+  -d "binding_message=$(python -c 'print("x"*33)')" \
+  http://127.0.0.1:8000/bc-authorize
+# → {"error":"invalid_binding_message", ...}
+```
+
 ## Smoke test
 
 Le smoke test enchaîne deux scénarios de façon automatique (port dédié

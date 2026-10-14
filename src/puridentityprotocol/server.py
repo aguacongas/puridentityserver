@@ -312,6 +312,7 @@ class ProtocolDependencies:
                 interval_seconds=settings.ciba_interval_seconds,
                 token_endpoint=f"{protocol_base_url}/token",
                 bc_authorize_endpoint=f"{protocol_base_url}/bc-authorize",
+                binding_message_max_length=settings.ciba_binding_message_max_length,
             ),
             self.readers.client,
             self.readers.user,
