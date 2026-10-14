@@ -22,6 +22,12 @@
 #   (config client de la suite). redirect_uris = callback de la suite (alias
 #   du plan) + variante à query des modules « second client »
 #   (`AddRedirectUriQuerySuffix` = ?dummy1=lorem&dummy2=ipsum).
+# - `tls_client_certificate_bound_access_tokens = true` sur les 2 clients
+#   FAPI1 uniquement (issue #144, RFC 8705) : la suite FAPI1 impose le
+#   sender-constrain mTLS (certificat client exigé au /token, claim
+#   `cnf.x5t#S256` sur les access tokens, binding validé à la ressource).
+#   Les clients FAPI2 restent sans flag : ils utilisent DPoP et ne
+#   présentent aucun certificat — un flag global casserait le plan fapi2.
 # L'issuer public est surchargé par `PURIDENTITYSERVER_ISSUER` (blueprint
 # `render.yaml`) : https://puridentityserver-certification.onrender.com
 
@@ -144,6 +150,7 @@ client_type = "confidential"
 token_endpoint_auth_method = "private_key_jwt"
 fapi_enabled = true
 require_consent = true
+tls_client_certificate_bound_access_tokens = true
 id_token_signed_response_alg = "PS256"
 jwks = [{ kty = "RSA", e = "AQAB", kid = "puridentityserver-fapi1-client-20261011", alg = "PS256", n = "27WKNdOdKbsr5lsM6EttzRkzJ7YTH3Iec0pwuIWdqxTsHnAcYWocGu1aI81Pg7psJDw1Adu5pU_TPykGL2q3nwW2GFyzO9Iv8YJQShLfZUJSiLnch3O-g6NbdxwllLGFhQy_5X2t7hnxTWUQlftx5Pm6BFM50qzePoi-WJaN5bXdKl0xVVYH4Tjf_aoOfHWIDmhl1NOgPQ-hnRzlztWds7weBRbk3WGgx7X12rAeeGE6uQXjjJreHV5svDX_ftz7UzAQb8rQB7AHCtdydbWtZW2COp6JvE2qS8JzUuWldP919xmi8y5SpBz9LnfFwQE7TGtOlAp1xlZ-ZC94H6nnmw" }]
 
@@ -158,6 +165,7 @@ client_type = "confidential"
 token_endpoint_auth_method = "private_key_jwt"
 fapi_enabled = true
 require_consent = true
+tls_client_certificate_bound_access_tokens = true
 id_token_signed_response_alg = "PS256"
 jwks = [{ kty = "RSA", e = "AQAB", kid = "puridentityserver-fapi1-client2-20261011", alg = "PS256", n = "uwDU81VS3Vt4bcHlqddG3F0OHl3uIOpjI_xl5BUybws-4hzpIVRl699unrZFT1E0zjhUQZwJFLR5TMxBeSH4xCWT05zedDxVecxK2nowxoze5paB6Rr8DnV8K-G913Zz5d4IE4lJL4hIMseeN-b6UO0HjwS3f5ABTBnTqZytdWr26Y9-0n1uoyX97FJ1ww78t7nEbIzl_qUQzSa3f0e2iFVEPPSlhNVLk53gJWYllp70e8dID_wn2eLfOCRpe04z_sp04zUqpXe8HCsj_EUSCDA6r5X61qyDS8wBIxRCYFGUblojS5hBx-n1MheUh1KHtQVImMJJd97JlHVVJ1-WSQ" }]
 
