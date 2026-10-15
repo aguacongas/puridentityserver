@@ -13,6 +13,12 @@ name: Certification OIDC (Local)
 # main (workflow_dispatch) : les PR publient uniquement leur rapport en
 # artefact.
 #
+# Captures d'écran (#158) : le job `capture` rejoue une fois par run les 24
+# scénarios REVIEW contre l'OP local (Playwright) et téléverse l'artefact
+# `certification-local-screenshots` ; les jobs `plan` le substituent au PNG de
+# secours (SCREENSHOTS_DIR) et le job `report` intègre les images au rapport
+# publié. Job non bloquant : capture en échec = rapport sans images.
+#
 # Sortie STRICTE (#130) : le code retour non nul du driver (modules FAILED,
 # INTERRUPTED / did-not-complete, warnings inattendus) fait échouer le job
 # plan — les exports et le garde-fou restent en `if: always()` pour préserver
@@ -102,9 +108,68 @@ jobs:
           done
           echo "matrix=$(printf '{"include":[%s]}' "$(IFS=,; echo "${entries[*]}")")" >> "$GITHUB_OUTPUT"
 
+  capture:
+    name: Captures d'écran réelles (Playwright)
+    runs-on: ubuntu-latest
+    # Non bloquant (comme le job prepare hébergé, issues #138/#158) : une
+    # capture en échec laisse l'artefact absent ou partiel, les jobs plan
+    # téléversent le PNG de secours et le rapport est publié sans image plutôt
+    # qu'en erreur.
+    continue-on-error: true
+    steps:
+      - name: Checkout du dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Résolution de la dernière release publiée de la suite
+        # Même résolution que les jobs plan (issue #150) : le harness de la
+        # capture joue la dernière release publiée de la suite.
+        run: |
+          latest=$(git ls-remote --tags https://gitlab.com/openid/conformance-suite.git "refs/tags/release-v*" \
+            | python3 -c 'import re,sys; tags=[l.split("refs/tags/")[1].strip() for l in sys.stdin if "refs/tags/" in l]; tags=[t for t in tags if re.fullmatch(r"release-v\d+\.\d+\.\d+", t)]; tags.sort(key=lambda v: tuple(map(int, v.split("-v")[1].split(".")))); print(tags[-1] if tags else "")') || latest=""
+          if [ -z "$latest" ]; then
+            echo "::error::Dernière release de la suite injoignable (git ls-remote) — impossible de résoudre SUITE_VERSION"
+            exit 1
+          fi
+          echo "SUITE_VERSION=$latest" >> "$GITHUB_ENV"
+          echo "Suite de certification : $latest" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Installation de uv (OP local)
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: false
+
+      - name: Bootstrap du harness local (suite docker + OP + nginx mTLS)
+        run: bash certification/local/setup.sh
+
+      - name: Captures d'écran réelles des modules de relecture (Playwright)
+        # Rejoue les 24 scénarios REVIEW contre l'OP local (cert auto-signé :
+        # ignore_https_errors ; issuer lu au discovery, redirect_uris de la
+        # suite locale via --suite-url). Une seule exécution par run : les 6
+        # jobs plan téléversent le résultat en artefact.
+        run: |
+          mkdir -p screenshots
+          python3 -m pip install --disable-pip-version-check --quiet playwright "pyjwt[cryptography]"
+          python3 -m playwright install --with-deps chromium
+          python3 certification/capture_screenshots.py \
+            --base-url https://localhost:9443 \
+            --suite-url "$SUITE_URL" \
+            --out screenshots
+          ls -l screenshots
+
+      - name: Upload des captures d'écran réelles
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: certification-local-screenshots
+          path: screenshots/
+          if-no-files-found: ignore
+
   plan:
     name: Plan ${{ matrix.plan }} (local)
-    needs: matrix
+    needs: [matrix, capture]
+    # Même condition que le job report : les plans jouent même si la capture
+    # a échoué (artefact absent → PNG de secours, cf. issue #158).
+    if: ${{ always() && needs.matrix.result == 'success' }}
     runs-on: ubuntu-latest
     strategy:
       # Chaque plan continue même si un autre échoue : le rapport consolidé
@@ -162,6 +227,27 @@ jobs:
         # idempotente des 5 patches + timeout parametrable.
         run: bash certification/local/prepare-suite.sh
 
+      - name: Récupération des captures d'écran réelles (artefact capture)
+        # Capture échouée ou absente = pas d'artefact : le driver retombe sur
+        # son PNG de secours (patch) — identique au job hébergé.
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: certification-local-screenshots
+          path: screenshots
+
+      - name: Emplacement des captures d'écran
+        # L'artefact peut être déposé à plat (screenshots/*.png) ou avec son
+        # répertoire (screenshots/screenshots/*.png) : le driver ne lit que
+        # le premier niveau, on aplatit donc au besoin.
+        run: |
+          if [ -d screenshots ]; then
+            find screenshots -mindepth 2 -type f -name '*.png' -exec mv -t screenshots/ {} + 2>/dev/null || true
+            ls -l screenshots
+          else
+            echo "Aucune capture : le driver utilisera le PNG de secours."
+          fi
+
       - name: Lancement du plan ${{ matrix.plan }}
         # Sortie stricte (#130) : le code retour du driver (1 sur modules
         # FAILED / INTERRUPTED / warnings inattendus, cf. `run-test-plan.py` —
@@ -175,6 +261,9 @@ jobs:
           CONFORMANCE_TOKEN: ""
           DISABLE_SSL_VERIFY: "1"
           CONFORMANCE_MODULE_TIMEOUT: "600"
+          # Captures réelles produites par le job `capture` : le driver les
+          # téléverse à la place du PNG de secours (absence = secours).
+          SCREENSHOTS_DIR: ${{ github.workspace }}/screenshots
         run: |
           set +e
           mkdir -p results
@@ -223,7 +312,7 @@ jobs:
 
   report:
     name: Rapport statique local + GitHub Pages
-    needs: [matrix, plan]
+    needs: [matrix, plan, capture]
     if: ${{ always() && needs.matrix.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
@@ -242,6 +331,28 @@ jobs:
           find . -type f -name '*.zip' -not -path './results/*' -not -path './.git/*' \
             -exec mv -t results/ {} + 2>/dev/null || true
           ls -lh results | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Téléversement des captures d'écran réelles (artefact capture)
+        # Capture échouée ou absente = pas d'artefact : le rapport est généré
+        # sans images (report.py ignore un --screenshots vide) — jamais de
+        # rupture du pipeline (issue #158).
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: certification-local-screenshots
+          path: screenshots
+
+      - name: Emplacement des captures d'écran
+        # L'artefact peut être déposé à plat (screenshots/*.png) ou avec son
+        # répertoire (screenshots/screenshots/*.png) : report.py ne lit que
+        # le premier niveau, on aplatit donc au besoin.
+        run: |
+          if [ -d screenshots ]; then
+            find screenshots -mindepth 2 -type f -name '*.png' -exec mv -t screenshots/ {} + 2>/dev/null || true
+            ls -l screenshots
+          else
+            echo "Aucune capture : le rapport sera publié sans images."
+          fi
 
       - name: Génération du rapport statique
         run: |
