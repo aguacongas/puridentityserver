@@ -88,18 +88,10 @@ jobs:
           PLAN_FILTER: ${{ inputs.plan || 'all' }}
         run: |
           set -euo pipefail
-          selector_for() {
-            case "$1" in
-              basic) echo 'oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
-              implicit) echo 'oidcc-implicit-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
-              hybrid) echo 'oidcc-hybrid-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
-              ciba) echo 'fapi-ciba-id1-test-plan[client_registration=dynamic_client][client_auth_type=private_key_jwt][ciba_mode=poll][fapi_ciba_profile=plain_fapi]' ;;
-              fapi1) echo 'fapi1-advanced-final-test-plan[fapi_profile=plain_fapi][client_auth_type=private_key_jwt][fapi_auth_request_method=by_value][fapi_response_mode=plain_response]' ;;
-              fapi2) echo 'fapi2-security-profile-final-test-plan[fapi_profile=plain_fapi][client_auth_type=private_key_jwt][authorization_request_type=simple][openid=openid_connect][sender_constrain=dpop]' ;;
-              *) return 1 ;;
-            esac
-          }
-          plans=(basic implicit hybrid ciba fapi1 fapi2)
+          # Selecteurs des plans : source unique partagee avec le lancement
+          # local (certification/local/run-plan.sh) et le workflow herberge.
+          source certification/selectors.sh
+          plans=("${CERTIFICATION_PLANS[@]}")
           if [ "$PLAN_FILTER" != "all" ]; then
             selector_for "$PLAN_FILTER" > /dev/null || { echo "::error::Plan inconnu : $PLAN_FILTER"; exit 1; }
             plans=("$PLAN_FILTER")
@@ -166,14 +158,9 @@ jobs:
         run: python3 -m pip install --disable-pip-version-check --quiet httpx
 
       - name: Patch du driver (5 patches, idem job hébergé)
-        run: |
-          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-reuse-plan.patch"
-          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-screenshots.patch"
-          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-alias-release.patch"
-          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-interrupted-diagnostics.patch"
-          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-stale-plan-recovery.patch"
-          sed -i 's/timeout=240/timeout=int(os.getenv("CONFORMANCE_MODULE_TIMEOUT", "240"))/' \
-            conformance-suite/scripts/conformance.py
+        # Helper partage avec le lancement local (run-plan.sh) : application
+        # idempotente des 5 patches + timeout parametrable.
+        run: bash certification/local/prepare-suite.sh
 
       - name: Lancement du plan ${{ matrix.plan }}
         # Sortie stricte (#130) : le code retour du driver (1 sur modules

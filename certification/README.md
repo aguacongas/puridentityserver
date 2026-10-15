@@ -155,26 +155,48 @@ driver (hôte) --API--> suite docker nginx :8443 (alias localhost.emobix.co.uk)
   `localhost.emobix.co.uk` même en trusté — le module basculait alors en WAITING
   puis INTERRUPTED. Jamais à activer sur un déploiement exposé.
 
-Lancer en local (Linux, prérequis : docker, uv, openssl) :
+### Démarrage rapide (Linux, macOS, Windows)
+
+Prérequis par environnement :
+
+| Environnement | Prérequis |
+| --- | --- |
+| Linux | `docker` (+ plugin compose), `uv`, `openssl`, `curl`, `git` |
+| macOS | Docker Desktop, `uv`, `openssl`, `curl`, `git` |
+| Windows | Docker Desktop (backend WSL2), Git for Windows (fournit **git-bash**), `uv` |
+
+Sur **Windows**, lancer tous les scripts avec **git-bash** (pas PowerShell) :
+le harness est écrit en bash et gère lui-même les chemins et arguments MSYS.
+`setup.sh` vérifie les prérequis, pose (ou signale) l'entrée hosts
+`127.0.0.1 localhost.emobix.co.uk` — indispensable aux callbacks de la suite —
+et est **idempotent** (relançable : l'OP résiduel est arrêté avant
+redémarrage, les conteneurs sont réutilisés).
 
 ```bash
-# 1. monter le harness (suite + OP + nginx mTLS) et attendre la disponibilité
+# 1. monter le harness (suite docker + OP uvicorn + nginx mTLS), idempotent
 bash certification/local/setup.sh
 
-# 2. substituer les URLs LOCALES dans le plan puis jouer fapi1
-export CONFORMANCE_SERVER=https://localhost.emobix.co.uk:8443/
-sed -i "s#{OPURL}#https://op:9443#g; s#{SUITEURL}#$CONFORMANCE_SERVER#g" \
-  certification/plans/fapi1.json
-# le driver tourne SANS token (la suite en mode dev injecte un utilisateur via
-# DummyUserFilter) et ignore le cert auto-signé :
-export CONFORMANCE_TOKEN="" DISABLE_SSL_VERIFY=1
-git clone --depth 1 --branch release-v5.3.3 https://gitlab.com/openid/conformance-suite.git  # déjà cloné par setup.sh
-# appliquer les 5 patches du driver (voir certification-local.yml), puis :
-cd conformance-suite
-python3 scripts/run-test-plan.py --export-dir ../results \
-  "fapi1-advanced-final-test-plan[fapi_profile=plain_fapi][client_auth_type=private_key_jwt][fapi_auth_request_method=by_value][fapi_response_mode=plain_response]" \
-  ../certification/plans/fapi1.json
+# 2. rejouer un plan en une commande (même séquence stricte que la CI)
+bash certification/local/run-plan.sh fapi2   # basic | implicit | hybrid | ciba | fapi1 | fapi2
+
+# 3. arrêter / nettoyer
+bash certification/local/down.sh             # OP + op-mtls + conteneurs de la suite
+bash certification/local/down.sh --purge     # + suppression de .harness-local/
 ```
+
+`run-plan.sh` reproduit le job plan du workflow CI : readiness (bootstrap via
+`setup.sh` si besoin), application idempotente des 5 patches du driver
+(`prepare-suite.sh`), substitution `{OPURL}`/`{SUITEURL}` dans une copie
+générée du clone (`conformance-suite/plans/<plan>.json` — gitignore, le
+working tree git reste propre), lancement du driver officiel en **sortie
+stricte** (code retour non nul dès
+qu'un module est FAILED/INTERRUPTED ou qu'un warning inattendu survient), puis
+bilan `PASSED/FAILED/REVIEW` lu dans l'export, avec les chemins du log
+(`.harness-local/last-<plan>.log`) et des exports
+(`.harness-local/results/<plan>/`). Les sélecteurs de plans viennent de
+`certification/selectors.sh`, la **source unique** partagée avec les deux
+workflows CI ; `prepare-suite.sh` est le helper de patches partagé avec le
+workflow local.
 
 En CI : le workflow `Certification OIDC (Local)`
 (`.github/workflows/certification-local.yml`) exécute exactement cette
@@ -198,6 +220,18 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
 
 ## Dépannage
 
+- **`setup.sh` s'arrête sur « entree hosts absente »** : la résolution de
+  `localhost.emobix.co.uk` vers `127.0.0.1` est indispensable (callbacks de la
+  suite + alias réseau docker). Ajouter `127.0.0.1 localhost.emobix.co.uk` au
+  fichier hosts système — sous Windows : `C:\Windows\System32\drivers\etc\hosts`
+  ouvert avec le Bloc-notes **en administrateur** (le même fichier que
+  `/etc/hosts` vu par git-bash) — puis relancer `setup.sh`.
+- **Modules bloqués en `WAITING` après une substitution manuelle du plan** :
+  `{SUITEURL}` doit être remplacé **avec** sa slash finale
+  (`https://localhost.emobix.co.uk:8443/`), sinon le `match` de callback devient
+  `…8443test/…`, ne s'applique jamais et chaque module reste `WAITING` jusqu'au
+  timeout. `run-plan.sh` applique la substitution correcte (même valeur que
+  l'env `SUITE_URL` du workflow local).
 - **L'OP ne répond pas** : le service Render libre s'endort après ~15 min
   d'inactivité ; le workflow patiente (cold start ~1 min) avant d'échouer.
 - **`DELETE /register/{client_id}` en 404 `invalid_client`** (module en

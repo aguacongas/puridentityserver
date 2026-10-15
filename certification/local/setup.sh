@@ -19,7 +19,8 @@
 #   et passe le cert extrait via X-SSL-Client-Cert (voir nginx-mtls.conf).
 #
 # Réutilisable tel quel en local (DoD) : `bash certification/local/setup.sh`
-# puis lancer un plan (voir certification/README.md, « Rejeu local complet »).
+# puis `bash certification/local/run-plan.sh <plan>` — voir certification/README.md
+# (« Démarrage rapide »). Relançable sans dommage (OP résiduel arrêté d'abord).
 set -euo pipefail
 
 # --- Configuration (surchargeable par env) ------------------------------------
@@ -47,12 +48,85 @@ winpath() {
   if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
 }
 
-# ---1) Alias réseau : la suite génère ses callbacks sur localhost.emobix.co.uk.
-# Le driver (hôte) doit y accéder comme le navigateur (conteneur) : on pointe
-# l'alias vers127.0.0.1 côté hôte (Docker Desktop le fait déjà, Linux non).
-if ! getent hosts "$SUITE_HOSTNAME" >/dev/null 2>&1; then
-  log "ajout de $SUITE_HOSTNAME ->127.0.0.1 dans /etc/hosts"
-  echo "127.0.0.1 $SUITE_HOSTNAME" | sudo tee -a /etc/hosts >/dev/null
+# Arret d'un processus : taskkill /T (git-bash) tue aussi la descendance
+# (le python enfant de « uv run » tient le port et op.db) ; sinon kill.
+stop_pid() {
+  if command -v taskkill >/dev/null 2>&1; then
+    MSYS_NO_PATHCONV=1 taskkill /F /T /PID "$1" >/dev/null 2>&1 || true
+  else
+    kill "$1" 2>/dev/null || true
+  fi
+}
+
+# PID du processus qui ecoute encore $OP_PORT (netstat ; le PID est le dernier
+# champ sous Windows comme sous Linux ; « LISTEN » couvre LISTENING et LISTEN).
+port_listener_pid() {
+  netstat -ano 2>/dev/null \
+    | awk -v p=":$OP_PORT" '$0 ~ /LISTEN/ && $0 ~ p"[[:space:]]" { print $NF; exit }'
+}
+
+# ---0) Prérequis --------------------------------------------------------------
+# Echec sec avec message d'aide : sous Windows, tout se lance depuis git-bash
+# (fourni par Git for Windows) — les scripts du harness sont en bash.
+require() {
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "[setup] $1 introuvable — $2" >&2
+    exit 1
+  }
+}
+require git "installez Git (https://git-scm.com ; Windows : Git for Windows, qui fournit git-bash)"
+require curl "installez curl (Linux/macOS : natif ; Windows : Git for Windows)"
+require openssl "installez OpenSSL (Linux : paquet openssl ; macOS/Windows : natif ou Git for Windows)"
+require uv "installez uv (https://docs.astral.sh/uv/) : curl -LsSf https://astral.sh/uv/install.sh | sh"
+require docker "installez/activez Docker Desktop (Windows/macOS) ou Docker Engine (Linux)"
+if ! docker info >/dev/null 2>&1; then
+  echo "[setup] daemon docker non joignable — demarrez Docker Desktop (ou le service docker)" >&2
+  exit 1
+fi
+if ! docker compose version >/dev/null 2>&1; then
+  echo "[setup] plugin « docker compose » absent — mettez a jour Docker" >&2
+  exit 1
+fi
+
+# ---1) Résolution de localhost.emobix.co.uk -----------------------------------
+# La suite génère ses callbacks sur ce nom. Deux sources possibles : le DNS
+# public (wildcard OIDF -> 127.0.0.1) ou l'entrée hosts. On teste la
+# RÉSOLUTION (curl « could not resolve » = code 6) plutôt que le contenu de
+# /etc/hosts : sous git-bash/Windows, /etc/hosts ne reflète pas le fichier
+# hosts de Windows alors que le résolveur natif — et le DNS — répondent déjà.
+host_resolves() {
+  local rc=0
+  curl -s --max-time 5 -o /dev/null "http://$SUITE_HOSTNAME:1/" 2>/dev/null || rc=$?
+  [ "$rc" -ne 6 ]
+}
+if host_resolves; then
+  log "$SUITE_HOSTNAME resout deja (DNS ou hosts) — aucune modification"
+else
+  log "ajout de $SUITE_HOSTNAME -> 127.0.0.1 dans /etc/hosts"
+  if printf '127.0.0.1 %s\n' "$SUITE_HOSTNAME" >> /etc/hosts 2>/dev/null; then
+    log "entree ajoutee"
+  elif command -v sudo >/dev/null 2>&1 \
+      && printf '127.0.0.1 %s\n' "$SUITE_HOSTNAME" | sudo tee -a /etc/hosts >/dev/null; then
+    log "entree ajoutee (sudo)"
+  fi
+  if host_resolves; then
+    log "resolution de $SUITE_HOSTNAME OK"
+  else
+    cat >&2 <<EOF
+[setup] $SUITE_HOSTNAME ne resout pas vers 127.0.0.1 et l'ecriture de
+/etc/hosts a echoue. Ajoutez manuellement :
+
+    127.0.0.1 $SUITE_HOSTNAME
+
+- Windows (git-bash) : editez C:\Windows\System32\drivers\etc\hosts avec le
+  Bloc-notes LANCE EN TANT QU'ADMINISTRATEUR (c'est le meme fichier que
+  /etc/hosts vu par git-bash), puis relancez setup.sh.
+- Linux/macOS : echo '127.0.0.1 $SUITE_HOSTNAME' | sudo tee -a /etc/hosts
+- Sans entrée hosts : le DNS public OIDF (wildcard -> 127.0.0.1) peut aussi
+  faire foi — verifiez la connectivité DNS de la machine.
+EOF
+    exit 1
+  fi
 fi
 
 # ---2) Clone de la suite (pinné) si absent ------------------------------------
@@ -161,6 +235,30 @@ sed \
 # ---7) OP uvicorn (hôte) ------------------------------------------------------
 log "installation des dépendances OP (uv sync --extra sql)"
 ( cd "$REPO_ROOT" && uv sync --extra sql --locked >/dev/null )
+# Re-run idempotent : un OP résiduel tient le port — uvicorn échouerait à se
+# lier et le readiness final tomberait sur un « 502 ou hors service ». Deux
+# sources d'OP résiduel : le pidfile (runs précédents de setup.sh) ET un OP
+# orphelin (run manuel, pidfile écrasé) — le second est détecté via le
+# propriétaire du port 8000. Tuer le listener fait aussi sortir ses parents
+# (« uv run » et python intermédiaire attendent leur enfant).
+if [ -f "$LOCAL_DIR/op.pid" ]; then
+  old_pid="$(cat "$LOCAL_DIR/op.pid" 2>/dev/null || true)"
+  if [ -n "$old_pid" ]; then
+    log "arrêt de l'OP résiduel (pidfile $old_pid)"
+    stop_pid "$old_pid"
+  fi
+  rm -f "$LOCAL_DIR/op.pid"
+fi
+listener="$(port_listener_pid || true)"
+if [ -n "${listener:-}" ]; then
+  log "port $OP_PORT toujours pris (pid $listener) : arrêt de l'écouteur"
+  stop_pid "$listener"
+fi
+deadline=$((SECONDS + 10))
+while curl -s --max-time 1 -o /dev/null "http://127.0.0.1:$OP_PORT/" 2>/dev/null; do
+  [ $SECONDS -lt $deadline ] || { echo "[setup] port $OP_PORT toujours actif apres arret — verifiez manuellement" >&2; exit 1; }
+  sleep 1
+done
 log "démarrage de l'OP (uvicorn :$OP_PORT, issuer https://$OP_ALIAS:$MTLS_PORT)"
 # PURIDENTITYSERVER_REQUEST_URI_ALLOW_LOCAL_TARGETS : la suite sert le document
 # request_uri sur localhost.emobix.co.uk (→127.0.0.1), destination loopback

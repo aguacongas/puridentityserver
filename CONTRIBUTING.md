@@ -20,6 +20,15 @@ mypy src                     # typage strict
 pytest                       # tests + couverture (min 80 %)
 ```
 
+Harness local de certification OIDC (docker complet, Linux/macOS/Windows —
+détails dans `certification/README.md`) :
+
+```bash
+bash certification/local/setup.sh           # monter le harness (idempotent)
+bash certification/local/run-plan.sh fapi2  # rejouer un plan, sortie stricte
+bash certification/local/down.sh            # arrêter / nettoyer (--purge : .harness-local)
+```
+
 ## Style et syntaxe
 
 - **Typage explicite obligatoire** : signatures de fonctions annotées (params + retour),
