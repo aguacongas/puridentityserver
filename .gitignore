@@ -37,3 +37,7 @@ Thumbs.db
 # Rapports du rejeu conformance (generes par le workflow et en local)
 junit-conformance.xml
 conformance-report.md
+
+# Harness local de certification (clone de la suite + artefacts setup.sh)
+conformance-suite/
+.harness-local/

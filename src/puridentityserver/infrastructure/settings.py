@@ -438,6 +438,16 @@ class Settings(BaseSettings):
     # déjà individuellement via ``fapi2_enabled``).
     par_required: bool = False
 
+    # Request objects (RFC 9101) — fetch HTTP du paramètre ``request_uri``.
+    # Garde anti-SSRF : les destinations loopback/privées sont refusées, sauf
+    # si l'OP écoute lui-même en loopback (``loopback_bind(host)`` — dev et
+    # tests). ``request_uri_allow_local_targets`` ouvre explicitement ces
+    # destinations quand l'OP bind une adresse non-loopback : requis par le
+    # harness de certification local, où la suite sert le document sur
+    # ``localhost.emobix.co.uk`` (alias → 127.0.0.1). Ne jamais activer sur
+    # un déploiement exposé (issue #152).
+    request_uri_allow_local_targets: bool = False
+
     # Resource server d'exemple - endpoint GET /protected-resource
     # (RFC 8707 + profil FAPI-R-6.2.1 de la suite de certification) :
     # valide l'en-tête Bearer (signature, expiration, révocation), renvoie

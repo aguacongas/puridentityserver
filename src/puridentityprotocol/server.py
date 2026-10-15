@@ -247,7 +247,10 @@ class ProtocolDependencies:
         self.claims_provider = UserStoreClaimsProvider(self.readers.user)
         self.request_object_resolver = RequestObjectResolver(
             RequestObjectConfig(issuer=settings.issuer),
-            HTTPRequestObjectFetcher(allow_local_targets=loopback_bind(settings.host)),
+            HTTPRequestObjectFetcher(
+                allow_local_targets=loopback_bind(settings.host)
+                or settings.request_uri_allow_local_targets
+            ),
             clients=self.readers.client,
             signed=self.signed_request_objects,
         )

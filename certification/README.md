@@ -142,7 +142,18 @@ driver (hôte) --API--> suite docker nginx :8443 (alias localhost.emobix.co.uk)
   volée, certificat client **optionnel** (`optional_no_ca` — les plans FAPI1
   mélangent modules mTLS et `private_key_jwt`), cert extrait transmis via
   `X-SSL-Client-Cert` **URL-encodé** (`$ssl_client_escaped_cert`, dé-encodé par
-  l'OP).
+  l'OP) ;
+- l'OP local est lancé avec `PURIDENTITYSERVER_REQUEST_URI_ALLOW_LOCAL_TARGETS=true`
+  et `SSL_CERT_FILE` pointant sur un certificat **SAN** (`localhost.emobix.co.uk`,
+  `localhost`, `127.0.0.1`) que `setup.sh` substitue dans le nginx de la suite
+  (concaténé au bundle système) : les modules `oidcc-request-uri-*` font fetcher
+  par l'OP le document servi par la suite sur `localhost.emobix.co.uk:8443`
+  (alias → 127.0.0.1). Deux blocages levés (issue #152) : la destination loopback
+  serait sinon **refusée par la garde anti-SSRF** du fetcher `request_uri` (l'OP
+  bind `0.0.0.0`), et le cert cuit dans l'image de la suite (`CN=localhost`
+  **sans SAN**) **échoue au hostname matching** OpenSSL/Python pour
+  `localhost.emobix.co.uk` même en trusté — le module basculait alors en WAITING
+  puis INTERRUPTED. Jamais à activer sur un déploiement exposé.
 
 Lancer en local (Linux, prérequis : docker, uv, openssl) :
 
