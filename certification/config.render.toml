@@ -54,6 +54,13 @@ ciba_approval_enabled = true
 # content-type JSON ; 200 attendu, 401 sans jeton).
 protected_resource_enabled = true
 
+# Reverse proxy : reconstruction de l'URL publique (claim `htu` des preuves
+# DPoP, RFC 9449 §4.3). Instance Render ET harness local derrière un nginx
+# de terminaison TLS : sans ce réglage, `htu` (`https://op:9443/…` côté
+# suite) est comparé à l'URL interne du backend (`http://host.docker.
+# internal:8000/…`) et toutes les preuves sont rejetées (issue #153).
+trust_proxy_headers = true
+
 # Login obligatoire à l'endpoint /authorize (OIDC Core 1.0 §3.1.2.1) : la
 # demande non authentifiée est redirigée vers /login (refresh de session du
 # navigateur interne de la suite), `prompt=none` reçoit `login_required`.

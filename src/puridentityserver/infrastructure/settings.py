@@ -457,6 +457,17 @@ class Settings(BaseSettings):
     # rallument via `config.toml`.
     protected_resource_enabled: bool = False
 
+    # Reverse proxy : reconstruction de l'URL publique requêtée à partir
+    # des en-têtes `X-Forwarded-Proto`/`X-Forwarded-Host`/
+    # `X-Forwarded-Port` (claim `htu` des preuves DPoP, RFC 9449 §4.3).
+    # Sans ce réglage, un OP terminant le TLS derrière un proxy compare
+    # `htu` à l'URL interne du backend (ex. `http://backend:8000/…`) et
+    # rejette toute preuve générée pour l'URL publique.
+    # `X-Forwarded-*` est forgeable : activé uniquement derrière un proxy
+    # de confiance (Render, nginx du harness de certification) — jamais
+    # sur une exposition directe.
+    trust_proxy_headers: bool = False
+
     # Certificat client mTLS (RFC 8705) transmis par le proxy de
     # terminaison TLS : noms d'en-têtes configurables pour s'adapter à
     # n'importe quelle plateforme (Cloudflare Transform Rules RFC 9440

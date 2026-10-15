@@ -18,14 +18,22 @@ from puridentityserver.infrastructure.client_tls import (
     extract_client_certificate,
 )
 from puridentityserver.interfaces.api.dpop_proof import extract_dpop_proof
+from puridentityserver.interfaces.api.forwarded import public_url
 from puridentityserver.interfaces.api.security import split_authorization
 
 
 def userinfo_router(
     usecase: UserInfoUseCase,
     client_certificate_headers: ClientCertificateHeaderNames | None = None,
+    *,
+    trust_proxy_headers: bool = False,
 ) -> APIRouter:
-    """Construit le routeur FastAPI exposant ``GET /userinfo``."""
+    """Construit le routeur FastAPI exposant ``GET /userinfo``.
+
+    ``trust_proxy_headers`` active la reconstruction de l'URL publique
+    derrière un reverse proxy (claim ``htu`` DPoP, RFC 9449 §4.3) — voir
+    ``Settings.trust_proxy_headers``.
+    """
     certificate_headers = client_certificate_headers or ClientCertificateHeaderNames()
     router = APIRouter(tags=["userinfo"])
 
@@ -70,7 +78,7 @@ def userinfo_router(
                 access_token=token,
                 auth_scheme=scheme,
                 dpop_proof=proof,
-                htu=str(request.url),
+                htu=public_url(request, trust_proxy_headers=trust_proxy_headers),
                 htm=request.method,
                 tls_certificate=extract_client_certificate(request, certificate_headers),
             )
