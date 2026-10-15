@@ -1,0 +1,4 @@
+# Les scripts bash exigent LF : bash refuse les fins de ligne CRLF, et
+# core.autocrlf=true (Windows) les convertirait au checkout — les scripts du
+# harness de certification ne seraient alors plus executables sous git-bash.
+*.sh text eol=lf
