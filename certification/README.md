@@ -46,9 +46,10 @@ retenue :
 - une page `https://<owner>.github.io/puridentityserver/certification/`
   consolide les derniers résultats (publish réservé aux runs sur `main` ou
   lancés à la main) ; les **captures d'écran réelles** des modules de
-  relecture restent consultables dans l'artefact `certification-screenshots`
-  du run hébergé (fichiers aussi disponibles sous
-  `<page>/screenshots/<testName>.png` quand ils sont présents) ;
+  relecture sont produites par le workflow local lui-même (artefact
+  `certification-local-screenshots`, issue #158) et affichées dans la page
+  (`<page>/screenshots/<testName>.png`) ; le run hébergé les publie aussi
+  dans son artefact `certification-screenshots` ;
 - le workflow hébergé `Certification OIDC` téléverse ses exports
   (`certification-results-<plan>` puis `certification-results`) et l'artefact
   `certification-screenshots` (captures réelles des modules de relecture,
@@ -369,7 +370,7 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
 | `plans/basic|implicit|hybrid|ciba|fapi1|fapi2.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; fapi1/fapi2 portent aussi `client`/`client2` en clé privée et `resource`) |
 | `conformance-reuse-plan.patch` | patch du driver : `create_test_plan` idempotent (réutilise le plan existant quand sa config n'a pas changé) |
 | `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) ou, à défaut, un PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode hébergé) |
-| `capture_screenshots.py` | rejoue les 4 scénarios de relecture contre l'OP déployé (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver |
+| `capture_screenshots.py` | rejoue les 24 scénarios de relecture (4 Core, 16 FAPI1, 4 FAPI2) contre l'OP (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver — `--base-url` = OP, `--suite-url` = base des callbacks de la suite (hébergée par défaut, `https://localhost.emobix.co.uk:8443` en local) |
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |
 | `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
 | `conformance-stale-plan-recovery.patch` | patch du driver : n'est jamais réessaie le 500 déterministe « test module not found » (1 tentative au lieu de 28) et valide la membership du plan réutilisé contre le catalogue avant le run — recréation automatique du plan stale (membership fraîche dès le premier run), plan le plus récent privilégié à la réutilisation |
@@ -377,9 +378,9 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
 | `local/setup.sh` | bootstrap du harness **auto-hébergé** : alias réseau, clone + déploiement docker de la suite, cert auto-signé + nginx mTLS `op`, config OP locale (issuer `https://op:9443`), OP uvicorn, attente de disponibilité |
 | `local/nginx-mtls.conf` | nginx de terminaison mTLS devant l'OP local : certificat client optionnel (`optional_no_ca`), extraction `$ssl_client_escaped_cert` → `X-SSL-Client-Cert` (pas de newline brute), proxy vers l'OP uvicorn de l'hôte |
 | `../.github/workflows/certification.yml` | workflow hébergé à la demande (`workflow_dispatch` uniquement) : `prepare` (deploy + captures, une fois), `plan` (les 6 plans en parallèle, un job matrix chacun, mode witness), `report` (fusion des exports en artefact — publication OIDC des résultats à venir) |
-| `../.github/workflows/certification-local.yml` | workflow **auto-hébergé strict** : déclenché à chaque merge sur `main`, sur les PR (`certification/**`) et à la demande ; 6 plans en matrix, code non nul du driver = job en échec, **publication GitHub Pages** (sauf sur les PR) |
+| `../.github/workflows/certification-local.yml` | workflow **auto-hébergé strict** : déclenché à chaque merge sur `main`, sur les PR (`certification/**`) et à la demande ; 6 plans en matrix, code non nul du driver = job en échec, job `capture` (Playwright, artefact `certification-local-screenshots`, #158), **publication GitHub Pages** (sauf sur les PR) |
 
-## Captures d'écran des modules de relecture (mode hébergé)
+## Captures d'écran des modules de relecture (modes hébergé et local)
 
 Certains modules Core s'arrêtent sur un événement **REVIEW** demandant une capture
 d'écran : sans intervention, le driver attend jusqu'au timeout
@@ -395,19 +396,33 @@ page différente de l'OP :
 | `oidcc-prompt-login` | second formulaire de connexion (`prompt=login`) |
 | `oidcc-max-age-1` | second formulaire de connexion (`max_age=1`, une seconde après le premier) |
 
-Deux étapes couvrent ce besoin :
+Les modules FAPI1 (request object défectueux) et FAPI2 (demande poussée PAR) sont
+du même ressort : leurs placeholders REVIEW attendent la page d'erreur réellement
+servie par l'OP. Deux étapes couvrent ce besoin :
 
 1. **`capture_screenshots.py`** (étape « Captures d'écran réelles des modules de
-   relecture », `continue-on-error`) : enregistre un client via RFC 7591, rejoue les
-   4 scénarios avec chromium headless contre `$OP_URL`, **contrôle chaque page avant
-   export** (statut 400 + marqueur `<code>` du motif, ou titre et
+   relecture ») : enregistre un client via RFC 7591, rejoue les **24 scénarios de
+   relecture** (les 4 modules Core du tableau, les 16 modules FAPI1, les 4 modules
+   FAPI2) avec chromium headless contre l'OP (`--base-url`), **contrôle chaque page
+   avant export** (statut 400 + marqueur `<code>` du motif, ou titre et
    `form[action="/login"]`, sans redirection de l'erreur) puis dépose
    `screenshots/<testName>.png` — PNG sous les 500 Ko imposés par l'ImageAPI de la
-   suite. Le callback des clients de capture est `https://rp.example.invalid/callback`
-   (RFC 2606) : la navigation finale échoue au DNS, erreur que le script absorbe.
-   Un échec (installation du navigateur, OP indisponible…) sort avec un code non nul,
-   l'étape passe en warning et aucun PNG n'est produit : le run n'est jamais arrêté
-   pour une capture.
+   suite. Le callback des clients Core de capture est `https://rp.example.invalid/callback`
+   (RFC 2606) : la navigation finale échoue au DNS, erreur que le script absorbe ;
+   les clients FAPI statiques utilisent le callback de la suite (`--suite-url` :
+   hébergé `https://www.certification.openid.net`, local
+   `https://localhost.emobix.co.uk:8443`) et l'`aud` des assertions est lu au
+   discovery de l'OP (issuer local `https://op:9443`). L'étape est
+   `continue-on-error` : un échec (installation du navigateur, OP indisponible…)
+   passe en warning, aucun PNG n'est produit et le run n'est jamais arrêté pour une
+   capture. Les deux workflows l'exécutent :
+   - **mode hébergé** : dans le job `prepare` contre l'instance Render, résultat
+     publié en artefact `certification-screenshots` ;
+   - **mode local** (#158) : job `capture` de `certification-local.yml` contre
+     l'OP local (`https://localhost:9443`, cert auto-signé), **une seule fois par
+     run**, artefact `certification-local-screenshots` que les jobs `plan`
+     téléchargent (env `SCREENSHOTS_DIR`, substitution du PNG de secours) et que
+     le job `report` intègre au rapport.
 2. **`conformance-screenshots.patch`** couple deux points du driver :
    - `conformance.py` : `screenshot_data_uri(test_name)` lit
      `SCREENSHOTS_DIR/<testName>.png` (répertoire fourni à l'étape des plans) ;
@@ -426,7 +441,8 @@ la preuve exhibée est désormais la page réellement servie par l'OP, téléver
 le même run. Le rapport la rend visible aux deux endroits où l'on regarde un run :
 la **page GitHub Pages** (`report.py --screenshots` recopie les PNG dans
 `_site/screenshots/` et les affiche dans la section du module) et l'artefact
-`certification-screenshots`. Sans capture réelle, la capture de secours reste ce
+`certification-screenshots` (hébergé) ou `certification-local-screenshots` (local).
+Sans capture réelle, la capture de secours reste ce
 qu'elle était : un artifice pour que la suite se termine et produise le rapport
 complet.
 

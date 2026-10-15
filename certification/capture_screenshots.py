@@ -33,6 +33,15 @@ Usage (depuis la racine du dépôt, dans la certification CI) :
     python3 certification/capture_screenshots.py \
         --base-url https://puridentityserver-certification.onrender.com
 
+Harness local (certification-local.yml, OP derrière le nginx mTLS auto-signé) :
+
+    python3 certification/capture_screenshots.py \
+        --base-url https://localhost:9443 \
+        --suite-url https://localhost.emobix.co.uk:8443
+
+Dans les deux cas, le claim ``aud`` des jetons signés porte l'issuer lu dans
+le discovery (``_resolve_issuer``), pas l'URL de navigation.
+
 Les fichiers produits sont ``<out>/<testName>.png`` ; ``fill_required_screenshots``
 du driver les lit ensuite via la variable ``SCREENSHOTS_DIR``.
 """
@@ -82,11 +91,13 @@ _REDIRECT_URI = "https://rp.example.invalid/callback"
 _CLIENT_NAME = "certification-captures"
 # Limite de l'ImageAPI de la suite : data URI <= 500 Ko.
 _MAX_IMAGE_BYTES = 500 * 1024
-# Clients statiques FAPI seedés par certification/config.render.toml : leur
-# request object (JAR) exige une ``redirect_uri`` enregistrée, celle du
-# callback de la suite pour le plan correspondant.
-_FAPI1_REDIRECT_URI = "https://www.certification.openid.net/test/a/puridentityserver-fapi1/callback"
-_FAPI2_REDIRECT_URI = "https://www.certification.openid.net/test/a/puridentityserver-fapi2/callback"
+# Clients statiques FAPI seedés (certification/config.render.toml en hébergé,
+# config OP locale du harness) : leur request object (JAR) exige une
+# ``redirect_uri`` enregistrée — celle du callback de la suite pour le plan
+# correspondant. Le préfixe dépend de l'instance de suite : --suite-url
+# (hébergée : certification.openid.net ; locale : localhost.emobix.co.uk).
+_FAPI1_CALLBACK_PATH = "/test/a/puridentityserver-fapi1/callback"
+_FAPI2_CALLBACK_PATH = "/test/a/puridentityserver-fapi2/callback"
 # Forme compacte des erreurs OAuth JSON (RFC 6749 §5.2) servies à la place
 # d'une page HTML (obligation PAR, résolution d'une référence poussée).
 _JSON_ERROR_MARKERS = {
@@ -313,18 +324,21 @@ def _now() -> int:
     return int(time.time())
 
 
-def _fapi1_claims(client: PlanSigningClient, base_url: str, mode: str) -> dict[str, object]:
+def _fapi1_claims(client: PlanSigningClient, issuer: str, mode: str) -> dict[str, object]:
     """Claims du request object FAPI1, ajustés pour le défaut du scénario.
 
     La base porte les claims exigés par FAPI1-ADV-5.2.2 (``iss``/``aud``/
-    ``exp``/``nbf``/``scope``/``nonce``/``redirect_uri``) ; ``mode`` applique
+    ``exp``/``nbf``/``scope``/``nonce``/``redirect_uri``) ; ``aud`` reçoit
+    l'issuer OP du discovery, qui peut différer de l'URL de navigation
+    (harness local : navigation sur ``localhost:9443``, issuer ``https://op:9443``)
+    ; ``mode`` applique
     le défaut module (claim retiré, valeur hors borne, ``redirect_uri``
     inconnue…). Les valeurs ``None`` retirent le claim du jeton.
     """
     now = _now()
     claims: dict[str, object | None] = {
         "iss": client.client_id,
-        "aud": base_url.rstrip("/"),
+        "aud": issuer.rstrip("/"),
         "exp": now + 300,
         "nbf": now - 60,
         "scope": "openid profile",
@@ -433,6 +447,7 @@ def _client_assertion(client: PlanSigningClient, issuer: str) -> str:
 def _push_par(
     request: APIRequestContext,
     base_url: str,
+    issuer: str,
     client: PlanSigningClient,
     code_challenge: str,
 ) -> str:
@@ -449,7 +464,7 @@ def _push_par(
             "code_challenge": code_challenge,
             "code_challenge_method": "S256",
             "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-            "client_assertion": _client_assertion(client, base_url),
+            "client_assertion": _client_assertion(client, issuer),
         },
     )
     if response.status not in (200, 201):
@@ -694,12 +709,19 @@ def _capture_core_scenarios(
         _unregister_client(context_request, base_url, client)
 
 
-def _capture_fapi1_scenarios(page: Page, base_url: str, plans_dir: Path, out: Path) -> None:
+def _capture_fapi1_scenarios(
+    page: Page,
+    base_url: str,
+    issuer: str,
+    plans_dir: Path,
+    out: Path,
+    redirect_uri: str,
+) -> None:
     """Rejoue les 16 scénarios FAPI1 (request object défectueux par module)."""
-    client = _load_plan_signing_client(plans_dir / "fapi1.json", _FAPI1_REDIRECT_URI)
+    client = _load_plan_signing_client(plans_dir / "fapi1.json", redirect_uri)
     foreign_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     for test_name, mode, error_code in _FAPI1_JAR_SCENARIOS:
-        claims = _fapi1_claims(client, base_url, mode)
+        claims = _fapi1_claims(client, issuer, mode)
         url = _fapi1_request_url(base_url, client, claims, mode, foreign_key)
         _capture_error_page(page, url, error_code, out / f"{test_name}.png")
 
@@ -708,28 +730,34 @@ def _capture_fapi2_scenarios(
     page: Page,
     request: APIRequestContext,
     base_url: str,
+    issuer: str,
     plans_dir: Path,
     out: Path,
     par_ttl_seconds: int,
     username: str,
     password: str,
+    redirect_uri: str,
 ) -> None:
     """Rejoue les 4 scénarios FAPI2 (demande poussée, ``request_uri``)."""
-    client = _load_plan_signing_client(plans_dir / "fapi2.json", _FAPI2_REDIRECT_URI)
+    client = _load_plan_signing_client(plans_dir / "fapi2.json", redirect_uri)
     other_client_id = _other_plan_client_id(plans_dir / "fapi2.json")
-    _capture_unsigned_without_par(page, base_url, client.client_id, out)
+    _capture_unsigned_without_par(page, base_url, client.client_id, out, redirect_uri)
     _, challenge = _pkce_pair()
-    _capture_par_reuse(page, request, base_url, client, challenge, out, username, password)
-    _capture_par_expired(page, request, base_url, client, challenge, out, par_ttl_seconds)
-    _capture_par_other_client(page, request, base_url, client, other_client_id, challenge, out)
+    _capture_par_reuse(page, request, base_url, issuer, client, challenge, out, username, password)
+    _capture_par_expired(page, request, base_url, issuer, client, challenge, out, par_ttl_seconds)
+    _capture_par_other_client(
+        page, request, base_url, issuer, client, other_client_id, challenge, out
+    )
 
 
-def _capture_unsigned_without_par(page: Page, base_url: str, client_id: str, out: Path) -> None:
+def _capture_unsigned_without_par(
+    page: Page, base_url: str, client_id: str, out: Path, redirect_uri: str
+) -> None:
     """FAPI2 n'admet que les demandes poussées : une requête directe est refusée."""
     url = _authorize_url(
         base_url,
         client_id,
-        extra={"redirect_uri": _FAPI2_REDIRECT_URI, "code_challenge_method": "S256"},
+        extra={"redirect_uri": redirect_uri, "code_challenge_method": "S256"},
     )
     _capture_json_error(
         page,
@@ -743,6 +771,7 @@ def _capture_par_reuse(
     page: Page,
     request: APIRequestContext,
     base_url: str,
+    issuer: str,
     client: PlanSigningClient,
     code_challenge: str,
     out: Path,
@@ -750,7 +779,7 @@ def _capture_par_reuse(
     password: str,
 ) -> None:
     """Le ``request_uri`` est à usage unique : la seconde visite est refusée."""
-    request_uri = _push_par(request, base_url, client, code_challenge)
+    request_uri = _push_par(request, base_url, issuer, client, code_challenge)
     url = _authorize_with_uri(base_url, client.client_id, request_uri)
     _complete_flow_quietly(page, url, username, password)
     _capture_json_error(page, url, "invalid_request_uri", out / f"{_FAPI2_TEST_NAMES[1]}.png")
@@ -760,13 +789,14 @@ def _capture_par_expired(
     page: Page,
     request: APIRequestContext,
     base_url: str,
+    issuer: str,
     client: PlanSigningClient,
     code_challenge: str,
     out: Path,
     par_ttl_seconds: int,
 ) -> None:
     """Un ``request_uri`` expiré (TTL PAR) est refusé (RFC 9126 §4)."""
-    request_uri = _push_par(request, base_url, client, code_challenge)
+    request_uri = _push_par(request, base_url, issuer, client, code_challenge)
     time.sleep(par_ttl_seconds + 2)
     url = _authorize_with_uri(base_url, client.client_id, request_uri)
     _capture_json_error(page, url, "invalid_request_uri", out / f"{_FAPI2_TEST_NAMES[2]}.png")
@@ -776,15 +806,36 @@ def _capture_par_other_client(
     page: Page,
     request: APIRequestContext,
     base_url: str,
+    issuer: str,
     client: PlanSigningClient,
     other_client_id: str,
     code_challenge: str,
     out: Path,
 ) -> None:
     """La référence poussée n'est résoluble que pour le client qui l'a émise."""
-    request_uri = _push_par(request, base_url, client, code_challenge)
+    request_uri = _push_par(request, base_url, issuer, client, code_challenge)
     url = _authorize_with_uri(base_url, other_client_id, request_uri)
     _capture_json_error(page, url, "invalid_request", out / f"{_FAPI2_TEST_NAMES[3]}.png")
+
+
+def _resolve_issuer(request: APIRequestContext, base_url: str) -> str:
+    """Issuer OP lu dans le document de discovery, ``base_url`` en repli.
+
+    Peut différer de l'URL de navigation : le harness local sert l'OP sur
+    ``https://localhost:9443`` (nginx mTLS) alors que son issuer configuré
+    est ``https://op:9443`` — sans ce repli, tous les ``aud`` signés
+    (request objects FAPI1, assertions client FAPI2) sont refusés.
+    """
+    try:
+        response = request.get(f"{base_url.rstrip('/')}/.well-known/openid-configuration")
+        if response.ok:
+            issuer = response.json().get("issuer")
+            if isinstance(issuer, str) and issuer:
+                return issuer.rstrip("/")
+        _LOGGER.warning("discovery HTTP %s : aud = base_url", response.status)
+    except Error as error:
+        _LOGGER.warning("discovery inaccessible (%s) : aud = base_url", error)
+    return base_url.rstrip("/")
 
 
 def capture_all(
@@ -796,6 +847,8 @@ def capture_all(
     *,
     plans_dir: Path,
     par_ttl_seconds: int,
+    fapi1_redirect: str,
+    fapi2_redirect: str,
 ) -> list[Path]:
     """Rejoue les 24 scénarios et écrit les PNG nommés ``<testName>.png``.
 
@@ -806,11 +859,19 @@ def capture_all(
     out.mkdir(parents=True, exist_ok=True)
     browser = playwright.chromium.launch()
     try:
-        context = browser.new_context(viewport={"width": 1024, "height": 768})
+        # ignore_https_errors : le harness local (certification-local.yml)
+        # expose l'OP sur un certificat auto-signé (nginx mTLS) — sans effet
+        # sur l'instance Render, dont le certificat est valide.
+        context = browser.new_context(
+            viewport={"width": 1024, "height": 768},
+            ignore_https_errors=True,
+        )
         page = context.new_page()
+        issuer = _resolve_issuer(context.request, base_url)
+        _LOGGER.info("issuer OP : %s", issuer)
         _capture_core_scenarios(page, context.request, base_url, out, username, password)
         try:
-            _capture_fapi1_scenarios(page, base_url, plans_dir, out)
+            _capture_fapi1_scenarios(page, base_url, issuer, plans_dir, out, fapi1_redirect)
         except Exception as error:
             _LOGGER.error("Captures fapi1 impossibles : %s", error)
         try:
@@ -818,11 +879,13 @@ def capture_all(
                 page,
                 context.request,
                 base_url,
+                issuer,
                 plans_dir,
                 out,
                 par_ttl_seconds,
                 username,
                 password,
+                fapi2_redirect,
             )
         except Exception as error:
             _LOGGER.error("Captures fapi2 impossibles : %s", error)
@@ -840,6 +903,14 @@ def main(argv: list[str] | None = None) -> int:
         help="URL publique de l'OP (défaut : instance de certification Render)",
     )
     parser.add_argument("--out", default="screenshots", help="répertoire des PNG")
+    parser.add_argument(
+        "--suite-url",
+        default="https://www.certification.openid.net",
+        help=(
+            "Base des callbacks de la suite (.../test/a/<plan>/callback) : "
+            "hébergée (défaut) ou harness local https://localhost.emobix.co.uk:8443"
+        ),
+    )
     parser.add_argument("--username", default="alice@example.com", help="compte de connexion")
     parser.add_argument("--password", default="password", help="mot de passe du compte")
     parser.add_argument(
@@ -857,6 +928,9 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     out = Path(args.out)
+    suite_base = args.suite_url.rstrip("/")
+    fapi1_redirect = f"{suite_base}{_FAPI1_CALLBACK_PATH}"
+    fapi2_redirect = f"{suite_base}{_FAPI2_CALLBACK_PATH}"
     expected = {f"{name}.png" for name in _CORE_TEST_NAMES}
     expected |= {f"{name}.png" for name, _mode, _error in _FAPI1_JAR_SCENARIOS}
     expected |= {f"{name}.png" for name in _FAPI2_TEST_NAMES}
@@ -870,6 +944,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.password,
                 plans_dir=Path(args.plans_dir),
                 par_ttl_seconds=args.par_ttl_seconds,
+                fapi1_redirect=fapi1_redirect,
+                fapi2_redirect=fapi2_redirect,
             )
     except Exception as error:
         _LOGGER.error("Capture impossible : %s", error)
