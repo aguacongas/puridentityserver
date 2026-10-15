@@ -40,6 +40,13 @@ mkdir -p "$LOCAL_DIR"
 cd "$REPO_ROOT"
 log() { printf '[setup] %s\n' "$*"; }
 
+# Compat git-bash/MSYS (Windows) : openssl et Python natifs ne comprennent
+# pas les chemins POSIX (/c/…) — les convertit en forme Windows (no-op
+# sous Linux, où cygpath est absent).
+winpath() {
+  if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+}
+
 # ---1) Alias réseau : la suite génère ses callbacks sur localhost.emobix.co.uk.
 # Le driver (hôte) doit y accéder comme le navigateur (conteneur) : on pointe
 # l'alias vers127.0.0.1 côté hôte (Docker Desktop le fait déjà, Linux non).
@@ -90,14 +97,19 @@ SUITE_TLS_CERT="$LOCAL_DIR/suite-tls.crt"
 SUITE_TLS_KEY="$LOCAL_DIR/suite-tls.key"
 SUITE_TRUST="$LOCAL_DIR/suite-trust.pem"
 log "génération du certificat SAN pour $SUITE_HOSTNAME (substitution dans $SUITE_NGINX)"
-openssl req -x509 -nodes -days 2 -newkey rsa:2048 \
-  -keyout "$SUITE_TLS_KEY" -out "$SUITE_TLS_CERT" \
+# MSYS_NO_PATHCONV : sous git-bash, `-subj /CN=…` serait sinon converti en
+# chemin Windows (C:/Program Files/Git/CN=…) et openssl refuserait le DN ;
+# les chemins de fichiers sont passés déjà convertis via winpath.
+MSYS_NO_PATHCONV=1 openssl req -x509 -nodes -days 2 -newkey rsa:2048 \
+  -keyout "$(winpath "$SUITE_TLS_KEY")" -out "$(winpath "$SUITE_TLS_CERT")" \
   -subj "/CN=$SUITE_HOSTNAME" \
   -addext "subjectAltName=DNS:$SUITE_HOSTNAME,DNS:localhost,IP:127.0.0.1" \
   2>/dev/null
-docker cp "$SUITE_TLS_CERT" "$SUITE_NGINX:/etc/ssl/certs/nginx-selfsigned.crt"
-docker cp "$SUITE_TLS_KEY" "$SUITE_NGINX:/etc/ssl/private/nginx-selfsigned.key"
-docker exec "$SUITE_NGINX" chmod 600 /etc/ssl/private/nginx-selfsigned.key
+docker cp "$(winpath "$SUITE_TLS_CERT")" "$SUITE_NGINX:/etc/ssl/certs/nginx-selfsigned.crt"
+docker cp "$(winpath "$SUITE_TLS_KEY")" "$SUITE_NGINX:/etc/ssl/private/nginx-selfsigned.key"
+# MSYS_NO_PATHCONV : les arguments de docker exec sont des chemins CÔTÉ
+# conteneur — la conversion git-bash les réécrirait en /c/… Windows.
+MSYS_NO_PATHCONV=1 docker exec "$SUITE_NGINX" chmod 600 /etc/ssl/private/nginx-selfsigned.key
 log "rechargement du nginx de la suite"
 deadline=$((SECONDS + 60))
 until docker exec "$SUITE_NGINX" nginx -s reload >/dev/null 2>&1; do
@@ -119,8 +131,8 @@ log "confiance OP → suite écrite dans $SUITE_TRUST (SAN $SUITE_HOSTNAME)"
 # ---4) Certificat serveur auto-signé pour l'OP nginx --------------------------
 if [ ! -f "$LOCAL_DIR/nginx.crt" ]; then
   log "génération du certificat serveur auto-signé (op, localhost, host.docker.internal)"
-  openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
-    -keyout "$LOCAL_DIR/nginx.key" -out "$LOCAL_DIR/nginx.crt" \
+  MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
+    -keyout "$(winpath "$LOCAL_DIR/nginx.key")" -out "$(winpath "$LOCAL_DIR/nginx.crt")" \
     -subj "/CN=$OP_ALIAS" \
     -addext "subjectAltName=DNS:$OP_ALIAS,DNS:localhost,DNS:host.docker.internal,IP:127.0.0.1" \
     2>/dev/null
@@ -133,9 +145,9 @@ docker run -d --name "$OP_ALIAS-mtls" \
   -p "$MTLS_PORT:$MTLS_PORT" \
   --add-host host.docker.internal:host-gateway \
   ${SUITE_NET:+--network "$SUITE_NET" --network-alias "$OP_ALIAS"} \
-  -v "$REPO_ROOT/certification/local/nginx-mtls.conf:/etc/nginx/nginx.conf:ro" \
-  -v "$LOCAL_DIR/nginx.crt:/etc/nginx/tls/nginx.crt:ro" \
-  -v "$LOCAL_DIR/nginx.key:/etc/nginx/tls/nginx.key:ro" \
+  -v "$(winpath "$REPO_ROOT/certification/local/nginx-mtls.conf"):/etc/nginx/nginx.conf:ro" \
+  -v "$(winpath "$LOCAL_DIR/nginx.crt"):/etc/nginx/tls/nginx.crt:ro" \
+  -v "$(winpath "$LOCAL_DIR/nginx.key"):/etc/nginx/tls/nginx.key:ro" \
   nginx:alpine >/dev/null
 
 # ---6) Config OP locale (issuer op:9443, callbacks suite locale, SQLite) ------
@@ -143,7 +155,7 @@ log "génération de la config OP locale"
 sed \
   -e "s|issuer = \"http://127.0.0.1:8000\"|issuer = \"https://$OP_ALIAS:$MTLS_PORT\"|" \
   -e "s|https://www.certification.openid.net|https://$SUITE_HOSTNAME:$SUITE_PORT|g" \
-  -e "s|storage_dsn = \"sqlite:///puridentityserver.db\"|storage_dsn = \"sqlite:///$LOCAL_DIR/op.db\"|" \
+  -e "s|storage_dsn = \"sqlite:///puridentityserver.db\"|storage_dsn = \"sqlite:///$(winpath "$LOCAL_DIR/op.db")\"|" \
   "$REPO_ROOT/certification/config.render.toml" > "$LOCAL_DIR/op-config.toml"
 
 # ---7) OP uvicorn (hôte) ------------------------------------------------------
@@ -154,11 +166,11 @@ log "démarrage de l'OP (uvicorn :$OP_PORT, issuer https://$OP_ALIAS:$MTLS_PORT)
 # request_uri sur localhost.emobix.co.uk (→127.0.0.1), destination loopback
 # refusée par la garde anti-SSRF tant que l'OP bind 0.0.0.0 (issue #152).
 # SSL_CERT_FILE : certificat SAN de la suite (étape 3.5) + bundle système.
-PURIDENTITYSERVER_SETTINGS_FILE="$LOCAL_DIR/op-config.toml" \
+PURIDENTITYSERVER_SETTINGS_FILE="$(winpath "$LOCAL_DIR/op-config.toml")" \
 PURIDENTITYSERVER_HOST="$OP_HOST" \
 PURIDENTITYSERVER_PORT="$OP_PORT" \
 PURIDENTITYSERVER_REQUEST_URI_ALLOW_LOCAL_TARGETS=true \
-SSL_CERT_FILE="$SUITE_TRUST" \
+SSL_CERT_FILE="$(winpath "$SUITE_TRUST")" \
   nohup uv run python -m puridentityserver \
     >"$LOCAL_DIR/op.log" 2>&1 & echo $! > "$LOCAL_DIR/op.pid"
 
