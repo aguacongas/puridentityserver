@@ -29,6 +29,7 @@ from puridentityserver.infrastructure.client_tls import (
     extract_client_certificate,
 )
 from puridentityserver.interfaces.api.dpop_proof import extract_dpop_proof
+from puridentityserver.interfaces.api.forwarded import public_url
 from puridentityserver.interfaces.api.security import split_authorization
 
 #: En-tête d'interaction FAPI échoyé sur les réponses de la ressource.
@@ -38,8 +39,15 @@ _FAPI_INTERACTION_ID = "x-fapi-interaction-id"
 def protected_resource_router(
     usecase: ProtectedResourceUseCase,
     client_certificate_headers: ClientCertificateHeaderNames | None = None,
+    *,
+    trust_proxy_headers: bool = False,
 ) -> APIRouter:
-    """Construit le routeur FastAPI exposant ``GET /protected-resource``."""
+    """Construit le routeur FastAPI exposant ``GET /protected-resource``.
+
+    ``trust_proxy_headers`` active la reconstruction de l'URL publique
+    derrière un reverse proxy (claim ``htu`` DPoP, RFC 9449 §4.3) — voir
+    ``Settings.trust_proxy_headers``.
+    """
     certificate_headers = client_certificate_headers or ClientCertificateHeaderNames()
     router = APIRouter(tags=["resource"])
 
@@ -82,7 +90,7 @@ def protected_resource_router(
                 tls_certificate=extract_client_certificate(request, certificate_headers),
                 auth_scheme=scheme,
                 dpop_proof=proof,
-                htu=_htu(request),
+                htu=public_url(request, trust_proxy_headers=trust_proxy_headers),
                 htm=request.method,
             )
         )
@@ -91,11 +99,6 @@ def protected_resource_router(
         return _success_response(result, interaction_id)
 
     return router
-
-
-def _htu(request: Request) -> str:
-    """URL cible de la preuve DPoP, sans query string ni fragment (RFC 9449 §4.3)."""
-    return str(request.url).partition("?")[0].partition("#")[0]
 
 
 def _interaction_id(request: Request) -> str:

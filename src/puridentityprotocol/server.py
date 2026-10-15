@@ -494,11 +494,19 @@ class ProtocolDependencies:
             )
         if self.settings.ciba_approval_enabled:
             app.include_router(ciba_approval_router(self.ciba_approval_usecase))
-        app.include_router(userinfo_router(self.userinfo_usecase, self.client_certificate_headers))
+        app.include_router(
+            userinfo_router(
+                self.userinfo_usecase,
+                self.client_certificate_headers,
+                trust_proxy_headers=self.settings.trust_proxy_headers,
+            )
+        )
         if self.protected_resource_usecase is not None:
             app.include_router(
                 protected_resource_router(
-                    self.protected_resource_usecase, self.client_certificate_headers
+                    self.protected_resource_usecase,
+                    self.client_certificate_headers,
+                    trust_proxy_headers=self.settings.trust_proxy_headers,
                 )
             )
         app.include_router(introspect_router(self.introspect_usecase))

@@ -887,7 +887,7 @@ class TestProtectedResourceDPoP:
     _RESOURCE_URL = "http://testserver/protected-resource"
 
     @staticmethod
-    def _app(*, require_dpop: bool = True) -> FastAPI:
+    def _app(*, require_dpop: bool = True, trust_proxy_headers: bool = False) -> FastAPI:
         seed = {**TestProtectedResourceDPoP._SEED, "require_dpop": require_dpop}
         return create_app(
             Settings(
@@ -897,6 +897,7 @@ class TestProtectedResourceDPoP:
                 clients_seed=(seed,),
                 api_resources_seed=(),
                 protected_resource_enabled=True,
+                trust_proxy_headers=trust_proxy_headers,
             )
         )
 
@@ -1044,6 +1045,53 @@ class TestProtectedResourceDPoP:
             )
 
         assert response.status_code == 200
+
+    def test_accepts_proof_for_public_url_behind_trusted_proxy(self) -> None:
+        """RFC 9449 §4.3 : ``htu`` reconstruit depuis ``X-Forwarded-*`` (issue #153)."""
+        key = ec.generate_private_key(ec.SECP256R1())
+        with TestClient(self._app(trust_proxy_headers=True)) as client:
+            token = self._access_token(client, key)
+            proof = _proof(
+                key,
+                htu="https://op:9443/protected-resource",
+                method="GET",
+                ath=access_token_hash(token),
+            )
+            response = client.get(
+                "/protected-resource",
+                headers={
+                    "Authorization": f"DPoP {token}",
+                    "DPoP": proof,
+                    "X-Forwarded-Proto": "https",
+                    "X-Forwarded-Host": "op:9443",
+                },
+            )
+
+        assert response.status_code == 200
+
+    def test_ignores_forwarded_headers_when_trust_is_off(self) -> None:
+        """Sans ``trust_proxy_headers``, les en-têtes forgeables sont ignorés."""
+        key = ec.generate_private_key(ec.SECP256R1())
+        with TestClient(self._app()) as client:
+            token = self._access_token(client, key)
+            proof = _proof(
+                key,
+                htu="https://op:9443/protected-resource",
+                method="GET",
+                ath=access_token_hash(token),
+            )
+            response = client.get(
+                "/protected-resource",
+                headers={
+                    "Authorization": f"DPoP {token}",
+                    "DPoP": proof,
+                    "X-Forwarded-Proto": "https",
+                    "X-Forwarded-Host": "op:9443",
+                },
+            )
+
+        assert response.status_code == 401
+        assert response.json()["error"] == "invalid_dpop_proof"
 
 
 class TestRegistrationDPoP:
