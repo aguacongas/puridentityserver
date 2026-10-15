@@ -98,7 +98,7 @@ jobs:
           fi
           entries=()
           for p in "${plans[@]}"; do
-            entries+=("{\"plan\":\"$p\",\"selector\":\"$(selector_for "$p")\"}")
+            entries+=("{\"plan\":\"$p\",\"selector\":\"$(selector_for "$p")\",\"file\":\"$p.json\"}")
           done
           echo "matrix=$(printf '{"include":[%s]}' "$(IFS=,; echo "${entries[*]}")")" >> "$GITHUB_OUTPUT"
 
