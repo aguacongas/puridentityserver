@@ -72,6 +72,50 @@ if [ -n "$SUITE_NGINX" ]; then
 fi
 log "réseau de la suite : ${SUITE_NET:-<inconnu>}"
 
+# ---3.5) Certificat TLS SAN du nginx de la suite (fetch request_uri par l'OP) --
+# Double blocage issue #152 : (1) la garde anti-SSRF refuse localhost.emobix.co.uk
+# tant que l'OP bind 0.0.0.0 (corrigé par PURIDENTITYSERVER_REQUEST_URI_ALLOW_
+# LOCAL_TARGETS) ; (2) le cert cuit dans l'image de la suite n'a que CN=localhost
+# SANS SAN : le hostname matching OpenSSL/Python refuse de le valider pour
+# localhost.emobix.co.uk, même en trusté → échec silencieux du fetch → 400.
+# On génère donc un cert SAN, on le substitue dans le conteneur nginx (chemins
+# lus dans nginx.conf de la suite) et on recharge nginx. L'OP reçoit le même
+# cert via SSL_CERT_FILE (concaténé au bundle système, puisque SSL_CERT_FILE
+# remplace le magasin par défaut).
+[ -n "$SUITE_NGINX" ] || {
+  echo "::error::conteneur nginx de la suite introuvable"
+  exit 1
+}
+SUITE_TLS_CERT="$LOCAL_DIR/suite-tls.crt"
+SUITE_TLS_KEY="$LOCAL_DIR/suite-tls.key"
+SUITE_TRUST="$LOCAL_DIR/suite-trust.pem"
+log "génération du certificat SAN pour $SUITE_HOSTNAME (substitution dans $SUITE_NGINX)"
+openssl req -x509 -nodes -days 2 -newkey rsa:2048 \
+  -keyout "$SUITE_TLS_KEY" -out "$SUITE_TLS_CERT" \
+  -subj "/CN=$SUITE_HOSTNAME" \
+  -addext "subjectAltName=DNS:$SUITE_HOSTNAME,DNS:localhost,IP:127.0.0.1" \
+  2>/dev/null
+docker cp "$SUITE_TLS_CERT" "$SUITE_NGINX:/etc/ssl/certs/nginx-selfsigned.crt"
+docker cp "$SUITE_TLS_KEY" "$SUITE_NGINX:/etc/ssl/private/nginx-selfsigned.key"
+docker exec "$SUITE_NGINX" chmod 600 /etc/ssl/private/nginx-selfsigned.key
+log "rechargement du nginx de la suite"
+deadline=$((SECONDS + 60))
+until docker exec "$SUITE_NGINX" nginx -s reload >/dev/null 2>&1; do
+  [ $SECONDS -lt $deadline ] || {
+    echo "::error::reload du nginx de la suite impossible"
+    exit 1
+  }
+  sleep 3
+done
+cp "$SUITE_TLS_CERT" "$SUITE_TRUST"
+for bundle in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt; do
+  if [ -f "$bundle" ]; then
+    cat "$bundle" >> "$SUITE_TRUST"
+    break
+  fi
+done
+log "confiance OP → suite écrite dans $SUITE_TRUST (SAN $SUITE_HOSTNAME)"
+
 # ---4) Certificat serveur auto-signé pour l'OP nginx --------------------------
 if [ ! -f "$LOCAL_DIR/nginx.crt" ]; then
   log "génération du certificat serveur auto-signé (op, localhost, host.docker.internal)"
@@ -106,9 +150,15 @@ sed \
 log "installation des dépendances OP (uv sync --extra sql)"
 ( cd "$REPO_ROOT" && uv sync --extra sql --locked >/dev/null )
 log "démarrage de l'OP (uvicorn :$OP_PORT, issuer https://$OP_ALIAS:$MTLS_PORT)"
+# PURIDENTITYSERVER_REQUEST_URI_ALLOW_LOCAL_TARGETS : la suite sert le document
+# request_uri sur localhost.emobix.co.uk (→127.0.0.1), destination loopback
+# refusée par la garde anti-SSRF tant que l'OP bind 0.0.0.0 (issue #152).
+# SSL_CERT_FILE : certificat SAN de la suite (étape 3.5) + bundle système.
 PURIDENTITYSERVER_SETTINGS_FILE="$LOCAL_DIR/op-config.toml" \
 PURIDENTITYSERVER_HOST="$OP_HOST" \
 PURIDENTITYSERVER_PORT="$OP_PORT" \
+PURIDENTITYSERVER_REQUEST_URI_ALLOW_LOCAL_TARGETS=true \
+SSL_CERT_FILE="$SUITE_TRUST" \
   nohup uv run python -m puridentityserver \
     >"$LOCAL_DIR/op.log" 2>&1 & echo $! > "$LOCAL_DIR/op.pid"
 
