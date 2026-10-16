@@ -19,7 +19,10 @@ une capture authentique de la page servie par l'OP :
    ``alg=none``/``RS256``, clé inconnue, request object absent, ``redirect_uri``
    non enregistrée — signé avec la clé privée du client statique seedé par
    ``certification/config.render.toml`` (l'enregistrement dynamique ne crée
-   pas de client ``fapi_enabled``) ;
+   pas de client ``fapi_enabled``) ; la requête porte la ``redirect_uri``
+   enregistrée et ``response_type=code id_token`` : l'erreur repart en
+   fragment de la callback (RFC 6749 §4.2.2.1, issue #178), sauf pour les
+   deux scénarios servis en page HTML (scénarios « page ») ;
 3. les 4 scénarios FAPI2 : requête signée sans PAR, réutilisation d'un
    ``request_uri``, ``request_uri`` expiré, ``request_uri`` d'un autre client.
 
@@ -108,8 +111,9 @@ _CORE_TEST_NAMES = (
 )
 
 #: Modules FAPI1 du plan fapi1-advanced-final laissés en REVIEW : un request
-#: object défectueux par module, servis en page HTML 400 portant le ``<code>``
-#: du motif (RFC 6749 §4.1.2.1, RFC 9101 §6.3).
+#: object défectueux par module (RFC 6749 §4.1.2.1, RFC 9101 §6.3). Depuis
+#: l'issue #178, l'erreur repart en redirection (fragment, response_type
+#: ``code id_token``) quand la query porte une ``redirect_uri`` enregistrée.
 _FAPI1_JAR_SCENARIOS: tuple[tuple[str, str, str], ...] = (
     (
         "fapi1-advanced-final-ensure-authorization-request-without-request-object-fails",
@@ -191,6 +195,20 @@ _FAPI1_JAR_SCENARIOS: tuple[tuple[str, str, str], ...] = (
         "rs256",
         "invalid_request_object",
     ),
+)
+
+#: Modules FAPI1 servis en **page HTML** (la query du scénario ne porte pas de
+#: ``redirect_uri`` enregistrée, ou porte une URI non enregistrée — la RFC
+#: 6749 §4.1.2.1 interdit alors de rediriger) ; tous les autres modes
+#: repartent en fragment de la callback (issue #178). Les deux tests en mode
+#: « sans redirect_uri » se distinguent par leur nom : la suite retire
+#: l'URI du transport pour ``ensure-redirect-uri-in-authorization-request``,
+#: elle ne retire que le claim du request object pour ``…-without-redirect-uri-fails``.
+_FAPI1_PAGE_TEST_NAMES = frozenset(
+    {
+        "fapi1-advanced-final-ensure-redirect-uri-in-authorization-request",
+        "fapi1-advanced-final-ensure-registered-redirect-uri",
+    }
 )
 
 #: Modules FAPI2 du plan fapi2-security-profile-final laissés en REVIEW : les
@@ -402,10 +420,20 @@ def _fapi1_request_url(
     claims: dict[str, object],
     mode: str,
     foreign_key: object,
+    page_mode: bool,
 ) -> str:
-    """URL ``/authorize`` du scénario FAPI1 (``request`` par valeur, ou sans)."""
+    """URL ``/authorize`` du scénario FAPI1 (``request`` par valeur, ou sans).
+
+    Comme l'envoie la suite (issue #178) : la ``redirect_uri`` enregistrée et
+    ``response_type=code id_token`` figurent dans la query des scénarios à
+    redirection ; les scénarios « page » (:data:`_FAPI1_PAGE_TEST_NAMES`)
+    n'en portent aucune de valide.
+    """
     jar = _fapi1_jar(client, claims, mode, foreign_key)
     params = {"client_id": client.client_id}
+    if not page_mode:
+        params["redirect_uri"] = client.redirect_uri
+        params["response_type"] = "code id_token"
     if jar is not None:
         params["request"] = jar
     return f"{base_url.rstrip('/')}/authorize?{urlencode(params)}"
@@ -740,13 +768,23 @@ def _capture_fapi1_scenarios(
     out: Path,
     redirect_uri: str,
 ) -> None:
-    """Rejoue les 16 scénarios FAPI1 (request object défectueux par module)."""
+    """Rejoue les 16 scénarios FAPI1 (request object défectueux par module).
+
+    Redirection vers la callback en fragment (``response_type`` hybride,
+    issue #178) hors :data:`_FAPI1_PAGE_TEST_NAMES`, page HTML 400 pour les
+    deux scénarios « page ».
+    """
     client = _load_plan_signing_client(plans_dir / "fapi1.json", redirect_uri)
     foreign_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     for test_name, mode, error_code in _FAPI1_JAR_SCENARIOS:
         claims = _fapi1_claims(client, issuer, mode)
-        url = _fapi1_request_url(base_url, client, claims, mode, foreign_key)
-        _capture_error_page(page, url, error_code, out / f"{test_name}.png")
+        page_mode = test_name in _FAPI1_PAGE_TEST_NAMES
+        url = _fapi1_request_url(base_url, client, claims, mode, foreign_key, page_mode)
+        path = out / f"{test_name}.png"
+        if page_mode:
+            _capture_error_page(page, url, error_code, path)
+        else:
+            _capture_redirect_error(page, url, redirect_uri, error_code, path)
 
 
 def _capture_fapi2_scenarios(

@@ -620,7 +620,8 @@ def _left_half_hash(value: str) -> str:
 def test_seed_fapi_enabled_is_parsed() -> None:
     """Le drapeau ``fapi_enabled`` du seed active le profil (composition)."""
     with TestClient(_app()) as client:
-        # Sans request object : page d'erreur 400, aucune redirection.
+        # Sans request object : invalid_request renvoyé au client (issue #178),
+        # la redirect_uri du client étant enregistrée.
         response = client.get(
             "/authorize",
             params={
@@ -633,9 +634,9 @@ def test_seed_fapi_enabled_is_parsed() -> None:
             follow_redirects=False,
         )
 
-    assert response.status_code == 400
-    assert "invalid_request" in response.text
-    assert "FAPI" in response.text
+    assert response.status_code == 302
+    assert response.headers["location"].startswith(_REDIRECT_URI)
+    assert "error=invalid_request" in response.headers["location"]
 
 
 def test_authorize_hybrid_flow_with_signed_jar_succeeds() -> None:

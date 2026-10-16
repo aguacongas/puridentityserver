@@ -86,10 +86,16 @@ _FAPI_TRANSPORT_KEYS = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class RequestObjectError:
-    """Refus de traiter le request object (RFC 6749 §3.1.1, RFC 9101 §4)."""
+    """Refus de traiter le request object (RFC 6749 §3.1.1, RFC 9101 §4).
+
+    ``state`` rétablit au mieux la valeur portée par le jeton refusé : elle
+    doit être réaffichée dans la réponse d'erreur (RFC 6749 §4.1.2.1,
+    §4.2.2.1) — lecture seule du payload, sans rapport de confiance.
+    """
 
     error: str
     error_description: str
+    state: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,23 +151,29 @@ class RequestObjectResolver:
         """
         document, error = await self._document(params)
         if error is not None:
-            return error
+            return _with_state(error, document or params.get("request", ""))
         client = await self._find_client(params.get("client_id", ""))
         if not document:
             if client is not None and client.fapi_enabled:
-                return RequestObjectError(
-                    error="invalid_request",
-                    error_description="request object obligatoire pour un client "
-                    "FAPI1 (FAPI1-ADV-5.2.2-1)",
+                return _with_state(
+                    RequestObjectError(
+                        error="invalid_request",
+                        error_description="request object obligatoire pour un client "
+                        "FAPI1 (FAPI1-ADV-5.2.2-1)",
+                    ),
+                    "",
                 )
             return dict(params)
         if client is None:
             client = await self._find_client(_unverified_iss(document))
         if client is not None and client.fapi_enabled:
-            return await self._resolve_fapi(params, document, client)
+            resolved = await self._resolve_fapi(params, document, client)
+            if isinstance(resolved, RequestObjectError):
+                return _with_state(resolved, document)
+            return resolved
         claims, error = _claims(document, self._config.signing_algorithms)
         if error is not None:
-            return error
+            return _with_state(error, document)
         return _merge(params, claims)
 
     async def _resolve_fapi(
@@ -309,11 +321,33 @@ def _unverified_iss(document: str) -> str:
     ``client_id`` du transport est absent, avant toute vérification de
     signature (lecture seule du payload encodé).
     """
+    return _unverified_claim(document, "iss")
+
+
+def _with_state(error: RequestObjectError, document: str) -> RequestObjectError:
+    """Rattache au refus le ``state`` lisible dans le jeton, s'il y en a un.
+
+    L'écho du ``state`` dans la redirection d'erreur (RFC 6749 §4.1.2.1) ne
+    fait porter aucune décision à ce claim non vérifié : il est renvoyé au
+    seul client qui l'a émis, vers sa ``redirect_uri`` enregistrée.
+    """
+    state = _unverified_claim(document, "state")
+    if not state or state == error.state:
+        return error
+    return RequestObjectError(
+        error=error.error,
+        error_description=error.error_description,
+        state=state,
+    )
+
+
+def _unverified_claim(document: str, name: str) -> str:
+    """Retourne un claim string non vérifié du payload JWT, ``""`` s'il est absent."""
     segments = document.split(".")
     if len(segments) not in (2, 3):
         return ""
     payload = _decode_segment(segments[1])
     if payload is None:
         return ""
-    issuer = payload.get("iss")
-    return issuer if isinstance(issuer, str) else ""
+    value = payload.get(name)
+    return value if isinstance(value, str) else ""
