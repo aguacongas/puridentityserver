@@ -31,6 +31,33 @@ uv run python -m pytest -p no:cacheprovider -q   # tests + couverture >= 80 % (9
   (harness de parcours) vit dans `samples/oidc_harness/` et sert les smoke
   tests `samples/fapi1-client/` et `samples/fapi2-client/`.
 
+### Tests de certification en local (au cas où)
+
+Procédure établie pour rejouer les plans sans passer par la CI — se lancer
+depuis **git-bash** (jamais PowerShell) :
+
+```bash
+bash certification/local/setup.sh            # bootstrap idempotent : clone de la suite, docker, OP, nginx mTLS
+bash certification/local/run-plan.sh basic   # 1 plan en sortie stricte (log + exports)
+bash certification/local/down.sh             # arrêt du harness (--purge : conteneurs + clone)
+```
+
+- Plans : `basic | implicit | hybrid | ciba | fapi1 | fapi2`. `run-plan.sh` fait la
+  readiness (bootstrap via `setup.sh` si le harness est absent), applique les 5 patches
+  driver par `prepare-suite.sh` (idempotent), substitue les URLs locales puis joue le
+  driver officiel en sortie stricte ; log : `.harness-local/last-<plan>.log`,
+  exports : `.harness-local/results/<plan>` (ou `--export-dir`).
+- Captures REVIEW : produire les 24 PNG avec
+  `python certification/capture_screenshots.py --base-url https://localhost:9443 --out <dir>`,
+  puis `SCREENSHOTS_DIR=<dir> bash certification/local/run-plan.sh <plan>` ; sans
+  `SCREENSHOTS_DIR`, le driver retombe sur le PNG de secours (mode witness) ; avec,
+  toute capture absente le fait échouer (issue #161, comportement CI attendu).
+- La CI (`certification-local.yml`) rejoue ces mêmes scripts : toute évolution de la
+  procédure doit rester alignée entre local et workflow.
+- **Il n'est pas interdit d'améliorer cette procédure** si un besoin se manifeste
+  (script, étape, documentation) : faire évoluer les scripts locaux et tenir
+  AGENTS.md + `certification/README.md` à jour en conséquence.
+
 ## Complexité cognitive (SonarCloud S3776) — piège récurrent
 
 Le linter SonarCompute Python `python:S3776` compte la complexité cognitive de chaque

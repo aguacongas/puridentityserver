@@ -13,11 +13,12 @@ name: Certification OIDC (Local)
 # main (workflow_dispatch) : les PR publient uniquement leur rapport en
 # artefact.
 #
-# Captures d'écran (#158) : le job `capture` rejoue une fois par run les 24
+# Captures d'écran (#158, #161) : le job `capture` rejoue une fois par run les 24
 # scénarios REVIEW contre l'OP local (Playwright) et téléverse l'artefact
 # `certification-local-screenshots` ; les jobs `plan` le substituent au PNG de
 # secours (SCREENSHOTS_DIR) et le job `report` intègre les images au rapport
-# publié. Job non bloquant : capture en échec = rapport sans images.
+# publié. Job BLOQUANT (issue #161) : une capture absente ou invalide fait
+# échouer le run (aucun repli silencieux en CI).
 #
 # Sortie STRICTE (#130) : le code retour non nul du driver (modules FAILED,
 # INTERRUPTED / did-not-complete, warnings inattendus) fait échouer le job
@@ -111,11 +112,9 @@ jobs:
   capture:
     name: Captures d'écran réelles (Playwright)
     runs-on: ubuntu-latest
-    # Non bloquant (comme le job prepare hébergé, issues #138/#158) : une
-    # capture en échec laisse l'artefact absent ou partiel, les jobs plan
-    # téléversent le PNG de secours et le rapport est publié sans image plutôt
-    # qu'en erreur.
-    continue-on-error: true
+    # Bloquant (issue #161) : le script exige les 24 captures et sort en code
+    # non nul dès qu'une scène échoue ; sans artefact, les jobs plan ne peuvent
+    # pas fournir les captures REVIEW exigées et le run échoue.
     steps:
       - name: Checkout du dépôt
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -167,9 +166,10 @@ jobs:
   plan:
     name: Plan ${{ matrix.plan }} (local)
     needs: [matrix, capture]
-    # Même condition que le job report : les plans jouent même si la capture
-    # a échoué (artefact absent → PNG de secours, cf. issue #158).
-    if: ${{ always() && needs.matrix.result == 'success' }}
+    # Sans `always()` : un job `capture` rouge (captures REVIEW manquantes,
+    # issue #161) fait échouer le run et les plans sont ignorés — rien n'a à
+    # jouer sans les captures exigées.
+    if: ${{ needs.matrix.result == 'success' && needs.capture.result == 'success' }}
     runs-on: ubuntu-latest
     strategy:
       # Chaque plan continue même si un autre échoue : le rapport consolidé
@@ -228,9 +228,9 @@ jobs:
         run: bash certification/local/prepare-suite.sh
 
       - name: Récupération des captures d'écran réelles (artefact capture)
-        # Capture échouée ou absente = pas d'artefact : le driver retombe sur
-        # son PNG de secours (patch) — identique au job hébergé.
-        continue-on-error: true
+        # Capture obligatoire (issue #161) : l'artefact existe dès que le job
+        # `capture` est vert ; s'il manque malgré tout, cet échec est le bon
+        # signal (le driver exigerait de toute façon chaque capture).
         uses: actions/download-artifact@v8
         with:
           name: certification-local-screenshots
@@ -239,14 +239,15 @@ jobs:
       - name: Emplacement des captures d'écran
         # L'artefact peut être déposé à plat (screenshots/*.png) ou avec son
         # répertoire (screenshots/screenshots/*.png) : le driver ne lit que
-        # le premier niveau, on aplatit donc au besoin.
+        # le premier niveau, on aplatit donc au besoin. Aucun PNG = échec
+        # explicite (captures REVIEW obligatoires, issue #161).
         run: |
-          if [ -d screenshots ]; then
-            find screenshots -mindepth 2 -type f -name '*.png' -exec mv -t screenshots/ {} + 2>/dev/null || true
-            ls -l screenshots
-          else
-            echo "Aucune capture : le driver utilisera le PNG de secours."
+          if [ ! -d screenshots ] || ! find screenshots -maxdepth 1 -name '*.png' -print -quit | grep -q .; then
+            echo "::error::Aucune capture REVIEW disponible (artefact capture absent ou vide) — issue #161"
+            exit 1
           fi
+          find screenshots -mindepth 2 -type f -name '*.png' -exec mv -t screenshots/ {} + 2>/dev/null || true
+          ls -l screenshots
 
       - name: Lancement du plan ${{ matrix.plan }}
         # Sortie stricte (#130) : le code retour du driver (1 sur modules
@@ -261,8 +262,9 @@ jobs:
           CONFORMANCE_TOKEN: ""
           DISABLE_SSL_VERIFY: "1"
           CONFORMANCE_MODULE_TIMEOUT: "600"
-          # Captures réelles produites par le job `capture` : le driver les
-          # téléverse à la place du PNG de secours (absence = secours).
+          # Captures réelles obligatoires produites par le job `capture`
+          # (issue #161) : une capture absente ou invalide lève une erreur
+          # fatale dans le driver et fait échouer le job.
           SCREENSHOTS_DIR: ${{ github.workspace }}/screenshots
         run: |
           set +e

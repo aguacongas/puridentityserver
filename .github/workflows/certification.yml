@@ -8,7 +8,10 @@ name: Certification OIDC
 # (release: types: [published], cf. issue #150). Jobs WITNESS : les gaps Core
 # (modules ne passant pas encore) NE font pas échouer le workflow — la sortie
 # stricte (#130) s'applique au workflow local (certification-local.yml), seul
-# propriétaire de GitHub Pages. Ce workflow ne publie PLUS sur Pages : ses
+# propriétaire de GitHub Pages. En revanche les captures REVIEW sont
+# OBLIGATOIRES (issue #161) : capture, téléchargement et remplissage sont
+# stricteurs et un pilier manquant fait échouer le run. Ce workflow ne publie
+# PLUS sur Pages : ses
 # résultats seront soumis directement à l'OpenID Foundation (à venir, #150).
 # Chaque run produit ses rapports en artefacts.
 #
@@ -227,13 +230,12 @@ jobs:
         # avec chromium headless et dépose <testName>.png dans screenshots/.
         # PyJWT + cryptography signent les request objects des scénarios FAPI
         # avec les clés des clients statiques (certification/plans/).
-        # Une échec (installation navigateur, OP indisponible…) laisse le
-        # répertoire vide : conformance-screenshots.patch retombe alors sur son
-        # PNG de secours et le run se poursuit — étape non bloquante.
+        # Blocant (issue #161) : le script exige les 24 captures et sort en
+        # code non nul dès qu'une scène échoue — sans elles, aucun job plan ne
+        # pourrait alimenter les placeholders REVIEW.
         # Une seule exécution par run : les 6 jobs matrix téléchargent le
         # résultat en artefact (lancer Playwright ×6 ferait ×6 le temps de
         # build navigateur et 4 relevés concurrents du même OP).
-        continue-on-error: true
         run: |
           mkdir -p "$GITHUB_WORKSPACE/screenshots"
           python3 -m pip install --disable-pip-version-check --quiet playwright "pyjwt[cryptography]"
@@ -247,8 +249,8 @@ jobs:
         # Les PNG téléversés aux modules de relecture (ImageAPI) sont gardés
         # sous la main pour contrôle humain : c'est la preuve visible des
         # verdicts REVIEW, au même titre que le rapport sur GitHub Pages.
-        # Le répertoire est créé par l'étape précédente (même échouée) : un
-        # répertoire vide produit simplement aucun artefact.
+        # Sans échec de l'étape précédente (sinon le job est déjà rouge,
+        # issue #161), le répertoire contient les 24 PNG.
         uses: actions/upload-artifact@v7
         with:
           name: certification-screenshots
@@ -262,7 +264,8 @@ jobs:
     strategy:
       # Chaque plan continue même si un autre échoue : le rapport consolidé
       # doit montrer l'état complet du run, pas s'arrêter au premier plan
-      # rouge (mode witness : aucun job ne bloque la CI).
+      # rouge (mode witness : les gaps de modules ne bloquent pas — les
+      # captures REVIEW, elles, restent bloquantes, cf. garde-fou issue #161).
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
 
@@ -371,9 +374,9 @@ jobs:
           grep -n "CONFORMANCE_MODULE_TIMEOUT" scripts/conformance.py
 
       - name: Récupération des captures d'écran réelles (artefact prepare)
-        # Capture échouée ou absente = pas d'artefact : le driver retombe sur
-        # son PNG de secours (patch) — comme en local sans Playwright.
-        continue-on-error: true
+        # Capture obligatoire (issue #161) : le job `prepare` vert garantit la
+        # présence de l'artefact ; un téléchargement impossible est un échec à
+        # proprement parler (le driver exigerait de toute façon chaque PNG).
         uses: actions/download-artifact@v8
         with:
           name: certification-screenshots
@@ -382,14 +385,15 @@ jobs:
       - name: Emplacement des captures d'écran
         # L'artefact peut être déposé à plat (screenshots/*.png) ou avec son
         # répertoire (screenshots/screenshots/*.png) : le driver ne lit que
-        # le premier niveau, on aplatit donc au besoin.
+        # le premier niveau, on aplatit donc au besoin. Aucun PNG = échec
+        # explicite (captures REVIEW obligatoires, issue #161).
         run: |
-          if [ -d screenshots ]; then
-            find screenshots -mindepth 2 -type f -name '*.png' -exec mv -t screenshots/ {} + 2>/dev/null || true
-            ls -l screenshots
-          else
-            echo "Aucune capture : le driver utilisera le PNG de secours."
+          if [ ! -d screenshots ] || ! find screenshots -maxdepth 1 -name '*.png' -print -quit | grep -q .; then
+            echo "::error::Aucune capture REVIEW disponible (artefact prepare absent ou vide) — issue #161"
+            exit 1
           fi
+          find screenshots -mindepth 2 -type f -name '*.png' -exec mv -t screenshots/ {} + 2>/dev/null || true
+          ls -l screenshots
 
       - name: Lancement du plan ${{ matrix.plan }} (witness)
         # Un seul plan par job (matrice) : chaque plan exporte ses .zip dans
@@ -399,8 +403,10 @@ jobs:
         continue-on-error: true
         working-directory: conformance-suite
         env:
-          # Captures réelles produites par le job `prepare` : le driver les
-          # téléverse à la place du PNG de secours (absence = secours).
+          # Captures réelles obligatoires produites par le job `prepare`
+          # (issue #161) : une capture absente ou invalide lève une erreur
+          # fatale dans le driver (détectée par le garde-fou ci-dessous, le
+          # step restant witness pour les gaps de modules).
           SCREENSHOTS_DIR: ${{ github.workspace }}/screenshots
         run: |
           set +e
@@ -411,10 +417,22 @@ jobs:
           python3 scripts/run-test-plan.py \
             --export-dir "$GITHUB_WORKSPACE/results" \
             "${{ matrix.selector }}" \
-            "$GITHUB_WORKSPACE/certification/plans/${{ matrix.plan }}.json" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+            "$GITHUB_WORKSPACE/certification/plans/${{ matrix.plan }}.json" 2>&1 \
+            | tee "$GITHUB_WORKSPACE/driver-${{ matrix.plan }}.log" | tee -a "$GITHUB_STEP_SUMMARY"
           code=${PIPESTATUS[0]}
           echo "- exit code : $code (les gaps sont acceptés en mode witness)" | tee -a "$GITHUB_STEP_SUMMARY"
           [ "$code" -eq 0 ] || echo "plan ${{ matrix.plan }} en échec partiel (witness)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: "Garde-fou : captures REVIEW fournies (issue #161)"
+        # Le step Lancement reste witness (gaps de modules acceptés) : ce
+        # garde-fou y repère l'erreur fatale du driver sur une capture
+        # manquante/invalide et fait échouer le job malgré le contrat witness.
+        run: |
+          if grep -qE 'capture REVIEW (absente|invalide)' "$GITHUB_WORKSPACE/driver-${{ matrix.plan }}.log"; then
+            echo "::error::Capture REVIEW manquante ou invalide pendant le plan ${{ matrix.plan }} (captures obligatoires, issue #161)"
+            exit 1
+          fi
+          echo "Aucune capture REVIEW manquante pendant le plan ${{ matrix.plan }} : OK"
 
       - name: Upload des exports du plan
         # Un artefact par plan → le job `report` les fusionne. Aucun export
@@ -478,9 +496,9 @@ jobs:
           ls -lh results | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Téléversement des captures d'écran réelles
-        # Artefact absent (captures en échec) : le rapport est publié sans
-        # image plutôt que de planter (continue-on-error, comme l'étape
-        # Playwright elle-même).
+        # Rapport seul à tolérer l'absence (l'étape Playwright du job
+        # `prepare` a déjà fait échouer le run, issue #161) : ici on ne
+        # fait que présenter les images — jamais de second échec redondant.
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:
