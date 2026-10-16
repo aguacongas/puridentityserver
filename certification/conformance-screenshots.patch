@@ -10,7 +10,7 @@ index e1f3996..790f826 100644
  import json
  import random
  import re
-@@ -18,6 +19,44 @@ import traceback
+@@ -18,6 +19,49 @@ import traceback
  import zipfile
  
  
@@ -33,10 +33,13 @@ index e1f3996..790f826 100644
 +def screenshot_data_uri(test_name):
 +    """Data URI (image/png) de la capture reelle d'un module, ou None.
 +
-+    Lit ``SCREENSHOTS_DIR/<testName>.png`` (variable SCREENSHOTS_DIR) ; renvoie
-+    None si le repertoire n'est pas configure, si le fichier est absent ou
-+    s'il depasse la limite de l'ImageAPI : l'appelant retombe alors sur le PNG
-+    de secours, le deroulement n'est jamais interrompu pour une capture.
++    Lit ``SCREENSHOTS_DIR/<testName>.png`` (variable SCREENSHOTS_DIR).
++    Sans repertoire configure (execution manuelle) : renvoie None et
++    l'appelant utilise le PNG de secours. Avec SCREENSHOTS_DIR (CI) : leve
++    RuntimeError si le fichier est absent, vide ou trop volumineux : les
++    workflows de certification exigent la capture reelle de chaque module
++    de relecture (issue #161) ; aucun placeholder REVIEW non couvert
++    n'est accepte.
 +    """
 +    directory = os.getenv(SCREENSHOTS_DIR_ENV)
 +    if not directory:
@@ -46,16 +49,18 @@ index e1f3996..790f826 100644
 +        with open(path, 'rb') as screenshot:
 +            payload = screenshot.read()
 +    except (IOError, OSError):
-+        return None
++        raise RuntimeError(
++            "capture REVIEW absente : {0} (SCREENSHOTS_DIR={1})".format(path, directory))
 +    if not payload or len(payload) > MAX_SCREENSHOT_BYTES:
-+        return None
++        raise RuntimeError(
++            "capture REVIEW invalide : {0} (vide ou superieure a {1} octets)".format(path, MAX_SCREENSHOT_BYTES))
 +    return 'data:image/png;base64,' + base64.b64encode(payload).decode('ascii')
 +
 +
  class ServerUnavailableError(Exception):
      """Raised when the server is unreachable after exhausting retries."""
      pass
-@@ -287,6 +326,45 @@ class Conformance(object):
+@@ -287,6 +331,46 @@ class Conformance(object):
              raise Exception("get_test_log failed - HTTP {:d} {}".format(response.status_code, response.content))
          return response.json()
  
@@ -68,9 +73,10 @@ index e1f3996..790f826 100644
 +        # GET /api/log/{id}/images puis on les remplit via
 +        # POST /api/log/{id}/images/{placeholder} avec la capture reelle du module
 +        # (SCREENSHOTS_DIR/<testName>.png, deposee avant le deroulement par
-+        # certification/capture_screenshots.py) ou, a defaut, avec le PNG de
-+        # secours valide afin que le test se termine tout seul (mode witness : le
-+        # PNG de secours n'est pas une preuve d'execution reelle du navigateur).
++        # certification/capture_screenshots.py) ; sans SCREENSHOTS_DIR (execution
++        # manuelle), le PNG de secours (mode witness). Avec SCREENSHOTS_DIR (CI),
++        # une capture absente est une erreur fatale : le driver echoue et le run
++        # echoue (issue #161).
 +        api_url = '{0}api/log/{1}/images'.format(self.api_url_base, module_id)
 +        response = await self.httpclient.get(api_url)
 +        if response.status_code != 200:
@@ -81,7 +87,7 @@ index e1f3996..790f826 100644
 +        content = screenshot_data_uri(test_name)
 +        if content is None:
 +            content = STUB_SCREENSHOT_DATA_URI
-+            print('fill_required_screenshots {} : capture reelle absente, PNG de secours utilise'.format(test_name))
++            print('fill_required_screenshots {} : capture reelle absente, PNG de secours utilise (SCREENSHOTS_DIR non configure)'.format(test_name))
 +        else:
 +            print('fill_required_screenshots {} : capture reelle utilisee'.format(test_name))
 +        filled = 0
@@ -105,7 +111,7 @@ diff --git a/scripts/run-test-plan.py b/scripts/run-test-plan.py
 index ba14e9a..d0d7229 100755
 --- a/scripts/run-test-plan.py
 +++ b/scripts/run-test-plan.py
-@@ -377,6 +377,37 @@ async def run_test_module(moduledict, plan_id, test_info, test_time_taken, varia
+@@ -377,6 +377,39 @@ async def run_test_module(moduledict, plan_id, test_info, test_time_taken, varia
                          os.environ['TEST_MODULE_NAME'] = module
                          subprocess.call(["npm", "run", "client"], cwd="./sample-openbanking-client-nodejs")
  
@@ -113,9 +119,11 @@ index ba14e9a..d0d7229 100755
 +                # sur un evenement de relecture demandant une capture d'ecran
 +                # (ex. oidcc-response-type-missing). On remplit ces placeholders
 +                # automatiquement pour laisser la certification se terminer toute
-+                # seule : avec SCREENSHOTS_DIR, la capture reelle du module
++                # seule : avec SCREENSHOTS_DIR (CI), la capture reelle du module
 +                # (PNG depose par certification/capture_screenshots.py) est
-+                # telechargee ; sans elle, le PNG de secours (mode witness).
++                # obligatoire : une capture absente leve RuntimeError et echoue le
++                # driver (issue #161) ; sans SCREENSHOTS_DIR (execution manuelle),
++                # le PNG de secours (mode witness).
 +                # On laisse d'abord une periode de tolerance pour que le module se
 +                # termine de lui-meme : un remplissage immediat declenche le watcher
 +                # de placeholders d'AbstractTestModule, qui conclut le test pendant

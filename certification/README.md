@@ -206,7 +206,8 @@ driver fait échouer le job plan (modules FAILED, INTERRUPTED ou warnings
 inattendus ; seule l'absence totale d'export signale un crash du harness) et
 téléverse les exports + le rapport en artefacts ; le rapport est **publié sur
 GitHub Pages** pour les runs sur `main` ou lancés à la main (pas pour les
-PR). Les modules REVIEW restent tolérés (capturés en PNG de secours). Les
+PR). Les modules REVIEW restent tolérés (verdicts de relecture), leur preuve
+étant fournie par les captures réelles obligatoires (issue #161). Les
 lacunes d'enforcement mTLS CIBA sont corrigées (#147, #149) : le plan ciba
 est à 35/35 PASSED (run 38575847610).
 
@@ -369,7 +370,7 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
 | `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`, 4 clients statiques FAPI `private_key_jwt` + JWKS public pour les plans fapi1/fapi2) |
 | `plans/basic|implicit|hybrid|ciba|fapi1|fapi2.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; fapi1/fapi2 portent aussi `client`/`client2` en clé privée et `resource`) |
 | `conformance-reuse-plan.patch` | patch du driver : `create_test_plan` idempotent (réutilise le plan existant quand sa config n'a pas changé) |
-| `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) ou, à défaut, un PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode hébergé) |
+| `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) — avec `SCREENSHOTS_DIR` défini (CI), un fichier absent/vide/trop lourd lève une erreur fatale (captures obligatoires, issue #161) ; sans variable (exécution manuelle), le PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode hébergé) |
 | `capture_screenshots.py` | rejoue les 24 scénarios de relecture (4 Core, 16 FAPI1, 4 FAPI2) contre l'OP (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver — `--base-url` = OP, `--suite-url` = base des callbacks de la suite (hébergée par défaut, `https://localhost.emobix.co.uk:8443` en local) |
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |
 | `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
@@ -378,7 +379,7 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
 | `local/setup.sh` | bootstrap du harness **auto-hébergé** : alias réseau, clone + déploiement docker de la suite, cert auto-signé + nginx mTLS `op`, config OP locale (issuer `https://op:9443`), OP uvicorn, attente de disponibilité |
 | `local/nginx-mtls.conf` | nginx de terminaison mTLS devant l'OP local : certificat client optionnel (`optional_no_ca`), extraction `$ssl_client_escaped_cert` → `X-SSL-Client-Cert` (pas de newline brute), proxy vers l'OP uvicorn de l'hôte |
 | `../.github/workflows/certification.yml` | workflow hébergé à la demande (`workflow_dispatch` uniquement) : `prepare` (deploy + captures, une fois), `plan` (les 6 plans en parallèle, un job matrix chacun, mode witness), `report` (fusion des exports en artefact — publication OIDC des résultats à venir) |
-| `../.github/workflows/certification-local.yml` | workflow **auto-hébergé strict** : déclenché à chaque merge sur `main`, sur les PR (`certification/**`) et à la demande ; 6 plans en matrix, code non nul du driver = job en échec, job `capture` (Playwright, artefact `certification-local-screenshots`, #158), **publication GitHub Pages** (sauf sur les PR) |
+| `../.github/workflows/certification-local.yml` | workflow **auto-hébergé strict** : déclenché à chaque merge sur `main`, sur les PR (`certification/**`) et à la demande ; 6 plans en matrix, code non nul du driver = job en échec, job `capture` **bloquant** (Playwright, artefact `certification-local-screenshots`, #158/#161 : captures REVIEW obligatoires), **publication GitHub Pages** (sauf sur les PR) |
 
 ## Captures d'écran des modules de relecture (modes hébergé et local)
 
@@ -413,9 +414,9 @@ servie par l'OP. Deux étapes couvrent ce besoin :
    hébergé `https://www.certification.openid.net`, local
    `https://localhost.emobix.co.uk:8443`) et l'`aud` des assertions est lu au
    discovery de l'OP (issuer local `https://op:9443`). L'étape est
-   `continue-on-error` : un échec (installation du navigateur, OP indisponible…)
-   passe en warning, aucun PNG n'est produit et le run n'est jamais arrêté pour une
-   capture. Les deux workflows l'exécutent :
+   **bloquante** (issue #161) : le script exige les 24 captures et un échec
+   (installation du navigateur, OP indisponible, scène invalide…) fait échouer
+   le run — plus aucun repli silencieux en CI. Les deux workflows l'exécutent :
    - **mode hébergé** : dans le job `prepare` contre l'instance Render, résultat
      publié en artefact `certification-screenshots` ;
    - **mode local** (#158) : job `capture` de `certification-local.yml` contre
@@ -428,8 +429,11 @@ servie par l'OP. Deux étapes couvrent ce besoin :
      `SCREENSHOTS_DIR/<testName>.png` (répertoire fourni à l'étape des plans) ;
      `fill_required_screenshots(module_id, test_name)` liste les placeholders en
      attente (`GET api/log/{id}/images`, entrées avec le champ `upload`) puis les
-     remplit (`POST api/log/{id}/images/{placeholder}`) avec cette **capture réelle**
-     ou, si le fichier est absent/invalide, avec le **PNG 1x1 de secours** (data URI
+     remplit (`POST api/log/{id}/images/{placeholder}`) avec cette **capture réelle** ;
+     avec `SCREENSHOTS_DIR` défini (les deux workflows), un fichier absent, vide
+     ou trop volumineux **lève une erreur fatale** et fait échouer le driver
+     (captures obligatoires, issue #161) ; sans variable (exécution manuelle
+     hors CI), il replonge sur le **PNG 1x1 de secours** (data URI
      `image/png`) ;
    - `run-test-plan.py` : appel de cette méthode pour les modules purement OP
      (pas de client à piloter), **après une période de tolérance** puis l'attente de
@@ -442,9 +446,9 @@ le même run. Le rapport la rend visible aux deux endroits où l'on regarde un r
 la **page GitHub Pages** (`report.py --screenshots` recopie les PNG dans
 `_site/screenshots/` et les affiche dans la section du module) et l'artefact
 `certification-screenshots` (hébergé) ou `certification-local-screenshots` (local).
-Sans capture réelle, la capture de secours reste ce
-qu'elle était : un artifice pour que la suite se termine et produise le rapport
-complet.
+Le PNG de secours ne survit qu'à une exécution manuelle sans `SCREENSHOTS_DIR` :
+en CI, la capture réelle de chaque module de relecture est exigée et son absence
+fait échouer le run (issue #161).
 
 Le remplissage **immédiat** est interdit : le watcher de placeholders
 d'`AbstractTestModule` conclut le test dès que la liste est vide pendant que le
