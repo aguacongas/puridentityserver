@@ -406,7 +406,9 @@ servie par l'OP. Deux étapes couvrent ce besoin :
    relecture** (les 4 modules Core du tableau, les 16 modules FAPI1, les 4 modules
    FAPI2) avec chromium headless contre l'OP (`--base-url`), **contrôle chaque page
    avant export** (statut 400 + marqueur `<code>` du motif, ou titre et
-   `form[action="/login"]`, sans redirection de l'erreur) puis dépose
+   `form[action="/login"]` ; les erreurs FAPI2, elles, doivent arriver par une
+   302 vers le callback de la suite portant `error=<code>` — transport
+   RFC 6749 §4.1.2.1, issue #160) puis dépose
    `screenshots/<testName>.png` — PNG sous les 500 Ko imposés par l'ImageAPI de la
    suite. Le callback des clients Core de capture est `https://rp.example.invalid/callback`
    (RFC 2606) : la navigation finale échoue au DNS, erreur que le script absorbe ;

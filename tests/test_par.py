@@ -212,6 +212,7 @@ class TestPushedAuthorizationUseCase:
         result = run(uc.resolve("urn:ietf:params:oauth:request_uri:unknown", _CLIENT_ID))
         assert isinstance(result, PushError)
         assert result.error == "invalid_request_uri"
+        assert result.redirect_uri == ""
 
     def test_resolve_round_trip(self) -> None:
         uc, _, _ = _make_usecase()
@@ -237,6 +238,8 @@ class TestPushedAuthorizationUseCase:
         after = run(uc.resolve(pushed_result.request_uri, _CLIENT_ID))
         assert isinstance(after, PushError)
         assert after.error == "invalid_request_uri"
+        assert after.redirect_uri == "https://app.example/callback"
+        assert after.state == "st-1"
 
     def test_resolve_rejects_other_client(self) -> None:
         uc, _, _ = _make_usecase()
@@ -245,6 +248,8 @@ class TestPushedAuthorizationUseCase:
         result = run(uc.resolve(pushed_result.request_uri, "other-client"))
         assert isinstance(result, PushError)
         assert result.error == "invalid_request"
+        assert result.redirect_uri == "https://app.example/callback"
+        assert result.state == "st-1"
 
     def test_resolve_rejects_expired(self) -> None:
         uc, _, pushed = _make_usecase()
@@ -259,6 +264,8 @@ class TestPushedAuthorizationUseCase:
         assert isinstance(result, PushError)
         assert result.error == "invalid_request_uri"
         assert "expiré" in result.error_description.lower() or "expired" in result.error_description
+        assert result.redirect_uri == "https://app.example/callback"
+        assert result.state == "st-1"
 
     def test_resolve_rejects_consumed(self) -> None:
         uc, _, pushed = _make_usecase()
@@ -273,6 +280,7 @@ class TestPushedAuthorizationUseCase:
         result = run(uc.resolve(consumed.request_uri, _CLIENT_ID))
         assert isinstance(result, PushError)
         assert result.error == "invalid_request_uri"
+        assert result.redirect_uri == "https://app.example/callback"
 
     def test_status_code_of_push_errors(self) -> None:
         uc, _, _ = _make_usecase()
@@ -459,8 +467,10 @@ class TestParIntegrationHTTP:
                 params={"client_id": _CLIENT_ID, "request_uri": request_uri},
                 follow_redirects=False,
             )
-        assert second.status_code == 400
-        assert second.json()["error"] == "invalid_request_uri"
+        assert second.status_code == 302
+        location = second.headers["location"]
+        assert location.startswith("https://app.example/callback?")
+        assert "error=invalid_request_uri" in location
 
     def test_authorize_ignores_extra_params_with_request_uri(self) -> None:
         with TestClient(_app()) as client:
@@ -503,7 +513,8 @@ class TestParIntegrationHTTP:
                 follow_redirects=False,
             )
         assert resp.status_code == 400
-        assert resp.json()["error"] == "invalid_request_uri"
+        assert resp.headers["content-type"].startswith("text/html")
+        assert "invalid_request_uri" in resp.text
 
     def test_authorize_rejects_mismatched_client(self) -> None:
         with TestClient(_app()) as client:
@@ -523,8 +534,10 @@ class TestParIntegrationHTTP:
                 params={"client_id": "other-client", "request_uri": request_uri},
                 follow_redirects=False,
             )
-        assert resp.status_code == 400
-        assert resp.json()["error"] == "invalid_request"
+        assert resp.status_code == 302
+        location = resp.headers["location"]
+        assert location.startswith("https://app.example/callback?")
+        assert "error=invalid_request" in location
 
     def test_push_rejects_request_uri_in_body(self) -> None:
         with TestClient(_app()) as client:
@@ -605,12 +618,34 @@ class TestParRequiredPerClient:
                     "client_id": _CLIENT_ID,
                     "redirect_uri": "https://app.example/callback",
                     "scope": "openid",
+                    "state": "st-par",
+                },
+                follow_redirects=False,
+            )
+        assert resp.status_code == 302
+        location = resp.headers["location"]
+        assert location.startswith("https://app.example/callback?")
+        assert "error=invalid_request" in location
+        assert "state=st-par" in location
+
+    def test_direct_authorize_par_required_unregistered_redirect_stays_page(
+        self,
+    ) -> None:
+        """Sans callback enregistré sûr, le refus PAR est une page HTML (issue #160)."""
+        with TestClient(_app(self._SEED)) as client:
+            resp = client.get(
+                "/authorize",
+                params={
+                    "response_type": "code",
+                    "client_id": _CLIENT_ID,
+                    "redirect_uri": "https://evil.example/phish",
+                    "scope": "openid",
                 },
                 follow_redirects=False,
             )
         assert resp.status_code == 400
-        assert resp.json()["detail"]["error"] == "invalid_request"
-        assert "Pushed Authorization Request" in resp.json()["detail"]["error_description"]
+        assert resp.headers["content-type"].startswith("text/html")
+        assert "invalid_request" in resp.text
 
     def test_par_flow_allowed_when_par_required(self) -> None:
         with TestClient(_app(self._SEED)) as client:
@@ -666,9 +701,10 @@ class TestParRequiredServer:
                 },
                 follow_redirects=False,
             )
-        assert resp.status_code == 400
-        assert resp.json()["detail"]["error"] == "invalid_request"
-        assert "Pushed Authorization Request" in resp.json()["detail"]["error_description"]
+        assert resp.status_code == 302
+        location = resp.headers["location"]
+        assert location.startswith("https://app.example/callback?")
+        assert "error=invalid_request" in location
 
     def test_par_flow_allowed_when_server_requires_par(self) -> None:
         with TestClient(_app(par_required=True)) as client:
@@ -728,7 +764,8 @@ class TestParDisabled:
                 follow_redirects=False,
             )
         assert resp.status_code == 400
-        assert resp.json()["error"] == "invalid_request"
+        assert resp.headers["content-type"].startswith("text/html")
+        assert "invalid_request" in resp.text
 
 
 class TestParClientAssertion:
