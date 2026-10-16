@@ -32,6 +32,7 @@ from puridentityserver.domain.authorization import (
     Client,
     ClientType,
     PushedAuthorization,
+    ResponseMode,
 )
 from puridentityserver.domain.dpop import DPoPProof
 from puridentityserver.interfaces.domain.client_assertions import ClientAssertionVerifier
@@ -71,11 +72,23 @@ class PushResult:
 
 @dataclass(frozen=True, slots=True)
 class PushError:
-    """Erreur de ``POST /par`` (RFC 9126 §2.3)."""
+    """Erreur de ``POST /par`` (RFC 9126 §2.3) ou de résolution à ``/authorize``.
+
+    ``redirect_uri``, ``state`` et ``response_mode`` portent — quand la
+    demande poussée reste connue du store (référence expirée, déjà
+    consommée ou présentée par un autre client) — le contexte de la
+    redirection d'erreur vers le client poussé (RFC 6749 §4.1.2.1,
+    issue #160) : cette ``redirect_uri`` a été validée à l'enregistrement
+    puis au push, sa redirection est donc sûre. Vide quand aucun callback
+    sûr n'est connu : la couche HTTP sert alors une page d'erreur.
+    """
 
     error: str
     error_description: str = ""
     status_code: int = 400
+    redirect_uri: str = ""
+    state: str = ""
+    response_mode: ResponseMode = ResponseMode.QUERY
 
 
 def _fapi_pkce_error(params: dict[str, str], *, fapi2: bool = False) -> PushError | None:
@@ -120,6 +133,31 @@ def _validated_push_error(validated: AuthorizeError) -> PushError:
         error=error,
         error_description=description,
         status_code=401 if error == "invalid_client" else 400,
+    )
+
+
+def _invalid_pushed_error(
+    pushed: PushedAuthorization, *, error: str, description: str
+) -> PushError:
+    """Erreur de résolution d'une référence encore connue du store (issue #160).
+
+    La ``redirect_uri``, le ``state`` et le ``response_mode`` de la demande
+    poussée accompagnent l'erreur : ``/authorize`` en fera une redirection
+    vers le callback du client poussé quand ce callback est connu
+    (RFC 6749 §4.1.2.1), une page d'erreur sinon.
+    """
+    mode = (
+        ResponseMode.FRAGMENT
+        if pushed.params.get("response_mode") == "fragment"
+        else ResponseMode.QUERY
+    )
+    return PushError(
+        error=error,
+        error_description=description,
+        status_code=400,
+        redirect_uri=pushed.params.get("redirect_uri", ""),
+        state=pushed.params.get("state", ""),
+        response_mode=mode,
     )
 
 
@@ -366,7 +404,12 @@ class PushedAuthorizationUseCase:
         Retourne la requête d'autorisation reconstruite, ou ``PushError`` :
         ``invalid_request_uri`` pour une référence inconnue, expirée ou
         déjà consommée (RFC 9101 §6.3), ``invalid_request`` pour un
-        ``client_id`` incohérent. La consommation unique est appliquée à
+        ``client_id`` incohérent. Quand la référence reste connue du store
+        (expirée, consommée, client incohérent), l'erreur porte le contexte
+        de redirection vers le callback du client poussé — transport
+        ``/authorize`` RFC 6749 §4.1.2.1 (issue #160) ; une référence
+        totalement inconnue ne fournit rien et la couche HTTP répond en
+        page d'erreur. La consommation unique est appliquée à
         l'achèvement du flux (:meth:`complete`) et non à la première
         visite : la suite de conformance exige que réutiliser la même
         référence reste possible tant que l'authentification n'est pas
@@ -383,25 +426,21 @@ class PushedAuthorizationUseCase:
         now = datetime.now(timezone.utc)
         if pushed.expires_at <= now:
             await self._pushed.delete(request_uri)
-            return PushError(
-                error="invalid_request_uri",
-                error_description="request_uri expiré",
-                status_code=400,
+            return _invalid_pushed_error(
+                pushed, error="invalid_request_uri", description="request_uri expiré"
             )
 
         if pushed.is_consumed:
             await self._pushed.delete(request_uri)
-            return PushError(
-                error="invalid_request_uri",
-                error_description="request_uri déjà utilisé",
-                status_code=400,
+            return _invalid_pushed_error(
+                pushed, error="invalid_request_uri", description="request_uri déjà utilisé"
             )
 
         if pushed.client_id != client_id:
-            return PushError(
+            return _invalid_pushed_error(
+                pushed,
                 error="invalid_request",
-                error_description="client_id ne correspond pas à la requête poussée",
-                status_code=400,
+                description="client_id ne correspond pas à la requête poussée",
             )
 
         return AuthorizeRequest(
@@ -427,11 +466,14 @@ class PushedAuthorizationUseCase:
 
         Appelé par ``/authorize`` lors de l'émission réussie de la réponse
         (code ou jetons) : la référence devient inutilisable (RFC 9126 §4).
-        Silencieux si la référence a disparu (expiration ou consommation
-        concurrente).
+        L'entrée n'est pas supprimée sur place mais marquée ``is_consumed`` :
+        une réutilisation doit pouvoir être rejetée avec le transport
+        ``/authorize`` (RFC 6749 §4.1.2.1, issue #160), ce qui exige que la
+        référence reste connue du store — la purge physique est faite par
+        :meth:`resolve` à la visite suivante. Silencieux si la référence a
+        disparu (expiration ou consommation concurrente).
         """
         pushed = await self._pushed.find_by_request_uri(request_uri)
         if pushed is None:
             return
         await self._pushed.consume(request_uri)
-        await self._pushed.delete(request_uri)

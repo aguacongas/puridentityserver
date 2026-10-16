@@ -186,9 +186,10 @@ def test_direct_authorize_is_rejected() -> None:
             follow_redirects=False,
         )
 
-    assert response.status_code == 400
-    assert response.json()["detail"]["error"] == "invalid_request"
-    assert "Pushed Authorization Request" in response.json()["detail"]["error_description"]
+    assert response.status_code == 302
+    query = _redirect_query(response.headers["location"])
+    assert query["error"] == ["invalid_request"]
+    assert "Pushed Authorization Request" in query["error_description"][0]
 
 
 def test_par_requires_pkce() -> None:

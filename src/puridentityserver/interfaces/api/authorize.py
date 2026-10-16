@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import html
-import json
 import time
 from dataclasses import dataclass
 from typing import Annotated
 from urllib.parse import quote, urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict
 
@@ -38,7 +37,7 @@ from puridentityserver.identity.config import (
     session_reauth,
     session_sid,
 )
-from puridentityserver.interfaces.api.authorize_error import error_response
+from puridentityserver.interfaces.api.authorize_error import error_redirect, error_response
 from puridentityserver.interfaces.api.consent import consent_url
 from puridentityserver.interfaces.repositories.readers import ClientReader
 
@@ -223,7 +222,7 @@ async def _direct_authorize_request(
     request_object_resolver: RequestObjectResolver,
     client_repository: ClientReader | None,
     par_required: bool = False,
-) -> AuthorizeRequest | HTMLResponse:
+) -> AuthorizeRequest | RedirectResponse | HTMLResponse:
     """Construit la demande d'une requête **non poussée** (RFC 6749 §3.1).
 
     Le request object (RFC 9101) est résolu en premier : ses claims priment
@@ -233,7 +232,9 @@ async def _direct_authorize_request(
     rendus en **page HTML** : une demande écartée en amont de toute
     redirection exploitable ne produit ni JSON ni redirection (RFC 6749
     §4.1.2.1), c'est l'observable des checks ``ExpectResponseTypeMissing
-    ErrorPage`` et ``ExpectInvalidRequestUriErrorPage`` de la suite.
+    ErrorPage`` et ``ExpectInvalidRequestUriErrorPage`` de la suite. Le
+    refus PAR, lui, se redirige vers la ``redirect_uri`` de la query quand
+    elle est enregistrée (issue #160), page HTML sinon.
     """
     resolved = await request_object_resolver.resolve(params)
     if isinstance(resolved, RequestObjectError):
@@ -251,7 +252,9 @@ async def _direct_authorize_request(
     ]
     if missing:
         return _missing_parameters_page(missing)
-    await _enforce_par_requirement(params.get("client_id", ""), client_repository, par_required)
+    enforced = await _enforce_par_requirement(params, client_repository, par_required)
+    if enforced is not None:
+        return enforced
     return AuthorizeRequest(
         response_type=params.get("response_type", ""),
         client_id=params.get("client_id", ""),
@@ -536,9 +539,10 @@ async def _authorize_entry(
     """Résout l'entrée ``/authorize`` : poussée (``request_uri``) ou directe.
 
     Retourne ``(demande, pushed_reference)`` — la ``Response`` d'erreur
-    JSON tient la place de la demande quand la résolution échoue (RFC 9126
-    §6.2) ; ``pushed_reference`` (vide hors PAR) accompagne le reste du
-    parcours pour consommer la demande poussée à l'émission.
+    tient la place de la demande quand la résolution échoue (page HTML,
+    cf. :func:`_pushed_param_response`, issue #160) ; ``pushed_reference``
+    (vide hors PAR) accompagne le reste du parcours pour consommer la
+    demande poussée à l'émission.
     """
     request_uri = params.get("request_uri", "")
     if request_uri and is_pushed_request_uri(request_uri):
@@ -570,8 +574,11 @@ async def _resolve_pushed_request(
     redirection ne peuvent donc rien y changer). Les erreurs de résolution
     (référence inconnue, expirée, consommée → ``invalid_request_uri`` ;
     client incohérent → ``invalid_request`` ; PAR désactivé →
-    ``invalid_request``) répondent en JSON OAuth top-level (RFC 6749 §5.2,
-    lisible par la suite de certification sans enveloppe ``detail``).
+    ``invalid_request``) suivent le transport ``/authorize`` (RFC 6749
+    §4.1.2.1, issue #160) : une redirection 302 vers le callback de la
+    demande poussée quand ce callback reste connu du store (référence
+    expirée, déjà consommée ou d'un autre client), page HTML d'erreur
+    sinon (référence inconnue, PAR désactivé).
     """
     if par_usecase is None:
         return _pushed_param_response(
@@ -589,22 +596,54 @@ async def _resolve_pushed_request(
 
 
 def _pushed_param_response(error: PushError) -> Response:
-    """Sérialise une erreur de résolution poussée en JSON OAuth (RFC 6749 §5.2)."""
-    return Response(
-        content=json.dumps(
-            {"error": error.error, "error_description": error.error_description},
-            separators=(",", ":"),
+    """Transporte une erreur de résolution poussée (RFC 6749 §4.1.2.1, issue #160).
+
+    Une ``redirect_uri`` poussée encore connue (référence expirée, déjà
+    consommée ou présentée par un autre client) reçoit une redirection 302
+    portant ``error``, ``error_description`` et ``state`` (redirection sûre :
+    cette URI a été validée à l'enregistrement puis au push). Sans
+    ``redirect_uri`` exploitable (référence inconnue, PAR désactivé), une
+    page HTML d'erreur est servie au user agent (RFC 6749 §4.1.2.1 : pas de
+    redirection vers un callback inconnu).
+    """
+    if not error.redirect_uri:
+        return _pushed_error_page(error)
+    return error_redirect(
+        AuthorizeError(
+            error=error.error,
+            error_description=error.error_description,
+            redirect_uri=error.redirect_uri,
+            state=error.state,
+            response_mode=error.response_mode,
+            redirectable=True,
+        )
+    )
+
+
+def _pushed_error_page(error: PushError) -> HTMLResponse:
+    """Page d'erreur 400 d'une résolution poussée sans callback sûr (issue #160)."""
+    return HTMLResponse(
+        status_code=400,
+        content=(
+            '<!doctype html><html lang="fr"><head><meta charset="utf-8">'
+            "<title>Erreur de la demande d'autorisation</title><style>body{"
+            "font-family:sans-serif;margin:2rem;max-width:28rem}h1{font-size:"
+            "1.3rem}.hint{color:#666;font-size:0.9rem}</style></head><body>"
+            "<h1>Requête d'autorisation invalide</h1>"
+            '<p class="hint"><code>'
+            + html.escape(error.error)
+            + "</code> — "
+            + html.escape(error.error_description)
+            + "</p></body></html>"
         ),
-        media_type="application/json",
-        status_code=error.status_code,
     )
 
 
 async def _enforce_par_requirement(
-    client_id: str,
+    params: dict[str, str],
     client_repository: ClientReader | None,
     server_par_required: bool = False,
-) -> None:
+) -> RedirectResponse | HTMLResponse | None:
     """Refuse une demande directe à /authorize si PAR est exigé (RFC 9126 §6.1).
 
     Un client marqué ``par_required`` (ou ``fapi2_enabled``, FAPI2-SP-5.3.2.2-4 :
@@ -612,22 +651,30 @@ async def _enforce_par_requirement(
     puis présenter le ``request_uri`` à l'endpoint d'autorisation ; le
     drapeau serveur ``server_par_required`` impose la même discipline à
     **tous** les clients. Toute demande non poussée est rejetée en
-    ``invalid_request``.
+    ``invalid_request`` (issue #160) : une redirection 302 quand la
+    ``redirect_uri`` de la query est exactement enregistrée pour le client
+    (redirection sûre), page HTML d'erreur sinon — ``None`` quand aucune
+    exigence PAR ne s'applique.
     """
     if client_repository is None:
-        return
-    client = await client_repository.find_by_id(client_id)
+        return None
+    client = await client_repository.find_by_id(params.get("client_id", ""))
     if client is None:
-        return
-    if client.par_required or client.fapi2_enabled or server_par_required:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "invalid_request",
-                "error_description": "Ce client exige l'utilisation de Pushed "
-                "Authorization Request (RFC 9126 §6.1)",
-            },
+        return None
+    if not (client.par_required or client.fapi2_enabled or server_par_required):
+        return None
+    description = "Ce client exige l'utilisation de Pushed Authorization Request (RFC 9126 §6.1)"
+    redirect_uri = params.get("redirect_uri", "")
+    if redirect_uri and redirect_uri in client.redirect_uris:
+        return error_redirect(
+            AuthorizeError(
+                error="invalid_request",
+                error_description=description,
+                redirect_uri=redirect_uri,
+                state=params.get("state", ""),
+            )
         )
+    return _pushed_error_page(PushError(error="invalid_request", error_description=description))
 
 
 async def _consent_redirect_if_required(

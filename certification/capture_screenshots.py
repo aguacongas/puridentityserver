@@ -98,12 +98,6 @@ _MAX_IMAGE_BYTES = 500 * 1024
 # (hébergée : certification.openid.net ; locale : localhost.emobix.co.uk).
 _FAPI1_CALLBACK_PATH = "/test/a/puridentityserver-fapi1/callback"
 _FAPI2_CALLBACK_PATH = "/test/a/puridentityserver-fapi2/callback"
-# Forme compacte des erreurs OAuth JSON (RFC 6749 §5.2) servies à la place
-# d'une page HTML (obligation PAR, résolution d'une référence poussée).
-_JSON_ERROR_MARKERS = {
-    "invalid_request": '"error":"invalid_request"',
-    "invalid_request_uri": '"error":"invalid_request_uri"',
-}
 
 #: Modules Core laissés en REVIEW par la suite (placeholders de capture).
 _CORE_TEST_NAMES = (
@@ -200,7 +194,8 @@ _FAPI1_JAR_SCENARIOS: tuple[tuple[str, str, str], ...] = (
 )
 
 #: Modules FAPI2 du plan fapi2-security-profile-final laissés en REVIEW : les
-#: erreurs de la voie poussée (PAR) sont servies en JSON OAuth top-level.
+#: erreurs de la voie poussée (PAR) sont transportées par la redirection 302
+#: vers le callback du client poussé (RFC 6749 §4.1.2.1, issue #160).
 _FAPI2_TEST_NAMES = (
     "fapi2-security-profile-final-ensure-unsigned-authorization-request-without-using-par-fails",
     "fapi2-security-profile-final-par-attempt-reuse-request_uri",
@@ -576,19 +571,42 @@ def _capture_error_page(page: Page, url: str, error_code: str, path: Path) -> No
     _screenshot(page, path)
 
 
-def _capture_json_error(page: Page, url: str, error_code: str, path: Path) -> None:
-    """Capture la réponse d'erreur JSON OAuth (RFC 6749 §5.2) affichée par le navigateur.
+def _capture_redirect_error(
+    page: Page, url: str, callback_uri: str, error_code: str, path: Path
+) -> None:
+    """Capture l'erreur transportée par la redirection vers le callback (RFC 6749 §4.1.2.1).
 
     Les erreurs de la voie poussée (obligation PAR, ``request_uri`` expiré,
-    réutilisé ou d'un autre client) sont servies en JSON compact au lieu
-    d'une page HTML : le corps affiché porte ``"error":"<code>"``.
+    réutilisé ou d'un autre client) sont servies par une 302 vers la
+    ``redirect_uri`` du client poussé : la redirection est contrôlée sur le
+    premier saut (``max_redirects=0`` — la suite elle-même redirige son
+    callback vers ``log-detail.html``), puis la page finale est capturée en
+    viewport (la page ``log-detail`` déborde des 500 Ko en page entière).
     """
-    marker = _JSON_ERROR_MARKERS[error_code]
-    _assert_status(page, url, 400)
-    body = page.locator("body").inner_text().replace(" ", "").replace("\n", "")
-    if marker not in body:
-        raise RuntimeError(f"motif {error_code!r} absent de la réponse JSON {url} : {body[:200]}")
-    _screenshot(page, path)
+    response = page.request.get(url, max_redirects=0)
+    if response.status != 302:
+        raise RuntimeError(
+            f"HTTP {response.status} inattendu pour {url} (attendu 302) : {response.text()[:200]}"
+        )
+    location = response.headers.get("location", "")
+    callback_path = callback_uri.split("?", 1)[0]
+    if not location.startswith(callback_path):
+        raise RuntimeError(f"l'OP n'a pas redirigé vers {callback_path} : {location}")
+    if f"error={error_code}" not in location:
+        raise RuntimeError(f"motif {error_code!r} absent de la redirection : {location}")
+    _goto(page, location)
+    # Hors exécution de test, le callback de la suite ne retrouve pas son
+    # test (« no test found ») : un bandeau injecté rend l'URL reçue (et le
+    # motif ``error=`` transporté par la 302) visible sur la capture.
+    page.evaluate(
+        "(u) => { const d = document.createElement('pre'); d.textContent = u;"
+        " d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;"
+        "margin:0;padding:.5rem;background:#fffbe6;border-bottom:2px solid #d4a017;"
+        "font:bold .8rem monospace;white-space:pre-wrap;word-break:break-all';"
+        " document.body.prepend(d); }",
+        location,
+    )
+    _screenshot(page, path, full_page=False)
 
 
 def _capture_error_after_flow(
@@ -644,9 +662,14 @@ def _capture_second_login(
     _capture_login_page(page, _authorize_url(base_url, client_id, extra=extra), path)
 
 
-def _screenshot(page: Page, path: Path) -> None:
-    """Exporte la page et contrôle la limite de 500 Ko de l'ImageAPI."""
-    page.screenshot(path=str(path), full_page=True)
+def _screenshot(page: Page, path: Path, *, full_page: bool = True) -> None:
+    """Exporte la page et contrôle la limite de 500 Ko de l'ImageAPI.
+
+    ``full_page=False`` : capture le viewport seul — indispensable pour la
+    page ``log-detail`` de la suite (les logs FAPI2 débordent largement des
+    500 Ko en page entière).
+    """
+    page.screenshot(path=str(path), full_page=full_page)
     size = path.stat().st_size
     if size > _MAX_IMAGE_BYTES:
         raise RuntimeError(f"capture trop lourde pour l'ImageAPI : {path} fait {size} octets")
@@ -743,10 +766,14 @@ def _capture_fapi2_scenarios(
     other_client_id = _other_plan_client_id(plans_dir / "fapi2.json")
     _capture_unsigned_without_par(page, base_url, client.client_id, out, redirect_uri)
     _, challenge = _pkce_pair()
-    _capture_par_reuse(page, request, base_url, issuer, client, challenge, out, username, password)
-    _capture_par_expired(page, request, base_url, issuer, client, challenge, out, par_ttl_seconds)
+    _capture_par_reuse(
+        page, request, base_url, issuer, client, challenge, out, username, password, redirect_uri
+    )
+    _capture_par_expired(
+        page, request, base_url, issuer, client, challenge, out, par_ttl_seconds, redirect_uri
+    )
     _capture_par_other_client(
-        page, request, base_url, issuer, client, other_client_id, challenge, out
+        page, request, base_url, issuer, client, other_client_id, challenge, out, redirect_uri
     )
 
 
@@ -759,9 +786,10 @@ def _capture_unsigned_without_par(
         client_id,
         extra={"redirect_uri": redirect_uri, "code_challenge_method": "S256"},
     )
-    _capture_json_error(
+    _capture_redirect_error(
         page,
         url,
+        redirect_uri,
         "invalid_request",
         out / f"{_FAPI2_TEST_NAMES[0]}.png",
     )
@@ -777,12 +805,19 @@ def _capture_par_reuse(
     out: Path,
     username: str,
     password: str,
+    redirect_uri: str,
 ) -> None:
     """Le ``request_uri`` est à usage unique : la seconde visite est refusée."""
     request_uri = _push_par(request, base_url, issuer, client, code_challenge)
     url = _authorize_with_uri(base_url, client.client_id, request_uri)
     _complete_flow_quietly(page, url, username, password)
-    _capture_json_error(page, url, "invalid_request_uri", out / f"{_FAPI2_TEST_NAMES[1]}.png")
+    _capture_redirect_error(
+        page,
+        url,
+        redirect_uri,
+        "invalid_request_uri",
+        out / f"{_FAPI2_TEST_NAMES[1]}.png",
+    )
 
 
 def _capture_par_expired(
@@ -794,12 +829,19 @@ def _capture_par_expired(
     code_challenge: str,
     out: Path,
     par_ttl_seconds: int,
+    redirect_uri: str,
 ) -> None:
     """Un ``request_uri`` expiré (TTL PAR) est refusé (RFC 9126 §4)."""
     request_uri = _push_par(request, base_url, issuer, client, code_challenge)
     time.sleep(par_ttl_seconds + 2)
     url = _authorize_with_uri(base_url, client.client_id, request_uri)
-    _capture_json_error(page, url, "invalid_request_uri", out / f"{_FAPI2_TEST_NAMES[2]}.png")
+    _capture_redirect_error(
+        page,
+        url,
+        redirect_uri,
+        "invalid_request_uri",
+        out / f"{_FAPI2_TEST_NAMES[2]}.png",
+    )
 
 
 def _capture_par_other_client(
@@ -811,11 +853,18 @@ def _capture_par_other_client(
     other_client_id: str,
     code_challenge: str,
     out: Path,
+    redirect_uri: str,
 ) -> None:
     """La référence poussée n'est résoluble que pour le client qui l'a émise."""
     request_uri = _push_par(request, base_url, issuer, client, code_challenge)
     url = _authorize_with_uri(base_url, other_client_id, request_uri)
-    _capture_json_error(page, url, "invalid_request", out / f"{_FAPI2_TEST_NAMES[3]}.png")
+    _capture_redirect_error(
+        page,
+        url,
+        redirect_uri,
+        "invalid_request",
+        out / f"{_FAPI2_TEST_NAMES[3]}.png",
+    )
 
 
 def _resolve_issuer(request: APIRequestContext, base_url: str) -> str:
