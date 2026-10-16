@@ -228,17 +228,19 @@ async def _direct_authorize_request(
     Le request object (RFC 9101) est résolu en premier : ses claims priment
     sur la query (OIDC Core 1.0 §6.1), qui n'est plus qu'un repli. Puis les
     paramètres requis sont contrôlés et l'obligation PAR du client appliquée
-    (RFC 9126 §6.1). Un request object refusé ou des paramètres manquants sont
-    rendus en **page HTML** : une demande écartée en amont de toute
-    redirection exploitable ne produit ni JSON ni redirection (RFC 6749
-    §4.1.2.1), c'est l'observable des checks ``ExpectResponseTypeMissing
-    ErrorPage`` et ``ExpectInvalidRequestUriErrorPage`` de la suite. Le
-    refus PAR, lui, se redirige vers la ``redirect_uri`` de la query quand
-    elle est enregistrée (issue #160), page HTML sinon.
+    (RFC 9126 §6.1). Un request object refusé suit le transport
+    ``/authorize`` (RFC 6749 §4.1.2.1, issue #178) : redirection vers la
+    ``redirect_uri`` de la query quand elle est exactement enregistrée,
+    page HTML sinon — c'est l'observable du placeholder
+    ``ExpectAuthorizationRequestWithoutRequestObjectErrorPage`` de la
+    suite. Les paramètres manquants restent rendus en **page HTML**
+    (check ``ExpectResponseTypeMissingErrorPage`` exigé par la suite).
+    Le refus PAR, lui, se redirige vers la ``redirect_uri`` de la query
+    quand elle est enregistrée (issue #160), page HTML sinon.
     """
     resolved = await request_object_resolver.resolve(params)
     if isinstance(resolved, RequestObjectError):
-        return _request_object_error_page(resolved)
+        return await _request_object_error_response(resolved, params, client_repository)
     params = resolved
     missing = [
         name
@@ -311,10 +313,11 @@ def _missing_parameters_page(missing: list[str]) -> HTMLResponse:
 
 
 def _request_object_error_page(error: RequestObjectError) -> HTMLResponse:
-    """Page d'erreur 400 d'un request object refusé (RFC 9101 §6, §7).
+    """Page d'erreur 400 d'un request object refusé sans callback sûr (RFC 9101 §6, §7).
 
-    Aucune redirection : la ``redirect_uri`` du transport n'est pas
-    exploitable tant que le request object n'a pas été accepté.
+    Repli de :func:`_request_object_error_response` (issue #178) : sans
+    ``redirect_uri`` de la query exactement enregistrée pour le client —
+    la RFC 6749 §4.1.2.1 interdit alors de rediriger.
     """
     return HTMLResponse(
         status_code=400,
@@ -330,6 +333,55 @@ def _request_object_error_page(error: RequestObjectError) -> HTMLResponse:
             + html.escape(error.error_description)
             + "</p></body></html>"
         ),
+    )
+
+
+async def _request_object_error_response(
+    error: RequestObjectError,
+    params: dict[str, str],
+    client_repository: ClientReader | None,
+) -> RedirectResponse | HTMLResponse:
+    """Transporte un refus de request object (RFC 6749 §4.1.2.1, issue #178).
+
+    La ``redirect_uri`` de la **query** reçoit une redirection 302 portant
+    ``error``, ``error_description`` et ``state`` quand elle fait un exact
+    match sur les ``redirect_uris`` du client (URI validée à
+    l'enregistrement, même garantie que les erreurs PAR de l'issue #160) :
+    les claims du request object rejeté — qui n'est pas fiable par
+    définition — ne sont jamais utilisés pour choisir la cible. Sans
+    callback sûr (URI absente ou non enregistrée, client inconnu), la
+    page HTML d'erreur est servie.
+
+    L'enveloppe suit le ``response_type`` du transport : le fragment
+    d'entrée (implicit/hybrid, FAPI1 ``code id_token``) impose de renvoyer
+    l'erreur dans le fragment de la callback (RFC 6749 §4.1.2.1,
+    §4.2.2.1 — ``response_mode=query`` y est interdit), la query sinon.
+    Le ``state`` écho vient du request object lui-même quand il est lisible
+    (RFC 9101 §6.3), de la query à défaut.
+    """
+    if client_repository is None:
+        return _request_object_error_page(error)
+    client = await client_repository.find_by_id(params.get("client_id", ""))
+    if client is None:
+        return _request_object_error_page(error)
+    redirect_uri = params.get("redirect_uri", "")
+    if redirect_uri not in client.redirect_uris:
+        return _request_object_error_page(error)
+    response_type = params.get("response_type", "")
+    has_tokens = bool({"token", "id_token"} & set(response_type.split()))
+    requested_mode = params.get("response_mode", "")
+    if requested_mode == ResponseMode.FRAGMENT.value or has_tokens:
+        response_mode = ResponseMode.FRAGMENT
+    else:
+        response_mode = ResponseMode.QUERY
+    return error_redirect(
+        AuthorizeError(
+            error=error.error,
+            error_description=error.error_description,
+            redirect_uri=redirect_uri,
+            state=error.state or params.get("state", ""),
+            response_mode=response_mode,
+        )
     )
 
 

@@ -487,6 +487,7 @@ def test_authorize_redirect_uri_of_request_object_takes_precedence() -> None:
 
 
 def test_authorize_shows_error_page_for_invalid_request_object() -> None:
+    """Sans ``redirect_uri`` dans la query, la page 400 reste servie (issue #178)."""
     with TestClient(_app()) as client:
         response = client.get(
             "/authorize",
@@ -497,6 +498,112 @@ def test_authorize_shows_error_page_for_invalid_request_object() -> None:
     assert response.status_code == 400
     assert "invalid_request_object" in response.text
     assert "location" not in response.headers
+
+
+def test_authorize_redirects_invalid_request_object_error() -> None:
+    """Issue #178 : ``redirect_uri`` de la query enregistrée → 302 avec state."""
+    with TestClient(_app()) as client:
+        response = client.get(
+            "/authorize",
+            params={
+                "request": "pas-un-jwt",
+                "client_id": "web-app",
+                "redirect_uri": "https://app.example/callback",
+                "state": "state-ro",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert location.startswith("https://app.example/callback?")
+    query = parse_qs(urlparse(location).query)
+    assert query["error"] == ["invalid_request_object"]
+    assert query["state"] == ["state-ro"]
+
+
+def test_authorize_keeps_error_page_for_unregistered_redirect_uri() -> None:
+    """Issue #178 : URI non enregistrée → jamais de redirection (RFC 6749 §4.1.2.1)."""
+    with TestClient(_app()) as client:
+        response = client.get(
+            "/authorize",
+            params={
+                "request": "pas-un-jwt",
+                "client_id": "web-app",
+                "redirect_uri": "https://evil.example/cb",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 400
+    assert "invalid_request_object" in response.text
+    assert "location" not in response.headers
+
+
+def test_authorize_keeps_error_page_for_unknown_client() -> None:
+    """Issue #178 : client inconnu → page 400 (aucun callback de confiance)."""
+    with TestClient(_app()) as client:
+        response = client.get(
+            "/authorize",
+            params={
+                "request": "pas-un-jwt",
+                "client_id": "client-inconnu",
+                "redirect_uri": "https://app.example/callback",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 400
+    assert "location" not in response.headers
+
+
+def test_authorize_redirects_request_object_error_in_fragment() -> None:
+    """Issue #178 : ``response_type`` hybride → erreur dans le fragment (RFC 6749 §4.2.2.1)."""
+    with TestClient(_app()) as client:
+        response = client.get(
+            "/authorize",
+            params={
+                "request": "pas-un-jwt",
+                "client_id": "web-app",
+                "redirect_uri": "https://app.example/callback",
+                "response_type": "code id_token",
+                "state": "state-frag",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert location.startswith("https://app.example/callback#")
+    fragment = parse_qs(urlparse(location).fragment)
+    assert fragment["error"] == ["invalid_request_object"]
+    assert fragment["state"] == ["state-frag"]
+
+
+def test_authorize_echoes_state_from_rejected_request_object() -> None:
+    """Issue #178 : le ``state`` lisible du jeton refusé est réaffiché (RFC 9101 §6.3)."""
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "HS256"}).encode()).rstrip(b"=").decode()
+    payload = (
+        base64.urlsafe_b64encode(json.dumps({"state": "state-du-jar"}).encode())
+        .rstrip(b"=")
+        .decode()
+    )
+    jar = f"{header}.{payload}.c2ln"
+    with TestClient(_app()) as client:
+        response = client.get(
+            "/authorize",
+            params={
+                "request": jar,
+                "client_id": "web-app",
+                "redirect_uri": "https://app.example/callback",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    assert query["error"] == ["invalid_request_object"]
+    assert query["state"] == ["state-du-jar"]
 
 
 def test_authorize_shows_error_page_for_exclusive_parameters() -> None:
@@ -515,7 +622,7 @@ def test_authorize_shows_error_page_for_exclusive_parameters() -> None:
 
 
 def test_authorize_shows_error_page_for_unreachable_request_uri() -> None:
-    """Aucune redirection : la ``redirect_uri`` de transport n'est pas vérifiable."""
+    """Sans ``redirect_uri`` dans la query : page 400 (issue #178)."""
     with TestClient(_app()) as client:
         response = client.get(
             "/authorize",
@@ -525,6 +632,7 @@ def test_authorize_shows_error_page_for_unreachable_request_uri() -> None:
 
     assert response.status_code == 400
     assert "invalid_request_uri" in response.text
+    assert "location" not in response.headers
 
 
 def test_authorize_fetches_request_uri_document(
@@ -580,7 +688,7 @@ def _app_binding_all_interfaces(*, allow_local_targets: bool) -> FastAPI:
 def test_authorize_refuses_local_request_uri_when_harness_flag_is_absent(
     document_server: tuple[str, _DocumentState],
 ) -> None:
-    """Host non-loopback sans drapeau : garde anti-SSRF → page 400."""
+    """Host non-loopback sans drapeau : garde anti-SSRF → erreur au client enregistré."""
     url, _state = document_server
     with TestClient(_app_binding_all_interfaces(allow_local_targets=False)) as client:
         response = client.get(
@@ -595,8 +703,9 @@ def test_authorize_refuses_local_request_uri_when_harness_flag_is_absent(
             follow_redirects=False,
         )
 
-    assert response.status_code == 400
-    assert "invalid_request_uri" in response.text
+    assert response.status_code == 302
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    assert query["error"] == ["invalid_request_uri"]
 
 
 def test_authorize_fetches_local_request_uri_with_harness_flag(
