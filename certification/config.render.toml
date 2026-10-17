@@ -181,6 +181,8 @@ client_id = "puridentityserver-fapi2-client"
 redirect_uris = [
     "https://www.certification.openid.net/test/a/puridentityserver-fapi2/callback",
     "https://www.certification.openid.net/test/a/puridentityserver-fapi2/callback?dummy1=lorem&dummy2=ipsum",
+    "https://www.certification.openid.net/test/a/puridentityserver-fapi2-message-signing/callback",
+    "https://www.certification.openid.net/test/a/puridentityserver-fapi2-message-signing/callback?dummy1=lorem&dummy2=ipsum",
 ]
 scopes = "openid profile offline_access"
 client_type = "confidential"
@@ -189,6 +191,7 @@ fapi2_enabled = true
 require_consent = true
 require_dpop = true
 id_token_signed_response_alg = "PS256"
+authorization_signed_response_alg = "PS256"
 jwks = [{ kty = "RSA", e = "AQAB", kid = "puridentityserver-fapi2-client-20261011", alg = "PS256", n = "uefT_6K_7U6LSwTta9yqKqixqUUGRkCNl9ktqM-BuUCtLXACwjllhobJglWwaOu8fba7EAJZggBEGyXPkSKxFrOwdI9ZTBbFxn_MvGW6NtA4PrwwAfMt0tEPjjSU1p4NeuLR_mY6NWPobxns57rlF2vYpcYfp_ya4VGv1S-hY3RsCdsjZ_r3SuwcpdBYzbgU8VmhYcVXlCOT3oMnF4u01OeUhcgpa80tmXvHCRxIxc55gbMihvUubCWHzfPAoqjiuQvy5KiBy-Ntzxk1d2HFACfxOxGe4G8Dx5BLpzlyX98jlV6rBsQc2-pQYhijzX8safOYMvT6Wm3RKdl2yyVpow" }]
 
 [[settings.clients_seed]]
@@ -196,6 +199,8 @@ client_id = "puridentityserver-fapi2-client2"
 redirect_uris = [
     "https://www.certification.openid.net/test/a/puridentityserver-fapi2/callback",
     "https://www.certification.openid.net/test/a/puridentityserver-fapi2/callback?dummy1=lorem&dummy2=ipsum",
+    "https://www.certification.openid.net/test/a/puridentityserver-fapi2-message-signing/callback",
+    "https://www.certification.openid.net/test/a/puridentityserver-fapi2-message-signing/callback?dummy1=lorem&dummy2=ipsum",
 ]
 scopes = "openid profile offline_access"
 client_type = "confidential"
@@ -204,4 +209,5 @@ fapi2_enabled = true
 require_consent = true
 require_dpop = true
 id_token_signed_response_alg = "PS256"
+authorization_signed_response_alg = "PS256"
 jwks = [{ kty = "RSA", e = "AQAB", kid = "puridentityserver-fapi2-client2-20261011", alg = "PS256", n = "0ZageizBn1mdYVtlnvfOx7n-J3_MXhgXgttj7WS3OW1nNc0t9DzeRCzNo2ri3sxqZJyLuNWiCQSjZTZnpixqetRwZhMRfEF0LTp3415IJIePJvH32VoKLchVbF-ZZGt7rWFvZRhquDTS7BgjEZGOhT8C8BaSmgcNNI-GfqNWWQZNmsYtGy3X58J2X7XPyEHHyPDFC8SlRzIAp1fJLFYMNW3kH5EQ5PhCF-aa4PNYeaqQswCRXmZLTRkBHvFM7t3IvIxhOLvbDYRXs5bGtsFBy0j5dkYzUpm72uOPwCjhIhlx2MI0XtnXhzE0C_bxkAZ9Mj_oX6ogleKHi6cxVL92dw" }]

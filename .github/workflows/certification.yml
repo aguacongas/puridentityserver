@@ -19,13 +19,14 @@ name: Certification OIDC
 # `release-vX.Y.Z` listé par `git ls-remote` sur
 # gitlab.com/openid/conformance-suite (échec = run en erreur) — cf. issue #150.
 #
-# Issue #122 : les 6 plans s'exécutent EN PARALLÈLE (matrix de jobs, même
-# patron que certification-local.yml) : ~3 h séquentielles deviennent la durée
+# Issue #122 : les 7 plans s'exécutent EN PARALLÈLE (matrix de jobs, même
+# patron que certification-local.yml ; fapi2-message-signing ajouté par
+# l'issue #164) : ~3 h séquentielles deviennent la durée
 # du plan le plus long (~40 min) :
 # - job `prepare` UNIQUE : matrice depuis l'input `plan`, deploy hook Render
 #   (UNE SEULE fois — un redejob par plan remplacerait l'OP en plein run) et
 #   captures Playwright (artefact partagé) ;
-# - job `plan` ×6 (`fail-fast: false`) : clone + patches de la suite, un seul
+# - job `plan` ×7 (`fail-fast: false`) : clone + patches de la suite, un seul
 #   plan joué en mode witness, export → artefact `certification-results-<plan>`.
 #   Parallélisation sûre : chaque plan porte un alias distinct
 #   (`puridentityserver-<plan>`) et `release_alias` ne stoppe que son propre
@@ -44,8 +45,8 @@ on:
     inputs:
       plan:
         # Permet un cycle de diagnostic rapide : ne lancer qu'un seul plan au
-        # lieu des six (~30 min, même en parallèle le gain nul).
-        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + CIBA + FAPI1 + FAPI2)"
+        # lieu des sept (~30 min, même en parallèle le gain nul).
+        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + CIBA + FAPI1 + FAPI2 + FAPI2 Message Signing)"
         type: choice
         required: false
         default: all
@@ -57,6 +58,7 @@ on:
           - ciba
           - fapi1
           - fapi2
+          - fapi2-message-signing
 
 permissions:
   contents: read
@@ -98,7 +100,7 @@ jobs:
         # toute consommation d'infra (deploy hook, Playwright, clone).
         id: matrix
         env:
-          # Vide sur push/schedule : les six plans sont joués.
+          # Vide sur push/schedule : les sept plans sont joués.
           PLAN_FILTER: ${{ inputs.plan || 'all' }}
         run: |
           set -euo pipefail
@@ -196,7 +198,7 @@ jobs:
         # passe par un Bearer token délivré par l'OpenID Foundation. Un secret
         # manquant doit échouer SEC maintenant (message clair), pas via un
         # KeyError/traceback du driver en plein milieu du run — et surtout pas
-        # dans chacun des 6 jobs matrix (6 clones + 6 attentes avant d'échouer).
+        # dans chacun des 7 jobs matrix (7 clones + 7 attentes avant d'échouer).
         run: |
           if [ -z "$CONFORMANCE_TOKEN" ]; then
             echo "::error::Secret CONFORMANCE_TOKEN absent. Le créer ainsi :"
@@ -233,7 +235,7 @@ jobs:
         # Blocant (issue #161) : le script exige les 24 captures et sort en
         # code non nul dès qu'une scène échoue — sans elles, aucun job plan ne
         # pourrait alimenter les placeholders REVIEW.
-        # Une seule exécution par run : les 6 jobs matrix téléchargent le
+        # Une seule exécution par run : les 7 jobs matrix téléchargent le
         # résultat en artefact (lancer Playwright ×6 ferait ×6 le temps de
         # build navigateur et 4 relevés concurrents du même OP).
         run: |
@@ -341,7 +343,7 @@ jobs:
         #    encore actif (timeout dépassé, run annulé…) serait interrompu par le
         #    module suivant (« Stopping test due to alias conflict »). Le driver
         #    libère donc l'alias lui-même avant chaque création de module — et
-        #    comme chaque plan a UN alias distinct, les 6 jobs parallèles ne
+        #    comme chaque plan a UN alias distinct, les 7 jobs parallèles ne
         #    peuvent pas s'interrompre mutuellement.
         # 4) un module qui passe en INTERRUPTED ne donne dans la CI qu'un
         #    « has moved to INTERRUPTED » : on y ajoute la cause réelle (statut,

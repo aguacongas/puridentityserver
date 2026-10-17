@@ -5,8 +5,8 @@
 # Usage : source certification/selectors.sh puis selector_for <plan>.
 # shellcheck shell=bash
 
-# Les six plans joues par defaut (filtre `all` des workflows).
-CERTIFICATION_PLANS=(basic implicit hybrid ciba fapi1 fapi2)
+# Les sept plans joues par defaut (filtre `all` des workflows).
+CERTIFICATION_PLANS=(basic implicit hybrid ciba fapi1 fapi2 fapi2-message-signing)
 
 # Retourne le selecteur de variante d'un plan sur stdout ; code retour 1 si le
 # plan est inconnu (appelant : message d'erreur + sortie securisee).
@@ -30,6 +30,14 @@ selector_for() {
     # de grant management ; notApplicableWhen n'exclut que
     # client_attestation avec plain_fapi.
     fapi2) echo 'fapi2-security-profile-final-test-plan[fapi_profile=plain_fapi][client_auth_type=private_key_jwt][authorization_request_type=simple][openid=openid_connect][sender_constrain=dpop]' ;;
+    # FAPI2 Message Signing Final (issue #164) : meme socle que fapi2 +
+    # fapi_response_mode=jarm (response_mode=jwt sur /authorize, reponses
+    # d'autorisation enveloppees en JWT signe — reussites ET erreurs).
+    # fapi_request_method=unsigned est explicite : la variante n'a pas de
+    # defaultValue dans la suite (release-v5.3.3) — la creation du plan
+    # echoue sans valeur (« requires a value for variant fapi_request_method ») ;
+    # le plan fapi2 ne l'expose que via la reutilisation d'un plan anterieur.
+    fapi2-message-signing) echo 'fapi2-message-signing-final-test-plan[fapi_profile=plain_fapi][client_auth_type=private_key_jwt][fapi_request_method=unsigned][authorization_request_type=simple][openid=openid_connect][sender_constrain=dpop][fapi_response_mode=jarm]' ;;
     *) return 1 ;;
   esac
 }

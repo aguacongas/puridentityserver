@@ -60,6 +60,9 @@ class ClientRow(PersistenceBase):
     id_token_signed_response_alg: Mapped[str] = mapped_column(
         String(32), default="", server_default=text("''")
     )
+    authorization_signed_response_alg: Mapped[str] = mapped_column(
+        String(32), default="", server_default=text("''")
+    )
     id_token_encrypted_response_alg: Mapped[str] = mapped_column(
         String(32), default="", server_default=text("''")
     )
@@ -183,6 +186,7 @@ def _to_row(client: Client) -> ClientRow:
         tls_client_certificate_hash=client.tls_client_certificate_hash,
         tls_client_certificate_bound_access_tokens=client.tls_client_certificate_bound_access_tokens,
         id_token_signed_response_alg=client.id_token_signed_response_alg,
+        authorization_signed_response_alg=client.authorization_signed_response_alg,
         id_token_encrypted_response_alg=client.id_token_encrypted_response_alg,
         id_token_encrypted_response_enc=client.id_token_encrypted_response_enc,
         frontchannel_logout_uri=client.frontchannel_logout_uri,
@@ -262,6 +266,7 @@ def _from_row(row: ClientRow) -> Client:
         tls_client_certificate_hash=_text(row.tls_client_certificate_hash),
         tls_client_certificate_bound_access_tokens=row.tls_client_certificate_bound_access_tokens,
         id_token_signed_response_alg=_text(row.id_token_signed_response_alg),
+        authorization_signed_response_alg=_text(row.authorization_signed_response_alg),
         id_token_encrypted_response_alg=_text(row.id_token_encrypted_response_alg),
         id_token_encrypted_response_enc=_text(row.id_token_encrypted_response_enc),
         frontchannel_logout_uri=_text(row.frontchannel_logout_uri),

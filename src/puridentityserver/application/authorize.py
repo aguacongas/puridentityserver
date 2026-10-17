@@ -19,6 +19,9 @@ Les jetons émis sur ``/authorize`` (implicit/hybrid) sont retournés dans le
 §4.2.2) ; le ``nonce`` est requis dès qu'un ``id_token`` est émis. En hybrid,
 l'``id_token`` porte ``c_hash`` (empreinte du code) et ``at_hash`` (empreinte
 de l'access token) pour lier les trois artefacts (OIDC Core 1.0 §3.3.2.11).
+Le mode ``response_mode=jwt`` (JARM Final 1.0 §3) enveloppe au contraire la
+réponse — succès comme erreur redirigeable — dans un JWT signé porté par le
+paramètre ``response`` de la query string.
 """
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ from puridentityserver.application.claims_request import (
 )
 from puridentityserver.application.id_token_encryption import encrypt_id_token_for_client
 from puridentityserver.application.id_token_material import resolve_id_token_material
+from puridentityserver.application.jarm import JarmSigner, jarm_signing_alg
 from puridentityserver.application.resource_indicators import (
     is_resource_uri,
     parse_resource_parameter,
@@ -142,6 +146,9 @@ class AuthorizeError:
     repartir en redirection : ``redirect_uri`` non enregistrée ou
     ``client_id`` invalide, que la RFC 6749 §4.1.2.1 interdit de suivre au
     profit d'une information affichée à l'utilisateur par le user agent.
+    ``client_id`` (vide pour une demande dont le client n'est pas résolu)
+    porte l'audience de l'enveloppe JARM quand ``response_mode`` vaut
+    ``jwt`` (JARM Final 1.0 §3).
     """
 
     error: str
@@ -150,6 +157,7 @@ class AuthorizeError:
     state: str = ""
     response_mode: ResponseMode = ResponseMode.QUERY
     redirectable: bool = True
+    client_id: str = ""
 
 
 AuthorizeResult = AuthorizeRedirect | AuthorizeError
@@ -304,6 +312,22 @@ async def validate_authorization_request(
             redirectable=False,
         )
 
+    if request.response_mode == ResponseMode.JWT.value and not jarm_signing_alg(
+        client, request.response_mode
+    ):
+        # response_mode=jwt n'est signable qu'avec un
+        # authorization_signed_response_alg publié par l'OP (JARM Final
+        # 1.0 §4) : sans lui, refus propre en transport clair — le mode
+        # ``jwt`` ne peut pas porter l'enveloppe elle-même.
+        return _authorize_error(
+            "unsupported_response_mode",
+            request,
+            description="response_mode=jwt exige un "
+            "authorization_signed_response_alg publié par l'émetteur "
+            "(JARM Final 1.0 §4)",
+            response_mode=error_mode,
+        )
+
     profile_error = _client_profile_error(request, client, response_types, response_mode)
     if profile_error is not None:
         return profile_error
@@ -385,7 +409,7 @@ def _fapi_profile_error(
 ) -> AuthorizeError | None:
     """Contrôle le profil FAPI 1.0 Advanced du client (``fapi_enabled``).
 
-    Seul le flow hybride ``code id_token`` est admis sans JARM
+    Seul le flow hybride ``code id_token`` est admis
     (FAPI1-ADV-5.2.2-2) : ``code`` seul est refusé
     ``unsupported_response_type``. Un ``code_challenge`` déclaré doit
     employer ``S256`` — ``plain`` est rejeté (FAPI1-ADV-5.2.2-18) ;
@@ -413,10 +437,9 @@ def _fapi_profile_error(
 def _is_fapi_flow(response_types: frozenset[str]) -> bool:
     """True si ``response_types`` est le flow hybride exigé par FAPI 1.0 Advanced.
 
-    Seul ``code id_token`` est admis sans JARM (FAPI1-ADV-5.2.2-2) :
-    ``code`` seul (flow authorization code) comme ``token`` pur sont refusés
-    ``unsupported_response_type`` — le profil JARM (``response_mode=jwt``)
-    n'est pas retenu.
+    Seul ``code id_token`` est admis (FAPI1-ADV-5.2.2-2) : ``code`` seul
+    (flow authorization code) comme ``token`` pur sont refusés
+    ``unsupported_response_type``.
     """
     return response_types == frozenset(("code", "id_token"))
 
@@ -492,7 +515,8 @@ class AuthorizeUseCase:
     d'autorisation est enregistré s'il est demandé (hybrid), l'access token
     et/ou l'id_token sont émis depuis ``/authorize`` pour les flows implicit
     et hybrid. La réponse est placée dans le fragment de la ``redirect_uri``
-    dès qu'un jeton est retourné.
+    dès qu'un jeton est retourné, ou signée dans l'enveloppe JARM portée
+    par ``response`` quand ``response_mode=jwt`` est demandé.
     """
 
     def __init__(
@@ -506,15 +530,18 @@ class AuthorizeUseCase:
         *,
         claims_provider: ClaimsProvider | None = None,
         identity_resources: IdentityResourceReader | None = None,
+        jarm_signer: JarmSigner | None = None,
     ) -> None:
         """Injection de la configuration, des repositories et de l'émetteur de jetons.
 
         ``claims_provider`` / ``identity_resources`` alimentent les claims
         ajoutés à l'id_token : les claims des scopes accordés en
         ``response_type=id_token`` (OIDC Core 1.0 §5.4 — aucun UserInfo
-        possible sans access_token) et le member ``id_token`` du paramètre
+        possible sans access_token) et le member ``claims`` du paramètre
         ``claims`` (§5.5). Sans injection, l'id_token garde son payload
-        standard minimal.
+        standard minimal. ``jarm_signer`` enveloppe la réponse de succès
+        en ``response_mode=jwt`` (JARM Final 1.0 §3) ; sans injection, le
+        mode ``jwt`` retombe sur le transport ``query`` clair.
         """
         self._config = config
         self._clients = client_repository
@@ -524,6 +551,7 @@ class AuthorizeUseCase:
         self._session_management = session_management
         self._claims_provider = claims_provider
         self._identity_resources = identity_resources
+        self._jarm_signer = jarm_signer
 
     async def execute(self, request: AuthorizeRequest) -> AuthorizeResult:
         """Traite la demande d'autorisation et retourne le redirect ou l'erreur."""
@@ -564,9 +592,7 @@ class AuthorizeUseCase:
             session_state=self._resolve_session_state(request),
         )
         return AuthorizeRedirect(
-            redirect_uri=self._build_redirect_uri(
-                request.redirect_uri, validated.response_mode, params
-            ),
+            redirect_uri=await self._response_redirect_uri(request, validated, params),
             code=code,
             state=request.state,
             response_mode=validated.response_mode,
@@ -574,6 +600,34 @@ class AuthorizeUseCase:
             access_token=access_token,
             expires_in=expires_in,
         )
+
+    async def _response_redirect_uri(
+        self,
+        request: AuthorizeRequest,
+        validated: ValidatedAuthorization,
+        params: dict[str, str],
+    ) -> str:
+        """URL de retour : enveloppe JARM (``?response=<jwt>``) ou params clairs.
+
+        En ``response_mode=jwt`` (JARM Final 1.0 §5.1), les paramètres sont
+        signés dans l'enveloppe ; sans signeur injecté ou si le client
+        s'est révélé non signable, la réponse retombe sur le transport
+        clair : ``fragment`` dès qu'un jeton est retourné, ``query`` sinon.
+        """
+        encoded = [f"{name}={value}" for name, value in params.items()]
+        if validated.response_mode is ResponseMode.JWT and self._jarm_signer is not None:
+            try:
+                envelope = await self._jarm_signer.sign(validated.client, params)
+            except ValueError:
+                envelope = ""
+            if envelope:
+                return self._build_redirect_uri(
+                    request.redirect_uri, ResponseMode.JWT, [f"response={envelope}"]
+                )
+        mode = validated.response_mode
+        if mode is ResponseMode.JWT:
+            mode = ResponseMode.FRAGMENT if validated.has_tokens else ResponseMode.QUERY
+        return self._build_redirect_uri(request.redirect_uri, mode, encoded)
 
     async def _issue_code(
         self, request: AuthorizeRequest, scopes: frozenset[Scope], client: Client
@@ -767,28 +821,34 @@ class AuthorizeUseCase:
         scopes: frozenset[Scope],
         state: str,
         session_state: str = "",
-    ) -> list[str]:
-        """Assemble les paramètres de succès de la redirection (RFC 6749 §4.1.2, §4.2.2)."""
-        params: list[str] = []
+    ) -> dict[str, str]:
+        """Assemble les paramètres de succès de la redirection (RFC 6749 §4.1.2, §4.2.2).
+
+        Le dictionnaire (ordre d'insertion stable) sert aux deux transports :
+        encodé ``nom=valeur`` pour ``query`` / ``fragment``, claims de
+        l'enveloppe JARM pour ``response_mode=jwt`` (valeurs restant des
+        chaînes, les paramètres OAuth 2.0 le sont par définition).
+        """
+        params: dict[str, str] = {}
         if code:
-            params.append(f"code={code}")
+            params["code"] = code
         if access_token:
-            params.append(f"access_token={access_token}")
-            params.append("token_type=Bearer")
-            params.append(f"expires_in={expires_in}")
-            params.append("scope=" + " ".join(sorted(scope.value for scope in scopes)))
+            params["access_token"] = access_token
+            params["token_type"] = "Bearer"  # ruff: ignore[hardcoded-password-string]  (valeur standard OAuth, pas un secret)
+            params["expires_in"] = str(expires_in)
+            params["scope"] = " ".join(sorted(scope.value for scope in scopes))
         if id_token:
-            params.append(f"id_token={id_token}")
+            params["id_token"] = id_token
         if session_state:
-            params.append(f"session_state={session_state}")
+            params["session_state"] = session_state
         if state:
-            params.append(f"state={state}")
+            params["state"] = state
         if self._config.issuer:
             # RFC 9207 §2.3 : l'émetteur accompagne toute réponse
             # d'autorisation réussie (``iss``), metadata
             # ``authorization_response_iss_parameter_supported`` —
             # OAuth2-iss-2, FAPI2-SP-5.3.2.2-7.
-            params.append(f"iss={self._config.issuer}")
+            params["iss"] = self._config.issuer
         return params
 
     def _resolve_session_state(self, request: AuthorizeRequest) -> str:
@@ -811,7 +871,9 @@ class AuthorizeUseCase:
     ) -> str:
         """Construit l'URL de retour : query (query string) ou fragment (#...).
 
-        Une ``redirect_uri`` déjà porteuse d'une query (paramètres statiques
+        ``response_mode=jwt`` suit la query — le paramètre unique
+        ``response`` y porte l'enveloppe JARM (JARM Final 1.0 §5.1). Une
+        ``redirect_uri`` déjà porteuse d'une query (paramètres statiques
         du RP) impose ``&`` : un second ``?`` séparerait deux query strings
         et la suite de certification ne lirait plus les paramètres de retour
         (``CheckMatchingCallbackParameters``).
@@ -829,8 +891,13 @@ def _resolve_response_mode(requested: str, has_tokens: bool) -> ResponseMode | N
     Le fragment s'impose dès qu'un jeton est retourné : la query string
     exposerait le jeton (historique, Referer). Un ``response_mode=query``
     explicite combiné à des jetons est donc refusé (RFC 6749 §4.2.2,
-    OIDC Core 1.0 §3.1.2.1).
+    OIDC Core 1.0 §3.1.2.1). ``response_mode=jwt`` (JARM Final 1.0 §3)
+    prime sur cette règle — l'enveloppe porte elle-même les jetons, en
+    query ; l'algorithme de signature du client est contrôlé séparément
+    dans :func:`validate_authorization_request`.
     """
+    if requested == ResponseMode.JWT.value:
+        return ResponseMode.JWT
     if requested == ResponseMode.FRAGMENT.value:
         return ResponseMode.FRAGMENT
     if requested == ResponseMode.QUERY.value:
@@ -843,9 +910,14 @@ def _error_response_mode(requested: str, has_tokens: bool) -> ResponseMode:
 
     Les erreurs des flows retournant des jetons vont dans le fragment ; les
     autres dans la query string. Une combinaison ``query`` + jetons (interdite)
-    retombe aussi sur le fragment.
+    retombe aussi sur le fragment. ``response_mode=jwt`` est neutralisé ici :
+    ce mode n'est résolu qu'après la résolution du client et son contrôle
+    d'algorithme — une erreur émise avant (``response_type`` non supporté)
+    ne peut pas être signée et retourne au transport clair.
     """
-    resolved = _resolve_response_mode(requested, has_tokens)
+    resolved = _resolve_response_mode(
+        "" if requested == ResponseMode.JWT.value else requested, has_tokens
+    )
     return resolved if resolved is not None else ResponseMode.FRAGMENT
 
 
@@ -856,7 +928,11 @@ def _authorize_error(
     response_mode: ResponseMode = ResponseMode.QUERY,
     redirectable: bool = True,
 ) -> AuthorizeError:
-    """Construit une réponse d'erreur OAuth (RFC 6749 §4.1.2.1, §4.2.2.1)."""
+    """Construit une réponse d'erreur OAuth (RFC 6749 §4.1.2.1, §4.2.2.1).
+
+    ``client_id`` reprend toujours celui de la demande : il sert d'audience
+    à l'enveloppe JARM des erreurs redirigeables (JARM Final 1.0 §3).
+    """
     return AuthorizeError(
         error=error,
         error_description=description,
@@ -864,6 +940,7 @@ def _authorize_error(
         state=request.state,
         response_mode=response_mode,
         redirectable=redirectable,
+        client_id=request.client_id,
     )
 
 

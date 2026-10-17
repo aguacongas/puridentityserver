@@ -66,10 +66,17 @@ Scope.OFFLINE_ACCESS = Scope("offline_access")
 
 
 class ResponseMode(str, Enum):
-    """Mode de réponse de l'endpoint d'autorisation (OIDC Core 1.0 §3.1.2.1)."""
+    """Mode de réponse de l'endpoint d'autorisation (OIDC Core 1.0 §3.1.2.1).
+
+    ``jwt`` (JARM Final 1.0 §3) enveloppe la réponse — succès comme erreur
+    redirigeable — dans un JWT signé porté par le paramètre ``response`` de
+    la query string ; ``query`` et ``fragment`` restent les modes OAuth 2.0
+    historiques.
+    """
 
     QUERY = "query"
     FRAGMENT = "fragment"
+    JWT = "jwt"
 
 
 class ClientType(str, Enum):
@@ -191,6 +198,11 @@ class Client:
     jeton JWS est émis tel quel ; sinon le JWS imbriqué est chiffré avec
     ``client_secret_ciphertext`` (familles symétriques) ou la clé publique
     RSA du ``jwks`` (RSA-OAEP).
+    ``authorization_signed_response_alg`` (OIDC Registration 1.0 §2.1,
+    JARM Final 1.0 §4) est l'algorithme JWS de l'enveloppe JARM signant
+    les réponses de ce client quand ``response_mode=jwt`` est demandé :
+    vide (défaut) ou valeur non publiée par l'OP = la demande est refusée
+    ``unsupported_response_mode``.
      ``frontchannel_logout_uri`` / ``backchannel_logout_uri`` (OIDC
      Front-Channel Logout 1.0 §2 / Back-Channel Logout 1.0 §2) : URI de
      terminaison de session du client appelées par ``/end_session`` après la
@@ -245,6 +257,11 @@ class Client:
     id_token_signed_response_alg: str = ""
     id_token_encrypted_response_alg: str = ""
     id_token_encrypted_response_enc: str = ""
+    #: ``authorization_signed_response_alg`` (OIDC Registration 1.0 §2.1,
+    #: JARM Final 1.0 §4) : algorithme JWS signant l'enveloppe JARM de ce
+    #: client ; ``""`` (défaut) signifie ``response_mode=jwt`` refusé en
+    #: ``unsupported_response_mode``.
+    authorization_signed_response_alg: str = ""
     frontchannel_logout_uri: str = ""
     frontchannel_logout_session_required: bool = False
     backchannel_logout_uri: str = ""

@@ -162,6 +162,19 @@ DPOP_SIGNING_ALGORITHMS: tuple[str, ...] = (
     JWTAlgorithm.ES512.value,
 )
 
+#: Algorithmes JWS admis pour l'enveloppe JARM (``response_mode=jwt``,
+#: JARM Final 1.0 §4.1) : ``PS256``/``ES256`` exigés par les profils FAPI,
+#: ``RS256`` admis pour les clients standards. Familles symétriques HS* et
+#: ``none`` exclus — la réponse d'autorisation est signée par l'OP avec sa
+#: propre clé. Publiés au discovery sous
+#: ``authorization_signing_alg_values_supported`` et contrôlés à la
+#: validation de la demande portant ``response_mode=jwt``.
+JARM_SIGNING_ALGORITHMS: tuple[str, ...] = (
+    JWTAlgorithm.PS256.value,
+    JWTAlgorithm.ES256.value,
+    JWTAlgorithm.RS256.value,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class KeyPair:

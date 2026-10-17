@@ -494,6 +494,10 @@ client_type = "public"
 # - sample-swagger-client   : flow OIDC depuis le bouton « Authorize » de
 #                             Swagger UI (/docs, client public + PKCE) —
 #                             échantillon samples/swagger-docs-client/
+# - sample-jarm-client      : flow Authorization Code avec response_mode=jwt
+#                             (JARM Final 1.0 §3), réponse signée dans
+#                             l'enveloppe `response` — échantillon
+#                             samples/jarm-client/
 # → les smokes tests de ces samples PASSERT une configuration spécifique (port
 #   dédié + ce client) via un fichier temporaire ; ici ils sont aussi enregistrés
 #   pour pouvoir lancer le serveur par défaut et tester manuellement les samples.
@@ -644,3 +648,16 @@ scopes = "openid profile email"
 client_type = "confidential"
 backchannel_token_delivery_mode = "ping"
 backchannel_client_notification_endpoint = "http://127.0.0.1:8118/notify"
+
+# client du sample JARM (JARM Final 1.0 §3 — échantillon
+# samples/jarm-client/) : flow Authorization Code avec
+# response_mode=jwt — succès comme erreur redirigeable sont signés dans
+# l'enveloppe portée par le paramètre `response` de la query string.
+# `authorization_signed_response_alg` déclare l'algorithme OP admis
+# (JARM Final 1.0 §4.1) ; client public = PKCE obligatoire.
+[[settings.clients_seed]]
+client_id = "sample-jarm-client"
+redirect_uris = ["http://127.0.0.1:8120/callback"]
+scopes = "openid profile email"
+client_type = "public"
+authorization_signed_response_alg = "PS256"

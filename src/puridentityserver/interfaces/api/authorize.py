@@ -21,6 +21,7 @@ from puridentityserver.application.authorize import (
     validate_authorization_request,
 )
 from puridentityserver.application.consent import ConsentUseCase
+from puridentityserver.application.jarm import JarmSigner, jarm_signing_alg
 from puridentityserver.application.par import PushedAuthorizationUseCase, PushError
 from puridentityserver.application.request_object import (
     RequestObjectError,
@@ -28,7 +29,7 @@ from puridentityserver.application.request_object import (
     is_pushed_request_uri,
 )
 from puridentityserver.application.resource_indicators import encode_resource_parameter
-from puridentityserver.domain.authorization import ResponseMode, Scope
+from puridentityserver.domain.authorization import Client, ResponseMode, Scope
 from puridentityserver.identity.config import (
     CurrentUser,
     CurrentUserOptional,
@@ -101,6 +102,7 @@ def authorize_router(
     par_required: bool = False,
     require_login: bool = False,
     base_url: str = "",
+    jarm_signer: JarmSigner | None = None,
 ) -> APIRouter:
     """Construit le routeur FastAPI exposant ``GET /authorize``.
 
@@ -118,6 +120,8 @@ def authorize_router(
     couverts par un consentement mémorisé. ``require_login`` : la demande non
     authentifiée est redirigée vers ``/login`` (OIDC Core 1.0 §3.1.2.1), ou
     renvoyée en erreur ``login_required`` quand ``prompt=none`` (§3.1.2.6).
+    ``jarm_signer`` signe les erreurs redirigeables en ``response_mode=jwt``
+    (JARM Final 1.0 §3) ; sans injection, elles restent en query/fragment.
     """
     router = APIRouter(tags=["authorize"])
 
@@ -176,11 +180,18 @@ def authorize_router(
             request_object_resolver=request_object_resolver,
             client_repository=client_repository,
             par_required=par_required,
+            jarm_signer=jarm_signer,
         )
         if isinstance(auth_request, Response):
             return auth_request
         pre = await _pre_execution_response(
-            auth_request, request, user, client_repository, require_login, base_url
+            auth_request,
+            request,
+            user,
+            client_repository,
+            require_login,
+            base_url,
+            jarm_signer=jarm_signer,
         )
         if pre is not None:
             return pre
@@ -195,7 +206,7 @@ def authorize_router(
         result = await usecase.execute(auth_request)
         if isinstance(result, AuthorizeRedirect):
             return await _success_redirect(result, par_usecase, pushed_reference)
-        return error_response(result)
+        return await error_response(result, jarm_signer)
 
     return router
 
@@ -222,6 +233,8 @@ async def _direct_authorize_request(
     request_object_resolver: RequestObjectResolver,
     client_repository: ClientReader | None,
     par_required: bool = False,
+    *,
+    jarm_signer: JarmSigner | None = None,
 ) -> AuthorizeRequest | RedirectResponse | HTMLResponse:
     """Construit la demande d'une requête **non poussée** (RFC 6749 §3.1).
 
@@ -237,10 +250,14 @@ async def _direct_authorize_request(
     (check ``ExpectResponseTypeMissingErrorPage`` exigé par la suite).
     Le refus PAR, lui, se redirige vers la ``redirect_uri`` de la query
     quand elle est enregistrée (issue #160), page HTML sinon.
+    ``jarm_signer`` signe ces refus redirigeables quand la demande porte
+    ``response_mode=jwt`` et que le client est signable.
     """
     resolved = await request_object_resolver.resolve(params)
     if isinstance(resolved, RequestObjectError):
-        return await _request_object_error_response(resolved, params, client_repository)
+        return await _request_object_error_response(
+            resolved, params, client_repository, jarm_signer
+        )
     params = resolved
     missing = [
         name
@@ -254,7 +271,9 @@ async def _direct_authorize_request(
     ]
     if missing:
         return _missing_parameters_page(missing)
-    enforced = await _enforce_par_requirement(params, client_repository, par_required)
+    enforced = await _enforce_par_requirement(
+        params, client_repository, par_required, jarm_signer=jarm_signer
+    )
     if enforced is not None:
         return enforced
     return AuthorizeRequest(
@@ -336,10 +355,29 @@ def _request_object_error_page(error: RequestObjectError) -> HTMLResponse:
     )
 
 
+def _requested_error_mode(client: Client, requested_mode: str, has_tokens: bool) -> ResponseMode:
+    """Mode d'encodage d'une erreur pour un client déjà résolu.
+
+    ``response_mode=jwt`` n'est honoré que si le client porte un
+    ``authorization_signed_response_alg`` géré par l'OP (JARM Final 1.0 §4) :
+    sans lui — ou quand ``response_type`` lui-même exige le fragment
+    (RFC 6749 §4.2.2.1) — l'erreur repart en transport clair ``fragment`` /
+    ``query``. Le contrôle de l'algorithme lui-même reste le fait de
+    ``validate_authorization_request`` (refus ``unsupported_response_mode``
+    transporté en clair).
+    """
+    if jarm_signing_alg(client, requested_mode):
+        return ResponseMode.JWT
+    if requested_mode == ResponseMode.FRAGMENT.value or has_tokens:
+        return ResponseMode.FRAGMENT
+    return ResponseMode.QUERY
+
+
 async def _request_object_error_response(
     error: RequestObjectError,
     params: dict[str, str],
     client_repository: ClientReader | None,
+    jarm_signer: JarmSigner | None = None,
 ) -> RedirectResponse | HTMLResponse:
     """Transporte un refus de request object (RFC 6749 §4.1.2.1, issue #178).
 
@@ -352,12 +390,13 @@ async def _request_object_error_response(
     callback sûr (URI absente ou non enregistrée, client inconnu), la
     page HTML d'erreur est servie.
 
-    L'enveloppe suit le ``response_type`` du transport : le fragment
-    d'entrée (implicit/hybrid, FAPI1 ``code id_token``) impose de renvoyer
-    l'erreur dans le fragment de la callback (RFC 6749 §4.1.2.1,
-    §4.2.2.1 — ``response_mode=query`` y est interdit), la query sinon.
-    Le ``state`` écho vient du request object lui-même quand il est lisible
-    (RFC 9101 §6.3), de la query à défaut.
+    L'enveloppe suit le ``response_mode`` demandé quand le client est
+    signable JARM (``response=jwt`` signé), sinon le ``response_type`` du
+    transport : le fragment d'entrée (implicit/hybrid, FAPI1
+    ``code id_token``) impose de renvoyer l'erreur dans le fragment de la
+    callback (RFC 6749 §4.1.2.1, §4.2.2.1 — ``response_mode=query`` y est
+    interdit), la query sinon. Le ``state`` écho vient du request object
+    lui-même quand il est lisible (RFC 9101 §6.3), de la query à défaut.
     """
     if client_repository is None:
         return _request_object_error_page(error)
@@ -369,19 +408,17 @@ async def _request_object_error_response(
         return _request_object_error_page(error)
     response_type = params.get("response_type", "")
     has_tokens = bool({"token", "id_token"} & set(response_type.split()))
-    requested_mode = params.get("response_mode", "")
-    if requested_mode == ResponseMode.FRAGMENT.value or has_tokens:
-        response_mode = ResponseMode.FRAGMENT
-    else:
-        response_mode = ResponseMode.QUERY
-    return error_redirect(
+    response_mode = _requested_error_mode(client, params.get("response_mode", ""), has_tokens)
+    return await error_redirect(
         AuthorizeError(
             error=error.error,
             error_description=error.error_description,
             redirect_uri=redirect_uri,
             state=error.state or params.get("state", ""),
             response_mode=response_mode,
-        )
+            client_id=client.client_id,
+        ),
+        jarm_signer,
     )
 
 
@@ -392,6 +429,8 @@ async def _pre_execution_response(
     client_repository: ClientReader | None,
     require_login: bool,
     base_url: str,
+    *,
+    jarm_signer: JarmSigner | None = None,
 ) -> RedirectResponse | HTMLResponse | None:
     """Réponses possibles **avant** émission : page d'erreur, reconnexion, ``prompt``.
 
@@ -404,7 +443,13 @@ async def _pre_execution_response(
     if error_page is not None:
         return error_page
     return await _authentication_gate(
-        auth_request, request, user, client_repository, require_login, base_url
+        auth_request,
+        request,
+        user,
+        client_repository,
+        require_login,
+        base_url,
+        jarm_signer=jarm_signer,
     )
 
 
@@ -449,7 +494,7 @@ async def _non_redirectable_error(
         return None
     validated = await validate_authorization_request(auth_request, client_repository)
     if isinstance(validated, AuthorizeError) and not validated.redirectable:
-        return error_response(validated)
+        return await error_response(validated)
     return None
 
 
@@ -460,6 +505,8 @@ async def _authentication_gate(
     client_repository: ClientReader | None,
     require_login: bool,
     base_url: str,
+    *,
+    jarm_signer: JarmSigner | None = None,
 ) -> RedirectResponse | HTMLResponse | None:
     """Contrôle d'accès avant émission : reconnexion, ``prompt``, ``max_age``.
 
@@ -474,10 +521,18 @@ async def _authentication_gate(
     """
     if user is not None and await _reauthentication_required(auth_request, request, base_url):
         if "none" in auth_request.prompt.split():
-            return await _login_or_error(auth_request, request, client_repository, base_url)
+            return await _login_or_error(
+                auth_request,
+                request,
+                client_repository,
+                base_url,
+                jarm_signer=jarm_signer,
+            )
         return _login_redirect(request, base_url)
     if user is None and (require_login or "login" in auth_request.prompt.split()):
-        return await _login_or_error(auth_request, request, client_repository, base_url)
+        return await _login_or_error(
+            auth_request, request, client_repository, base_url, jarm_signer=jarm_signer
+        )
     return None
 
 
@@ -527,6 +582,8 @@ async def _login_or_error(
     http_request: Request,
     client_repository: ClientReader | None,
     base_url: str = "",
+    *,
+    jarm_signer: JarmSigner | None = None,
 ) -> RedirectResponse | HTMLResponse:
     """Gère une demande ``/authorize`` non réauthentifiée (``prompt``/``require_login``).
 
@@ -541,6 +598,9 @@ async def _login_or_error(
     l'émetteur, jamais ``request.url`` : derrière un proxy de terminaison TLS
     l'en-tête Host ne porte pas le port non standard, ce qui cassait la
     redirection post-login avec e.g. ``https://host.example:8445``).
+
+    L'erreur ``login_required`` suit ``response_mode`` (signée JARM pour un
+    client signable, query/fragment sinon) via ``jarm_signer``.
     """
     if "none" in auth_request.prompt.split():
         validated = (
@@ -549,15 +609,16 @@ async def _login_or_error(
             else None
         )
         if isinstance(validated, AuthorizeError):
-            return error_response(validated)
+            return await error_response(validated, jarm_signer)
         error = AuthorizeError(
             error="login_required",
             error_description="Authentification requise (prompt=none)",
             redirect_uri=auth_request.redirect_uri,
             state=auth_request.state,
             response_mode=validated.response_mode if validated is not None else ResponseMode.QUERY,
+            client_id=auth_request.client_id,
         )
-        return error_response(error)
+        return await error_response(error, jarm_signer)
     return _login_redirect(http_request, base_url)
 
 
@@ -587,6 +648,7 @@ async def _authorize_entry(
     request_object_resolver: RequestObjectResolver,
     client_repository: ClientReader | None,
     par_required: bool,
+    jarm_signer: JarmSigner | None = None,
 ) -> tuple[AuthorizeRequest | Response, str]:
     """Résout l'entrée ``/authorize`` : poussée (``request_uri``) ou directe.
 
@@ -603,7 +665,11 @@ async def _authorize_entry(
         )
         return resolved, request_uri
     built = await _direct_authorize_request(
-        params, request_object_resolver, client_repository, par_required
+        params,
+        request_object_resolver,
+        client_repository,
+        par_required,
+        jarm_signer=jarm_signer,
     )
     if isinstance(built, HTMLResponse):
         return built, ""
@@ -633,7 +699,7 @@ async def _resolve_pushed_request(
     sinon (référence inconnue, PAR désactivé).
     """
     if par_usecase is None:
-        return _pushed_param_response(
+        return await _pushed_param_response(
             PushError(
                 error="invalid_request",
                 error_description="Pushed Authorization Request désactivé",
@@ -643,11 +709,11 @@ async def _resolve_pushed_request(
 
     resolved = await par_usecase.resolve(request_uri=request_uri, client_id=client_id)
     if isinstance(resolved, PushError):
-        return _pushed_param_response(resolved)
+        return await _pushed_param_response(resolved)
     return resolved
 
 
-def _pushed_param_response(error: PushError) -> Response:
+async def _pushed_param_response(error: PushError) -> Response:
     """Transporte une erreur de résolution poussée (RFC 6749 §4.1.2.1, issue #160).
 
     Une ``redirect_uri`` poussée encore connue (référence expirée, déjà
@@ -656,11 +722,14 @@ def _pushed_param_response(error: PushError) -> Response:
     cette URI a été validée à l'enregistrement puis au push). Sans
     ``redirect_uri`` exploitable (référence inconnue, PAR désactivé), une
     page HTML d'erreur est servie au user agent (RFC 6749 §4.1.2.1 : pas de
-    redirection vers un callback inconnu).
+    redirection vers un callback inconnu). La charge poussée peut exiger
+    ``response_mode=jwt``, mais sa résolution n'est pas encore acquise :
+    l'erreur reste en transport clair (query/fragment), acceptée telle quelle
+    par la suite (``allowPlainErrorResponseForJarm``, JARM Final 1.0 §3).
     """
     if not error.redirect_uri:
         return _pushed_error_page(error)
-    return error_redirect(
+    return await error_redirect(
         AuthorizeError(
             error=error.error,
             error_description=error.error_description,
@@ -695,6 +764,8 @@ async def _enforce_par_requirement(
     params: dict[str, str],
     client_repository: ClientReader | None,
     server_par_required: bool = False,
+    *,
+    jarm_signer: JarmSigner | None = None,
 ) -> RedirectResponse | HTMLResponse | None:
     """Refuse une demande directe à /authorize si PAR est exigé (RFC 9126 §6.1).
 
@@ -706,7 +777,9 @@ async def _enforce_par_requirement(
     ``invalid_request`` (issue #160) : une redirection 302 quand la
     ``redirect_uri`` de la query est exactement enregistrée pour le client
     (redirection sûre), page HTML d'erreur sinon — ``None`` quand aucune
-    exigence PAR ne s'applique.
+    exigence PAR ne s'applique. La redirection porte l'enveloppe JARM quand
+    la demande exige ``response_mode=jwt`` et que le client est signable
+    (JARM Final 1.0 §3).
     """
     if client_repository is None:
         return None
@@ -718,13 +791,22 @@ async def _enforce_par_requirement(
     description = "Ce client exige l'utilisation de Pushed Authorization Request (RFC 9126 §6.1)"
     redirect_uri = params.get("redirect_uri", "")
     if redirect_uri and redirect_uri in client.redirect_uris:
-        return error_redirect(
+        response_types = set(params.get("response_type", "").split())
+        response_mode = _requested_error_mode(
+            client,
+            params.get("response_mode", ""),
+            bool({"token", "id_token"} & response_types),
+        )
+        return await error_redirect(
             AuthorizeError(
                 error="invalid_request",
                 error_description=description,
                 redirect_uri=redirect_uri,
                 state=params.get("state", ""),
-            )
+                response_mode=response_mode,
+                client_id=client.client_id,
+            ),
+            jarm_signer,
         )
     return _pushed_error_page(PushError(error="invalid_request", error_description=description))
 

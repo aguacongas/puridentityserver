@@ -20,15 +20,16 @@ uv run python -m pytest -p no:cacheprovider -q   # tests + couverture >= 80 % (9
 
 - **Harness local (mode courant)** : la suite de conformance OIDF tourne en docker
   sur le runner, OP local derrière un nginx mTLS — workflow
-  `.github/workflows/certification-local.yml`, matrix des 6 plans (basic,
-  implicit, hybrid, ciba, fapi1, fapi2), mode *witness* (les gaps module ne
+  `.github/workflows/certification-local.yml`, matrix des 7 plans (basic,
+  implicit, hybrid, ciba, fapi1, fapi2, fapi2-message-signing), mode *witness*
+  (les gaps module ne
   bloquent pas), déclenché sur chaque PR vers `main` touchant `certification/**`
   ou à la demande (`workflow_dispatch`, filtre de plan).
   **Toujours utiliser la dernière release publiée de la suite** : la version par
   défaut vit dans `SUITE_VERSION` (`certification/local/setup.sh`) ; avant chaque
   usage/rejeu, vérifier qu'une release plus récente n'est pas publiée et bumper
   `SUITE_VERSION` + la doc (`certification/README.md`) en conséquence, puis
-  rejouer les 6 plans pour valider le bump. Ne jamais fixer une version
+  rejouer les 7 plans pour valider le bump. Ne jamais fixer une version
   périmée dans la doc ou les scripts.
 - **Run hébergé officiel OIDF** : `.github/workflows/certification.yml` (secret
   `CONFORMANCE_TOKEN`, publication GitHub Pages) — reste la référence finale de
@@ -48,7 +49,7 @@ bash certification/local/run-plan.sh basic   # 1 plan en sortie stricte (log + e
 bash certification/local/down.sh             # arrêt du harness (--purge : conteneurs + clone)
 ```
 
-- Plans : `basic | implicit | hybrid | ciba | fapi1 | fapi2`. `run-plan.sh` fait la
+- Plans : `basic | implicit | hybrid | ciba | fapi1 | fapi2 | fapi2-message-signing`. `run-plan.sh` fait la
   readiness (bootstrap via `setup.sh` si le harness est absent), applique les 5 patches
   driver par `prepare-suite.sh` (idempotent), substitue les URLs locales puis joue le
   driver officiel en sortie stricte ; log : `.harness-local/last-<plan>.log`,
