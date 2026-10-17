@@ -38,6 +38,7 @@ from puridentityserver.application.device_authorize import (
 from puridentityserver.application.discovery import DiscoveryConfig, DiscoveryUseCase
 from puridentityserver.application.dpop import DpopGrantGuard
 from puridentityserver.application.introspect import IntrospectConfig, IntrospectUseCase
+from puridentityserver.application.jarm import JarmSigner
 from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
 from puridentityserver.application.logout import LogoutConfig, LogoutUseCase
 from puridentityserver.application.par import PushedAuthorizationConfig, PushedAuthorizationUseCase
@@ -71,6 +72,7 @@ from puridentityserver.infrastructure.claims import UserStoreClaimsProvider
 from puridentityserver.infrastructure.client_assertions import PyJWTClientAssertionVerifier
 from puridentityserver.infrastructure.client_tls import ClientCertificateHeaderNames
 from puridentityserver.infrastructure.dpop import PyJWTDpopProofValidator
+from puridentityserver.infrastructure.jarm import PyJarmEnvelopeSigner
 from puridentityserver.infrastructure.jwe import JWEIdTokenEncrypter
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
 from puridentityserver.infrastructure.persistence.readers import build_readers_from_stores
@@ -142,6 +144,7 @@ def _mount_authorization_routers(
     par_required: bool,
     require_login: bool,
     base_url: str,
+    jarm_signer: JarmSigner | None = None,
 ) -> None:
     """Monte ``/authorize`` (+ ``/par`` + ``/consent`` selon la configuration)."""
     app.include_router(
@@ -154,6 +157,7 @@ def _mount_authorization_routers(
             par_required=par_required,
             require_login=require_login,
             base_url=base_url,
+            jarm_signer=jarm_signer,
         )
     )
     app.include_router(
@@ -162,6 +166,7 @@ def _mount_authorization_routers(
             authorize_usecase,
             client_reader,
             par_usecase=par_usecase if par_enabled else None,
+            jarm_signer=jarm_signer,
         )
     )
     if par_enabled:
@@ -255,6 +260,10 @@ class ProtocolDependencies:
             signed=self.signed_request_objects,
         )
 
+        self.jarm_signer = JarmSigner(
+            PyJarmEnvelopeSigner(self.key_manager, settings.issuer),
+            self.readers.client,
+        )
         self.authorize_usecase = AuthorizeUseCase(
             AuthorizeConfig(
                 code_ttl_seconds=settings.authorization_code_ttl_seconds,
@@ -271,6 +280,7 @@ class ProtocolDependencies:
             session_management=self.session_management,
             claims_provider=self.claims_provider,
             identity_resources=self.readers.identity_resource,
+            jarm_signer=self.jarm_signer,
         )
         self.token_usecase = TokenUseCase(
             TokenConfig(
@@ -482,6 +492,7 @@ class ProtocolDependencies:
             par_required=self.settings.par_required,
             require_login=self.settings.require_login,
             base_url=self.settings.base_url or self.settings.issuer,
+            jarm_signer=self.jarm_signer,
         )
         app.include_router(token_router(self.token_usecase, self.client_certificate_headers))
         app.include_router(device_authorization_router(self.device_usecase))

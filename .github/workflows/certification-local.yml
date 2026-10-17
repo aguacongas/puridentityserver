@@ -4,8 +4,9 @@ name: Certification OIDC (Local)
 # le runner, avec l'OP PurIdentityServer local derrière un nginx mTLS — aucune
 # dépendance à l'infra hébergée de la Fondation ni à Render.
 #
-# Assurance conformité COURANTE et déterministe. Les SIX plans sont joués en
-# matrix (patron du job hébergé, issue #122) : chaque job boot son propre
+# Assurance conformité COURANTE et déterministe. Les SEPT plans sont joués en
+# matrix (patron du job hébergé, issue #122 ; fapi2-message-signing ajouté par
+# l'issue #164) : chaque job boot son propre
 # harness docker (isolé, aucun conflit d'alias) et exporte son artefact. Le job
 # `report` fusionne les exports, génère le rapport statique et le PUBLIE sur
 # GitHub Pages — ce workflow est le SEUL propriétaire de la publication Pages
@@ -48,6 +49,7 @@ on:
           - ciba
           - fapi1
           - fapi2
+          - fapi2-message-signing
   pull_request:
     branches: ["main"]
     paths:
@@ -143,7 +145,7 @@ jobs:
       - name: Captures d'écran réelles des modules de relecture (Playwright)
         # Rejoue les 24 scénarios REVIEW contre l'OP local (cert auto-signé :
         # ignore_https_errors ; issuer lu au discovery, redirect_uris de la
-        # suite locale via --suite-url). Une seule exécution par run : les 6
+        # suite locale via --suite-url). Une seule exécution par run : les 7
         # jobs plan téléversent le résultat en artefact.
         run: |
           mkdir -p screenshots

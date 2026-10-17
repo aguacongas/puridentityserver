@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives.serialization import (
 
 from puridentityserver.domain.authorization import Scope
 from puridentityserver.domain.jwks import SYMMETRIC_ALGORITHMS, JWTAlgorithm, KeyPair
+from puridentityserver.infrastructure.jwks import first_active_key
 from puridentityserver.interfaces.domain.jwks import KeyManager
 from puridentityserver.interfaces.domain.tokens import IdTokenConditionalClaims
 
@@ -262,11 +263,4 @@ class PyJWTTokenManager:
 
     async def _first_active_key(self, algorithm: JWTAlgorithm) -> KeyPair:
         """Retourne la première clé active de l'algorithme, en génère si besoin."""
-        for key in await self._key_manager.get_active_keys():
-            if key.algorithm is algorithm:
-                return key
-        await self._key_manager.ensure_active_key(4096, algorithm)
-        for key in await self._key_manager.get_active_keys():
-            if key.algorithm is algorithm:
-                return key
-        raise RuntimeError(f"Aucune clé active disponible pour l'algorithme {algorithm.value}")
+        return await first_active_key(self._key_manager, algorithm)

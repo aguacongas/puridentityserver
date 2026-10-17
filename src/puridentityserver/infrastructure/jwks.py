@@ -20,6 +20,7 @@ from puridentityserver.domain.jwks import (
     KeyPair,
     KeyUse,
 )
+from puridentityserver.interfaces.domain.jwks import KeyManager
 from puridentityserver.interfaces.repositories.key_pair_repository import KeyPairRepository
 
 _RSA_ALGORITHMS = (
@@ -130,6 +131,23 @@ class DefaultKeyManager:
         active = [k for k in await self.get_active_keys() if k.algorithm is algorithm]
         if not active:
             await self.generate_key_pair(key_size, algorithm)
+
+
+async def first_active_key(key_manager: KeyManager, algorithm: JWTAlgorithm) -> KeyPair:
+    """Première clé active de l'algorithme, en génère une si aucune n'existe.
+
+    Partagée par l'émission des jetons (``PyJWTTokenManager``) et celle de
+    l'enveloppe JARM (``PyJarmEnvelopeSigner``) : même dérive de clé, même
+    ``kid`` opposé au JWKS.
+    """
+    for key in await key_manager.get_active_keys():
+        if key.algorithm is algorithm:
+            return key
+    await key_manager.ensure_active_key(4096, algorithm)
+    for key in await key_manager.get_active_keys():
+        if key.algorithm is algorithm:
+            return key
+    raise RuntimeError(f"Aucune clé active disponible pour l'algorithme {algorithm.value}")
 
 
 def _generate_key_pair(key_size: int, algorithm: JWTAlgorithm) -> KeyPair:

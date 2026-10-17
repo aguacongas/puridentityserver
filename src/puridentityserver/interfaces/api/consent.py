@@ -36,6 +36,7 @@ from puridentityserver.application.authorize import (
     validate_authorization_request,
 )
 from puridentityserver.application.consent import ConsentUseCase
+from puridentityserver.application.jarm import JarmSigner
 from puridentityserver.application.par import PushedAuthorizationUseCase
 from puridentityserver.domain.authorization import Scope
 from puridentityserver.identity.config import CurrentUserOptional
@@ -231,12 +232,17 @@ def consent_router(
     authorize_usecase: AuthorizeUseCase,
     client_repository: ClientReader,
     par_usecase: PushedAuthorizationUseCase | None = None,
+    *,
+    jarm_signer: JarmSigner | None = None,
 ) -> APIRouter:
     """Construit le routeur FastAPI exposant la page de consentement ``/consent``.
 
     ``par_usecase`` (``None`` : PAR désactivé) consomme la ``pushed_reference``
     au moment où l'approbation émet la réponse d'autorisation — même
     invariant que la redirection de succès de ``GET /authorize``.
+    ``jarm_signer`` signe les refus redirigeables (``access_denied`` du
+    bouton « Refuser », erreurs de re-validation) en ``response_mode=jwt``
+    (JARM Final 1.0 §3) ; sans injection, ils restent en query/fragment.
     """
     router = APIRouter(tags=["consent"])
 
@@ -267,6 +273,7 @@ def consent_router(
             str(user.id),
             pushed_reference=pushed_reference,
             par_usecase=par_usecase,
+            jarm_signer=jarm_signer,
         )
 
     @router.post(
@@ -292,16 +299,18 @@ def consent_router(
             raise HTTPException(status_code=400, detail="redirect_uri requis")
         validated = await validate_authorization_request(request, client_repository)
         if isinstance(validated, AuthorizeError):
-            return error_response(validated)
+            return await error_response(validated, jarm_signer)
         if form.action == "deny":
-            return error_response(
+            return await error_response(
                 AuthorizeError(
                     error="access_denied",
                     error_description="L'utilisateur a refusé l'accès",
                     redirect_uri=request.redirect_uri,
                     state=request.state,
                     response_mode=validated.response_mode,
-                )
+                    client_id=request.client_id,
+                ),
+                jarm_signer,
             )
         await consent_usecase.grant(str(user.id), request.client_id, _requested_scopes(request))
         return await _execution_redirect(
@@ -323,6 +332,7 @@ def consent_router(
             ),
             par_usecase=par_usecase,
             pushed_reference=pushed_reference,
+            jarm_signer=jarm_signer,
         )
 
     return router
@@ -337,6 +347,7 @@ async def _handle_consent(
     *,
     pushed_reference: str = "",
     par_usecase: PushedAuthorizationUseCase | None = None,
+    jarm_signer: JarmSigner | None = None,
 ) -> RedirectResponse | HTMLResponse | str:
     """Affiche la page ou court-circuite quand le consentement est déjà couvert.
 
@@ -348,13 +359,14 @@ async def _handle_consent(
     même quand le consentement stocké couvre la demande (la page est
     rendue, jamais court-circuitée). ``pushed_reference``
     accompagne la page et l'exécution pour consommer la demande poussée
-    à l'émission du code (PAR).
+    à l'émission du code (PAR) ; ``jarm_signer`` signe les erreurs de
+    re-validation redirigeables (JARM Final 1.0 §3).
     """
     if not request.redirect_uri:
         raise HTTPException(status_code=400, detail="redirect_uri requis")
     validated = await validate_authorization_request(request, client_repository)
     if isinstance(validated, AuthorizeError):
-        return error_response(validated)
+        return await error_response(validated, jarm_signer)
     request = AuthorizeRequest(
         response_type=request.response_type,
         client_id=request.client_id,
@@ -380,6 +392,7 @@ async def _handle_consent(
             request,
             par_usecase=par_usecase,
             pushed_reference=pushed_reference,
+            jarm_signer=jarm_signer,
         )
     return _render_page(request, pushed_reference)
 
@@ -418,16 +431,19 @@ async def _execution_redirect(
     *,
     par_usecase: PushedAuthorizationUseCase | None = None,
     pushed_reference: str = "",
+    jarm_signer: JarmSigner | None = None,
 ) -> RedirectResponse | HTMLResponse:
     """Exécute la demande d'autorisation et redirige vers ``redirect_uri``.
 
     Sur émission réussie (code ou jetons), consomme la ``pushed_reference``
     (PAR) : la même référence ne peut plus être rejouée après l'approbation
     du consentement — invariant de ``_success_redirect`` de ``/authorize``.
+    Une erreur d'exécution redirigeable suit ``response_mode`` (signée JARM
+    pour un client signable via ``jarm_signer``).
     """
     result = await usecase.execute(request)
     if isinstance(result, AuthorizeError):
-        return error_response(result)
+        return await error_response(result, jarm_signer)
     if par_usecase is not None and pushed_reference:
         await par_usecase.complete(pushed_reference)
     return RedirectResponse(result.redirect_uri, status_code=302)

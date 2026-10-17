@@ -4,7 +4,8 @@ Deux formats coexistent selon que l'erreur est **redirigeable** ou non :
 
 - ``error_redirect`` : la redirection vers ``redirect_uri`` portant ``error``
   (query pour le code flow, fragment dès qu'un jeton est retourné,
-  RFC 6749 §4.2.2.1) ;
+  RFC 6749 §4.2.2.1) — en ``response_mode=jwt``, l'erreur est au contraire
+  signée dans l'enveloppe JARM portée par ``response`` (JARM Final 1.0 §3) ;
 - ``error_page`` : une page HTML d'erreur affichée dans le navigateur de
   l'utilisateur, exigée dès que la ``redirect_uri`` n'est pas de confiance
   (non enregistrée) ou que le ``client_id`` est invalide — la RFC 6749
@@ -23,6 +24,7 @@ from urllib.parse import quote
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from puridentityserver.application.authorize import AuthorizeError
+from puridentityserver.application.jarm import JarmSigner
 from puridentityserver.domain.authorization import ResponseMode
 from puridentityserver.interfaces.api.error_description import ascii_error_description
 
@@ -32,7 +34,23 @@ _DEFAULT_DESCRIPTIONS = {
 }
 
 
-def error_redirect(result: AuthorizeError) -> RedirectResponse:
+def _jarm_error_params(result: AuthorizeError) -> dict[str, str]:
+    """Paramètres d'erreur placés en claims de l'enveloppe JARM (valeurs brutes).
+
+    Contrairement à l'encodage ``query``/``fragment``, les valeurs ne sont
+    pas percentées : le JWT les porte en JSON (JARM Final 1.0 §3).
+    """
+    params = {"error": result.error}
+    if result.error_description:
+        params["error_description"] = ascii_error_description(result.error_description)
+    if result.state:
+        params["state"] = result.state
+    return params
+
+
+async def error_redirect(
+    result: AuthorizeError, signer: JarmSigner | None = None
+) -> RedirectResponse:
     """Construit le redirect d'erreur vers ``redirect_uri``.
 
     Les erreurs des flows retournant des jetons (implicit/hybrid) sont
@@ -40,7 +58,23 @@ def error_redirect(result: AuthorizeError) -> RedirectResponse:
     la query string (RFC 6749 §4.1.2.1). Une ``redirect_uri`` déjà
     porteuse d'une query impose ``&`` pour ne pas créer une seconde query
     string (``CheckMatchingCallbackParameters`` de la suite).
+
+    En ``response_mode=jwt``, l'erreur est signée dans l'enveloppe JARM
+    portée par ``?response=<jwt>`` (JARM Final 1.0 §3) ; sans signeur ou
+    si le ``client_id`` n'est pas signable (inconnu, algorithme non
+    déclaré), la redirection retombe sur le transport clair en query.
     """
+    if result.response_mode is ResponseMode.JWT:
+        envelope = (
+            await signer.sign_by_client_id(result.client_id, _jarm_error_params(result))
+            if signer is not None
+            else None
+        )
+        if envelope:
+            separator = "&" if "?" in result.redirect_uri else "?"
+            return RedirectResponse(
+                f"{result.redirect_uri}{separator}response={envelope}", status_code=302
+            )
     parts = [f"error={result.error}"]
     if result.error_description:
         description = quote(ascii_error_description(result.error_description), safe="")
@@ -85,8 +119,10 @@ def error_page(result: AuthorizeError) -> HTMLResponse:
     )
 
 
-def error_response(result: AuthorizeError) -> RedirectResponse | HTMLResponse:
+async def error_response(
+    result: AuthorizeError, signer: JarmSigner | None = None
+) -> RedirectResponse | HTMLResponse:
     """Redirige vers ``redirect_uri`` si l'erreur l'autorise, sinon page d'erreur."""
     if not result.redirectable:
         return error_page(result)
-    return error_redirect(result)
+    return await error_redirect(result, signer)

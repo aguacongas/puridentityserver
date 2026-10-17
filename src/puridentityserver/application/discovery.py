@@ -23,6 +23,7 @@ from puridentityserver.domain.jwks import (
     ALL_SIGNING_ALGORITHMS,
     CIBA_REQUEST_SIGNING_ALGORITHMS,
     DPOP_SIGNING_ALGORITHMS,
+    JARM_SIGNING_ALGORITHMS,
     JWTAlgorithm,
 )
 from puridentityserver.interfaces.repositories.readers import (
@@ -64,6 +65,8 @@ class DiscoveryConfig:
     )
     request_object_signing_algorithms: tuple[str, ...] = PUBLISHED_REQUEST_OBJECT_SIGNING_ALGORITHMS
     dpop_signing_algorithms: tuple[str, ...] = DPOP_SIGNING_ALGORITHMS
+    response_modes_supported: tuple[str, ...] = ("query", "fragment", "jwt")
+    authorization_signing_alg_values_supported: tuple[str, ...] = JARM_SIGNING_ALGORITHMS
 
 
 class DiscoveryUseCase:
@@ -133,6 +136,17 @@ class DiscoveryUseCase:
             # ``_build_success_params``) — OAuth2-iss-3,
             # FAPI2-SP-FINAL-5.3.2.2-7.
             "authorization_response_iss_parameter_supported": True,
+            # Modes de réponse autorisés (RFC 6749 §3.1.2.1, OIDC Core
+            # §3.1.2.1) + ``jwt`` : JARM Final 1.0 §3 enveloppe la réponse
+            # d'autorisation (succès ou erreur redirigeable) dans un JWT
+            # signé — ``CheckDiscEndpointResponseModesSupportedContainsJwt``.
+            "response_modes_supported": list(self._config.response_modes_supported),
+            # Algorithmes admis pour signer ces enveloppes JARM côté OP
+            # (JARM Final 1.0 §4.1, ``authorization_signed_response_alg``
+            # déclaré par les clients).
+            "authorization_signing_alg_values_supported": list(
+                self._config.authorization_signing_alg_values_supported
+            ),
         }
         if self._config.registration_enabled:
             metadata["registration_endpoint"] = f"{base}/register"
