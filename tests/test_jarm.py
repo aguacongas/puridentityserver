@@ -201,16 +201,18 @@ def test_jarm_signing_alg_rejects_unknown_algorithm() -> None:
 
 def test_envelope_signer_refuses_symmetric_algorithm() -> None:
     signer = PyJarmEnvelopeSigner(cast(KeyManager, object()), _ISSUER)
+    envelope = signer.sign_envelope(audience="jarm-app", algorithm="HS256", params={})
     with pytest.raises(ValueError, match="non signable"):
-        run(signer.sign_envelope(audience="jarm-app", algorithm="HS256", params={}))
+        run(envelope)
 
 
 def test_jarm_signer_refuses_client_without_alg() -> None:
     signer = JarmSigner(
         PyJarmEnvelopeSigner(cast(KeyManager, object()), _ISSUER), InMemoryClientRepository()
     )
+    call = signer.sign(_jarm_client(alg=""), {})
     with pytest.raises(ValueError, match="sans authorization_signed_response_alg"):
-        run(signer.sign(_jarm_client(alg=""), {}))
+        run(call)
 
 
 def test_sign_by_client_id_returns_none_for_unsignable_client() -> None:
