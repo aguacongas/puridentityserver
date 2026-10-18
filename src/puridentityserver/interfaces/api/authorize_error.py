@@ -6,6 +6,9 @@ Deux formats coexistent selon que l'erreur est **redirigeable** ou non :
   (query pour le code flow, fragment dès qu'un jeton est retourné,
   RFC 6749 §4.2.2.1) — en ``response_mode=jwt``, l'erreur est au contraire
   signée dans l'enveloppe JARM portée par ``response`` (JARM Final 1.0 §3) ;
+  en ``response_mode=form_post``, elle part dans le ``POST`` auto-soumis
+  vers la ``redirect_uri`` avec ``iss`` (Form Post Response Mode 1.0 §2,
+  RFC 9207 §2) ;
 - ``error_page`` : une page HTML d'erreur affichée dans le navigateur de
   l'utilisateur, exigée dès que la ``redirect_uri`` n'est pas de confiance
   (non enregistrée) ou que le ``client_id`` est invalide — la RFC 6749
@@ -27,6 +30,7 @@ from puridentityserver.application.authorize import AuthorizeError
 from puridentityserver.application.jarm import JarmSigner
 from puridentityserver.domain.authorization import ResponseMode
 from puridentityserver.interfaces.api.error_description import ascii_error_description
+from puridentityserver.interfaces.api.form_post import form_post_page
 
 _DEFAULT_DESCRIPTIONS = {
     "invalid_redirect_uri": "La redirection demandée n'est pas enregistrée",
@@ -48,9 +52,27 @@ def _jarm_error_params(result: AuthorizeError) -> dict[str, str]:
     return params
 
 
+def _form_post_error_params(result: AuthorizeError, issuer: str) -> dict[str, str]:
+    """Paramètres d'erreur soumis en ``POST`` (Form Post §2 + RFC 9207 §2).
+
+    Valeurs brutes comme dans l'enveloppe JARM — ni percent-encodage ni
+    ``#`` : le corps ``x-www-form-urlencoded`` fait ce travail. ``iss``
+    accompagne l'erreur (RFC 9207 §2, « including error responses »),
+    même si le transport ``query``/``fragment`` ne l'émet pas encore.
+    """
+    params = {"error": result.error}
+    if result.error_description:
+        params["error_description"] = ascii_error_description(result.error_description)
+    if result.state:
+        params["state"] = result.state
+    if issuer:
+        params["iss"] = issuer
+    return params
+
+
 async def error_redirect(
-    result: AuthorizeError, signer: JarmSigner | None = None
-) -> RedirectResponse:
+    result: AuthorizeError, signer: JarmSigner | None = None, *, issuer: str = ""
+) -> RedirectResponse | HTMLResponse:
     """Construit le redirect d'erreur vers ``redirect_uri``.
 
     Les erreurs des flows retournant des jetons (implicit/hybrid) sont
@@ -63,7 +85,17 @@ async def error_redirect(
     portée par ``?response=<jwt>`` (JARM Final 1.0 §3) ; sans signeur ou
     si le ``client_id`` n'est pas signable (inconnu, algorithme non
     déclaré), la redirection retombe sur le transport clair en query.
+
+    En ``response_mode=form_post`` (Form Post Response Mode 1.0 §4),
+    l'erreur redirigeable part dans le ``POST`` auto-soumis vers la
+    ``redirect_uri`` — mêmes paramètres ``error`` / ``error_description``
+    / ``state`` / ``iss`` que la réponse de succès. ``issuer`` porte la
+    valeur ``iss`` publiée par discovery (RFC 9207 §2) : ignorée hors
+    ``form_post``, l'émetteur n'étant pas encore émis sur les transports
+    clairs (cf. issue de suivi RFC 9207).
     """
+    if result.response_mode is ResponseMode.FORM_POST:
+        return form_post_page(result.redirect_uri, _form_post_error_params(result, issuer))
     if result.response_mode is ResponseMode.JWT:
         envelope = (
             await signer.sign_by_client_id(result.client_id, _jarm_error_params(result))
@@ -120,9 +152,9 @@ def error_page(result: AuthorizeError) -> HTMLResponse:
 
 
 async def error_response(
-    result: AuthorizeError, signer: JarmSigner | None = None
+    result: AuthorizeError, signer: JarmSigner | None = None, *, issuer: str = ""
 ) -> RedirectResponse | HTMLResponse:
     """Redirige vers ``redirect_uri`` si l'erreur l'autorise, sinon page d'erreur."""
     if not result.redirectable:
         return error_page(result)
-    return await error_redirect(result, signer)
+    return await error_redirect(result, signer, issuer=issuer)

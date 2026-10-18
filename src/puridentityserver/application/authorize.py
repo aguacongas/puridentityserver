@@ -21,7 +21,9 @@ l'``id_token`` porte ``c_hash`` (empreinte du code) et ``at_hash`` (empreinte
 de l'access token) pour lier les trois artefacts (OIDC Core 1.0 §3.3.2.11).
 Le mode ``response_mode=jwt`` (JARM Final 1.0 §3) enveloppe au contraire la
 réponse — succès comme erreur redirigeable — dans un JWT signé porté par le
-paramètre ``response`` de la query string.
+paramètre ``response`` de la query string. Le mode ``response_mode=form_post``
+(Form Post Response Mode 1.0 §2) la porte dans un ``POST`` auto-soumis vers
+la ``redirect_uri``.
 """
 
 from __future__ import annotations
@@ -29,7 +31,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
 
@@ -127,7 +130,13 @@ class AuthorizeRequest:
 
 @dataclass(frozen=True, slots=True)
 class AuthorizeRedirect:
-    """Résultat d'une autorisation : redirection vers ``redirect_uri``."""
+    """Résultat d'une autorisation : redirection vers ``redirect_uri``.
+
+    En ``response_mode=form_post`` (Form Post Response Mode 1.0 §2),
+    ``redirect_uri`` porte la cible nue du formulaire — les paramètres
+    voyagent dans ``form_params`` et sont soumis en ``POST`` par le
+    user agent via la page auto-soumise.
+    """
 
     redirect_uri: str
     code: str
@@ -136,6 +145,7 @@ class AuthorizeRedirect:
     id_token: str = ""
     access_token: str = ""
     expires_in: int = 0
+    form_params: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -599,6 +609,7 @@ class AuthorizeUseCase:
             id_token=id_token,
             access_token=access_token,
             expires_in=expires_in,
+            form_params=params if validated.response_mode is ResponseMode.FORM_POST else {},
         )
 
     async def _response_redirect_uri(
@@ -607,13 +618,19 @@ class AuthorizeUseCase:
         validated: ValidatedAuthorization,
         params: dict[str, str],
     ) -> str:
-        """URL de retour : enveloppe JARM (``?response=<jwt>``) ou params clairs.
+        """URL de retour : cible nue (form_post), enveloppe JARM ou params clairs.
 
-        En ``response_mode=jwt`` (JARM Final 1.0 §5.1), les paramètres sont
-        signés dans l'enveloppe ; sans signeur injecté ou si le client
-        s'est révélé non signable, la réponse retombe sur le transport
-        clair : ``fragment`` dès qu'un jeton est retourné, ``query`` sinon.
+        En ``response_mode=form_post`` (Form Post Response Mode 1.0 §2),
+        l'``action`` du formulaire est la ``redirect_uri`` elle-même — URI
+        nue sans query ni fragment, les paramètres étant soumis dans le
+        corps du ``POST``. En ``response_mode=jwt`` (JARM Final 1.0 §5.1),
+        les paramètres sont signés dans l'enveloppe ; sans signeur injecté
+        ou si le client s'est révélé non signable, la réponse retombe sur
+        le transport clair : ``fragment`` dès qu'un jeton est retourné,
+        ``query`` sinon.
         """
+        if validated.response_mode is ResponseMode.FORM_POST:
+            return request.redirect_uri
         encoded = [f"{name}={value}" for name, value in params.items()]
         if validated.response_mode is ResponseMode.JWT and self._jarm_signer is not None:
             try:
@@ -894,10 +911,15 @@ def _resolve_response_mode(requested: str, has_tokens: bool) -> ResponseMode | N
     OIDC Core 1.0 §3.1.2.1). ``response_mode=jwt`` (JARM Final 1.0 §3)
     prime sur cette règle — l'enveloppe porte elle-même les jetons, en
     query ; l'algorithme de signature du client est contrôlé séparément
-    dans :func:`validate_authorization_request`.
+    dans :func:`validate_authorization_request`. ``response_mode=form_post``
+    (Form Post Response Mode 1.0 §4) est sûr pour les deux familles — le
+    ``POST`` ne passe ni par l'historique ni par la query — et prime donc
+    lui aussi sur la règle du fragment.
     """
     if requested == ResponseMode.JWT.value:
         return ResponseMode.JWT
+    if requested == ResponseMode.FORM_POST.value:
+        return ResponseMode.FORM_POST
     if requested == ResponseMode.FRAGMENT.value:
         return ResponseMode.FRAGMENT
     if requested == ResponseMode.QUERY.value:
@@ -914,6 +936,9 @@ def _error_response_mode(requested: str, has_tokens: bool) -> ResponseMode:
     ce mode n'est résolu qu'après la résolution du client et son contrôle
     d'algorithme — une erreur émise avant (``response_type`` non supporté)
     ne peut pas être signée et retourne au transport clair.
+    ``response_mode=form_post`` (Form Post Response Mode 1.0 §4) est en
+    revanche honoré : l'erreur redirigeable part dans le ``POST``
+    auto-soumis comme la réponse de succès.
     """
     resolved = _resolve_response_mode(
         "" if requested == ResponseMode.JWT.value else requested, has_tokens

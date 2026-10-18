@@ -65,7 +65,9 @@ class DiscoveryConfig:
     )
     request_object_signing_algorithms: tuple[str, ...] = PUBLISHED_REQUEST_OBJECT_SIGNING_ALGORITHMS
     dpop_signing_algorithms: tuple[str, ...] = DPOP_SIGNING_ALGORITHMS
-    response_modes_supported: tuple[str, ...] = ("query", "fragment", "jwt")
+    # RFC 6749 §3.1.2.1 + ``form_post`` (Form Post Response Mode 1.0 §2) +
+    # ``jwt`` (JARM Final 1.0 §3, ``CheckDiscEndpointResponseModesSupportedContainsJwt``).
+    response_modes_supported: tuple[str, ...] = ("query", "fragment", "form_post", "jwt")
     authorization_signing_alg_values_supported: tuple[str, ...] = JARM_SIGNING_ALGORITHMS
 
 

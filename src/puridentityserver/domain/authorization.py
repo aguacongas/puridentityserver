@@ -68,7 +68,9 @@ Scope.OFFLINE_ACCESS = Scope("offline_access")
 class ResponseMode(str, Enum):
     """Mode de réponse de l'endpoint d'autorisation (OIDC Core 1.0 §3.1.2.1).
 
-    ``jwt`` (JARM Final 1.0 §3) enveloppe la réponse — succès comme erreur
+    ``form_post`` (Form Post Response Mode 1.0 §2) soumet les paramètres
+    dans un ``POST`` auto-soumis vers la ``redirect_uri`` ; ``jwt``
+    (JARM Final 1.0 §3) enveloppe la réponse — succès comme erreur
     redirigeable — dans un JWT signé porté par le paramètre ``response`` de
     la query string ; ``query`` et ``fragment`` restent les modes OAuth 2.0
     historiques.
@@ -76,6 +78,7 @@ class ResponseMode(str, Enum):
 
     QUERY = "query"
     FRAGMENT = "fragment"
+    FORM_POST = "form_post"
     JWT = "jwt"
 
 
