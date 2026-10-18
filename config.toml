@@ -498,6 +498,11 @@ client_type = "public"
 #                             (JARM Final 1.0 §3), réponse signée dans
 #                             l'enveloppe `response` — échantillon
 #                             samples/jarm-client/
+# - sample-form-post-client : flow Authorization Code avec
+#                             response_mode=form_post (Form Post Response
+#                             Mode 1.0), réponse livrée en POST auto-soumis
+#                             vers la callback — échantillon
+#                             samples/form-post-client/
 # → les smokes tests de ces samples PASSERT une configuration spécifique (port
 #   dédié + ce client) via un fichier temporaire ; ici ils sont aussi enregistrés
 #   pour pouvoir lancer le serveur par défaut et tester manuellement les samples.
@@ -661,3 +666,14 @@ redirect_uris = ["http://127.0.0.1:8120/callback"]
 scopes = "openid profile email"
 client_type = "public"
 authorization_signed_response_alg = "PS256"
+
+# client du sample form_post (Form Post Response Mode 1.0 §2 — échantillon
+# samples/form-post-client/) : flow Authorization Code avec
+# response_mode=form_post — la réponse part dans un POST auto-soumis vers
+# la callback (le mini-RP du smoke test écoute sur 8122) ; client public =
+# PKCE obligatoire.
+[[settings.clients_seed]]
+client_id = "sample-form-post-client"
+redirect_uris = ["http://127.0.0.1:8122/callback"]
+scopes = "openid profile email"
+client_type = "public"

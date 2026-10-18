@@ -236,6 +236,7 @@ def test_settings_client_seed_reads_defaults_from_config_toml(
         "sample-ciba-client",
         "sample-ciba-ping-client",
         "sample-jarm-client",
+        "sample-form-post-client",
     ]
     assert client.redirect_uris == frozenset({"http://127.0.0.1:5173/callback"})
     assert client.scopes == frozenset({"openid", "profile", "email"})
@@ -255,6 +256,10 @@ def test_settings_client_seed_reads_defaults_from_config_toml(
     assert ping_client.backchannel_client_notification_endpoint == "http://127.0.0.1:8118/notify"
     jarm_client = next(c for c in settings.seed_clients if c.client_id == "sample-jarm-client")
     assert jarm_client.authorization_signed_response_alg == "PS256"
+    form_post_client = next(
+        c for c in settings.seed_clients if c.client_id == "sample-form-post-client"
+    )
+    assert form_post_client.redirect_uris == frozenset({"http://127.0.0.1:8122/callback"})
 
 
 def test_settings_client_seed_parses_lifetime_fields() -> None:
