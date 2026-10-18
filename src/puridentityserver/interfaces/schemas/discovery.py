@@ -77,10 +77,11 @@ class DiscoveryDocument(BaseModel):
             "code id_token token",
         ]
     )
-    # RFC 6749 §3.1.2.1 + ``jwt`` (JARM Final 1.0 §3) : la suite exige la
-    # présence exacte de ``jwt`` — ``CheckDiscEndpointResponseModesSupportedContainsJwt``.
+    # RFC 6749 §3.1.2.1 + ``form_post`` (Form Post Response Mode 1.0 §2) +
+    # ``jwt`` (JARM Final 1.0 §3) : la suite exige la présence exacte de
+    # ``jwt`` — ``CheckDiscEndpointResponseModesSupportedContainsJwt``.
     response_modes_supported: list[str] = Field(
-        default_factory=lambda: ["query", "fragment", "jwt"]
+        default_factory=lambda: ["query", "fragment", "form_post", "jwt"]
     )
     authorization_signing_alg_values_supported: list[str] = Field(
         default_factory=lambda: list(JARM_SIGNING_ALGORITHMS)

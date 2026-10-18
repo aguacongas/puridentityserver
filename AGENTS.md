@@ -20,8 +20,8 @@ uv run python -m pytest -p no:cacheprovider -q   # tests + couverture >= 80 % (9
 
 - **Harness local (mode courant)** : la suite de conformance OIDF tourne en docker
   sur le runner, OP local derrière un nginx mTLS — workflow
-  `.github/workflows/certification-local.yml`, matrix des 7 plans (basic,
-  implicit, hybrid, ciba, fapi1, fapi2, fapi2-message-signing), mode *witness*
+  `.github/workflows/certification-local.yml`, matrix des 8 plans (basic,
+  implicit, hybrid, formpost, ciba, fapi1, fapi2, fapi2-message-signing), mode *witness*
   (les gaps module ne
   bloquent pas), déclenché sur chaque PR vers `main` touchant `certification/**`
   ou à la demande (`workflow_dispatch`, filtre de plan).
@@ -29,7 +29,7 @@ uv run python -m pytest -p no:cacheprovider -q   # tests + couverture >= 80 % (9
   défaut vit dans `SUITE_VERSION` (`certification/local/setup.sh`) ; avant chaque
   usage/rejeu, vérifier qu'une release plus récente n'est pas publiée et bumper
   `SUITE_VERSION` + la doc (`certification/README.md`) en conséquence, puis
-  rejouer les 7 plans pour valider le bump. Ne jamais fixer une version
+  rejouer les 8 plans pour valider le bump. Ne jamais fixer une version
   périmée dans la doc ou les scripts.
 - **Run hébergé officiel OIDF** : `.github/workflows/certification.yml` (secret
   `CONFORMANCE_TOKEN`, publication GitHub Pages) — reste la référence finale de

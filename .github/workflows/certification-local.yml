@@ -4,9 +4,9 @@ name: Certification OIDC (Local)
 # le runner, avec l'OP PurIdentityServer local derrière un nginx mTLS — aucune
 # dépendance à l'infra hébergée de la Fondation ni à Render.
 #
-# Assurance conformité COURANTE et déterministe. Les SEPT plans sont joués en
+# Assurance conformité COURANTE et déterministe. Les HUIT plans sont joués en
 # matrix (patron du job hébergé, issue #122 ; fapi2-message-signing ajouté par
-# l'issue #164) : chaque job boot son propre
+# l'issue #164, formpost par l'issue #165) : chaque job boot son propre
 # harness docker (isolé, aucun conflit d'alias) et exporte son artefact. Le job
 # `report` fusionne les exports, génère le rapport statique et le PUBLIE sur
 # GitHub Pages — ce workflow est le SEUL propriétaire de la publication Pages
@@ -46,6 +46,7 @@ on:
           - basic
           - implicit
           - hybrid
+          - formpost
           - ciba
           - fapi1
           - fapi2

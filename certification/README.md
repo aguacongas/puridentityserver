@@ -35,7 +35,7 @@ retenue :
 ## Résultat attendu
 
 - Le workflow `Certification OIDC (Local)` se termine avec, pour chaque plan
-  (`oidcc-basic-`, `oidcc-implicit-`, `oidcc-hybrid-certification-test-plan`,
+  (`oidcc-basic-`, `oidcc-implicit-`, `oidcc-hybrid-`, `oidcc-formpost-basic-`,
   `fapi-ciba-id1-test-plan`, `fapi1-advanced-final-test-plan`,
   `fapi2-security-profile-final-test-plan`,
   `fapi2-message-signing-final-test-plan`),
@@ -79,7 +79,7 @@ retenue :
 - **En CI — local (courant)** : automatique à **chaque merge sur `main`**
   (sans filtre de chemins) et sur chaque PR touchant `certification/**` ;
   manuellement : *Actions → Certification OIDC (Local) → Run workflow* avec
-  le plan souhaité (défaut : les sept). Seuls les runs sur `main` ou lancés à
+  le plan souhaité (défaut : les huit). Seuls les runs sur `main` ou lancés à
   la main publient sur GitHub Pages.
 - **En CI — hébergé (à la demande)** : *Actions → Certification OIDC → Run
   workflow* (plus de cron ni de déclenchement au merge pour l'instant — le
@@ -89,11 +89,12 @@ retenue :
   photographie les `kid` du JWKS, déclenche le deploy hook puis patiente
   (15 min max) jusqu'à ce que les `kid` changent — preuve que le build est
   terminé **et** que le disque éphémère (donc l'état) a été recréé avant le
-  premier enregistrement de client ; joue ensuite les **sept plans en
-  parallèle** (7 jobs matrix, `fail-fast: false` — ~40 min au lieu de ~3 h
+  premier enregistrement de client ; joue ensuite les **huit plans en
+  parallèle** (8 jobs matrix, `fail-fast: false` — ~40 min au lieu de ~3 h
   séquentielles, issue #122 ; les plans FAPI1 Advanced, FAPI2 Security
-  Profile et FAPI2 Message Signing (JARM, issue #164) ont été ajoutés par
-  l'issue #113 et l'issue #164), chaque plan exportant son propre
+  Profile, FAPI2 Message Signing (JARM, issue #164) et Form Post
+  (issue #165) ont été ajoutés par les issues #113, #164 et #165), chaque
+  plan exportant son propre
   artefact, puis un job final fusionne les exports et téléverse le rapport
   consolidé en artefact.
 - **En local** : (optionnel) pour reproduire le même principe contre un
@@ -180,7 +181,7 @@ redémarrage, les conteneurs sont réutilisés).
 bash certification/local/setup.sh
 
 # 2. rejouer un plan en une commande (même séquence stricte que la CI)
-bash certification/local/run-plan.sh fapi2   # basic | implicit | hybrid | ciba | fapi1 | fapi2 | fapi2-message-signing
+bash certification/local/run-plan.sh fapi2   # basic | implicit | hybrid | formpost | ciba | fapi1 | fapi2 | fapi2-message-signing
 
 # 3. arrêter / nettoyer
 bash certification/local/down.sh             # OP + op-mtls + conteneurs de la suite
@@ -370,7 +371,7 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
 | --- | --- |
 | `render.yaml` / `Dockerfile` / `.dockerignore` | déploiement de l'OP sur Render (SQLite, disque éphémère) |
 | `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`, 4 clients statiques FAPI `private_key_jwt` + JWKS public pour les plans fapi1/fapi2) |
-| `plans/basic|implicit|hybrid|ciba|fapi1|fapi2|fapi2-message-signing.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; fapi1/fapi2/fapi2-message-signing portent aussi `client`/`client2` en clé privée et `resource`) |
+| `plans/basic|implicit|hybrid|formpost|ciba|fapi1|fapi2|fapi2-message-signing.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; fapi1/fapi2/fapi2-message-signing portent aussi `client`/`client2` en clé privée et `resource`) |
 | `conformance-reuse-plan.patch` | patch du driver : `create_test_plan` idempotent (réutilise le plan existant quand sa config n'a pas changé) |
 | `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) — avec `SCREENSHOTS_DIR` défini (CI), un fichier absent/vide/trop lourd lève une erreur fatale (captures obligatoires, issue #161) ; sans variable (exécution manuelle), le PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode hébergé) |
 | `capture_screenshots.py` | rejoue les 24 scénarios de relecture (4 Core, 16 FAPI1, 4 FAPI2) contre l'OP (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver — `--base-url` = OP, `--suite-url` = base des callbacks de la suite (hébergée par défaut, `https://localhost.emobix.co.uk:8443` en local) |
@@ -380,8 +381,8 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés ; recopie les captures réelles dans `_site/screenshots/` (`--screenshots`) et les affiche dans la section du module correspondant |
 | `local/setup.sh` | bootstrap du harness **auto-hébergé** : alias réseau, clone + déploiement docker de la suite, cert auto-signé + nginx mTLS `op`, config OP locale (issuer `https://op:9443`), OP uvicorn, attente de disponibilité |
 | `local/nginx-mtls.conf` | nginx de terminaison mTLS devant l'OP local : certificat client optionnel (`optional_no_ca`), extraction `$ssl_client_escaped_cert` → `X-SSL-Client-Cert` (pas de newline brute), proxy vers l'OP uvicorn de l'hôte |
-| `../.github/workflows/certification.yml` | workflow hébergé à la demande (`workflow_dispatch` uniquement) : `prepare` (deploy + captures, une fois), `plan` (les 7 plans en parallèle, un job matrix chacun, mode witness), `report` (fusion des exports en artefact — publication OIDC des résultats à venir) |
-| `../.github/workflows/certification-local.yml` | workflow **auto-hébergé strict** : déclenché à chaque merge sur `main`, sur les PR (`certification/**`) et à la demande ; 7 plans en matrix, code non nul du driver = job en échec, job `capture` **bloquant** (Playwright, artefact `certification-local-screenshots`, #158/#161 : captures REVIEW obligatoires), **publication GitHub Pages** (sauf sur les PR) |
+| `../.github/workflows/certification.yml` | workflow hébergé à la demande (`workflow_dispatch` uniquement) : `prepare` (deploy + captures, une fois), `plan` (les 8 plans en parallèle, un job matrix chacun, mode witness), `report` (fusion des exports en artefact — publication OIDC des résultats à venir) |
+| `../.github/workflows/certification-local.yml` | workflow **auto-hébergé strict** : déclenché à chaque merge sur `main`, sur les PR (`certification/**`) et à la demande ; 8 plans en matrix, code non nul du driver = job en échec, job `capture` **bloquant** (Playwright, artefact `certification-local-screenshots`, #158/#161 : captures REVIEW obligatoires), **publication GitHub Pages** (sauf sur les PR) |
 
 ## Captures d'écran des modules de relecture (modes hébergé et local)
 

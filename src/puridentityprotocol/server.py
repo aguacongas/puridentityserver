@@ -145,8 +145,13 @@ def _mount_authorization_routers(
     require_login: bool,
     base_url: str,
     jarm_signer: JarmSigner | None = None,
+    issuer: str = "",
 ) -> None:
-    """Monte ``/authorize`` (+ ``/par`` + ``/consent`` selon la configuration)."""
+    """Monte ``/authorize`` (+ ``/par`` + ``/consent`` selon la configuration).
+
+    ``issuer`` (identifiant d'émetteur publié par discovery) est réfléchi en
+    ``iss`` dans les erreurs ``response_mode=form_post`` (RFC 9207 §2).
+    """
     app.include_router(
         authorize_router(
             authorize_usecase,
@@ -158,6 +163,7 @@ def _mount_authorization_routers(
             require_login=require_login,
             base_url=base_url,
             jarm_signer=jarm_signer,
+            issuer=issuer,
         )
     )
     app.include_router(
@@ -167,6 +173,7 @@ def _mount_authorization_routers(
             client_reader,
             par_usecase=par_usecase if par_enabled else None,
             jarm_signer=jarm_signer,
+            issuer=issuer,
         )
     )
     if par_enabled:
@@ -493,6 +500,7 @@ class ProtocolDependencies:
             require_login=self.settings.require_login,
             base_url=self.settings.base_url or self.settings.issuer,
             jarm_signer=self.jarm_signer,
+            issuer=self.settings.issuer,
         )
         app.include_router(token_router(self.token_usecase, self.client_certificate_headers))
         app.include_router(device_authorization_router(self.device_usecase))

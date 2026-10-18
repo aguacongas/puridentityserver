@@ -144,13 +144,17 @@ def _invalid_pushed_error(
     La ``redirect_uri``, le ``state`` et le ``response_mode`` de la demande
     poussée accompagnent l'erreur : ``/authorize`` en fera une redirection
     vers le callback du client poussé quand ce callback est connu
-    (RFC 6749 §4.1.2.1), une page d'erreur sinon.
+    (RFC 6749 §4.1.2.1), une page d'erreur sinon — ou un ``POST``
+    auto-soumis quand la demande poussée exige ``response_mode=form_post``
+    (Form Post Response Mode 1.0 §4, issue #165).
     """
-    mode = (
-        ResponseMode.FRAGMENT
-        if pushed.params.get("response_mode") == "fragment"
-        else ResponseMode.QUERY
-    )
+    requested_mode = pushed.params.get("response_mode", "")
+    if requested_mode == ResponseMode.FRAGMENT.value:
+        mode = ResponseMode.FRAGMENT
+    elif requested_mode == ResponseMode.FORM_POST.value:
+        mode = ResponseMode.FORM_POST
+    else:
+        mode = ResponseMode.QUERY
     return PushError(
         error=error,
         error_description=description,

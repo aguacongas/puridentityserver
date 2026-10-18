@@ -40,6 +40,7 @@ from puridentityserver.identity.config import (
 )
 from puridentityserver.interfaces.api.authorize_error import error_redirect, error_response
 from puridentityserver.interfaces.api.consent import consent_url
+from puridentityserver.interfaces.api.form_post import authorization_response
 from puridentityserver.interfaces.repositories.readers import ClientReader
 
 
@@ -103,6 +104,7 @@ def authorize_router(
     require_login: bool = False,
     base_url: str = "",
     jarm_signer: JarmSigner | None = None,
+    issuer: str = "",
 ) -> APIRouter:
     """Construit le routeur FastAPI exposant ``GET /authorize``.
 
@@ -122,6 +124,9 @@ def authorize_router(
     renvoyée en erreur ``login_required`` quand ``prompt=none`` (§3.1.2.6).
     ``jarm_signer`` signe les erreurs redirigeables en ``response_mode=jwt``
     (JARM Final 1.0 §3) ; sans injection, elles restent en query/fragment.
+    ``issuer`` porte l'identifiant d'émetteur publié par discovery, réfléchi
+    en ``iss`` dans les erreurs soumises en ``response_mode=form_post``
+    (RFC 9207 §2, Form Post Response Mode 1.0 §4) — ignoré hors ``form_post``.
     """
     router = APIRouter(tags=["authorize"])
 
@@ -181,6 +186,7 @@ def authorize_router(
             client_repository=client_repository,
             par_required=par_required,
             jarm_signer=jarm_signer,
+            issuer=issuer,
         )
         if isinstance(auth_request, Response):
             return auth_request
@@ -192,6 +198,7 @@ def authorize_router(
             require_login,
             base_url,
             jarm_signer=jarm_signer,
+            issuer=issuer,
         )
         if pre is not None:
             return pre
@@ -206,7 +213,7 @@ def authorize_router(
         result = await usecase.execute(auth_request)
         if isinstance(result, AuthorizeRedirect):
             return await _success_redirect(result, par_usecase, pushed_reference)
-        return await error_response(result, jarm_signer)
+        return await error_response(result, jarm_signer, issuer=issuer)
 
     return router
 
@@ -215,17 +222,19 @@ async def _success_redirect(
     result: AuthorizeRedirect,
     par_usecase: PushedAuthorizationUseCase | None,
     pushed_reference: str,
-) -> RedirectResponse:
+) -> RedirectResponse | HTMLResponse:
     """Redirection de succès ; consomme la référence poussée le cas échéant.
 
     La consommation unique de la demande poussée est appliquée à
     l'émission réussie de la réponse (RFC 9126 §4) : la visite de
     ``/authorize`` reste répétable jusqu'à l'achèvement du flux
-    (conformance-suite #1296).
+    (conformance-suite #1296). En ``response_mode=form_post``, la page
+    auto-soumise de :func:`~puridentityserver.interfaces.api.form_post.authorization_response`
+    remplace la redirection 302 (Form Post Response Mode 1.0 §2).
     """
     if par_usecase is not None and pushed_reference:
         await par_usecase.complete(pushed_reference)
-    return RedirectResponse(result.redirect_uri, status_code=302)
+    return authorization_response(result)
 
 
 async def _direct_authorize_request(
@@ -235,6 +244,7 @@ async def _direct_authorize_request(
     par_required: bool = False,
     *,
     jarm_signer: JarmSigner | None = None,
+    issuer: str = "",
 ) -> AuthorizeRequest | RedirectResponse | HTMLResponse:
     """Construit la demande d'une requête **non poussée** (RFC 6749 §3.1).
 
@@ -247,16 +257,21 @@ async def _direct_authorize_request(
     page HTML sinon — c'est l'observable du placeholder
     ``ExpectAuthorizationRequestWithoutRequestObjectErrorPage`` de la
     suite. Les paramètres manquants restent rendus en **page HTML**
-    (check ``ExpectResponseTypeMissingErrorPage`` exigé par la suite).
-    Le refus PAR, lui, se redirige vers la ``redirect_uri`` de la query
-    quand elle est enregistrée (issue #160), page HTML sinon.
-    ``jarm_signer`` signe ces refus redirigeables quand la demande porte
-    ``response_mode=jwt`` et que le client est signable.
+    (check ``ExpectResponseTypeMissingErrorPage`` exigé par la suite),
+    sauf ``response_type`` seul manquant en ``response_mode=form_post``
+    avec callback sûr : le refus voyage alors dans le même transport que
+    la réponse de succès (issue #165, CA 4 — cf.
+    :func:`_form_post_missing_response_type`). Le refus PAR, lui, se
+    redirige vers la ``redirect_uri`` de la query quand elle est enregistrée
+    (issue #160), page HTML sinon. ``jarm_signer`` signe ces refus
+    redirigeables quand la demande porte ``response_mode=jwt`` et que le
+    client est signable ; ``issuer`` porte la valeur ``iss`` des erreurs
+    ``form_post`` (RFC 9207 §2).
     """
     resolved = await request_object_resolver.resolve(params)
     if isinstance(resolved, RequestObjectError):
         return await _request_object_error_response(
-            resolved, params, client_repository, jarm_signer
+            resolved, params, client_repository, jarm_signer, issuer=issuer
         )
     params = resolved
     missing = [
@@ -270,9 +285,12 @@ async def _direct_authorize_request(
         if not value
     ]
     if missing:
+        refused = await _form_post_missing_response_type(params, missing, client_repository, issuer)
+        if refused is not None:
+            return refused
         return _missing_parameters_page(missing)
     enforced = await _enforce_par_requirement(
-        params, client_repository, par_required, jarm_signer=jarm_signer
+        params, client_repository, par_required, jarm_signer=jarm_signer, issuer=issuer
     )
     if enforced is not None:
         return enforced
@@ -331,6 +349,49 @@ def _missing_parameters_page(missing: list[str]) -> HTMLResponse:
     )
 
 
+async def _form_post_missing_response_type(
+    params: dict[str, str],
+    missing: list[str],
+    client_repository: ClientReader | None,
+    issuer: str,
+) -> RedirectResponse | HTMLResponse | None:
+    """Refus ``form_post`` d'une demande dont ``response_type`` est absent (issue #165).
+
+    Seul ``response_type`` manquant + ``response_mode=form_post`` demandé +
+    client connu et actif + ``redirect_uri`` exactement enregistrée : la
+    réponse de refus voyage alors par le même transport que l'aurait fait
+    la réponse de succès (Form Post Response Mode 1.0 §4). RFC 6749
+    §4.1.2.1 qualifie l'absence d'un paramètre requis d'``invalid_request``
+    et exige le retour de ``state``. ``None`` sinon — la page de
+    :func:`_missing_parameters_page` fait foi (autre paramètre manquant,
+    client ou callback non vérifiables).
+    """
+    if set(missing) != {"response_type"}:
+        return None
+    if params.get("response_mode") != ResponseMode.FORM_POST.value:
+        return None
+    if client_repository is None:
+        return None
+    client = await client_repository.find_by_id(params.get("client_id", ""))
+    if client is None or not client.is_active:
+        return None
+    redirect_uri = params.get("redirect_uri", "")
+    if redirect_uri not in client.redirect_uris:
+        return None
+    return await error_redirect(
+        AuthorizeError(
+            error="invalid_request",
+            error_description="Paramètre requis manquant : response_type (RFC 6749 §3.1.1)",
+            redirect_uri=redirect_uri,
+            state=params.get("state", ""),
+            response_mode=ResponseMode.FORM_POST,
+            redirectable=True,
+            client_id=client.client_id,
+        ),
+        issuer=issuer,
+    )
+
+
 def _request_object_error_page(error: RequestObjectError) -> HTMLResponse:
     """Page d'erreur 400 d'un request object refusé sans callback sûr (RFC 9101 §6, §7).
 
@@ -358,14 +419,18 @@ def _request_object_error_page(error: RequestObjectError) -> HTMLResponse:
 def _requested_error_mode(client: Client, requested_mode: str, has_tokens: bool) -> ResponseMode:
     """Mode d'encodage d'une erreur pour un client déjà résolu.
 
-    ``response_mode=jwt`` n'est honoré que si le client porte un
-    ``authorization_signed_response_alg`` géré par l'OP (JARM Final 1.0 §4) :
-    sans lui — ou quand ``response_type`` lui-même exige le fragment
-    (RFC 6749 §4.2.2.1) — l'erreur repart en transport clair ``fragment`` /
-    ``query``. Le contrôle de l'algorithme lui-même reste le fait de
-    ``validate_authorization_request`` (refus ``unsupported_response_mode``
-    transporté en clair).
+    ``response_mode=form_post`` (Form Post Response Mode 1.0 §4) prime : la
+    même exigence de transport s'applique à l'erreur et à la réponse de
+    succès, jetons compris. ``response_mode=jwt`` n'est honoré que si le
+    client porte un ``authorization_signed_response_alg`` géré par l'OP
+    (JARM Final 1.0 §4) : sans lui — ou quand ``response_type`` lui-même
+    exige le fragment (RFC 6749 §4.2.2.1) — l'erreur repart en transport
+    clair ``fragment`` / ``query``. Le contrôle de l'algorithme lui-même
+    reste le fait de ``validate_authorization_request`` (refus
+    ``unsupported_response_mode`` transporté en clair).
     """
+    if requested_mode == ResponseMode.FORM_POST.value:
+        return ResponseMode.FORM_POST
     if jarm_signing_alg(client, requested_mode):
         return ResponseMode.JWT
     if requested_mode == ResponseMode.FRAGMENT.value or has_tokens:
@@ -378,6 +443,8 @@ async def _request_object_error_response(
     params: dict[str, str],
     client_repository: ClientReader | None,
     jarm_signer: JarmSigner | None = None,
+    *,
+    issuer: str = "",
 ) -> RedirectResponse | HTMLResponse:
     """Transporte un refus de request object (RFC 6749 §4.1.2.1, issue #178).
 
@@ -419,6 +486,7 @@ async def _request_object_error_response(
             client_id=client.client_id,
         ),
         jarm_signer,
+        issuer=issuer,
     )
 
 
@@ -431,6 +499,7 @@ async def _pre_execution_response(
     base_url: str,
     *,
     jarm_signer: JarmSigner | None = None,
+    issuer: str = "",
 ) -> RedirectResponse | HTMLResponse | None:
     """Réponses possibles **avant** émission : page d'erreur, reconnexion, ``prompt``.
 
@@ -450,6 +519,7 @@ async def _pre_execution_response(
         require_login,
         base_url,
         jarm_signer=jarm_signer,
+        issuer=issuer,
     )
 
 
@@ -507,6 +577,7 @@ async def _authentication_gate(
     base_url: str,
     *,
     jarm_signer: JarmSigner | None = None,
+    issuer: str = "",
 ) -> RedirectResponse | HTMLResponse | None:
     """Contrôle d'accès avant émission : reconnexion, ``prompt``, ``max_age``.
 
@@ -527,11 +598,17 @@ async def _authentication_gate(
                 client_repository,
                 base_url,
                 jarm_signer=jarm_signer,
+                issuer=issuer,
             )
         return _login_redirect(request, base_url)
     if user is None and (require_login or "login" in auth_request.prompt.split()):
         return await _login_or_error(
-            auth_request, request, client_repository, base_url, jarm_signer=jarm_signer
+            auth_request,
+            request,
+            client_repository,
+            base_url,
+            jarm_signer=jarm_signer,
+            issuer=issuer,
         )
     return None
 
@@ -584,6 +661,7 @@ async def _login_or_error(
     base_url: str = "",
     *,
     jarm_signer: JarmSigner | None = None,
+    issuer: str = "",
 ) -> RedirectResponse | HTMLResponse:
     """Gère une demande ``/authorize`` non réauthentifiée (``prompt``/``require_login``).
 
@@ -600,7 +678,9 @@ async def _login_or_error(
     redirection post-login avec e.g. ``https://host.example:8445``).
 
     L'erreur ``login_required`` suit ``response_mode`` (signée JARM pour un
-    client signable, query/fragment sinon) via ``jarm_signer``.
+    client signable, ``POST`` auto-soumis pour ``response_mode=form_post``
+    portant alors ``iss`` — RFC 9207 §2 —, query/fragment sinon) via
+    ``jarm_signer`` et ``issuer``.
     """
     if "none" in auth_request.prompt.split():
         validated = (
@@ -609,7 +689,7 @@ async def _login_or_error(
             else None
         )
         if isinstance(validated, AuthorizeError):
-            return await error_response(validated, jarm_signer)
+            return await error_response(validated, jarm_signer, issuer=issuer)
         error = AuthorizeError(
             error="login_required",
             error_description="Authentification requise (prompt=none)",
@@ -618,7 +698,7 @@ async def _login_or_error(
             response_mode=validated.response_mode if validated is not None else ResponseMode.QUERY,
             client_id=auth_request.client_id,
         )
-        return await error_response(error, jarm_signer)
+        return await error_response(error, jarm_signer, issuer=issuer)
     return _login_redirect(http_request, base_url)
 
 
@@ -649,6 +729,7 @@ async def _authorize_entry(
     client_repository: ClientReader | None,
     par_required: bool,
     jarm_signer: JarmSigner | None = None,
+    issuer: str = "",
 ) -> tuple[AuthorizeRequest | Response, str]:
     """Résout l'entrée ``/authorize`` : poussée (``request_uri``) ou directe.
 
@@ -661,7 +742,7 @@ async def _authorize_entry(
     request_uri = params.get("request_uri", "")
     if request_uri and is_pushed_request_uri(request_uri):
         resolved = await _resolve_pushed_request(
-            params.get("client_id", ""), request_uri, par_usecase
+            params.get("client_id", ""), request_uri, par_usecase, issuer=issuer
         )
         return resolved, request_uri
     built = await _direct_authorize_request(
@@ -670,6 +751,7 @@ async def _authorize_entry(
         client_repository,
         par_required,
         jarm_signer=jarm_signer,
+        issuer=issuer,
     )
     if isinstance(built, HTMLResponse):
         return built, ""
@@ -680,6 +762,8 @@ async def _resolve_pushed_request(
     client_id: str,
     request_uri: str,
     par_usecase: PushedAuthorizationUseCase | None,
+    *,
+    issuer: str = "",
 ) -> AuthorizeRequest | Response:
     """Résout une référence poussée (RFC 9126 §4).
 
@@ -704,16 +788,17 @@ async def _resolve_pushed_request(
                 error="invalid_request",
                 error_description="Pushed Authorization Request désactivé",
                 status_code=400,
-            )
+            ),
+            issuer=issuer,
         )
 
     resolved = await par_usecase.resolve(request_uri=request_uri, client_id=client_id)
     if isinstance(resolved, PushError):
-        return await _pushed_param_response(resolved)
+        return await _pushed_param_response(resolved, issuer=issuer)
     return resolved
 
 
-async def _pushed_param_response(error: PushError) -> Response:
+async def _pushed_param_response(error: PushError, *, issuer: str = "") -> Response:
     """Transporte une erreur de résolution poussée (RFC 6749 §4.1.2.1, issue #160).
 
     Une ``redirect_uri`` poussée encore connue (référence expirée, déjà
@@ -725,7 +810,9 @@ async def _pushed_param_response(error: PushError) -> Response:
     redirection vers un callback inconnu). La charge poussée peut exiger
     ``response_mode=jwt``, mais sa résolution n'est pas encore acquise :
     l'erreur reste en transport clair (query/fragment), acceptée telle quelle
-    par la suite (``allowPlainErrorResponseForJarm``, JARM Final 1.0 §3).
+    par la suite (``allowPlainErrorResponseForJarm``, JARM Final 1.0 §3) ;
+    ``response_mode=form_post``, en revanche, est honoré — le refus part
+    dans le ``POST`` auto-soumis avec ``iss`` (issue #165, RFC 9207 §2).
     """
     if not error.redirect_uri:
         return _pushed_error_page(error)
@@ -737,7 +824,8 @@ async def _pushed_param_response(error: PushError) -> Response:
             state=error.state,
             response_mode=error.response_mode,
             redirectable=True,
-        )
+        ),
+        issuer=issuer,
     )
 
 
@@ -766,6 +854,7 @@ async def _enforce_par_requirement(
     server_par_required: bool = False,
     *,
     jarm_signer: JarmSigner | None = None,
+    issuer: str = "",
 ) -> RedirectResponse | HTMLResponse | None:
     """Refuse une demande directe à /authorize si PAR est exigé (RFC 9126 §6.1).
 
@@ -807,6 +896,7 @@ async def _enforce_par_requirement(
                 client_id=client.client_id,
             ),
             jarm_signer,
+            issuer=issuer,
         )
     return _pushed_error_page(PushError(error="invalid_request", error_description=description))
 
