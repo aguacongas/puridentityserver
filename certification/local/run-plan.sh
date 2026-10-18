@@ -12,7 +12,7 @@
 #   5. bilan PASSED/FAILED/REVIEW lu dans l'export, + chemins log/export.
 #
 # Usage : bash certification/local/run-plan.sh <plan> [--export-dir <dir>]
-#   plans : basic | implicit | hybrid | ciba | fapi1 | fapi2 | fapi2-message-signing
+#   plans : basic | implicit | hybrid | formpost | ciba | fapi1 | fapi2 | fapi2-message-signing
 #
 # Variables d'environnement (defauts en accord avec setup.sh) :
 #   REPO_ROOT, SUITE_DIR, LOCAL_DIR  chemins racine du depot / clone suite /
@@ -41,7 +41,7 @@ log() { printf '[run-plan] %s\n' "$*"; }
 
 usage() {
   echo "Usage : bash certification/local/run-plan.sh <plan> [--export-dir <dir>]" >&2
-  echo "  plans : basic | implicit | hybrid | ciba | fapi1 | fapi2 | fapi2-message-signing" >&2
+  echo "  plans : basic | implicit | hybrid | formpost | ciba | fapi1 | fapi2 | fapi2-message-signing" >&2
   exit 2
 }
 

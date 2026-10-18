@@ -19,14 +19,14 @@ name: Certification OIDC
 # `release-vX.Y.Z` listé par `git ls-remote` sur
 # gitlab.com/openid/conformance-suite (échec = run en erreur) — cf. issue #150.
 #
-# Issue #122 : les 7 plans s'exécutent EN PARALLÈLE (matrix de jobs, même
+# Issue #122 : les 8 plans s'exécutent EN PARALLÈLE (matrix de jobs, même
 # patron que certification-local.yml ; fapi2-message-signing ajouté par
-# l'issue #164) : ~3 h séquentielles deviennent la durée
+# l'issue #164, formpost par l'issue #165) : ~3 h séquentielles deviennent la durée
 # du plan le plus long (~40 min) :
 # - job `prepare` UNIQUE : matrice depuis l'input `plan`, deploy hook Render
 #   (UNE SEULE fois — un redejob par plan remplacerait l'OP en plein run) et
 #   captures Playwright (artefact partagé) ;
-# - job `plan` ×7 (`fail-fast: false`) : clone + patches de la suite, un seul
+# - job `plan` ×8 (`fail-fast: false`) : clone + patches de la suite, un seul
 #   plan joué en mode witness, export → artefact `certification-results-<plan>`.
 #   Parallélisation sûre : chaque plan porte un alias distinct
 #   (`puridentityserver-<plan>`) et `release_alias` ne stoppe que son propre
@@ -45,8 +45,8 @@ on:
     inputs:
       plan:
         # Permet un cycle de diagnostic rapide : ne lancer qu'un seul plan au
-        # lieu des sept (~30 min, même en parallèle le gain nul).
-        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + CIBA + FAPI1 + FAPI2 + FAPI2 Message Signing)"
+        # lieu des huit (~30 min, même en parallèle le gain nul).
+        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + CIBA + FAPI1 + FAPI2 + FAPI2 Message Signing)"
         type: choice
         required: false
         default: all
@@ -55,6 +55,7 @@ on:
           - basic
           - implicit
           - hybrid
+          - formpost
           - ciba
           - fapi1
           - fapi2
@@ -100,7 +101,7 @@ jobs:
         # toute consommation d'infra (deploy hook, Playwright, clone).
         id: matrix
         env:
-          # Vide sur push/schedule : les sept plans sont joués.
+          # Vide sur push/schedule : les huit plans sont joués.
           PLAN_FILTER: ${{ inputs.plan || 'all' }}
         run: |
           set -euo pipefail

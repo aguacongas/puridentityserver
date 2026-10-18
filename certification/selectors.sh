@@ -5,8 +5,8 @@
 # Usage : source certification/selectors.sh puis selector_for <plan>.
 # shellcheck shell=bash
 
-# Les sept plans joues par defaut (filtre `all` des workflows).
-CERTIFICATION_PLANS=(basic implicit hybrid ciba fapi1 fapi2 fapi2-message-signing)
+# Les huit plans joues par defaut (filtre `all` des workflows).
+CERTIFICATION_PLANS=(basic implicit hybrid formpost ciba fapi1 fapi2 fapi2-message-signing)
 
 # Retourne le selecteur de variante d'un plan sur stdout ; code retour 1 si le
 # plan est inconnu (appelant : message d'erreur + sortie securisee).
@@ -15,6 +15,10 @@ selector_for() {
     basic) echo 'oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
     implicit) echo 'oidcc-implicit-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
     hybrid) echo 'oidcc-hybrid-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
+    # Form Post (issue #165) : meme socle que basic (38 modules) avec la
+    # variante ResponseMode forcee a form_post par la suite — reponses ET
+    # erreurs d'autorisation livrees en POST auto-soumis vers la callback.
+    formpost) echo 'oidcc-formpost-basic-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]' ;;
     # CIBA : plan FAPI-CIBA-ID1 en mode witness (poll + Basic ne sont
     # pas des variants valides pour ce plan : private_key_jwt exigé,
     # JAR signé hors périmètre — issues dédiées).
