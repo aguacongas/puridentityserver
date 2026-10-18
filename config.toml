@@ -503,6 +503,11 @@ client_type = "public"
 #                             Mode 1.0), réponse livrée en POST auto-soumis
 #                             vers la callback — échantillon
 #                             samples/form-post-client/
+# - sample-prompt-create-client : flow Authorization Code avec
+#                             prompt=create (Initiating User Registration
+#                             via OIDC 1.0), création de compte à la volée
+#                             sur la page /signup — échantillon
+#                             samples/prompt-create-client/
 # → les smokes tests de ces samples PASSERT une configuration spécifique (port
 #   dédié + ce client) via un fichier temporaire ; ici ils sont aussi enregistrés
 #   pour pouvoir lancer le serveur par défaut et tester manuellement les samples.
@@ -675,5 +680,15 @@ authorization_signed_response_alg = "PS256"
 [[settings.clients_seed]]
 client_id = "sample-form-post-client"
 redirect_uris = ["http://127.0.0.1:8122/callback"]
+scopes = "openid profile email"
+client_type = "public"
+
+# client du sample prompt=create (Initiating User Registration via OIDC 1.0
+# — échantillon samples/prompt-create-client/) : flow Authorization Code
+# demandé avec prompt=create, le compte est créé sur la page /signup de
+# l'OP pendant le flow ; client public = PKCE obligatoire.
+[[settings.clients_seed]]
+client_id = "sample-prompt-create-client"
+redirect_uris = ["http://127.0.0.1:8124/callback"]
 scopes = "openid profile email"
 client_type = "public"

@@ -86,6 +86,12 @@ class DiscoveryDocument(BaseModel):
     authorization_signing_alg_values_supported: list[str] = Field(
         default_factory=lambda: list(JARM_SIGNING_ALGORITHMS)
     )
+    # Valeurs de ``prompt`` honorées (OIDC Core 1.0 §3.1.2.1 ; ``create`` :
+    # Initiating User Registration via OIDC 1.0, issue #166 — champ de
+    # convention, non mandate par Core).
+    prompt_values_supported: list[str] = Field(
+        default_factory=lambda: ["none", "login", "consent", "create"]
+    )
     grant_types_supported: list[str] = Field(
         default_factory=lambda: [
             "authorization_code",

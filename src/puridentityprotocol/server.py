@@ -62,6 +62,7 @@ from puridentityserver.identity.config import (
     login_router,
     register_router,
     seed_users,
+    signup_router,
 )
 from puridentityserver.infrastructure.backchannel import (
     HTTPBackchannelNotifier,
@@ -486,6 +487,7 @@ class ProtocolDependencies:
         )
         app.include_router(jwk_set_router(self.jwks_usecase))
         app.include_router(login_router(self.resolve_session_lifetime))
+        app.include_router(signup_router(self.resolve_session_lifetime))
         app.include_router(auth_router)
         app.include_router(register_router, prefix="/auth")
         _mount_authorization_routers(

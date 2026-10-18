@@ -5,6 +5,7 @@ Fournit l'identité utilisateur du serveur OIDC :
 - ``auth_router``            : routes ``/auth/cookie/login``, ``/logout``, ``/refresh``
 - ``register_router``        : route ``/auth/register``
 - ``login_router``           : page ``/login`` (formulaire HTML, spike navigateur)
+- ``signup_router``          : page ``/signup`` (inscription, ``prompt=create`` — issue #166)
 - ``CurrentUser``            : dependency d'utilisateur authentifié (requis)
 - ``CurrentUserOptional``    : dependency d'utilisateur authentifié (facultatif)
 - ``apply_schema``           : initialise le backend identité (dict mémoire ou table ``user``)
@@ -45,6 +46,7 @@ from fastapi_users.manager import (
     VERIFY_USER_TOKEN_AUDIENCE,
 )
 from fastapi_users.schemas import BaseUser, BaseUserCreate
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -568,5 +570,136 @@ def login_router(
             if cookie:
                 redirect.headers["set-cookie"] = cookie
             return redirect
+
+    return router
+
+
+_MIN_PASSWORD_LENGTH = 8
+
+_REGISTER_PAGE = """<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>PurIdentityServer — inscription</title>
+  <style>
+    body {{ font-family: sans-serif; margin: 2rem; max-width: 24rem; }}
+    label {{ display: block; margin: 0.6rem 0 0.2rem; }}
+    input {{ width: 100%; padding: 0.4rem; box-sizing: border-box; }}
+    button {{ margin-top: 1rem; padding: 0.5rem 1.2rem; }}
+  </style>
+</head>
+<body>
+  <h1>Création d'un compte PurIdentityServer</h1>
+  <form method="post" action="/signup">
+    <input type="hidden" name="next" value="{next}">
+    {client_hidden}<label>Adresse email <input type="email" name="email" required autofocus></label>
+    <label>Mot de passe
+      <input type="password" name="password" required minlength="{min_length}">
+    </label>
+    <button type="submit">Créer le compte</button>
+  </form>
+  <p><a href="{cancel_url}">Refuser l'inscription</a></p>
+</body>
+</html>
+"""
+
+
+def _register_marker_url(next_url: str, value: str) -> str:
+    """Ajoute le marqueur ``register=<value>`` à l'URL de retour d'un flow ``prompt=create``.
+
+    Ce marqueur (paramètre OP, ignoré comme inconnu par la validation de la
+    demande) fait émettre à ``/authorize`` l'``access_denied`` final dans le
+    transport résolu (query/fragment/JARM/form_post) : ``cancelled`` pour
+    une annulation utilisateur, ``refused`` quand la création échoue (email
+    déjà existant, politique de mots de passe).
+    """
+    separator = "&" if "?" in next_url else "?"
+    return f"{next_url}{separator}register={value}"
+
+
+def signup_router(
+    resolve_session_lifetime: Callable[[str], Awaitable[int | None]] | None = None,
+) -> APIRouter:
+    """Construit le routeur ``/signup`` (formulaire d'inscription HTML).
+
+    Page de création de compte exigée par ``prompt=create`` (Initiating User
+    Registration via OpenID Connect 1.0) : ``GET /signup?next=<url
+    d'autorisation>`` rend le formulaire, ``POST /signup`` crée le compte
+    (UserManager : email unique + politique de mots de passe serveur), ouvre
+    une session **fraîche** (cookie ``sid`` + empreinte ``reauth`` de l'URL de
+    retour — la création fonde l'authentification et satisfait aussi
+    ``prompt=create login``, spec §2) puis redirige vers ``next``.
+
+    Échec de création (email existant, mot de passe trop court) : retour vers
+    ``next`` avec le marqueur ``register=refused`` ; le lien d'annulation de
+    la page porte ``register=cancelled`` — dans les deux cas ``/authorize``
+    émet ``access_denied`` redirigeable au client (spec §3, CA de l'issue
+    #166). ``resolve_session_lifetime`` s'applique comme sur ``/login``
+    (durée de session cookie par client du flow).
+    """
+    router = APIRouter(tags=["identity"])
+
+    @router.get("/signup", response_class=HTMLResponse)
+    async def signup_page(
+        next_url: Annotated[str, Query(alias="next")] = "/",
+    ) -> str:
+        """Affiche le formulaire d'inscription (annulation = ``register=cancelled``)."""
+        client_id = _client_id_from_next(next_url)
+        hidden = (
+            f'<input type="hidden" name="client_id" value="{html.escape(client_id)}">'
+            if client_id
+            else ""
+        )
+        return _REGISTER_PAGE.format(
+            next=html.escape(next_url, quote=True),
+            client_hidden=hidden,
+            min_length=_MIN_PASSWORD_LENGTH,
+            cancel_url=html.escape(_register_marker_url(next_url, "cancelled"), quote=True),
+        )
+
+    @router.post("/signup")
+    async def signup(
+        email: Annotated[str, Form()],
+        password: Annotated[str, Form()],
+        next_url: Annotated[str, Form(alias="next")] = "/",
+        client_id: Annotated[str, Form()] = "",
+    ) -> RedirectResponse:
+        """Crée le compte, ouvre une session puis redirige vers ``next``.
+
+        La durée du cookie de session est celle du client du flow si elle est
+        configurée (sinon la durée serveur par défaut), comme ``/login``.
+        Un email déjà inscrit ou un mot de passe contre la politique renvoie
+        ``register=refused`` sur l'URL de retour.
+        """
+        if len(password) < _MIN_PASSWORD_LENGTH:
+            return RedirectResponse(_register_marker_url(next_url, "refused"), status_code=302)
+        try:
+            async with _user_db() as user_db:
+                user = await UserManager(user_db).create(
+                    BaseUserCreate(email=email, password=password)
+                )
+        except (
+            exceptions.UserAlreadyExists,
+            exceptions.InvalidPasswordException,
+            ValidationError,
+        ):
+            return RedirectResponse(_register_marker_url(next_url, "refused"), status_code=302)
+
+        lifetime = await _resolve_cookie_lifetime(
+            client_id, next_url, resolve_session_lifetime, _cookie_lifetime_seconds
+        )
+
+        strategy = _session_strategy(lifetime_seconds=lifetime)
+        token = await strategy.write_token(
+            user, sid=uuid.uuid4().hex, reauth=reauth_context(next_url)
+        )
+        login_response = await CookieTransport(
+            cookie_secure=False, cookie_max_age=lifetime
+        ).get_login_response(token)
+        redirect = RedirectResponse(next_url or "/", status_code=302)
+        cookie = login_response.headers.get("set-cookie")
+        if cookie:
+            redirect.headers["set-cookie"] = cookie
+        return redirect
 
     return router
