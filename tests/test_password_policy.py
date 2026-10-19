@@ -163,8 +163,9 @@ def test_policy_from_mapping_builds_full_policy() -> None:
 )
 def test_invalid_ranges_are_rejected(field: str, value: int) -> None:
     """Toute valeur hors plage lève ``ValueError`` au chargement."""
+    base = PasswordPolicy()
     with pytest.raises(ValueError):
-        replace(PasswordPolicy(), **{field: value})
+        replace(base, **{field: value})
 
 
 def test_max_length_below_min_is_rejected() -> None:

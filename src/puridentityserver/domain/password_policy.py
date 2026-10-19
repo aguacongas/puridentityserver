@@ -144,6 +144,9 @@ _BOOL_FIELDS = frozenset({"deny_common_passwords", "forbid_email_containment", "
 
 _CLASS_FIELDS = ("min_uppercase", "min_lowercase", "min_digits", "min_special")
 
+#: Libellé de la classe « caractère spécial » (exigences affichées).
+_SPECIAL_CLASS_LABEL = "caractère spécial"
+
 
 def _require_range(name: str, value: int, minimum: int, maximum: int) -> None:
     """Lève ``ValueError`` si ``value`` sort de ``[minimum, maximum]``."""
@@ -276,7 +279,8 @@ class PasswordPolicyPatch:
                     f"(reçu : {value!r})"
                 )
             changes[name] = value
-        return replace(cls(), **changes)
+        patched: PasswordPolicyPatch = replace(cls(), **changes)
+        return patched
 
     def apply(self, base: PasswordPolicy) -> PasswordPolicy:
         """Retourne ``base`` avec les seules clés renseignées de la surcharge."""
@@ -285,7 +289,8 @@ class PasswordPolicyPatch:
             value = getattr(self, descriptor.name)
             if value is not None:
                 changes[descriptor.name] = value
-        return replace(base, **changes)
+        patched: PasswordPolicy = replace(base, **changes)
+        return patched
 
 
 def _class_counts(password: str) -> dict[str, int]:
@@ -294,7 +299,7 @@ def _class_counts(password: str) -> dict[str, int]:
         "majuscule": sum(1 for character in password if character.isupper()),
         "minuscule": sum(1 for character in password if character.islower()),
         "chiffre": sum(1 for character in password if character.isdigit()),
-        "caractère spécial": sum(1 for character in password if not character.isalnum()),
+        _SPECIAL_CLASS_LABEL: sum(1 for character in password if not character.isalnum()),
     }
 
 
@@ -304,7 +309,7 @@ def _class_requirements(policy: PasswordPolicy) -> list[str]:
         "majuscule": policy.min_uppercase,
         "minuscule": policy.min_lowercase,
         "chiffre": policy.min_digits,
-        "caractère spécial": policy.min_special,
+        _SPECIAL_CLASS_LABEL: policy.min_special,
     }
     return [f"{minimum} {label}(s)" for label, minimum in minimums.items() if minimum]
 
@@ -316,7 +321,7 @@ def _class_violations(policy: PasswordPolicy, password: str) -> list[str]:
         "majuscule": policy.min_uppercase,
         "minuscule": policy.min_lowercase,
         "chiffre": policy.min_digits,
-        "caractère spécial": policy.min_special,
+        _SPECIAL_CLASS_LABEL: policy.min_special,
     }
     return [
         f"{minimum} {label}(s) minimum (actuel : {counts[label]})"
