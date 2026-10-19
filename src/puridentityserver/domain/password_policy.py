@@ -23,7 +23,7 @@ figurant parmi les derniers utilisés.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, fields
 from itertools import pairwise
 from typing import Any
 
@@ -279,18 +279,18 @@ class PasswordPolicyPatch:
                     f"(reçu : {value!r})"
                 )
             changes[name] = value
-        patched: PasswordPolicyPatch = replace(cls(), **changes)
-        return patched
+        return cls(**changes)
 
     def apply(self, base: PasswordPolicy) -> PasswordPolicy:
-        """Retourne ``base`` avec les seules clés renseignées de la surcharge."""
-        changes: dict[str, Any] = {}
+        """Retourne une copie de ``base`` avec les seules clés renseignées de la surcharge."""
+        merged: dict[str, Any] = {
+            descriptor.name: getattr(base, descriptor.name) for descriptor in fields(base)
+        }
         for descriptor in fields(self):
             value = getattr(self, descriptor.name)
             if value is not None:
-                changes[descriptor.name] = value
-        patched: PasswordPolicy = replace(base, **changes)
-        return patched
+                merged[descriptor.name] = value
+        return PasswordPolicy(**merged)
 
 
 def _class_counts(password: str) -> dict[str, int]:
