@@ -17,6 +17,8 @@ from typing import ClassVar
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from puridentityserver.domain.password_policy import PasswordPolicyPatch
+
 
 class Scope(str):
     """Scope OAuth 2.0 / OIDC : valeurs standard (RFC 6749 §3.3, §5.4) et libres.
@@ -273,6 +275,10 @@ class Client:
     backchannel_client_notification_endpoint: str = ""
     backchannel_authentication_request_signing_alg: str = ""
     binding_message_max_length: int | None = None
+    #: Surcharge partielle de la politique de mots de passe (clés absentes =
+    #: valeurs de ``[settings.password_policy]``) appliquée aux flows
+    #: d'inscription (``prompt=create``) de ce client.
+    password_policy: PasswordPolicyPatch = field(default_factory=PasswordPolicyPatch)
 
     @property
     def effective_auth_method(self) -> TokenEndpointAuthMethod:

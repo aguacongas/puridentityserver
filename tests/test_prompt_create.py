@@ -5,8 +5,12 @@
   la demande rejouée émet un code dont l'``id_token`` porte le ``sub`` du
   nouvel utilisateur (spec §2) ;
 - ``create`` + ``none`` renvoie ``login_required`` redirigeable (spec §3) ;
-- création refusée (email existant, politique de mot de passe) ou annulée via
-  le lien de la page → ``access_denied`` redirigeable avec ``state`` réfléchi ;
+- création refusée (politique de mots de passe, email existant ou malformé)
+  → erreur **inline** sur le formulaire avec le détail et nouvelle tentative
+  possible ; annulation via le lien de la page → ``access_denied``
+  redirigeable avec ``state`` réfléchi (CA 5 amendé) ;
+- politique de mots de passe par défaut (12 caractères, classes exigées, CA 6)
+  et surcharge par client (table ``password_policy`` du seed, CA 7) ;
 - utilisateur déjà connecté + ``prompt=create`` → page d'inscription (création
   directe, comportement §2 documenté) ;
 - discovery publie ``prompt_values_supported`` (CA 4, convention non mandate) ;
@@ -28,6 +32,10 @@ from puridentityserver.server import create_app
 
 _ISSUER = "https://id.example"
 _REDIRECT_URI = "https://app.example/callback"
+
+# Conforme à la politique par défaut : 14 caractères, toutes les classes,
+# absent des denylists et sans suite interdite.
+_STRONG_PASSWORD = "Motdepasse123!"
 
 _CLIENT_JSON: dict[str, object] = {
     "client_id": "web-app",
@@ -85,6 +93,15 @@ def _signup_next(location: str) -> str:
     return unquote(_redirect_query(location)["next"][0])
 
 
+def _signup_error_page(client: TestClient, location: str) -> str:
+    """Suit la redirection d'erreur inline et retourne le formulaire réaffiché."""
+    assert location.startswith("/signup?next="), location
+    assert "error=" in location, location
+    page = client.get(location)
+    assert page.status_code == 200, page.text
+    return page.text
+
+
 def _replay(client: TestClient, target: str) -> str:
     """Rejoue une URL absolue d'autorisation en chemin relatif (cookie conservé)."""
     parsed = urlparse(target)
@@ -119,6 +136,7 @@ def test_signup_page_renders_form_and_cancel_link() -> None:
     assert 'action="/signup"' in page.text
     assert 'name="email"' in page.text
     assert 'name="password"' in page.text
+    assert "Exigences : 12 caractères minimum" in page.text
     escaped_next = "https://id.example/authorize?prompt=create&amp;state=st-create"
     assert f'value="{escaped_next}"' in page.text
     assert "register=cancelled" in page.text
@@ -138,7 +156,7 @@ def test_signup_completes_flow_with_new_subject() -> None:
             "/signup",
             data={
                 "email": "carol@example.com",
-                "password": "motdepasse123",
+                "password": _STRONG_PASSWORD,
                 "next": next_target,
             },
             follow_redirects=False,
@@ -203,8 +221,8 @@ def test_prompt_create_login_redirects_to_signup() -> None:
     assert response.headers["location"].startswith("/signup?next=")
 
 
-def test_signup_with_existing_email_returns_access_denied() -> None:
-    """CA 3 : email déjà inscrit -> ``access_denied`` redirigeable (transport résolu)."""
+def test_signup_with_existing_email_shows_inline_error() -> None:
+    """CA 5 amendé : email déjà inscrit → erreur inline sur le formulaire (retry)."""
     with TestClient(_app()) as client:
         start = client.get(
             "/authorize", params=_authorize_params(prompt="create"), follow_redirects=False
@@ -215,22 +233,19 @@ def test_signup_with_existing_email_returns_access_denied() -> None:
             "/signup",
             data={
                 "email": "alice@example.com",
-                "password": "motdepasse123",
+                "password": _STRONG_PASSWORD,
                 "next": next_target,
             },
             follow_redirects=False,
         )
         assert refused.status_code == 302
-        assert _redirect_query(refused.headers["location"])["register"] == ["refused"]
-
-        location = _replay(client, refused.headers["location"])
-        query = _redirect_query(location)
-        assert query["error"] == ["access_denied"]
-        assert query["state"] == ["st-create"]
+        body = _signup_error_page(client, refused.headers["location"])
+        assert "déjà inscrite" in body
+        assert "register=cancelled" in body, "le lien d'annulation reste affiché"
 
 
-def test_signup_with_weak_password_returns_access_denied() -> None:
-    """CA 3 : politique de mot de passe serveur (8 caractères min.) -> refus."""
+def test_signup_with_weak_password_shows_inline_error() -> None:
+    """CA 6 : politique de mots de passe violée → détail des violations en clair."""
     with TestClient(_app()) as client:
         start = client.get(
             "/authorize", params=_authorize_params(prompt="create"), follow_redirects=False
@@ -243,10 +258,120 @@ def test_signup_with_weak_password_returns_access_denied() -> None:
             follow_redirects=False,
         )
         assert refused.status_code == 302
-        assert _redirect_query(refused.headers["location"])["register"] == ["refused"]
+        body = _signup_error_page(client, refused.headers["location"])
+        assert "12 caractères minimum (actuel : 5)" in body
+        assert "1 majuscule(s) minimum" in body
 
-        location = _replay(client, refused.headers["location"])
-        assert _redirect_query(location)["error"] == ["access_denied"]
+
+def test_signup_rejects_common_password() -> None:
+    """La denylist intégrée refuse un mot de passe courant même long."""
+    with TestClient(_app()) as client:
+        start = client.get(
+            "/authorize", params=_authorize_params(prompt="create"), follow_redirects=False
+        )
+        next_target = _signup_next(start.headers["location"])
+
+        refused = client.post(
+            "/signup",
+            data={
+                "email": "dave@example.com",
+                "password": "motdepasse123",
+                "next": next_target,
+            },
+            follow_redirects=False,
+        )
+        assert refused.status_code == 302
+        assert "trop courant" in _signup_error_page(client, refused.headers["location"])
+
+
+def test_signup_rejects_password_containing_email() -> None:
+    """Le mot de passe ne doit pas contenir l'email ou son local-part."""
+    with TestClient(_app()) as client:
+        start = client.get(
+            "/authorize", params=_authorize_params(prompt="create"), follow_redirects=False
+        )
+        next_target = _signup_next(start.headers["location"])
+
+        refused = client.post(
+            "/signup",
+            data={
+                "email": "carol@example.com",
+                "password": "Caroline2026XY!",
+                "next": next_target,
+            },
+            follow_redirects=False,
+        )
+        assert refused.status_code == 302
+        body = _signup_error_page(client, refused.headers["location"])
+        assert "contient l&#x27;adresse email" in body
+
+
+def test_signup_rejects_character_sequence() -> None:
+    """Une suite alphanumérique (12345+) est refusée par la politique."""
+    with TestClient(_app()) as client:
+        start = client.get(
+            "/authorize", params=_authorize_params(prompt="create"), follow_redirects=False
+        )
+        next_target = _signup_next(start.headers["location"])
+
+        refused = client.post(
+            "/signup",
+            data={
+                "email": "dave@example.com",
+                "password": "Abcdef12345!a",
+                "next": next_target,
+            },
+            follow_redirects=False,
+        )
+        assert refused.status_code == 302
+        body = _signup_error_page(client, refused.headers["location"])
+        assert "suite de caractères interdite" in body
+
+
+def test_signup_client_password_policy_override() -> None:
+    """CA 7 : la table ``password_policy`` du client écrase la défaut sur ses flows."""
+    overridden = {**_CLIENT_JSON, "password_policy": {"min_length": 16}}
+    app = create_app(
+        Settings(
+            issuer=_ISSUER,
+            base_url=_ISSUER,
+            jwks_algorithms=("RS256",),
+            clients_seed=(overridden,),
+            identity_seed_users=_IDENTITY_SEED,
+        )
+    )
+    with TestClient(app) as client:
+        start = client.get(
+            "/authorize", params=_authorize_params(prompt="create"), follow_redirects=False
+        )
+        next_target = _signup_next(start.headers["location"])
+
+        page = client.get("/signup", params={"next": next_target})
+        assert "Exigences : 16 caractères minimum" in page.text
+
+        refused = client.post(
+            "/signup",
+            data={
+                "email": "dave@example.com",
+                "password": _STRONG_PASSWORD,
+                "next": next_target,
+            },
+            follow_redirects=False,
+        )
+        assert refused.status_code == 302
+        assert "16 caractères minimum" in unquote(refused.headers["location"])
+
+        created = client.post(
+            "/signup",
+            data={
+                "email": "dave@example.com",
+                "password": "MotdepasseXY2026!",
+                "next": next_target,
+            },
+            follow_redirects=False,
+        )
+        assert created.status_code == 302, created.text
+        assert created.headers["location"] == next_target
 
 
 def test_signup_cancel_returns_access_denied() -> None:
@@ -259,6 +384,20 @@ def test_signup_cancel_returns_access_denied() -> None:
         cancel = f"{next_target}&register=cancelled"
 
         location = _replay(client, cancel)
+        query = _redirect_query(location)
+        assert query["error"] == ["access_denied"]
+        assert query["state"] == ["st-create"]
+
+
+def test_register_refused_marker_still_honoured() -> None:
+    """Le marqueur défensif ``register=refused`` reste honoré (compatibilité)."""
+    with TestClient(_app()) as client:
+        start = client.get(
+            "/authorize", params=_authorize_params(prompt="create"), follow_redirects=False
+        )
+        next_target = _signup_next(start.headers["location"])
+
+        location = _replay(client, f"{next_target}&register=refused")
         query = _redirect_query(location)
         assert query["error"] == ["access_denied"]
         assert query["state"] == ["st-create"]

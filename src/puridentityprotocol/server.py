@@ -55,6 +55,7 @@ from puridentityserver.application.token import TokenConfig, TokenUseCase
 from puridentityserver.application.userinfo import UserInfoConfig, UserInfoUseCase
 from puridentityserver.domain.authorization import TokenEndpointAuthMethod
 from puridentityserver.domain.jwks import SYMMETRIC_ALGORITHMS, JWTAlgorithm, KeyUse
+from puridentityserver.domain.password_policy import PasswordPolicy
 from puridentityserver.domain.userinfo import UserClaims
 from puridentityserver.identity.config import (
     auth_router,
@@ -112,6 +113,7 @@ from puridentityserver.interfaces.api.par import par_router
 from puridentityserver.interfaces.api.protected_resource import protected_resource_router
 from puridentityserver.interfaces.api.registration import registration_router
 from puridentityserver.interfaces.api.revocation import revocation_router
+from puridentityserver.interfaces.api.same_origin import SameOriginFormGuardMiddleware
 from puridentityserver.interfaces.api.session_management import session_management_router
 from puridentityserver.interfaces.api.token import token_router
 from puridentityserver.interfaces.api.userinfo import userinfo_router
@@ -187,7 +189,8 @@ class ProtocolDependencies:
     Construit la chaîne d'injection du protocole à partir des
     ``Settings`` et des ``Stores`` partagés (construits localement en
     déploiement séparé, fournis par le serveur ``full`` sinon) ; expose le
-    cycle de vie (seed + libération) et la durée de session par client.
+    cycle de vie (seed + libération) et les réglages par client (durée de
+    session, politique de mots de passe).
     """
 
     def __init__(self, settings: Settings, stores: Stores) -> None:
@@ -207,6 +210,7 @@ class ProtocolDependencies:
             cookie_lifetime_seconds=settings.identity_jwt_lifetime_seconds,
             session_rotation_days=settings.jwks_rotation_days,
             session_grace_period_days=settings.jwks_grace_period_days,
+            password_policy=settings.password_policy,
         )
         self.config = DiscoveryConfig(
             issuer=settings.issuer,
@@ -423,6 +427,18 @@ class ProtocolDependencies:
         client = await self.readers.client.find_by_id(client_id)
         return client.session_lifetime_seconds if client is not None else None
 
+    async def resolve_password_policy(self, client_id: str) -> PasswordPolicy:
+        """Politique de mots de passe effective : surcharge du client, sinon défaut.
+
+        La table partielle ``password_policy`` du client (``clients_seed``)
+        écrase les seules clés qu'elle renseigne sur la politique serveur
+        (``[settings.password_policy]``) ; client inconnu → défaut pur.
+        """
+        client = await self.readers.client.find_by_id(client_id)
+        if client is None:
+            return self.settings.password_policy
+        return client.password_policy.apply(self.settings.password_policy)
+
     @asynccontextmanager
     async def lifespan(self, _app: FastAPI) -> AsyncGenerator[None, None]:
         """Prépare les stockages (resources + protocole) puis libère à l'arrêt."""
@@ -487,7 +503,13 @@ class ProtocolDependencies:
         )
         app.include_router(jwk_set_router(self.jwks_usecase))
         app.include_router(login_router(self.resolve_session_lifetime))
-        app.include_router(signup_router(self.resolve_session_lifetime))
+        app.include_router(
+            signup_router(
+                self.resolve_session_lifetime,
+                resolve_password_policy=self.resolve_password_policy,
+                default_password_policy=self.settings.password_policy,
+            )
+        )
         app.include_router(auth_router)
         app.include_router(register_router, prefix="/auth")
         _mount_authorization_routers(
@@ -556,6 +578,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ),
     )
     app.add_middleware(DynamicCORSMiddleware, client_repository=deps.readers.client)
+    app.add_middleware(
+        SameOriginFormGuardMiddleware,
+        trust_proxy_headers=settings.trust_proxy_headers,
+    )
     deps.mount(app)
     return app
 

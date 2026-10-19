@@ -749,8 +749,9 @@ async def _registration_gate(
     - ``create`` + ``none`` : aucune interaction possible → ``login_required``
       redirigé au client (spec §3), quel que soit l'état de session ;
     - marqueur ``register=cancelled`` (annulation sur la page d'inscription)
-      ou ``register=refused`` (création refusée : email existant, politique
-      de mots de passe) → ``access_denied`` redirigeable, transporté selon le
+      ou ``register=refused`` (création refusée — marqueur défensif, les
+      refus de l'OP sont désormais rendus en erreur inline sur le
+      formulaire) → ``access_denied`` redirigeable, transporté selon le
       ``response_mode`` résolu (query/fragment, JARM signé, form_post avec
       ``iss``) ;
     - session dont l'empreinte ``reauth`` porte **cette** URL d'autorisation :
