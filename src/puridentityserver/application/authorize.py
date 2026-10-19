@@ -1003,6 +1003,12 @@ def parse_max_age(value: str) -> int:
     return parsed if parsed >= 0 else -2
 
 
+#: ACR atteignables par l'OP (OIDC Discovery 1.0 §2, ``acr_values_supported``).
+#: L'authentification se fait par identifiants : ce niveau unique est la base
+#: du contrôle ``unmet_authentication_requirements`` (RFC 9470 §2).
+SUPPORTED_ACR_VALUES: tuple[str, ...] = ("puridentityserver:pwd",)
+
+
 def first_acr_value(acr_values: str) -> str:
     """Première valeur ``acr_values`` demandée (OIDC Core 1.0 §3.1.2.1).
 

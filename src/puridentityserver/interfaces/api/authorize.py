@@ -13,10 +13,12 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from puridentityserver.application.authorize import (
+    SUPPORTED_ACR_VALUES,
     AuthorizeError,
     AuthorizeRedirect,
     AuthorizeRequest,
     AuthorizeUseCase,
+    first_acr_value,
     parse_max_age,
     validate_authorization_request,
 )
@@ -602,10 +604,15 @@ async def _authentication_gate(
       récente que la demande (OIDC Core 1.0 §3.1.2.1) : l'utilisateur connecté
       est renvoyé vers ``/login`` même s'il a déjà une session, la reconnexion
       rafraîchissant ``auth_time`` ;
-    - ``prompt=none`` dans ce cas renvoie ``login_required`` au client plutôt
-      que l'écran de connexion (§3.1.2.6) ;
+    - ``prompt=none`` dans ce cas renvoie ``login_required`` (§3.1.2.6), ou
+      ``unmet_authentication_requirements`` (RFC 9470 §2, issue #167) quand une
+      exigence ``max_age`` est inassumable par la session active ;
+    - ``prompt=none`` + session + ``acr_values`` hors ``acr_values_supported``
+      → ``unmet_authentication_requirements`` (RFC 9470 §2) : une valeur
+      étrangère est inassumable quel que soit le relogin ;
     - non connecté : ``prompt=login`` ou ``require_login`` déclenchent le
-      formulaire de connexion, ``prompt=none`` renvoie ``login_required`` ;
+      formulaire de connexion, ``prompt=none`` renvoie ``login_required``
+      — jamais le code RFC 9470, aucune session n'est authentifiée (§3) ;
     - ``prompt=create`` est délégué à ``_registration_gate`` (Initiating User
       Registration via OIDC 1.0, issue #166) — ``register_marker`` porte le
       marqueur ``register=`` de l'URL de retour d'inscription.
@@ -621,6 +628,20 @@ async def _authentication_gate(
             jarm_signer=jarm_signer,
             issuer=issuer,
         )
+    if (
+        user is not None
+        and "none" in auth_request.prompt.split()
+        and _unsupported_acr(auth_request)
+    ):
+        return await _login_or_error(
+            auth_request,
+            request,
+            client_repository,
+            base_url,
+            jarm_signer=jarm_signer,
+            issuer=issuer,
+            error_code="unmet_authentication_requirements",
+        )
     if user is not None and await _reauthentication_required(auth_request, request, base_url):
         if "none" in auth_request.prompt.split():
             return await _login_or_error(
@@ -630,6 +651,7 @@ async def _authentication_gate(
                 base_url,
                 jarm_signer=jarm_signer,
                 issuer=issuer,
+                error_code=await _reauthentication_error_code(auth_request, request, base_url),
             )
         return _login_redirect(request, base_url)
     if user is None and (require_login or "login" in auth_request.prompt.split()):
@@ -649,32 +671,76 @@ async def _reauthentication_required(
 ) -> bool:
     """Indique si ``prompt=login`` / ``max_age`` exigent une reconnexion.
 
-    ``prompt=login`` (et ``max_age=0``) est satisfait par une session issue
-    d'un ``POST /login`` dont le ``next`` était **cette** URL d'autorisation :
-    le claim ``reauth`` de la session porte son empreinte, ce qui évite toute
-    boucle de reconnexion — un login déclenché par la demande la valide
-    toujours. ``max_age`` strictement positif compare l'âge de la session à
-    la valeur demandée ; l'``auth_time`` est lu sur la session courante (le
-    ``auth_time`` de la demande n'est renseigné qu'après le contrôle, au
-    moment de l'émission) — sans quoi tout ``max_age`` paraîtrait dépassé et
-    la reconnexion tournerait en boucle. Même mécanisme d'anti-boucle lorsque
-    l'âge dépasse ``max_age>0`` : si la session vient d'un login déclenché par
-    **cette** URL (empreinte ``reauth``), le dépassement est imputable à la
-    latence de l'OP, pas à une session ancienne, et la demande est validée.
+    ``prompt=login`` est satisfait par une session issue d'un ``POST /login``
+    dont le ``next`` était **cette** URL d'autorisation : le claim ``reauth``
+    de la session porte son empreinte, ce qui évite toute boucle de
+    reconnexion — un login déclenché par la demande la valide toujours.
+    ``max_age`` est délégué à ``_max_age_requirement_unmet`` (même mécanisme
+    anti-boucle #137).
     """
     session_reauth_hash = await session_reauth(request)
     url_hash = reauth_context(_authorize_url_from_base(base_url, request))
-    tokens = auth_request.prompt.split()
-    if ("login" in tokens or auth_request.max_age == 0) and session_reauth_hash != url_hash:
+    if "login" in auth_request.prompt.split() and session_reauth_hash != url_hash:
         return True
-    if auth_request.max_age > 0:
-        auth_time = await session_auth_time(request)
-        if auth_time == 0:
-            return True
-        if (int(time.time()) - auth_time) <= auth_request.max_age:
-            return False
+    return await _max_age_requirement_unmet(auth_request, request, session_reauth_hash, url_hash)
+
+
+async def _max_age_requirement_unmet(
+    auth_request: AuthorizeRequest,
+    request: Request,
+    session_reauth_hash: str,
+    url_hash: str,
+) -> bool:
+    """Indique si l'exigence ``max_age`` n'est pas satisfaite par la session.
+
+    ``max_age=0`` exige une authentification immédiate (OIDC Core 1.0
+    §3.1.2.1), ``max_age>0`` compare l'âge de la session à la valeur
+    demandée ; l'``auth_time`` est lu sur la session courante et un ``0``
+    (session sans ``iat``) rend l'exigence inassumable. Un login déclenché
+    par **cette** URL d'autorisation (empreinte ``reauth``) satisfait toujours
+    l'exigence — la latence de l'OP n'est pas un dépassement (#137).
+    ``max_age`` absent (``-1``) : aucune exigence.
+    """
+    max_age = auth_request.max_age
+    if max_age == 0:
         return session_reauth_hash != url_hash
-    return False
+    if max_age < 0:
+        return False
+    auth_time = await session_auth_time(request)
+    if auth_time == 0:
+        return True
+    if (int(time.time()) - auth_time) <= max_age:
+        return False
+    return session_reauth_hash != url_hash
+
+
+async def _reauthentication_error_code(
+    auth_request: AuthorizeRequest, request: Request, base_url: str
+) -> str:
+    """Code d'erreur d'authentification pour ``prompt=none`` avec session active.
+
+    ``unmet_authentication_requirements`` (RFC 9470 §2) quand une exigence
+    ``max_age`` est inassumable : la session existe, seul le niveau
+    demandé n'est pas atteint — ``login_required`` serait impropre (§3).
+    ``prompt=login`` seul reste ``login_required`` : instruction d'interaction
+    et non exigence d'authentification (OIDC Core 1.0 §3.1.2.6).
+    """
+    session_reauth_hash = await session_reauth(request)
+    url_hash = reauth_context(_authorize_url_from_base(base_url, request))
+    if await _max_age_requirement_unmet(auth_request, request, session_reauth_hash, url_hash):
+        return "unmet_authentication_requirements"
+    return "login_required"
+
+
+def _unsupported_acr(auth_request: AuthorizeRequest) -> bool:
+    """``True`` si la première ``acr_values`` demandée est hors ACR supportés.
+
+    L'OP publie ses ACR atteignables dans ``acr_values_supported`` (OIDC
+    Discovery 1.0 §2) : une valeur étrangère est inassumable par la session,
+    aucun relogin ne la rendrait atteignable.
+    """
+    acr = first_acr_value(auth_request.acr_values)
+    return bool(acr) and acr not in SUPPORTED_ACR_VALUES
 
 
 def _login_redirect(request: Request, base_url: str) -> RedirectResponse:
@@ -685,6 +751,16 @@ def _login_redirect(request: Request, base_url: str) -> RedirectResponse:
     )
 
 
+#: Descriptions jointes aux codes d'authentification ``prompt=none``
+#: (OIDC Core 1.0 §3.1.2.6, RFC 9470 §2 — issue #167).
+_AUTHENTICATION_ERROR_DESCRIPTIONS = {
+    "login_required": "Authentification requise (prompt=none)",
+    "unmet_authentication_requirements": (
+        "Exigences d'authentification non satisfaites (max_age/acr_values, RFC 9470 §2)"
+    ),
+}
+
+
 async def _login_or_error(
     auth_request: AuthorizeRequest,
     http_request: Request,
@@ -693,25 +769,30 @@ async def _login_or_error(
     *,
     jarm_signer: JarmSigner | None = None,
     issuer: str = "",
+    error_code: str = "login_required",
 ) -> RedirectResponse | HTMLResponse:
     """Gère une demande ``/authorize`` non réauthentifiée (``prompt``/``require_login``).
 
     ``prompt=none`` (OIDC Core 1.0 §3.1.2.6) : aucune redirection vers le
-    formulaire n'est autorisée — une erreur ``login_required`` est renvoyée au
-    client via sa ``redirect_uri`` (la ``redirect_uri`` a déjà été validée en
-    amont par ``_non_redirectable_error``). Sinon : redirection vers
-    ``/login?next=<url complète d'/authorize>`` ; après connexion le
-    ``subject`` est porté par le cookie et la demande est rejouée telle quelle.
+    formulaire n'est autorisée — ``error_code`` est renvoyé au client via sa
+    ``redirect_uri`` (la ``redirect_uri`` a déjà été validée en amont par
+    ``_non_redirectable_error``). ``login_required`` par défaut ;
+    ``unmet_authentication_requirements`` (RFC 9470 §2) quand une exigence
+    ``max_age``/``acr_values`` est inassumable par une session existante,
+    la description suit le code (``_AUTHENTICATION_ERROR_DESCRIPTIONS``).
+    Sinon : redirection vers ``/login?next=<url complète d'/authorize>``,
+    après connexion le ``subject`` est porté par le cookie et la demande est
+    rejouée telle quelle.
 
     Le ``next`` est reconstruit depuis ``base_url`` (URL externe explicite de
     l'émetteur, jamais ``request.url`` : derrière un proxy de terminaison TLS
     l'en-tête Host ne porte pas le port non standard, ce qui cassait la
     redirection post-login avec e.g. ``https://host.example:8445``).
 
-    L'erreur ``login_required`` suit ``response_mode`` (signée JARM pour un
-    client signable, ``POST`` auto-soumis pour ``response_mode=form_post``
-    portant alors ``iss`` — RFC 9207 §2 —, query/fragment sinon) via
-    ``jarm_signer`` et ``issuer``.
+    L'erreur suit ``response_mode`` (signée JARM pour un client signable,
+    ``POST`` auto-soumis pour ``response_mode=form_post`` portant alors
+    ``iss`` — RFC 9207 §2 —, query/fragment sinon) via ``jarm_signer`` et
+    ``issuer``.
     """
     if "none" in auth_request.prompt.split():
         validated = (
@@ -722,8 +803,10 @@ async def _login_or_error(
         if isinstance(validated, AuthorizeError):
             return await error_response(validated, jarm_signer, issuer=issuer)
         error = AuthorizeError(
-            error="login_required",
-            error_description="Authentification requise (prompt=none)",
+            error=error_code,
+            error_description=_AUTHENTICATION_ERROR_DESCRIPTIONS.get(
+                error_code, _AUTHENTICATION_ERROR_DESCRIPTIONS["login_required"]
+            ),
             redirect_uri=auth_request.redirect_uri,
             state=auth_request.state,
             response_mode=validated.response_mode if validated is not None else ResponseMode.QUERY,
