@@ -36,8 +36,8 @@ retenue :
 
 - Le workflow `Certification OIDC (Local)` se termine avec, pour chaque plan
   (`oidcc-basic-`, `oidcc-implicit-`, `oidcc-hybrid-`, `oidcc-formpost-basic-`,
-  `fapi-ciba-id1-test-plan`, `fapi1-advanced-final-test-plan`,
-  `fapi2-security-profile-final-test-plan`,
+  `oidcc-dynamic-certification-test-plan`, `fapi-ciba-id1-test-plan`,
+  `fapi1-advanced-final-test-plan`, `fapi2-security-profile-final-test-plan`,
   `fapi2-message-signing-final-test-plan`),
   le détail des modules testés et leur verdict (PASSED / FAILED / WARNING /
   REVIEW / SKIPPED) dans le résumé du run ;
@@ -79,7 +79,7 @@ retenue :
 - **En CI — local (courant)** : automatique à **chaque merge sur `main`**
   (sans filtre de chemins) et sur chaque PR touchant `certification/**` ;
   manuellement : *Actions → Certification OIDC (Local) → Run workflow* avec
-  le plan souhaité (défaut : les huit). Seuls les runs sur `main` ou lancés à
+  le plan souhaité (défaut : les neuf). Seuls les runs sur `main` ou lancés à
   la main publient sur GitHub Pages.
 - **En CI — hébergé (à la demande)** : *Actions → Certification OIDC → Run
   workflow* (plus de cron ni de déclenchement au merge pour l'instant — le
@@ -89,11 +89,12 @@ retenue :
   photographie les `kid` du JWKS, déclenche le deploy hook puis patiente
   (15 min max) jusqu'à ce que les `kid` changent — preuve que le build est
   terminé **et** que le disque éphémère (donc l'état) a été recréé avant le
-  premier enregistrement de client ; joue ensuite les **huit plans en
-  parallèle** (8 jobs matrix, `fail-fast: false` — ~40 min au lieu de ~3 h
+  premier enregistrement de client ; joue ensuite les **neuf plans en
+  parallèle** (9 jobs matrix, `fail-fast: false` — ~40 min au lieu de ~3 h
   séquentielles, issue #122 ; les plans FAPI1 Advanced, FAPI2 Security
-  Profile, FAPI2 Message Signing (JARM, issue #164) et Form Post
-  (issue #165) ont été ajoutés par les issues #113, #164 et #165), chaque
+  Profile, FAPI2 Message Signing (JARM, issue #164), Form Post
+  (issue #165) et Dynamic (issue #168) ont été ajoutés par les issues #113,
+  #164, #165 et #168), chaque
   plan exportant son propre
   artefact, puis un job final fusionne les exports et téléverse le rapport
   consolidé en artefact.
@@ -181,7 +182,7 @@ redémarrage, les conteneurs sont réutilisés).
 bash certification/local/setup.sh
 
 # 2. rejouer un plan en une commande (même séquence stricte que la CI)
-bash certification/local/run-plan.sh fapi2   # basic | implicit | hybrid | formpost | ciba | fapi1 | fapi2 | fapi2-message-signing
+bash certification/local/run-plan.sh fapi2   # basic | implicit | hybrid | formpost | dynamic | ciba | fapi1 | fapi2 | fapi2-message-signing
 
 # 3. arrêter / nettoyer
 bash certification/local/down.sh             # OP + op-mtls + conteneurs de la suite
@@ -202,11 +203,28 @@ bilan `PASSED/FAILED/REVIEW` lu dans l'export, avec les chemins du log
 workflows CI ; `prepare-suite.sh` est le helper de patches partagé avec le
 workflow local.
 
+### Écarts de modules attendus (mode witness)
+
+`certification/expected-failures/<plan>.json` déclare, au format du driver
+(`--expected-failures-file`, cf. `conformance-suite/scripts/run-test-plan.py`),
+les conditions de modules connues et non résolues (capacités OP absentes :
+userinfo signé RS256, rotation des clés OP — module manuel autorisé en
+self-assertion par l'OIDF —, request objects RS256 des clients standards).
+Le driver les classe en « expected failure » : le plan ne sort en code non nul
+que pour les écarts **inattendus** — la strictude #130 est préservée et les
+gaps documentés ne bloquent pas (mode witness). Chaque entrée non consommée
+(condition résolue entre-temps, ex. capacité implémentée) fait échec
+`EXPECTED_*_NOT_HAPPEN` : le fichier doit être purgé dès qu'une capacité est
+livrée. `run-plan.sh` et le job plan de `certification-local.yml` appliquent
+le fichier quand il existe (chemin et comportement identiques) ; le workflow
+hébergé reste witness pur (`continue-on-error` sur le lancement).
+
 En CI : le workflow `Certification OIDC (Local)`
 (`.github/workflows/certification-local.yml`) exécute exactement cette
 séquence en **sortie stricte** (issue #130) : le code retour non nul du
 driver fait échouer le job plan (modules FAILED, INTERRUPTED ou warnings
-inattendus ; seule l'absence totale d'export signale un crash du harness) et
+inattendus — hors écarts déclarés witness, voir ci-dessus ; seule l'absence
+totale d'export signale un crash du harness) et
 téléverse les exports + le rapport en artefacts ; le rapport est **publié sur
 GitHub Pages** pour les runs sur `main` ou lancés à la main (pas pour les
 PR). Les modules REVIEW restent tolérés (verdicts de relecture), leur preuve
@@ -370,19 +388,19 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
 | Fichier | Rôle |
 | --- | --- |
 | `render.yaml` / `Dockerfile` / `.dockerignore` | déploiement de l'OP sur Render (SQLite, disque éphémère) |
-| `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`, 4 clients statiques FAPI `private_key_jwt` + JWKS public pour les plans fapi1/fapi2) |
-| `plans/basic|implicit|hybrid|formpost|ciba|fapi1|fapi2|fapi2-message-signing.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; fapi1/fapi2/fapi2-message-signing portent aussi `client`/`client2` en clé privée et `resource`) |
+| `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`, `subject_pairwise_seed` pour les modules sector du plan dynamic, 4 clients statiques FAPI `private_key_jwt` + JWKS public pour les plans fapi1/fapi2) |
+| `plans/basic|implicit|hybrid|formpost|dynamic|ciba|fapi1|fapi2|fapi2-message-signing.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; fapi1/fapi2/fapi2-message-signing portent aussi `client`/`client2` en clé privée et `resource`) |
 | `conformance-reuse-plan.patch` | patch du driver : `create_test_plan` idempotent (réutilise le plan existant quand sa config n'a pas changé) |
 | `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) — avec `SCREENSHOTS_DIR` défini (CI), un fichier absent/vide/trop lourd lève une erreur fatale (captures obligatoires, issue #161) ; sans variable (exécution manuelle), le PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode hébergé) |
-| `capture_screenshots.py` | rejoue les 24 scénarios de relecture (4 Core, 16 FAPI1, 4 FAPI2) contre l'OP (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver — `--base-url` = OP, `--suite-url` = base des callbacks de la suite (hébergée par défaut, `https://localhost.emobix.co.uk:8443` en local) |
+| `capture_screenshots.py` | rejoue les 30 scénarios de relecture (4 Core, 6 dynamic, 16 FAPI1, 4 FAPI2) contre l'OP (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver — `--base-url` = OP, `--suite-url` = base des callbacks de la suite (hébergée par défaut, `https://localhost.emobix.co.uk:8443` en local) |
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |
 | `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
 | `conformance-stale-plan-recovery.patch` | patch du driver : n'est jamais réessaie le 500 déterministe « test module not found » (1 tentative au lieu de 28) et valide la membership du plan réutilisé contre le catalogue avant le run — recréation automatique du plan stale (membership fraîche dès le premier run), plan le plus récent privilégié à la réutilisation |
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés ; recopie les captures réelles dans `_site/screenshots/` (`--screenshots`) et les affiche dans la section du module correspondant |
 | `local/setup.sh` | bootstrap du harness **auto-hébergé** : alias réseau, clone + déploiement docker de la suite, cert auto-signé + nginx mTLS `op`, config OP locale (issuer `https://op:9443`), OP uvicorn, attente de disponibilité |
 | `local/nginx-mtls.conf` | nginx de terminaison mTLS devant l'OP local : certificat client optionnel (`optional_no_ca`), extraction `$ssl_client_escaped_cert` → `X-SSL-Client-Cert` (pas de newline brute), proxy vers l'OP uvicorn de l'hôte |
-| `../.github/workflows/certification.yml` | workflow hébergé à la demande (`workflow_dispatch` uniquement) : `prepare` (deploy + captures, une fois), `plan` (les 8 plans en parallèle, un job matrix chacun, mode witness), `report` (fusion des exports en artefact — publication OIDC des résultats à venir) |
-| `../.github/workflows/certification-local.yml` | workflow **auto-hébergé strict** : déclenché à chaque merge sur `main`, sur les PR (`certification/**`) et à la demande ; 8 plans en matrix, code non nul du driver = job en échec, job `capture` **bloquant** (Playwright, artefact `certification-local-screenshots`, #158/#161 : captures REVIEW obligatoires), **publication GitHub Pages** (sauf sur les PR) |
+| `../.github/workflows/certification.yml` | workflow hébergé à la demande (`workflow_dispatch` uniquement) : `prepare` (deploy + captures, une fois), `plan` (les 9 plans en parallèle, un job matrix chacun, mode witness), `report` (fusion des exports en artefact — publication OIDC des résultats à venir) |
+| `../.github/workflows/certification-local.yml` | workflow **auto-hébergé strict** : déclenché à chaque merge sur `main`, sur les PR (`certification/**`) et à la demande ; 9 plans en matrix, code non nul du driver = job en échec, job `capture` **bloquant** (Playwright, artefact `certification-local-screenshots`, #158/#161 : captures REVIEW obligatoires), **publication GitHub Pages** (sauf sur les PR) |
 
 ## Captures d'écran des modules de relecture (modes hébergé et local)
 
@@ -396,7 +414,7 @@ page différente de l'OP :
 | Module | Page capturée |
 | --- | --- |
 | `oidcc-response-type-missing` | erreur 400 « Paramètres requis manquants : `response_type` » (avant login) |
-| `oidcc-ensure-registered-redirect-uri` | erreur 400 `invalid_redirect_uri`, servie **après** login/consentement |
+| `oidcc-ensure-registered-redirect-uri` | erreur 400 `invalid_redirect_uri`, servie avant login |
 | `oidcc-prompt-login` | second formulaire de connexion (`prompt=login`) |
 | `oidcc-max-age-1` | second formulaire de connexion (`max_age=1`, une seconde après le premier) |
 
@@ -405,10 +423,14 @@ du même ressort : leurs placeholders REVIEW attendent la page d'erreur réellem
 servie par l'OP. Deux étapes couvrent ce besoin :
 
 1. **`capture_screenshots.py`** (étape « Captures d'écran réelles des modules de
-   relecture ») : enregistre un client via RFC 7591, rejoue les **24 scénarios de
-   relecture** (les 4 modules Core du tableau, les 16 modules FAPI1, les 4 modules
+   relecture ») : enregistre un client via RFC 7591, rejoue les **30 scénarios de
+   relecture** (les 4 modules Core du tableau, les 6 modules du plan dynamic —
+   arbitrages de `redirect_uri` absente/supplémentaire/non concordante et pages
+   de connexion des clients DCR porteurs d'un `logo_uri`/`policy_uri`/`tos_uri`,
+   issue #168 —, les 16 modules FAPI1, les 4 modules
    FAPI2) avec chromium headless contre l'OP (`--base-url`), **contrôle chaque page
-   avant export** (statut 400 + marqueur `<code>` du motif, ou titre et
+   avant export** (statut 400 + marqueur `<code>` du motif — ou extrait « manquants
+   : redirect_uri » pour la page sans code de motif, ou titre et
    `form[action="/login"]` ; les erreurs FAPI2, elles, doivent arriver par une
    302 vers le callback de la suite portant `error=<code>` — transport
    RFC 6749 §4.1.2.1, issue #160) puis dépose
@@ -419,7 +441,7 @@ servie par l'OP. Deux étapes couvrent ce besoin :
    hébergé `https://www.certification.openid.net`, local
    `https://localhost.emobix.co.uk:8443`) et l'`aud` des assertions est lu au
    discovery de l'OP (issuer local `https://op:9443`). L'étape est
-   **bloquante** (issue #161) : le script exige les 24 captures et un échec
+   **bloquante** (issue #161) : le script exige les 30 captures et un échec
    (installation du navigateur, OP indisponible, scène invalide…) fait échouer
    le run — plus aucun repli silencieux en CI. Les deux workflows l'exécutent :
    - **mode hébergé** : dans le job `prepare` contre l'instance Render, résultat

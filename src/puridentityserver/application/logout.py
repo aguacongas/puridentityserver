@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from puridentityserver.domain.authorization import Client
+from puridentityserver.domain.subjects import display_subject
 from puridentityserver.interfaces.domain.backchannel import BackchannelNotifier
 from puridentityserver.interfaces.domain.tokens import TokenManager
 from puridentityserver.interfaces.repositories.readers import ClientReader
@@ -34,6 +35,7 @@ class LogoutConfig:
 
     issuer: str
     logout_token_ttl_seconds: int = 60
+    subject_seed: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,8 +147,14 @@ class LogoutUseCase:
         """Notifie chaque ``backchannel_logout_uri`` enregistrée (OIDC BCL 1.0 §3).
 
         POST d'un ``logout_token`` (``events`` + ``sub``/``sid``, RS256
-        serveur) vers tout client actif. Best effort : aucune exception ne
-        remonte, la session est déjà terminée côté serveur.
+        serveur) vers tout client actif. ``subject`` est le sujet **réel**
+        de la session : la ``sub`` du token est dérivée par client
+        cible (OIDC Core 1.0 §8.1, ESID 1.0 §4) pour correspondre à
+        celle de l'``id_token`` reçu par ce client — ``sid`` demeure le
+        lien de corrélation. La matière de dérivation est le ``sid``
+        courant, même valeur qu'à l'émission quand la session existe.
+        Best effort : aucune exception ne remonte, la session est déjà
+        terminée côté serveur.
         """
         if self._backchannel_notifier is None or not subject:
             return
@@ -163,7 +171,12 @@ class LogoutUseCase:
         for candidate in targets:
             logout_token = await self._token_manager.create_logout_token(
                 issuer=self._config.issuer,
-                subject=subject,
+                subject=display_subject(
+                    candidate,
+                    subject,
+                    material=session_id,
+                    seed=self._config.subject_seed,
+                ),
                 audience=candidate.client_id,
                 sid=session_id,
                 expires_at=expires_at,

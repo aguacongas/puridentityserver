@@ -64,6 +64,7 @@ from puridentityserver.domain.authorization import (
     resolve_lifetime_seconds,
 )
 from puridentityserver.domain.jwks import JWTAlgorithm
+from puridentityserver.domain.subjects import access_token_subject_claims, display_subject
 from puridentityserver.interfaces.domain.secrets import SecretCipher
 from puridentityserver.interfaces.domain.tokens import (
     IdTokenConditionalClaims,
@@ -102,6 +103,7 @@ class AuthorizeConfig:
     issuer: str = ""
     secret_cipher: SecretCipher | None = None
     id_token_encrypter: IdTokenEncrypter | None = None
+    subject_seed: str = ""
 
 
 @dataclass(slots=True)
@@ -649,17 +651,25 @@ class AuthorizeUseCase:
     async def _issue_code(
         self, request: AuthorizeRequest, scopes: frozenset[Scope], client: Client
     ) -> str:
-        """Émet et persiste un code d'autorisation (code flow ou hybrid)."""
+        """Émet et persiste un code d'autorisation (code flow ou hybrid).
+
+        ``subject_material`` porte la matière de dérivation de la ``sub``
+        non publique (sid de session, à défaut la valeur même du code) :
+        constante pendant tout le flow, reprise à l'échange et par le
+        refresh token (ESID 1.0 §4).
+        """
         code_ttl = resolve_lifetime_seconds(
             client.authorization_code_lifetime_seconds, self._config.code_ttl_seconds
         )
         now = datetime.now(timezone.utc)
+        value = token_urlsafe(32)
         code = AuthorizationCode(
-            code=token_urlsafe(32),
+            code=value,
             client_id=request.client_id,
             redirect_uri=request.redirect_uri,
             subject=request.subject,
             session_id=request.session_id,
+            subject_material=request.session_id or value,
             scopes=scopes,
             code_challenge=request.code_challenge,
             code_challenge_method=request.code_challenge_method,
@@ -704,6 +714,10 @@ class AuthorizeUseCase:
         now = datetime.now(timezone.utc)
         issued_at = int(now.timestamp())
         expires_epoch = int((now + timedelta(seconds=token_ttl)).timestamp())
+        subject_material = request.session_id or code
+        subject_claims = access_token_subject_claims(
+            client, request.subject, material=subject_material
+        )
 
         at_hash = ""
         access_token = ""
@@ -717,9 +731,7 @@ class AuthorizeUseCase:
                 expires_at=expires_epoch,
                 issued_at=issued_at,
                 scopes=scopes,
-                additional_claims=(
-                    requested_userinfo_payload(claims_request) if claims_request else None
-                ),
+                additional_claims=_merged_userinfo_payload(claims_request, subject_claims),
             )
             at_hash = _hash_artefact(access_token, self._config.signing_algorithm)
 
@@ -738,7 +750,12 @@ class AuthorizeUseCase:
             id_token = await self._token_manager.create_id_token(
                 algorithm=id_token_algorithm,
                 issuer=self._config.issuer,
-                subject=request.subject,
+                subject=display_subject(
+                    client,
+                    request.subject,
+                    material=subject_material,
+                    seed=self._config.subject_seed,
+                ),
                 audience=client.client_id,
                 expires_at=expires_epoch,
                 issued_at=issued_at,
@@ -983,6 +1000,23 @@ def _hash_artefact(value: str, algorithm: JWTAlgorithm) -> str:
         return ""
     digest = hashlib.new(f"sha{algorithm.value[-3:]}", value.encode("ascii")).digest()
     return base64.urlsafe_b64encode(digest[: len(digest) // 2]).rstrip(b"=").decode("ascii")
+
+
+def _merged_userinfo_payload(
+    claims_request: ClaimsRequest | None, subject_claims: Mapping[str, str]
+) -> Mapping[str, object] | None:
+    """Fusionne le member ``userinfo`` du paramètre ``claims`` et les claims de sujet.
+
+    Les claims de dérivation (``client_id``, ``subject_material``) sont
+    posés en dernier : aucun payload utilisateur ne peut les écraser, le
+    ``/userinfo`` dépendant de leur valeur pour reconstruire la ``sub``.
+    Sans rien à ajouter, ``None`` laisse le payload standard intact.
+    """
+    payload: dict[str, object] = dict(
+        requested_userinfo_payload(claims_request) if claims_request else {}
+    )
+    payload.update(subject_claims)
+    return payload or None
 
 
 def parse_max_age(value: str) -> int:

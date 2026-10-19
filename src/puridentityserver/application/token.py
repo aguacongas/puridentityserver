@@ -46,6 +46,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
@@ -91,6 +92,7 @@ from puridentityserver.domain.authorization import (
 )
 from puridentityserver.domain.jwks import JWTAlgorithm
 from puridentityserver.domain.revocation import RevokedToken, token_hash
+from puridentityserver.domain.subjects import access_token_subject_claims, display_subject
 from puridentityserver.interfaces.domain.client_assertions import (
     JWT_BEARER_GRANT_TYPE_URN,
     ClientAssertionVerifier,
@@ -132,6 +134,7 @@ class TokenConfig:
     token_endpoint: str = ""
     secret_cipher: SecretCipher | None = None
     id_token_encrypter: IdTokenEncrypter | None = None
+    subject_seed: str = ""
 
 
 @dataclass(slots=True)
@@ -306,6 +309,7 @@ class TokenUseCase:
                 dpop_jkt=binding.jkt if binding.bound else "",
                 resources=resources,
                 tls_cert_hash=tls_cert_hash,
+                subject_material=auth_code.subject_material,
             )
         issued = await self._issue_tokens(
             client,
@@ -320,6 +324,7 @@ class TokenUseCase:
             dpop_jkt=binding.jkt if binding.bound else "",
             resources=resources,
             tls_cert_hash=tls_cert_hash,
+            subject_material=auth_code.subject_material,
         )
         if isinstance(issued, TokenError):
             return issued
@@ -467,6 +472,7 @@ class TokenUseCase:
                 dpop_jkt=self._refresh_dpop_jkt(client, stored, binding),
                 resources=resources,
                 tls_cert_hash=tls_cert_hash,
+                subject_material=stored.subject_material,
             )
         issued = await self._issue_tokens(
             client,
@@ -477,6 +483,7 @@ class TokenUseCase:
             dpop_jkt=binding.jkt if binding.bound else "",
             resources=resources,
             tls_cert_hash=tls_cert_hash,
+            subject_material=stored.subject_material,
         )
         if isinstance(issued, TokenError):
             return issued
@@ -740,6 +747,7 @@ class TokenUseCase:
                 dpop_jkt=dpop_jkt,
                 resources=resources,
                 tls_cert_hash=tls_cert_hash,
+                subject_material=stored.device_code_hash,
             )
         issued = await self._issue_tokens(
             client,
@@ -750,6 +758,7 @@ class TokenUseCase:
             dpop_jkt=dpop_jkt,
             resources=resources,
             tls_cert_hash=tls_cert_hash,
+            subject_material=stored.device_code_hash,
         )
         if isinstance(issued, TokenError):
             return issued
@@ -880,6 +889,7 @@ class TokenUseCase:
                 dpop_jkt=dpop_jkt,
                 resources=resources,
                 tls_cert_hash=tls_cert_hash,
+                subject_material=stored.auth_req_id_hash,
             )
         issued = await self._issue_tokens(
             client,
@@ -891,6 +901,7 @@ class TokenUseCase:
             dpop_jkt=dpop_jkt,
             resources=resources,
             tls_cert_hash=tls_cert_hash,
+            subject_material=stored.auth_req_id_hash,
         )
         if isinstance(issued, TokenError):
             return issued
@@ -1074,6 +1085,7 @@ class TokenUseCase:
         dpop_jkt: str = "",
         resources: tuple[str, ...] = (),
         tls_cert_hash: str = "",
+        subject_material: str = "",
     ) -> tuple[str, str, int] | TokenError:
         """Émet et retourne l'``id_token``, l'``access_token`` et la TTL effective.
 
@@ -1087,6 +1099,10 @@ class TokenUseCase:
         (RFC 8707 §3) porte l'``aud`` du jeton quand il est renseigné.
         ``tls_cert_hash`` (RFC 8705 §3.3) porte l'empreinte du certificat
         client mTLS qui doit lier l'access token — chaîne vide sans lien.
+        ``subject_material`` est la matière de dérivation de la ``sub``
+        non publique (ESID 1.0 §4) : l'id_token expose la ``sub`` dérivée
+        et l'access token embarque les claims permettant à ``/userinfo``
+        de la reproduire.
         """
         claims_request = parse_claims_parameter(claims) if claims else None
         token_ttl = resolve_lifetime_seconds(
@@ -1095,6 +1111,7 @@ class TokenUseCase:
         expires_at = now + timedelta(seconds=token_ttl)
         issued_at = int(now.timestamp())
         expires_epoch = int(expires_at.timestamp())
+        subject_claims = access_token_subject_claims(client, subject, material=subject_material)
 
         material = await self._id_token_material(client)
         if isinstance(material, TokenError):
@@ -1112,7 +1129,12 @@ class TokenUseCase:
         id_token = await self._token_manager.create_id_token(
             algorithm=id_token_algorithm,
             issuer=self._config.issuer,
-            subject=subject,
+            subject=display_subject(
+                client,
+                subject,
+                material=subject_material,
+                seed=self._config.subject_seed,
+            ),
             audience=client.client_id,
             expires_at=expires_epoch,
             issued_at=issued_at,
@@ -1143,7 +1165,7 @@ class TokenUseCase:
             issued_at=issued_at,
             scopes=scopes,
             additional_claims=_access_token_additional_claims(
-                claims_request, dpop_jkt, tls_cert_hash
+                claims_request, dpop_jkt, tls_cert_hash, subject_claims
             ),
         )
         return id_token, access_token, token_ttl
@@ -1169,6 +1191,7 @@ class TokenUseCase:
         dpop_jkt: str = "",
         resources: tuple[str, ...] = (),
         tls_cert_hash: str = "",
+        subject_material: str = "",
     ) -> tuple[str, int]:
         """Émet et retourne un ``access_token`` et sa TTL effective.
 
@@ -1176,7 +1199,9 @@ class TokenUseCase:
         ``cnf``, RFC 9449 §5.1) ; ``resources`` (RFC 8707 §3) porte
         l'``aud`` du jeton quand il est renseigné ; ``tls_cert_hash``
         non vide lie le jeton au certificat client mTLS présenté (claim
-        ``cnf.x5t#S256``, RFC 8705 §3.3).
+        ``cnf.x5t#S256``, RFC 8705 §3.3). ``subject_material`` porte la
+        matière de dérivation de la ``sub`` non publique (ESID 1.0 §4),
+        ``""`` pour les flux sans session d'authentification.
         """
         token_ttl = resolve_lifetime_seconds(
             client.access_token_lifetime_seconds, self._config.access_token_ttl_seconds
@@ -1193,7 +1218,12 @@ class TokenUseCase:
             expires_at=expires_epoch,
             issued_at=issued_at,
             scopes=scopes,
-            additional_claims=_access_token_additional_claims(None, dpop_jkt, tls_cert_hash),
+            additional_claims=_access_token_additional_claims(
+                None,
+                dpop_jkt,
+                tls_cert_hash,
+                access_token_subject_claims(client, subject, material=subject_material),
+            ),
         )
         return access_token, token_ttl
 
@@ -1217,6 +1247,7 @@ class TokenUseCase:
         dpop_jkt: str = "",
         resources: tuple[str, ...] = (),
         tls_cert_hash: str = "",
+        subject_material: str = "",
     ) -> str:
         """Génère, persiste (empreinte) et retourne un nouveau refresh token opaque.
 
@@ -1226,7 +1257,9 @@ class TokenUseCase:
         indicators (RFC 8707) que tout renouvellement devra reprendre.
         ``tls_cert_hash`` non vide lie le refresh token au certificat
         client mTLS présenté (RFC 8705 §3.3) : tout renouvellement devra
-        présenter le même certificat.
+        présenter le même certificat. ``subject_material`` reprend la
+        matière de dérivation de la ``sub`` non publique (ESID 1.0 §4)
+        afin que les renouvellements reproduisent la même ``sub``.
 
         Un client **confidentiel** ne porte jamais la liaison DPoP : il
         s'authentifie par ``private_key_jwt`` (ou mTLS) et la suite
@@ -1246,6 +1279,7 @@ class TokenUseCase:
                 token_hash=token_hash(value),
                 client_id=client.client_id,
                 subject=subject,
+                subject_material=subject_material,
                 scopes=scopes,
                 expires_at=now + timedelta(seconds=ttl),
                 dpop_jkt=dpop_jkt,
@@ -1317,7 +1351,10 @@ def _unverified_assertion_claims(assertion: str) -> dict[str, object] | None:
 
 
 def _access_token_additional_claims(
-    claims_request: ClaimsRequest | None, dpop_jkt: str, tls_cert_hash: str = ""
+    claims_request: ClaimsRequest | None,
+    dpop_jkt: str,
+    tls_cert_hash: str = "",
+    subject_claims: Mapping[str, str] | None = None,
 ) -> dict[str, object] | None:
     """Claims additionnels de l'access token : member ``userinfo`` + liens du jeton.
 
@@ -1325,8 +1362,10 @@ def _access_token_additional_claims(
     est relu par ``/userinfo`` ; ``cnf.jkt`` (RFC 9449 §5.1) lie le jeton
     à la clé DPoP dont la preuve a été validée et ``cnf.x5t#S256``
     (RFC 8705 §3.3) au certificat client mTLS présenté au token
-    endpoint. ``None`` sans rien à ajouter, pour ne pas altérer le
-    payload standard.
+    endpoint. ``subject_claims`` porte les claims privés de dérivation
+    (``client_id``, ``subject_material``) posés en dernier : aucun autre
+    payload ne peut les écraser. ``None`` sans rien à ajouter, pour ne
+    pas altérer le payload standard.
     """
     additional: dict[str, object] = {}
     payload = requested_userinfo_payload(claims_request) if claims_request else None
@@ -1339,6 +1378,8 @@ def _access_token_additional_claims(
         confirmation["x5t#S256"] = tls_cert_hash
     if confirmation:
         additional["cnf"] = confirmation
+    if subject_claims:
+        additional.update(subject_claims)
     return additional or None
 
 

@@ -5,6 +5,7 @@ from functools import cached_property
 from hashlib import sha256
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from pydantic import field_validator
 from pydantic_settings import (
@@ -20,6 +21,7 @@ from puridentityserver.domain.authorization import (
     Client,
     ClientType,
     Scope,
+    SubjectType,
     TokenEndpointAuthMethod,
     origin_of_uri,
 )
@@ -104,6 +106,8 @@ def _parse_client(raw: dict[str, object]) -> Client:
         web_origins = frozenset()
     scopes = frozenset(Scope(token) for token in str(raw.get("scopes", "openid")).split() if token)
     client_type = _parse_client_type(raw.get("client_type", "public"))
+    subject_type = _parse_subject_type(raw.get("subject_type", "public"))
+    sector_identifier_uri = str(raw.get("sector_identifier_uri", ""))
     auth_method = _parse_auth_method(raw)
     fapi_enabled, fapi2_enabled = _fapi_profile_flags(raw)
     jwks_raw = raw.get("jwks")
@@ -155,6 +159,8 @@ def _parse_client(raw: dict[str, object]) -> Client:
         fapi2_enabled=fapi2_enabled,
         require_consent=bool(raw.get("require_consent")),
         require_dpop=bool(raw.get("require_dpop")),
+        subject_type=subject_type,
+        sector_identifier_uri=sector_identifier_uri,
     )
 
 
@@ -175,6 +181,41 @@ def _parse_client_type(raw: object) -> ClientType:
     if value not in ClientType.__members__ and value not in ("confidential", "public"):
         raise ValueError(f"Type de client non supporté : {value}")
     return ClientType(value)
+
+
+def _parse_subject_type(raw: object) -> SubjectType:
+    """Résout le type de subject identifier déclaré dans la configuration."""
+    value = str(raw)
+    if value not in SubjectType._value2member_map_:
+        raise ValueError(
+            f"Type de subject identifier non supporté : {value} "
+            "(public, pairwise ou ephemeral attendu)"
+        )
+    return SubjectType(value)
+
+
+def _validate_client_subject(client: Client) -> None:
+    """Valide le subject type d'un client seedé au boot (fail-fast).
+
+    - ``sector_identifier_uri`` : https absolu sans fragment (Core §8.1).
+    - ``pairwise`` sans secteur déclaré : ``redirect_uris`` d'hôte unique.
+    - ``pairwise``/``ephemeral`` : ``subject_pairwise_seed`` renseigné —
+      la dérivation serait inopérante sans clé serveur.
+    """
+    if client.sector_identifier_uri:
+        parts = urlsplit(client.sector_identifier_uri)
+        if parts.scheme != "https" or not parts.netloc or parts.fragment:
+            raise ValueError(
+                f"sector_identifier_uri invalide pour le client {client.client_id} "
+                "(https absolu sans fragment attendu)"
+            )
+    if client.subject_type is SubjectType.PAIRWISE and not client.sector_identifier_uri:
+        hosts = {host for host in (urlsplit(uri).hostname for uri in client.redirect_uris) if host}
+        if len(hosts) != 1:
+            raise ValueError(
+                f"Le client pairwise {client.client_id} exige un "
+                "sector_identifier_uri ou des redirect_uris d'hôte unique"
+            )
 
 
 def _parse_identity_resource(raw: dict[str, object]) -> IdentityResource:
@@ -464,6 +505,16 @@ class Settings(BaseSettings):
     # un déploiement exposé (issue #152).
     request_uri_allow_local_targets: bool = False
 
+    # Subject types pairwise / ephemeral (OIDC Core 1.0 §8.1, ESID 1.0 §4) :
+    # seed de dérivation HMAC-SHA256 des ``sub`` non publiques. Requis (non
+    # vide) dès qu'un client seedé ou enregistré dynamiquement déclare
+    # ``subject_type = pairwise`` ou ``ephemeral`` : sans clé serveur, la
+    # ``sub`` dérivée serait déductible de l'identité. À faire tourner à
+    # chaque redémarrage (valeur stable) et à garder secrète — changer le
+    # seed invalide toutes les ``sub`` dérivées émises (clients
+    # ``public`` non concernés, leur ``sub`` reste le sujet réel).
+    subject_pairwise_seed: str = ""
+
     # Resource server d'exemple - endpoint GET /protected-resource
     # (RFC 8707 + profil FAPI-R-6.2.1 de la suite de certification) :
     # valide l'en-tête Bearer (signature, expiration, révocation), renvoie
@@ -732,8 +783,23 @@ class Settings(BaseSettings):
 
     @cached_property
     def seed_clients(self) -> tuple[Client, ...]:
-        """Clients initiaux déclarés dans la configuration (seed au démarrage)."""
-        return tuple(_parse_client(raw) for raw in self.clients_seed)
+        """Clients initiaux déclarés dans la configuration (seed au démarrage).
+
+        Fail-fast sur un client dont le ``subject_type`` non public est
+        inopérant : ``sector_identifier_uri`` invalide, ``pairwise`` sans
+        secteur déductible, ou seed de dérivation ``subject_pairwise_seed``
+        absent — la configuration doit être corrigée avant tout service.
+        """
+        clients = tuple(_parse_client(raw) for raw in self.clients_seed)
+        for client in clients:
+            _validate_client_subject(client)
+            if client.subject_type is not SubjectType.PUBLIC and not self.subject_pairwise_seed:
+                raise ValueError(
+                    f"Le client {client.client_id} déclare subject_type="
+                    f"{client.subject_type.value} : subject_pairwise_seed "
+                    "doit être renseigné"
+                )
+        return clients
 
     @cached_property
     def seed_identity_resources(self) -> tuple[IdentityResource, ...]:

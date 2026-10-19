@@ -16,6 +16,7 @@ from puridentityserver.domain.authorization import (
     Client,
     ClientType,
     Scope,
+    SubjectType,
     TokenEndpointAuthMethod,
 )
 
@@ -105,6 +106,12 @@ class ClientRow(PersistenceBase):
     require_dpop: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
     fapi_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
     fapi2_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
+    subject_type: Mapped[str] = mapped_column(
+        String(16), default="public", server_default=text("'public'")
+    )
+    sector_identifier_uri: Mapped[str] = mapped_column(
+        String(512), default="", server_default=text("''")
+    )
 
 
 class SQLClientRepository:
@@ -213,6 +220,8 @@ def _to_row(client: Client) -> ClientRow:
         require_dpop=client.require_dpop,
         fapi_enabled=client.fapi_enabled,
         fapi2_enabled=client.fapi2_enabled,
+        subject_type=client.subject_type.value,
+        sector_identifier_uri=client.sector_identifier_uri,
     )
 
 
@@ -246,6 +255,15 @@ def _utc(value: datetime) -> datetime:
 def _auth_method(value: str | None) -> TokenEndpointAuthMethod | None:
     """Méthode d'authentification de domaine, ``None`` si colonne vide."""
     return TokenEndpointAuthMethod(value) if value else None
+
+
+def _subject_type(value: str | None) -> SubjectType:
+    """Type de subject identifier de domaine, ``public`` si colonne vide.
+
+    Les lignes antérieures au support des subject types sont migrées avec
+    la valeur par défaut ``public`` : leur ``sub`` émise reste identique.
+    """
+    return SubjectType(value) if value else SubjectType.PUBLIC
 
 
 def _from_row(row: ClientRow) -> Client:
@@ -295,4 +313,6 @@ def _from_row(row: ClientRow) -> Client:
         require_dpop=row.require_dpop,
         fapi_enabled=row.fapi_enabled,
         fapi2_enabled=row.fapi2_enabled,
+        subject_type=_subject_type(row.subject_type),
+        sector_identifier_uri=_text(row.sector_identifier_uri),
     )

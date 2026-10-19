@@ -1,15 +1,18 @@
-"""Lecture d'un ``request_uri`` de request object (RFC 9101 §5.2).
+"""Lecture de documents distants : ``request_uri`` (RFC 9101 §5.2) et secteur (Core §8.1).
 
-Document JWT récupéré par la bibliothèque standard (``urllib``) exécutée hors
+Document récupéré par la bibliothèque standard (``urllib``) exécutée hors
 de la boucle d'événements (``asyncio.to_thread``, cf. ``infrastructure
 backchannel``) : aucune dépendance réseau runtime n'est ajoutée. Le flux est
 contrôlé avant et après l'appel réseau — destination anti-SSRF, aucun suivi de
-redirection, délai et taille bornés, ``Content-Type: application/jwt`` exigé.
+redirection, délai et taille bornés, ``Content-Type`` de la réponse exigé
+(``application/jwt`` pour un request object, ``application/json`` pour le
+document ``sector_identifier_uri`` du Dynamic Client Registration).
 
 Les destinations privées ou loopback ne sont acceptées que si l'OP écoute
-lui-même en local (``host`` loopback) : c'est le cas des tests, où le document
-est hébergé par la suite sur la même machine, jamais d'une instance déployée
-qui doit rester à l'abri d'une URL pointant vers son propre réseau.
+lui-même en local (``host`` loopback) ou si ``request_uri_allow_local_targets``
+l'ouvre explicitement : c'est le cas des tests, où les documents sont hébergés
+par la suite sur la même machine, jamais d'une instance déployée qui doit
+rester à l'abri d'une URL pointant vers son propre réseau.
 """
 
 from __future__ import annotations
@@ -59,11 +62,20 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class HTTPRequestObjectFetcher:
-    """GET du document ``request_uri`` (implémentation du port ``RequestObjectFetcher``)."""
+    """GET d'un document distant (port ``RequestObjectFetcher`` / secteur).
 
-    def __init__(self, *, allow_local_targets: bool = False) -> None:
+    ``content_type`` fixe le type MIME exigé de la réponse et envoyé en
+    ``Accept`` : ``application/jwt`` par défaut pour un ``request_uri``,
+    ``application/json`` pour le document ``sector_identifier_uri`` (OIDC
+    Core 1.0 §8.1) lu par le Dynamic Client Registration.
+    """
+
+    def __init__(
+        self, *, allow_local_targets: bool = False, content_type: str = _CONTENT_TYPE
+    ) -> None:
         """``allow_local_targets`` ouvre les destinations locales (tests, dev)."""
         self._allow_local_targets = allow_local_targets
+        self._content_type = content_type
 
     async def fetch(self, url: str) -> str | None:
         """Lit ``url`` et en retourne le corps ; ``None`` si refus ou échec."""
@@ -71,7 +83,7 @@ class HTTPRequestObjectFetcher:
         if target is None:
             return None
         try:
-            return await asyncio.to_thread(_read_document, target)
+            return await asyncio.to_thread(_read_document, target, self._content_type)
         except (OSError, ValueError):
             return None
 
@@ -107,16 +119,16 @@ def _is_public(address: str) -> bool:
         return False
 
 
-def _read_document(url: str) -> str:
+def _read_document(url: str, content_type: str = _CONTENT_TYPE) -> str:
     """GET ``url`` sans redirection et sans suivre les liens hors 200."""
     request = urllib.request.Request(  # NOSONAR(S310)
         url,
-        headers={"Accept": _CONTENT_TYPE},
+        headers={"Accept": content_type},
         method="GET",
     )
     opener = urllib.request.build_opener(_NoRedirect())
     with opener.open(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
-        if response.status != 200 or response.headers.get_content_type() != _CONTENT_TYPE:
+        if response.status != 200 or response.headers.get_content_type() != content_type:
             raise ValueError("réponse refusée : type ou statut inattendu")
         body = response.read(_MAX_DOCUMENT_BYTES + 1)
     if len(body) > _MAX_DOCUMENT_BYTES:

@@ -32,6 +32,9 @@ class AuthorizationCodeRow(PersistenceBase):
     redirect_uri: Mapped[str] = mapped_column(String(1024), default="")
     subject: Mapped[str] = mapped_column(String(256), default="")
     session_id: Mapped[str] = mapped_column(String(256), default="")
+    subject_material: Mapped[str] = mapped_column(
+        String(256), default="", server_default=text("''")
+    )
     scopes: Mapped[list[str]] = mapped_column(JSON)
     code_challenge: Mapped[str] = mapped_column(String(512), default="")
     code_challenge_method: Mapped[str] = mapped_column(String(8), default="S256")
@@ -109,6 +112,7 @@ def _to_row(code: AuthorizationCode) -> AuthorizationCodeRow:
         redirect_uri=code.redirect_uri,
         subject=code.subject,
         session_id=code.session_id,
+        subject_material=code.subject_material,
         scopes=sorted(scope.value for scope in code.scopes),
         code_challenge=code.code_challenge,
         code_challenge_method=code.code_challenge_method,
@@ -140,6 +144,7 @@ def _from_row(row: AuthorizationCodeRow) -> AuthorizationCode:
         redirect_uri=row.redirect_uri,
         subject=row.subject,
         session_id=row.session_id or "",
+        subject_material=row.subject_material or "",
         scopes=frozenset(Scope(value) for value in row.scopes),
         code_challenge=row.code_challenge,
         code_challenge_method=row.code_challenge_method,

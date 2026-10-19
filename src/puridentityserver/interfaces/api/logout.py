@@ -113,9 +113,9 @@ def logout_router(usecase: LogoutUseCase) -> APIRouter:
         if isinstance(result, LogoutError):
             return _error_page(result)
 
-        subject = result.subject
-        if not subject and user is not None:
-            subject = str(user.id)
+        subject = str(user.id) if user is not None else ""
+        if not subject:
+            subject = result.subject
         await usecase.broadcast_backchannel_logout(subject=subject, session_id=sid)
 
         frontchannel = await usecase.frontchannel_uris(session_id=sid)

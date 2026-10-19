@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TypeVar
 
 import jwt as pyjwt
+import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -162,8 +163,8 @@ def _assertion(
         "iat": int(now.timestamp()),
     }
     if private_key is not None:
-        assert kid is not None
-        return pyjwt.encode(payload, private_key, algorithm="RS256", headers={"kid": kid})
+        headers = {"kid": kid} if kid is not None else None
+        return pyjwt.encode(payload, private_key, algorithm="RS256", headers=headers)
     assert secret is not None
     return pyjwt.encode(payload, secret, algorithm="HS256")
 
@@ -175,6 +176,7 @@ def _client(
     secret: str = "",
     ciphertext: str = "",
     jwks: tuple[dict[str, object], ...] = (),
+    jwks_uri: str = "",
     tls_hash: str = "",
     tls_subject_dn: str = "",
 ) -> Client:
@@ -188,6 +190,7 @@ def _client(
         token_endpoint_auth_method=method,
         client_secret_ciphertext=ciphertext,
         jwks=jwks,
+        jwks_uri=jwks_uri,
         tls_client_certificate_hash=tls_hash,
         tls_client_auth_subject_dn=tls_subject_dn,
     )
@@ -448,6 +451,114 @@ class TestClientAssertionVerifier:
         token = _assertion(
             iss="rsa-app", sub="rsa-app", aud=_TOKEN_ENDPOINT, private_key=private, kid="absent"
         )
+
+        claims = run(
+            PyJWTClientAssertionVerifier().verify(
+                token=token, client=client, audience=_TOKEN_ENDPOINT, require_iss_eq_sub=True
+            )
+        )
+
+        assert claims is None
+
+    def test_jwks_embedded_accepts_missing_kid_with_single_key(self) -> None:
+        private, jwks = _rsa_key()
+        client = _client(
+            client_id="rsa-app",
+            method=TokenEndpointAuthMethod.PRIVATE_KEY_JWT,
+            jwks=_keys_from(jwks),
+        )
+        token = _assertion(iss="rsa-app", sub="rsa-app", aud=_TOKEN_ENDPOINT, private_key=private)
+
+        claims = run(
+            PyJWTClientAssertionVerifier().verify(
+                token=token, client=client, audience=_TOKEN_ENDPOINT, require_iss_eq_sub=True
+            )
+        )
+
+        assert claims is not None
+        assert claims["iss"] == "rsa-app"
+
+    def test_jwks_embedded_rejects_missing_kid_with_multiple_keys(self) -> None:
+        private, jwks = _rsa_key()
+        _, other = _rsa_key()
+        second = tuple({**key, "kid": "other-kid"} for key in _keys_from(other))
+        client = _client(
+            client_id="rsa-app",
+            method=TokenEndpointAuthMethod.PRIVATE_KEY_JWT,
+            jwks=_keys_from(jwks) + second,
+        )
+        token = _assertion(iss="rsa-app", sub="rsa-app", aud=_TOKEN_ENDPOINT, private_key=private)
+
+        claims = run(
+            PyJWTClientAssertionVerifier().verify(
+                token=token, client=client, audience=_TOKEN_ENDPOINT, require_iss_eq_sub=True
+            )
+        )
+
+        assert claims is None
+
+    def test_jwks_uri_accepts_missing_kid_with_single_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        private, _ = _rsa_key()
+
+        class _FakeClient:
+            def __init__(self, url: str, timeout: int) -> None:
+                self.url = url
+                self.timeout = timeout
+
+            def get_signing_keys(self) -> list[object]:
+                return [private.public_key()]
+
+            def get_signing_key_from_jwt(self, raw: str) -> object:
+                raise AssertionError("resolution par kid inattendue sans kid")
+
+        monkeypatch.setattr(
+            "puridentityserver.infrastructure.client_assertions.PyJWKClient",
+            _FakeClient,
+        )
+        client = _client(
+            client_id="rsa-app",
+            method=TokenEndpointAuthMethod.PRIVATE_KEY_JWT,
+            jwks_uri="https://app.example/.well-known/jwks.json",
+        )
+        token = _assertion(iss="rsa-app", sub="rsa-app", aud=_TOKEN_ENDPOINT, private_key=private)
+
+        claims = run(
+            PyJWTClientAssertionVerifier().verify(
+                token=token, client=client, audience=_TOKEN_ENDPOINT, require_iss_eq_sub=True
+            )
+        )
+
+        assert claims is not None
+        assert claims["iss"] == "rsa-app"
+
+    def test_jwks_uri_rejects_missing_kid_with_multiple_keys(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        private, _ = _rsa_key()
+
+        class _FakeClient:
+            def __init__(self, url: str, timeout: int) -> None:
+                self.url = url
+                self.timeout = timeout
+
+            def get_signing_keys(self) -> list[object]:
+                return [private.public_key(), private.public_key()]
+
+            def get_signing_key_from_jwt(self, raw: str) -> object:
+                raise AssertionError("resolution par kid inattendue sans kid")
+
+        monkeypatch.setattr(
+            "puridentityserver.infrastructure.client_assertions.PyJWKClient",
+            _FakeClient,
+        )
+        client = _client(
+            client_id="rsa-app",
+            method=TokenEndpointAuthMethod.PRIVATE_KEY_JWT,
+            jwks_uri="https://app.example/.well-known/jwks.json",
+        )
+        token = _assertion(iss="rsa-app", sub="rsa-app", aud=_TOKEN_ENDPOINT, private_key=private)
 
         claims = run(
             PyJWTClientAssertionVerifier().verify(

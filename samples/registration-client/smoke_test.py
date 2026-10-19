@@ -24,7 +24,14 @@ scénario :
 9. ``/token`` avec l'ancien secret -> ``400 invalid_client`` (rotation) ;
 10. ``/token`` avec le nouveau secret -> ``200`` access_token ;
 11. ``DELETE /register/{client_id}`` -> ``204`` ;
-12. ``GET /register/{client_id}`` -> ``404`` (suppression effective).
+12. ``GET /register/{client_id}`` -> ``404`` (suppression effective) ;
+13. discovery publie ``subject_types_supported`` = public, pairwise, ephemeral ;
+14. deux clients pairwise (secteurs distincts) -> ``sub`` différentes, non corrélables ;
+15. un même client pairwise -> ``sub`` stable entre deux sessions ;
+16. ``/userinfo`` expose la même ``sub`` que l'``id_token`` ;
+17. un client ephemeral -> ``sub`` jamais réutilisée entre deux sessions ;
+18. un client public (défaut) -> ``sub`` réelle (non dérivée) ;
+19. ``sector_identifier_uri`` incohérent -> ``400 invalid_client_metadata``.
 
 Le sous-processus est terminé dans tous les cas (``finally``) et un
 garde-fou borne la durée totale.
@@ -42,6 +49,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+import jwt as pyjwt
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -53,6 +61,9 @@ SERVER_URL = f"http://{HOST}:{SERVER_PORT}"
 # même valeur que la configuration par défaut du serveur (config.toml) :
 # le même token fonctionne sur le port 8000 et sur le serveur de test.
 INITIAL_ACCESS_TOKEN = "dev-registrar-token"
+
+# seed de dérivation des sub pairwise/ephemeral (OIDC Core 1.0 §8.1).
+SUBJECT_PAIRWISE_SEED = "smoke-subject-seed-8104"
 
 REGISTRATION_URL = f"{SERVER_URL}/register"
 
@@ -74,6 +85,7 @@ def _authorize(
     *,
     client_id: str,
     scope: str = "openid profile email",
+    redirect_uri: str = REDIRECT_URI,
 ) -> str:
     """Émet un code d'autorisation pour ``client_id`` (appel anonyme)."""
     response = http.get(
@@ -81,7 +93,7 @@ def _authorize(
         params={
             "response_type": "code",
             "client_id": client_id,
-            "redirect_uri": REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "scope": scope,
         },
     )
@@ -95,6 +107,7 @@ def _exchange_code(
     code: str,
     client_id: str,
     client_secret: str,
+    redirect_uri: str = REDIRECT_URI,
 ) -> httpx.Response:
     """Échange le code contre un access_token via ``/token``."""
     return http.post(
@@ -102,7 +115,7 @@ def _exchange_code(
         data={
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "client_id": client_id,
             "client_secret": client_secret,
         },
@@ -118,6 +131,58 @@ def _register(
     """Appelle ``POST /register`` avec (ou sans) l'initial access token."""
     headers = {"authorization": f"Bearer {initial_access_token}"} if initial_access_token else {}
     return http.post(REGISTRATION_URL, json=metadata, headers=headers)
+
+
+def _id_token_sub(
+    http: httpx.Client, *, client_id: str, client_secret: str, scope: str, redirect_uri: str
+) -> str:
+    """Flow complet (authorize + token) et retourne la ``sub`` de l'id_token.
+
+    La ``sub`` est dérivée selon le ``subject_type`` du client : publiée
+    dans l'``id_token``, elle sert à vérifier la non-corrélabilité entre
+    clients pairwise et l'unicité éphémère entre sessions.
+    """
+    code = _authorize(http, client_id=client_id, scope=scope, redirect_uri=redirect_uri)
+    response = _exchange_code(
+        http,
+        code=code,
+        client_id=client_id,
+        client_secret=client_secret,
+        redirect_uri=redirect_uri,
+    )
+    assert response.status_code == 200, response.text
+    id_token = response.json()["id_token"]
+    return str(pyjwt.decode(id_token, options={"verify_signature": False})["sub"])
+
+
+def _userinfo_sub(http: httpx.Client, access_token: str) -> str:
+    """Appelle ``/userinfo`` et retourne la ``sub`` exposée au resource owner."""
+    response = http.get(
+        f"{SERVER_URL}/userinfo", headers={"authorization": f"Bearer {access_token}"}
+    )
+    assert response.status_code == 200, response.text
+    return str(response.json()["sub"])
+
+
+def _exchange_for_tokens(
+    http: httpx.Client,
+    *,
+    client_id: str,
+    client_secret: str,
+    scope: str,
+    redirect_uri: str,
+) -> dict[str, object]:
+    """Flow complet et retourne le corps ``/token`` (id_token, access_token)."""
+    code = _authorize(http, client_id=client_id, scope=scope, redirect_uri=redirect_uri)
+    response = _exchange_code(
+        http,
+        code=code,
+        client_id=client_id,
+        client_secret=client_secret,
+        redirect_uri=redirect_uri,
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
 
 
 def _run_scenario() -> None:
@@ -222,7 +287,153 @@ def _run_scenario() -> None:
         response = http.get(registration_client_uri, headers=auth)
         assert response.status_code == 404, response.text
         print("  [12/12] GET /register/{{client_id}} après suppression -> 404 OK")
+
+        _run_subject_types_scenario(http)
     print()
+
+
+def _run_subject_types_scenario(http: httpx.Client) -> None:
+    """Vérifie les subject types pairwise / ephemeral (OIDC Core 1.0 §8.1, ESID §4).
+
+    Scénario :
+    1. discovery publie ``subject_types_supported`` = public, pairwise, ephemeral ;
+    2. deux clients pairwise (secteurs distincts) -> ``sub`` différentes pour le
+       même utilisateur, non corrélables entre elles ;
+    3. un même client pairwise -> ``sub`` stable entre deux sessions ;
+    4. ``/userinfo`` expose la même ``sub`` que l'``id_token`` ;
+    5. un client ephemeral -> ``sub`` jamais réutilisée entre deux sessions ;
+    6. un client public (défaut) -> ``sub`` réelle, non dérivée ;
+    7. ``POST /register`` sans ``subject_pairwise_seed`` -> ``subject_type``
+       rejeté ; avec le seed, ``pairwise`` accepté et ``sector_identifier_uri``
+       vérifié par fetch (refus ``invalid_client_metadata`` si incohérent).
+    """
+    metadata = http.get(f"{SERVER_URL}/.well-known/openid-configuration").json()
+    assert metadata["subject_types_supported"] == ["public", "pairwise", "ephemeral"]
+    print("  [1/7] discovery subject_types_supported = public, pairwise, ephemeral OK")
+
+    login = http.post(
+        f"{SERVER_URL}/login",
+        data={"username": "alice@example.com", "password": "password", "next": "/"},
+    )
+    assert login.status_code == 302, login.text
+
+    uri_a = f"https://sector-a.example/{SERVER_PORT}/callback"
+    uri_b = f"https://sector-b.example/{SERVER_PORT}/callback"
+    uri_e = f"https://ephemeral.example/{SERVER_PORT}/callback"
+    pair_a = _register(
+        http,
+        {**_METADATA, "redirect_uris": [uri_a], "subject_type": "pairwise"},
+    )
+    assert pair_a.status_code == 201, pair_a.text
+    pair_b = _register(
+        http,
+        {**_METADATA, "redirect_uris": [uri_b], "subject_type": "pairwise"},
+    )
+    assert pair_b.status_code == 201, pair_b.text
+    ra, rb = pair_a.json(), pair_b.json()
+    assert ra["subject_type"] == "pairwise"
+    assert rb["subject_type"] == "pairwise"
+    sub_a = _id_token_sub(
+        http,
+        client_id=ra["client_id"],
+        client_secret=ra["client_secret"],
+        scope="openid",
+        redirect_uri=uri_a,
+    )
+    sub_b = _id_token_sub(
+        http,
+        client_id=rb["client_id"],
+        client_secret=rb["client_secret"],
+        scope="openid",
+        redirect_uri=uri_b,
+    )
+    assert sub_a and sub_b and sub_a != sub_b, (sub_a, sub_b)
+    assert sub_a != ra["client_id"] and sub_b != rb["client_id"]
+    print("  [2/7] deux clients pairwise -> sub distinctes (secteurs différents) OK")
+
+    sub_a2 = _id_token_sub(
+        http,
+        client_id=ra["client_id"],
+        client_secret=ra["client_secret"],
+        scope="openid",
+        redirect_uri=uri_a,
+    )
+    assert sub_a2 == sub_a
+    print("  [3/7] même client pairwise -> sub stable entre deux sessions OK")
+
+    tokens = _exchange_for_tokens(
+        http,
+        client_id=ra["client_id"],
+        client_secret=ra["client_secret"],
+        scope="openid profile",
+        redirect_uri=uri_a,
+    )
+    userinfo_sub = _userinfo_sub(http, str(tokens["access_token"]))
+    assert userinfo_sub == sub_a, (userinfo_sub, sub_a)
+    print("  [4/7] /userinfo expose la sub de l'id_token OK")
+
+    eph = _register(
+        http,
+        {**_METADATA, "redirect_uris": [uri_e], "subject_type": "ephemeral"},
+    )
+    assert eph.status_code == 201, eph.text
+    eph_json = eph.json()
+    eph_sub_1 = _id_token_sub(
+        http,
+        client_id=eph_json["client_id"],
+        client_secret=eph_json["client_secret"],
+        scope="openid",
+        redirect_uri=uri_e,
+    )
+    eph_sub_same = _id_token_sub(
+        http,
+        client_id=eph_json["client_id"],
+        client_secret=eph_json["client_secret"],
+        scope="openid",
+        redirect_uri=uri_e,
+    )
+    assert eph_sub_1 and eph_sub_same == eph_sub_1, (eph_sub_1, eph_sub_same)
+
+    login2 = http.post(
+        f"{SERVER_URL}/login",
+        data={"username": "alice@example.com", "password": "password", "next": "/"},
+    )
+    assert login2.status_code == 302, login2.text
+    eph_sub_2 = _id_token_sub(
+        http,
+        client_id=eph_json["client_id"],
+        client_secret=eph_json["client_secret"],
+        scope="openid",
+        redirect_uri=uri_e,
+    )
+    assert eph_sub_2 != eph_sub_1, (eph_sub_1, eph_sub_2)
+    print("  [5/7] client ephemeral -> sub constante en session, nouvelle jamais réutilisée OK")
+
+    pub = _register(http, _METADATA)
+    assert pub.status_code == 201, pub.text
+    pub_json = pub.json()
+    pub_sub = _id_token_sub(
+        http,
+        client_id=pub_json["client_id"],
+        client_secret=pub_json["client_secret"],
+        scope="openid profile email",
+        redirect_uri=REDIRECT_URI,
+    )
+    assert pub_sub and pub_sub != sub_a and pub_sub != sub_b, pub_sub
+    print("  [6/7] client public (défaut) -> sub réelle non dérivée OK")
+
+    bad = _register(
+        http,
+        {
+            **_METADATA,
+            "redirect_uris": [f"https://sector-c.example/{SERVER_PORT}/callback"],
+            "subject_type": "pairwise",
+            "sector_identifier_uri": f"https://sector-c.example/{SERVER_PORT}/missing.json",
+        },
+    )
+    assert bad.status_code == 400, bad.text
+    assert bad.json()["error"] == "invalid_client_metadata"
+    print("  [7/7] sector_identifier_uri incohérent -> 400 invalid_client_metadata OK")
 
 
 def main() -> None:
@@ -233,8 +444,11 @@ def main() -> None:
         run_server(
             port=SERVER_PORT,
             clients=(),
+            users={"alice": {"email": "alice@example.com", "password": "password"}},
+            users_seed={"alice": {"name": "Alice Martin"}},
             registration_enabled=True,
             registration_initial_access_tokens=(INITIAL_ACCESS_TOKEN,),
+            extra_settings={"subject_pairwise_seed": SUBJECT_PAIRWISE_SEED},
         ),
     ):
         print(f"\nScénario de registration dynamique (deadline={_DEADLINE}s)...")
