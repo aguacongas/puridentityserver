@@ -10,7 +10,7 @@ from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from puridentityserver.application.authorize import (
     AuthorizeError,
@@ -91,6 +91,11 @@ class AuthorizeQueryParams(BaseModel):
     claims: str = ""
     dpop_jkt: str = ""
     resource: list[str] = []
+    # Marqueur OP du parcours ``prompt=create`` (issue #166) : ``cancelled``
+    # (annulation sur /signup) ou ``refused`` (création refusée) →
+    # ``access_denied`` redirigeable. Sans effet hors ``prompt=create``.
+    # Alias requis : ``register`` écraserait un attribut de ``BaseModel``.
+    register_marker: str = Field("", alias="register")
 
 
 def authorize_router(
@@ -122,6 +127,10 @@ def authorize_router(
     couverts par un consentement mémorisé. ``require_login`` : la demande non
     authentifiée est redirigée vers ``/login`` (OIDC Core 1.0 §3.1.2.1), ou
     renvoyée en erreur ``login_required`` quand ``prompt=none`` (§3.1.2.6).
+    ``prompt=create`` redirige vers la page d'inscription ``/signup``
+    (Initiating User Registration via OIDC 1.0, issue #166) : ``create`` +
+    ``none`` renvoie ``login_required``, l'annulation ou un refus de création
+    émet ``access_denied`` redirigeable (marqueur ``register=``).
     ``jarm_signer`` signe les erreurs redirigeables en ``response_mode=jwt``
     (JARM Final 1.0 §3) ; sans injection, elles restent en query/fragment.
     ``issuer`` porte l'identifiant d'émetteur publié par discovery, réfléchi
@@ -199,6 +208,7 @@ def authorize_router(
             base_url,
             jarm_signer=jarm_signer,
             issuer=issuer,
+            register_marker=params.get("register", ""),
         )
         if pre is not None:
             return pre
@@ -325,6 +335,8 @@ def _query_params(query: AuthorizeQueryParams) -> dict[str, str]:
     resources = raw.pop("resource", [])
     values = resources if isinstance(resources, list) else [resources]
     raw["resource"] = encode_resource_parameter([str(value) for value in values])
+    # Le champ aliasé `register` est lu sous son nom de query par le handler.
+    raw["register"] = raw.pop("register_marker", "")
     return {name: str(value) for name, value in raw.items()}
 
 
@@ -500,13 +512,16 @@ async def _pre_execution_response(
     *,
     jarm_signer: JarmSigner | None = None,
     issuer: str = "",
+    register_marker: str = "",
 ) -> RedirectResponse | HTMLResponse | None:
     """Réponses possibles **avant** émission : page d'erreur, reconnexion, ``prompt``.
 
     Regroupe ``_non_redirectable_error`` (la ``redirect_uri`` doit être
     vérifiée avant toute redirection sortante) puis ``_authentication_gate``
-    (reconnexion exigée par ``prompt=login`` / ``max_age``). ``None`` : la
-    demande peut être exécutée.
+    (reconnexion exigée par ``prompt=login`` / ``max_age``, page
+    d'inscription pour ``prompt=create``). ``register_marker`` porte le
+    marqueur ``register=`` de l'URL (annulation/refus d'inscription, issue
+    #166). ``None`` : la demande peut être exécutée.
     """
     error_page = await _non_redirectable_error(auth_request, client_repository)
     if error_page is not None:
@@ -520,6 +535,7 @@ async def _pre_execution_response(
         base_url,
         jarm_signer=jarm_signer,
         issuer=issuer,
+        register_marker=register_marker,
     )
 
 
@@ -578,6 +594,7 @@ async def _authentication_gate(
     *,
     jarm_signer: JarmSigner | None = None,
     issuer: str = "",
+    register_marker: str = "",
 ) -> RedirectResponse | HTMLResponse | None:
     """Contrôle d'accès avant émission : reconnexion, ``prompt``, ``max_age``.
 
@@ -588,8 +605,22 @@ async def _authentication_gate(
     - ``prompt=none`` dans ce cas renvoie ``login_required`` au client plutôt
       que l'écran de connexion (§3.1.2.6) ;
     - non connecté : ``prompt=login`` ou ``require_login`` déclenchent le
-      formulaire de connexion, ``prompt=none`` renvoie ``login_required``.
+      formulaire de connexion, ``prompt=none`` renvoie ``login_required`` ;
+    - ``prompt=create`` est délégué à ``_registration_gate`` (Initiating User
+      Registration via OIDC 1.0, issue #166) — ``register_marker`` porte le
+      marqueur ``register=`` de l'URL de retour d'inscription.
     """
+    if "create" in auth_request.prompt.split():
+        return await _registration_gate(
+            auth_request,
+            request,
+            user,
+            client_repository,
+            base_url,
+            register_marker,
+            jarm_signer=jarm_signer,
+            issuer=issuer,
+        )
     if user is not None and await _reauthentication_required(auth_request, request, base_url):
         if "none" in auth_request.prompt.split():
             return await _login_or_error(
@@ -700,6 +731,106 @@ async def _login_or_error(
         )
         return await error_response(error, jarm_signer, issuer=issuer)
     return _login_redirect(http_request, base_url)
+
+
+async def _registration_gate(
+    auth_request: AuthorizeRequest,
+    request: Request,
+    user: CurrentUserOptional,
+    client_repository: ClientReader | None,
+    base_url: str,
+    register_marker: str,
+    *,
+    jarm_signer: JarmSigner | None = None,
+    issuer: str = "",
+) -> RedirectResponse | HTMLResponse | None:
+    """Traite ``prompt=create`` (Initiating User Registration via OIDC 1.0, issue #166).
+
+    - ``create`` + ``none`` : aucune interaction possible → ``login_required``
+      redirigé au client (spec §3), quel que soit l'état de session ;
+    - marqueur ``register=cancelled`` (annulation sur la page d'inscription)
+      ou ``register=refused`` (création refusée — marqueur défensif, les
+      refus de l'OP sont désormais rendus en erreur inline sur le
+      formulaire) → ``access_denied`` redirigeable, transporté selon le
+      ``response_mode`` résolu (query/fragment, JARM signé, form_post avec
+      ``iss``) ;
+    - session dont l'empreinte ``reauth`` porte **cette** URL d'autorisation :
+      l'inscription (ou la connexion) vient d'être faite pour cette demande —
+      anti-boucle, la demande poursuit (``None``). Cela satisfait aussi
+      ``create login`` : la création fonde une session fraîche (spec §2) ;
+    - sinon : page d'inscription ``/signup``, y compris pour un utilisateur
+      déjà connecté (création directe d'un second compte — comportement §2
+      documenté dans l'échantillon ``samples/prompt-create-client``).
+    """
+    if "none" in auth_request.prompt.split():
+        return await _login_or_error(
+            auth_request,
+            request,
+            client_repository,
+            base_url,
+            jarm_signer=jarm_signer,
+            issuer=issuer,
+        )
+    if register_marker in {"cancelled", "refused"}:
+        description = (
+            "Inscription annulée par l'utilisateur (prompt=create)"
+            if register_marker == "cancelled"
+            else "Création du compte refusée (prompt=create)"
+        )
+        return await _registration_refused(
+            auth_request,
+            client_repository,
+            description,
+            jarm_signer=jarm_signer,
+            issuer=issuer,
+        )
+    if user is not None:
+        session_hash = await session_reauth(request)
+        if session_hash == reauth_context(_authorize_url_from_base(base_url, request)):
+            return None
+    return _signup_redirect(request, base_url)
+
+
+async def _registration_refused(
+    auth_request: AuthorizeRequest,
+    client_repository: ClientReader | None,
+    description: str,
+    *,
+    jarm_signer: JarmSigner | None = None,
+    issuer: str = "",
+) -> RedirectResponse | HTMLResponse:
+    """Émet ``access_denied`` pour une inscription annulée ou refusée (issue #166).
+
+    Même discipline que ``_login_or_error`` pour ``prompt=none`` : la
+    ``redirect_uri`` a déjà été validée par ``_non_redirectable_error`` —
+    l'erreur part en ``response_mode`` résolu de la demande (JARM signé pour
+    un client signable, ``form_post`` avec ``iss`` RFC 9207 §2, query/fragment
+    sinon). ``state`` toujours réfléchi (RFC 6749 §4.1.2.1).
+    """
+    validated = (
+        await validate_authorization_request(auth_request, client_repository)
+        if client_repository is not None
+        else None
+    )
+    if isinstance(validated, AuthorizeError):
+        return await error_response(validated, jarm_signer, issuer=issuer)
+    error = AuthorizeError(
+        error="access_denied",
+        error_description=description,
+        redirect_uri=auth_request.redirect_uri,
+        state=auth_request.state,
+        response_mode=validated.response_mode if validated is not None else ResponseMode.QUERY,
+        client_id=auth_request.client_id,
+    )
+    return await error_response(error, jarm_signer, issuer=issuer)
+
+
+def _signup_redirect(request: Request, base_url: str) -> RedirectResponse:
+    """Redirige vers ``/signup`` en portant l'URL d'autorisation complète en ``next``."""
+    return RedirectResponse(
+        f"/signup?next={quote(_authorize_url_from_base(base_url, request))}",
+        status_code=302,
+    )
 
 
 def _authorize_url_from_base(base_url: str, http_request: Request) -> str:

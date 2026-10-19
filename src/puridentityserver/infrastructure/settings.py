@@ -34,6 +34,7 @@ from puridentityserver.domain.jwe import (
     JWEKeyManagementAlgorithm,
 )
 from puridentityserver.domain.jwks import ALL_SIGNING_ALGORITHMS, JWTAlgorithm
+from puridentityserver.domain.password_policy import PasswordPolicy, PasswordPolicyPatch
 
 _STORAGE_TYPES = ("memory", "sql")
 
@@ -65,6 +66,19 @@ def _fapi_profile_flags(raw: dict[str, object]) -> tuple[bool, bool]:
     if fapi and fapi2:
         raise ValueError("fapi_enabled et fapi2_enabled sont exclusifs")
     return fapi, fapi2
+
+
+def _parse_password_policy_patch(raw: object) -> PasswordPolicyPatch:
+    """Valide la surcharge partielle de politique d'un client seed (table TOML/JSON).
+
+    Une clé inconnue ou un type erroné est rejeté au démarrage
+    (``PasswordPolicyPatch.from_mapping``) plutôt qu'interprété à tort.
+    """
+    if raw is None:
+        return PasswordPolicyPatch()
+    if not isinstance(raw, dict):
+        raise ValueError("password_policy doit être une table (dictionnaire de clés partielles)")
+    return PasswordPolicyPatch.from_mapping(raw)
 
 
 def _parse_client(raw: dict[str, object]) -> Client:
@@ -135,6 +149,7 @@ def _parse_client(raw: dict[str, object]) -> Client:
             raw.get("backchannel_authentication_request_signing_alg", "")
         ),
         binding_message_max_length=_optional_int(raw, "binding_message_max_length"),
+        password_policy=_parse_password_policy_patch(raw.get("password_policy")),
         par_required=bool(raw.get("par_required")),
         fapi_enabled=fapi_enabled,
         fapi2_enabled=fapi2_enabled,
@@ -498,6 +513,15 @@ class Settings(BaseSettings):
     identity_jwt_lifetime_seconds: int = 3600
     identity_seed_users: Annotated[dict[str, dict[str, str]], NoDecode] = {}
 
+    # Politique de mots de passe des comptes de connexion de l'OP (page
+    # /signup de prompt=create, réinitialisation) — valeurs par défaut du
+    # serveur. Un client peut écraser des clés **individuelles** via la
+    # table partielle `password_policy` de `clients_seed`
+    # (TOML : `password_policy = { min_length = 16 }`) ; une clé inconnue
+    # ou un type erroné est rejeté au démarrage ; la variable
+    # PURIDENTITYSERVER_PASSWORD_POLICY accepte le même objet en JSON.
+    password_policy: Annotated[PasswordPolicy, NoDecode] = PasswordPolicy()
+
     @field_validator("jwks_algorithms", mode="before")
     @classmethod
     def _split_algorithms(cls, value: object) -> object:
@@ -595,6 +619,21 @@ class Settings(BaseSettings):
             if not isinstance(parsed, dict):
                 raise ValueError("PURIDENTITYSERVER_IDENTITY_SEED_USERS doit être un objet JSON")
             return parsed
+        return value
+
+    @field_validator("password_policy", mode="before")
+    @classmethod
+    def _parse_password_policy(cls, value: object) -> object:
+        """Transforme `PURIDENTITYSERVER_PASSWORD_POLICY='{"min_length":16}'` (JSON)."""
+        if isinstance(value, str):
+            import json
+
+            parsed = json.loads(value)
+            if not isinstance(parsed, dict):
+                raise ValueError("PURIDENTITYSERVER_PASSWORD_POLICY doit être un objet JSON")
+            return PasswordPolicy.from_mapping(parsed)
+        if isinstance(value, dict):
+            return PasswordPolicy.from_mapping(value)
         return value
 
     @field_validator("swagger_ui_init_oauth", mode="before")

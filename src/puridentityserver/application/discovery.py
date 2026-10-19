@@ -69,6 +69,10 @@ class DiscoveryConfig:
     # ``jwt`` (JARM Final 1.0 §3, ``CheckDiscEndpointResponseModesSupportedContainsJwt``).
     response_modes_supported: tuple[str, ...] = ("query", "fragment", "form_post", "jwt")
     authorization_signing_alg_values_supported: tuple[str, ...] = JARM_SIGNING_ALGORITHMS
+    # Valeurs de ``prompt`` honorées sur /authorize (OIDC Core 1.0 §3.1.2.1) :
+    # ``create`` = Initiating User Registration via OIDC 1.0 (issue #166) —
+    # champ ``prompt_values_supported`` de convention, non mandate par Core.
+    prompt_values_supported: tuple[str, ...] = ("none", "login", "consent", "create")
 
 
 class DiscoveryUseCase:
@@ -149,6 +153,10 @@ class DiscoveryUseCase:
             "authorization_signing_alg_values_supported": list(
                 self._config.authorization_signing_alg_values_supported
             ),
+            # Valeurs de ``prompt`` honorées (OIDC Core 1.0 §3.1.2.1 ;
+            # ``create`` : Initiating User Registration via OIDC 1.0,
+            # issue #166 — champ de convention, non mandate par Core).
+            "prompt_values_supported": list(self._config.prompt_values_supported),
         }
         if self._config.registration_enabled:
             metadata["registration_endpoint"] = f"{base}/register"

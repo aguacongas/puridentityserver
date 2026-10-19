@@ -420,7 +420,11 @@ async def test_request_verify_and_verify_roundtrip(
 async def test_forgot_and_reset_password_roundtrip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """forgot_password → reset_password : jeton RS256 rotatif, mot de passe changé."""
+    """forgot_password → reset_password : jeton RS256 rotatif, mot de passe changé.
+
+    Le nouveau mot de passe satisfait la ``PasswordPolicy`` par défaut
+    (longueur, classes, denylist, séquences) exigée par ``reset_password``.
+    """
     from fastapi_users import exceptions
     from fastapi_users.db import SQLAlchemyUserDatabase
 
@@ -448,14 +452,106 @@ async def test_forgot_and_reset_password_roundtrip(
         )
 
         old_hash = alice.hashed_password
-        updated = await manager.reset_password(token, "nouveau-mdp-42!")
+        updated = await manager.reset_password(token, "Nouveau-mdp-42!")
         assert updated.id == alice.id
         assert updated.hashed_password != old_hash
         # le hachage ayant changé, le même jeton (fingerprint) n'est plus valide
         with pytest.raises(exceptions.InvalidResetPasswordToken):
-            await manager.reset_password(token, "encore-un-mdp-42!")
+            await manager.reset_password(token, "Encore-un-mdp-42!")
         with pytest.raises(exceptions.InvalidResetPasswordToken):
-            await manager.reset_password("jeton-invalide", "encore-un-mdp-42!")
+            await manager.reset_password("jeton-invalide", "Encore-un-mdp-42!")
+
+
+@pytest.mark.anyio
+async def test_reset_password_refuses_policy_violation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """reset_password applique la ``PasswordPolicy`` : violation → refus."""
+    from fastapi_users import exceptions
+    from fastapi_users.db import SQLAlchemyUserDatabase
+
+    from puridentityserver.identity import config as mod
+    from puridentityserver.identity.user import User
+
+    _ensure_identity_configured()
+    _inject_test_db(monkeypatch)
+    await apply_schema()
+    users = await seed_users(_IDENTITY_SEED)
+    alice = users["alice"]
+
+    async with mod._get_session_factory()() as session:
+        user_db: SQLAlchemyUserDatabase[User, uuid_mod.UUID] = SQLAlchemyUserDatabase(session, User)
+        manager = _CapturingUserManager(user_db)
+        await manager.forgot_password(alice)
+
+        # 15 caractères mais aucune majuscule : classe manquante
+        with pytest.raises(exceptions.InvalidPasswordException):
+            await manager.reset_password(manager.reset_token, "nouveau-mdp-42")
+
+
+@pytest.mark.anyio
+async def test_reset_password_refuses_reused_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Historique (CA 8) : réutilisation d'un mot de passe récent → refus."""
+    from fastapi_users import exceptions
+    from fastapi_users.db import SQLAlchemyUserDatabase
+
+    from puridentityserver.identity import config as mod
+    from puridentityserver.identity.user import User
+
+    _ensure_identity_configured()
+    _inject_test_db(monkeypatch)
+    await apply_schema()
+    users = await seed_users(_IDENTITY_SEED)
+    alice = users["alice"]
+
+    async with mod._get_session_factory()() as session:
+        user_db: SQLAlchemyUserDatabase[User, uuid_mod.UUID] = SQLAlchemyUserDatabase(session, User)
+        manager = _CapturingUserManager(user_db)
+
+        await manager.forgot_password(alice)
+        first = await manager.reset_password(manager.reset_token, "Nouveau-mdp-42!")
+        assert first.password_history, "l'empreinte du mot de passe sortant rejoint l'historique"
+
+        await manager.forgot_password(first)
+        second = await manager.reset_password(manager.reset_token, "Encore-un-mdp-42!")
+        assert len(second.password_history) == 2
+
+        await manager.forgot_password(second)
+        with pytest.raises(exceptions.InvalidPasswordException):
+            await manager.reset_password(manager.reset_token, "Nouveau-mdp-42!")
+
+
+@pytest.mark.anyio
+async def test_reset_password_history_disabled_when_depth_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``history_depth = 0`` désactive le contrôle de réemploi."""
+    from fastapi_users.db import SQLAlchemyUserDatabase
+
+    from puridentityserver.domain.password_policy import PasswordPolicy
+    from puridentityserver.identity import config as mod
+    from puridentityserver.identity.user import User
+
+    _ensure_identity_configured()
+    monkeypatch.setattr(mod, "_password_policy", PasswordPolicy(history_depth=0))
+    _inject_test_db(monkeypatch)
+    await apply_schema()
+    users = await seed_users(_IDENTITY_SEED)
+    alice = users["alice"]
+
+    async with mod._get_session_factory()() as session:
+        user_db: SQLAlchemyUserDatabase[User, uuid_mod.UUID] = SQLAlchemyUserDatabase(session, User)
+        manager = _CapturingUserManager(user_db)
+
+        await manager.forgot_password(alice)
+        first = await manager.reset_password(manager.reset_token, "Nouveau-mdp-42!")
+        assert first.password_history == []
+
+        await manager.forgot_password(first)
+        again = await manager.reset_password(manager.reset_token, "Nouveau-mdp-42!")
+        assert again.hashed_password
 
 
 @pytest.mark.anyio

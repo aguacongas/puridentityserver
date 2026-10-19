@@ -237,6 +237,7 @@ def test_settings_client_seed_reads_defaults_from_config_toml(
         "sample-ciba-ping-client",
         "sample-jarm-client",
         "sample-form-post-client",
+        "sample-prompt-create-client",
     ]
     assert client.redirect_uris == frozenset({"http://127.0.0.1:5173/callback"})
     assert client.scopes == frozenset({"openid", "profile", "email"})
@@ -260,6 +261,10 @@ def test_settings_client_seed_reads_defaults_from_config_toml(
         c for c in settings.seed_clients if c.client_id == "sample-form-post-client"
     )
     assert form_post_client.redirect_uris == frozenset({"http://127.0.0.1:8122/callback"})
+    prompt_create_client = next(
+        c for c in settings.seed_clients if c.client_id == "sample-prompt-create-client"
+    )
+    assert prompt_create_client.redirect_uris == frozenset({"http://127.0.0.1:8124/callback"})
 
 
 def test_settings_client_seed_parses_lifetime_fields() -> None:

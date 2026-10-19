@@ -21,6 +21,7 @@ from puridentityprotocol.server import ProtocolDependencies
 from puridentityserver.infrastructure.persistence.stores import build_stores
 from puridentityserver.infrastructure.settings import Settings
 from puridentityserver.interfaces.api.cors import DynamicCORSMiddleware
+from puridentityserver.interfaces.api.same_origin import SameOriginFormGuardMiddleware
 
 _PACKAGE_VERSION = "0.1.0"
 
@@ -52,6 +53,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ),
     )
     app.add_middleware(DynamicCORSMiddleware, client_repository=protocol.readers.client)
+    app.add_middleware(
+        SameOriginFormGuardMiddleware,
+        trust_proxy_headers=settings.trust_proxy_headers,
+    )
     protocol.mount(app)
     admin.mount(app)
     return app

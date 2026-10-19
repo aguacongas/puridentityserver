@@ -5,6 +5,8 @@ Fournit l'identité utilisateur du serveur OIDC :
 - ``auth_router``            : routes ``/auth/cookie/login``, ``/logout``, ``/refresh``
 - ``register_router``        : route ``/auth/register``
 - ``login_router``           : page ``/login`` (formulaire HTML, spike navigateur)
+- ``signup_router``          : page ``/signup`` (inscription, ``prompt=create`` — issue #166,
+  politique de mots de passe ``PasswordPolicy`` configurable par client)
 - ``CurrentUser``            : dependency d'utilisateur authentifié (requis)
 - ``CurrentUserOptional``    : dependency d'utilisateur authentifié (facultatif)
 - ``apply_schema``           : initialise le backend identité (dict mémoire ou table ``user``)
@@ -29,7 +31,7 @@ from __future__ import annotations
 import hashlib
 import html
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Annotated
 from urllib.parse import parse_qs, quote, urlparse
@@ -45,9 +47,11 @@ from fastapi_users.manager import (
     VERIFY_USER_TOKEN_AUDIENCE,
 )
 from fastapi_users.schemas import BaseUser, BaseUserCreate
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from puridentityserver.domain.password_policy import PasswordPolicy
 from puridentityserver.identity.memory_db import InMemoryUserDatabase
 from puridentityserver.identity.rotating_signer import RotatingTokenSigner
 from puridentityserver.identity.session_strategy import SessionJWTStrategy
@@ -63,6 +67,8 @@ _session_signer: RotatingTokenSigner | None = None
 _reset_signer: RotatingTokenSigner | None = None
 _verify_signer: RotatingTokenSigner | None = None
 _cookie_lifetime_seconds = 3600
+_DEFAULT_PASSWORD_POLICY = PasswordPolicy()
+_password_policy = _DEFAULT_PASSWORD_POLICY
 _NOT_CONFIGURED = "configure_identity() n'a pas encore été appelé"
 _SESSION_COOKIE_NAME = "fastapiusersauth"
 
@@ -203,7 +209,14 @@ class UserManager(BaseUserManager[User, uuid.UUID]):
     async def reset_password(
         self, token: str, password: str, request: Request | None = None
     ) -> User:
-        """Valide un jeton de réinitialisation et met à jour le mot de passe."""
+        """Valide un jeton de réinitialisation et applique la nouvelle politique.
+
+        Le nouveau mot de passe est soumis à la ``PasswordPolicy`` serveur
+        (classes, denylist, séquences…) et ne doit pas figurer parmi les
+        ``history_depth`` derniers mots de passe du compte ; l'empreinte du
+        mot de passe quittant l'actif rejoint l'historique (décalage en
+        tête, plafonné à la profondeur configurée).
+        """
         if _reset_signer is None:
             raise RuntimeError(_NOT_CONFIGURED)
         data = await _reset_signer.read(token)
@@ -232,11 +245,31 @@ class UserManager(BaseUserManager[User, uuid.UUID]):
         if not user.is_active:
             raise exceptions.UserInactive()
 
-        updated_user = await self._update(user, {"password": password})
+        violations = list(_password_policy.validate(password, user.email))
+        if await self._password_in_history(user, password, _password_policy.history_depth):
+            violations.append("mot de passe déjà utilisé (historique récent)")
+        if violations:
+            raise exceptions.InvalidPasswordException(", ".join(violations))
+
+        history = [user.hashed_password, *user.password_history][: _password_policy.history_depth]
+        updated_user = await self._update(user, {"password": password, "password_history": history})
 
         await self.on_after_reset_password(user, request)
 
         return updated_user
+
+    async def _password_in_history(self, user: User, password: str, depth: int) -> bool:
+        """Vrai si ``password`` correspond à l'une des ``depth`` dernières empreintes.
+
+        La comparaison vérifie le candidat contre chaque empreinte conservée
+        (``User.password_history``) via le ``PasswordHelper`` — jamais un
+        stockage en clair. ``depth = 0`` désactive le contrôle.
+        """
+        for fingerprint in user.password_history[:depth]:
+            reused, _ = self.password_helper.verify_and_update(password, fingerprint)
+            if reused:
+                return True
+        return False
 
 
 def configure_identity(
@@ -247,6 +280,7 @@ def configure_identity(
     cookie_lifetime_seconds: int,
     session_rotation_days: int = 90,
     session_grace_period_days: int = 7,
+    password_policy: PasswordPolicy | None = None,
 ) -> None:
     """Injecte les KeyManagers rotatifs (session, reset, verify) depuis la configuration.
 
@@ -254,11 +288,13 @@ def configure_identity(
     hiérarchie config.toml → `PURIDENTITYSERVER_*` → ``.env`` permet de remplacer
     les valeurs de démonstration sans toucher au code. Chaque famille de
     jetons privés est signée RS256 par un ``RotatingTokenSigner`` dédié,
-    jamais un secret statique : seules les durées et la politique de
-    rotation sont injectées ici.
+    jamais un secret statique : seules les durées, la politique de
+    rotation et la politique de mots de passe (réinitialisation) sont
+    injectées ici — la page ``/signup`` reçoit la sienne via
+    ``signup_router``.
     """
     global _session_signer, _reset_signer, _verify_signer
-    global _cookie_lifetime_seconds
+    global _cookie_lifetime_seconds, _password_policy
     _session_signer = RotatingTokenSigner(
         session_key_manager,
         token_audience=["fastapi-users:auth"],
@@ -278,6 +314,7 @@ def configure_identity(
         grace_period_days=session_grace_period_days,
     )
     _cookie_lifetime_seconds = cookie_lifetime_seconds
+    _password_policy = password_policy if password_policy is not None else PasswordPolicy()
 
 
 def _session_strategy(lifetime_seconds: int | None = None) -> SessionJWTStrategy[User, uuid.UUID]:
@@ -568,5 +605,193 @@ def login_router(
             if cookie:
                 redirect.headers["set-cookie"] = cookie
             return redirect
+
+    return router
+
+
+_REGISTER_PAGE = """<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>PurIdentityServer — inscription</title>
+  <style>
+    body {{ font-family: sans-serif; margin: 2rem; max-width: 24rem; }}
+    label {{ display: block; margin: 0.6rem 0 0.2rem; }}
+    input {{ width: 100%; padding: 0.4rem; box-sizing: border-box; }}
+    button {{ margin-top: 1rem; padding: 0.5rem 1.2rem; }}
+    .error {{ color: #b00020; }}
+    .hint {{ color: #555; }}
+  </style>
+</head>
+<body>
+  <h1>Création d'un compte PurIdentityServer</h1>
+  {error}<form method="post" action="/signup">
+    <input type="hidden" name="next" value="{next}">
+    {client_hidden}<label>Adresse email <input type="email" name="email" required autofocus></label>
+    <label>Mot de passe
+      <input type="password" name="password" required
+             minlength="{min_length}" maxlength="{max_length}">
+      <small class="hint">Exigences : {requirements}</small>
+    </label>
+    <button type="submit">Créer le compte</button>
+  </form>
+  <p><a href="{cancel_url}">Refuser l'inscription</a></p>
+</body>
+</html>
+"""
+
+
+def _register_marker_url(next_url: str, value: str) -> str:
+    """Ajoute le marqueur ``register=<value>`` à l'URL de retour d'un flow ``prompt=create``.
+
+    Ce marqueur (paramètre OP, ignoré comme inconnu par la validation de la
+    demande) fait émettre à ``/authorize`` l'``access_denied`` final dans le
+    transport résolu (query/fragment/JARM/form_post) : ``cancelled`` pour
+    l'annulation utilisateur — seul marqueur émis par la page depuis
+    l'erreur inline des créations refusées ; ``refused`` reste honoré par
+    ``/authorize`` (compatibilité, émissions défensives éventuelles).
+    """
+    separator = "&" if "?" in next_url else "?"
+    return f"{next_url}{separator}register={value}"
+
+
+def _error_block(error: str) -> str:
+    """Rend le bloc d'erreur inline du formulaire (lignes HTML échappées)."""
+    if not error:
+        return ""
+    lines = "<br>".join(html.escape(line) for line in error.splitlines() if line)
+    return f'<p class="error">{lines}</p>'
+
+
+def _signup_error_redirect(next_url: str, violations: Sequence[str]) -> RedirectResponse:
+    """Renvoie sur ``/signup`` avec le détail des violations en query (``error``).
+
+    L'erreur est ré-affichée en clair sur le formulaire : l'utilisateur
+    corrige et retente ; ``access_denied`` redirigeable reste réservé à
+    l'annulation explicite (lien « Refuser l'inscription »).
+    """
+    details = quote("\n".join(violations))
+    return RedirectResponse(
+        f"/signup?next={quote(next_url, safe='')}&error={details}",
+        status_code=302,
+    )
+
+
+async def _resolve_signup_policy(
+    client_id: str,
+    resolver: Callable[[str], Awaitable[PasswordPolicy]] | None,
+    default_policy: PasswordPolicy,
+) -> PasswordPolicy:
+    """Politique de mots de passe du client du flow, sinon la politique défaut."""
+    if client_id and resolver is not None:
+        return await resolver(client_id)
+    return default_policy
+
+
+def signup_router(
+    resolve_session_lifetime: Callable[[str], Awaitable[int | None]] | None = None,
+    *,
+    resolve_password_policy: Callable[[str], Awaitable[PasswordPolicy]] | None = None,
+    default_password_policy: PasswordPolicy = _DEFAULT_PASSWORD_POLICY,
+) -> APIRouter:
+    """Construit le routeur ``/signup`` (formulaire d'inscription HTML).
+
+    Page de création de compte exigée par ``prompt=create`` (Initiating User
+    Registration via OpenID Connect 1.0) : ``GET /signup?next=<url
+    d'autorisation>`` rend le formulaire (exigences de la politique du
+    client du flow affichées sous le champ), ``POST /signup`` crée le compte
+    (UserManager : email unique + ``PasswordPolicy``), ouvre une session
+    **fraîche** (cookie ``sid`` + empreinte ``reauth`` de l'URL de retour —
+    la création fonde l'authentification et satisfait aussi
+    ``prompt=create login``, spec §2) puis redirige vers ``next``.
+
+    Création refusée (politique de mots de passe, email déjà inscrit ou
+    malformé) : retour sur le formulaire avec le détail en clair (erreur
+    inline, correction et nouvelle tentative) ; seul le lien d'annulation
+    (``register=cancelled``) conduit à ``access_denied`` redirigeable au
+    client (spec §3, CA de l'issue #166). ``resolve_password_policy``
+    résout la surcharge éventuelle du client du flow (``password_policy``
+    de ``clients_seed``) ; sans client ou sans surcharge,
+    ``default_password_policy`` (politique serveur) s'applique.
+    ``resolve_session_lifetime`` s'applique comme sur ``/login`` (durée de
+    session cookie par client du flow).
+    """
+    router = APIRouter(tags=["identity"])
+
+    @router.get("/signup", response_class=HTMLResponse)
+    async def signup_page(
+        next_url: Annotated[str, Query(alias="next")] = "/",
+        error: Annotated[str, Query()] = "",
+    ) -> str:
+        """Affiche le formulaire d'inscription (annulation = ``register=cancelled``)."""
+        client_id = _client_id_from_next(next_url)
+        hidden = (
+            f'<input type="hidden" name="client_id" value="{html.escape(client_id)}">'
+            if client_id
+            else ""
+        )
+        policy = await _resolve_signup_policy(
+            client_id, resolve_password_policy, default_password_policy
+        )
+        return _REGISTER_PAGE.format(
+            error=_error_block(error),
+            next=html.escape(next_url, quote=True),
+            client_hidden=hidden,
+            min_length=policy.min_length,
+            max_length=policy.max_length,
+            requirements=html.escape(policy.describe()),
+            cancel_url=html.escape(_register_marker_url(next_url, "cancelled"), quote=True),
+        )
+
+    @router.post("/signup")
+    async def signup(
+        email: Annotated[str, Form()],
+        password: Annotated[str, Form()],
+        next_url: Annotated[str, Form(alias="next")] = "/",
+        client_id: Annotated[str, Form()] = "",
+    ) -> RedirectResponse:
+        """Crée le compte, ouvre une session puis redirige vers ``next``.
+
+        La durée du cookie de session est celle du client du flow si elle est
+        configurée (sinon la durée serveur par défaut), comme ``/login``.
+        Mot de passe contraire à la politique, email déjà inscrit ou
+        malformé : retour sur le formulaire avec le détail (erreur inline).
+        """
+        policy = await _resolve_signup_policy(
+            client_id or _client_id_from_next(next_url),
+            resolve_password_policy,
+            default_password_policy,
+        )
+        violations = policy.validate(password, email)
+        if violations:
+            return _signup_error_redirect(next_url, violations)
+        try:
+            async with _user_db() as user_db:
+                user = await UserManager(user_db).create(
+                    BaseUserCreate(email=email, password=password)
+                )
+        except exceptions.UserAlreadyExists:
+            return _signup_error_redirect(next_url, ("cette adresse email est déjà inscrite",))
+        except exceptions.InvalidPasswordException:
+            return _signup_error_redirect(next_url, ("mot de passe refusé par le serveur",))
+        except ValidationError:
+            return _signup_error_redirect(next_url, ("adresse email invalide",))
+
+        lifetime = await _resolve_cookie_lifetime(
+            client_id, next_url, resolve_session_lifetime, _cookie_lifetime_seconds
+        )
+
+        strategy = _session_strategy(lifetime_seconds=lifetime)
+        token = await strategy.write_token(
+            user, sid=uuid.uuid4().hex, reauth=reauth_context(next_url)
+        )
+        login_response = await CookieTransport(
+            cookie_secure=False, cookie_max_age=lifetime
+        ).get_login_response(token)
+        redirect = RedirectResponse(next_url or "/", status_code=302)
+        cookie = login_response.headers.get("set-cookie")
+        if cookie:
+            redirect.headers["set-cookie"] = cookie
+        return redirect
 
     return router

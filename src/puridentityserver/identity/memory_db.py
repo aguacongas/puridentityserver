@@ -10,18 +10,40 @@ La sémantique reproduit celle de l'adaptateur SQL de ``fastapi-users`` :
 - ``get_by_email`` est insensible à la casse (équivalent de ``func.lower``) ;
 - ``create`` reçoit un dict et assigne un ``id`` UUID (le ``default=uuid4``
   de la colonne SQLAlchemy ne s'applique qu'à l'insertion) ;
+- les ``default`` de colonnes sont appliqués comme l'insertion SQL, y
+  compris les callables enveloppés par SQLAlchemy en fonctions à contexte
+  (``lambda ctx: fn()``) ;
 - ``get_by_oauth_account`` lève ``NotImplementedError``, comme l'adaptateur
   SQL sans table OAuth (aucun fournisseur OAuth n'est configuré).
 """
 
 from __future__ import annotations
 
+import inspect
 import uuid
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 
 from fastapi_users.db import BaseUserDatabase
 
 from puridentityserver.identity.user import User
+
+
+def _apply_column_default(default: object) -> object:
+    """Calcule la valeur par défaut d'une colonne comme l'insertion SQL.
+
+    SQLAlchemy enveloppe les callables de ``default`` en fonctions à
+    contexte (``lambda ctx: fn()``) — enveloppe ``__wrapped__`` que
+    ``inspect.signature`` suit par défaut : la signature réelle décide de
+    l'appel, un contexte ``None`` convenant puisqu'une valeur par défaut
+    de domaine n'en dépend jamais. Un callable sans paramètre est appelé
+    nu.
+    """
+    if not callable(default):
+        return default
+    if not inspect.signature(default, follow_wrapped=False).parameters:
+        return cast("Callable[[], object]", default)()
+    return cast("Callable[[object], object]", default)(None)
 
 
 class InMemoryUserDatabase(BaseUserDatabase[User, uuid.UUID]):
@@ -62,8 +84,7 @@ class InMemoryUserDatabase(BaseUserDatabase[User, uuid.UUID]):
             default = column.default
             if default is None or getattr(user, column.key, None) is not None:
                 continue
-            value = default.arg
-            setattr(user, column.key, value() if callable(value) else value)
+            setattr(user, column.key, _apply_column_default(default.arg))
         self._users[user.id] = user
         return user
 

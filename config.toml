@@ -459,6 +459,25 @@ name = "management"
 display_name = "API de gestion"
 scopes = ["admin"]
 
+# Politique de mots de passe des comptes de connexion de l'OP (formulaire
+# /signup de prompt=create, réinitialisation) — valeurs par défaut. Un
+# client de `clients_seed` peut écraser des clés INDIVIDUELLES via une
+# table partielle `password_policy` (clés inconnues ou types erronés →
+# erreur au démarrage) ; `PURIDENTITYSERVER_PASSWORD_POLICY` accepte le
+# même objet en JSON. `history_depth = 0` désactive l'historique de
+# réemploi (interdiction de réutiliser un mot de passe récent).
+[settings.password_policy]
+min_length = 12
+max_length = 128
+min_uppercase = 1
+min_lowercase = 1
+min_digits = 1
+min_special = 1
+deny_common_passwords = true
+forbid_email_containment = true
+forbid_sequences = true
+history_depth = 5
+
 [[settings.clients_seed]]
 client_id = "sample-pkce-client"
 redirect_uris = ["http://127.0.0.1:5173/callback"]
@@ -503,6 +522,11 @@ client_type = "public"
 #                             Mode 1.0), réponse livrée en POST auto-soumis
 #                             vers la callback — échantillon
 #                             samples/form-post-client/
+# - sample-prompt-create-client : flow Authorization Code avec
+#                             prompt=create (Initiating User Registration
+#                             via OIDC 1.0), création de compte à la volée
+#                             sur la page /signup — échantillon
+#                             samples/prompt-create-client/
 # → les smokes tests de ces samples PASSERT une configuration spécifique (port
 #   dédié + ce client) via un fichier temporaire ; ici ils sont aussi enregistrés
 #   pour pouvoir lancer le serveur par défaut et tester manuellement les samples.
@@ -677,3 +701,16 @@ client_id = "sample-form-post-client"
 redirect_uris = ["http://127.0.0.1:8122/callback"]
 scopes = "openid profile email"
 client_type = "public"
+
+# client du sample prompt=create (Initiating User Registration via OIDC 1.0
+# — échantillon samples/prompt-create-client/) : flow Authorization Code
+# demandé avec prompt=create, le compte est créé sur la page /signup de
+# l'OP pendant le flow ; client public = PKCE obligatoire. La table
+# `password_policy` y démontre la surcharge par client : 16 caractères
+# minimum au lieu des 12 du défaut serveur (voir `[settings.password_policy]`).
+[[settings.clients_seed]]
+client_id = "sample-prompt-create-client"
+redirect_uris = ["http://127.0.0.1:8124/callback"]
+scopes = "openid profile email"
+client_type = "public"
+password_policy = { min_length = 16 }
