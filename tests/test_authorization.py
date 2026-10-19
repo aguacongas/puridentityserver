@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from puridentityserver.application.authorize import (
+    SUPPORTED_ACR_VALUES,
     AuthorizeConfig,
     AuthorizeRedirect,
     AuthorizeRequest,
@@ -796,6 +797,154 @@ def test_max_age_expired_login_for_this_request_does_not_loop(
 
     assert response.status_code == 302
     assert response.headers["location"].startswith("https://app.example/callback?")
+
+
+# RFC 9470 §2 : unmet_authentication_requirements (issue #167)
+
+
+def _login_unrelated_session(client: TestClient) -> None:
+    """Fonde une session active sans lien avec l'URL d'autorisation suivante."""
+    login = client.post(
+        "/login",
+        data={"username": "alice@example.com", "password": "password", "next": "/"},
+        follow_redirects=False,
+    )
+    assert login.status_code == 302
+
+
+def test_prompt_none_expired_max_age_returns_unmet_authentication_requirements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RFC 9470 §2 : session active + ``max_age`` dépassé + ``prompt=none``.
+
+    Le code diffère de ``login_required`` (§3) : la session existe, seule
+    l'exigence d'authentification demandée est inassumable (issue #167).
+    """
+    with TestClient(_require_login_app()) as client:
+        _login_unrelated_session(client)
+        _advance_clock(monkeypatch, 5)
+
+        response = client.get(
+            "/authorize",
+            params={**_authorize_login_params(), "max_age": "1", "prompt": "none"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    query = _redirect_query(response.headers["location"])
+    assert query["error"] == ["unmet_authentication_requirements"]
+    assert query["state"] == ["st-auth"]
+
+
+def test_prompt_none_max_age_zero_returns_unmet_authentication_requirements() -> None:
+    """``max_age=0`` exige une authentification immédiate (RFC 9470 §2)."""
+    with TestClient(_require_login_app()) as client:
+        _login_unrelated_session(client)
+
+        response = client.get(
+            "/authorize",
+            params={**_authorize_login_params(), "max_age": "0", "prompt": "none"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert _redirect_query(response.headers["location"])["error"] == [
+        "unmet_authentication_requirements"
+    ]
+
+
+def test_prompt_none_unsupported_acr_returns_unmet_authentication_requirements() -> None:
+    """Un ``acr_values`` hors ``acr_values_supported`` est inassumable (RFC 9470 §2)."""
+    with TestClient(_require_login_app()) as client:
+        _login_unrelated_session(client)
+
+        response = client.get(
+            "/authorize",
+            params={
+                **_authorize_login_params(),
+                "acr_values": "urn:inconnu:loa2",
+                "prompt": "none",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert _redirect_query(response.headers["location"])["error"] == [
+        "unmet_authentication_requirements"
+    ]
+
+
+def test_prompt_none_supported_acr_issues_code() -> None:
+    """L'ACR publiée en discovery satisfait l'exigence : le flow poursuit.
+
+    L'écho du claim ``acr`` (OIDC Core 1.0 §2) reste le contrat en émission.
+    """
+    with TestClient(_require_login_app()) as client:
+        _login_unrelated_session(client)
+
+        response = client.get(
+            "/authorize",
+            params={
+                **_authorize_login_params(),
+                "acr_values": SUPPORTED_ACR_VALUES[0],
+                "prompt": "none",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert location.startswith("https://app.example/callback?")
+    assert "error" not in _redirect_query(location)
+
+
+def test_prompt_none_without_session_keeps_login_required() -> None:
+    """RFC 9470 §3 : sans session authentifiée le code reste ``login_required``.
+
+    ``max_age`` et ``acr_values`` étranger en demande anonyme : aucune
+    émission d'``unmet_authentication_requirements`` (issue #167, CA 3).
+    """
+    with TestClient(_require_login_app()) as client:
+        response = client.get(
+            "/authorize",
+            params={
+                **_authorize_login_params(),
+                "max_age": "1",
+                "acr_values": "urn:inconnu:loa2",
+                "prompt": "none",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert _redirect_query(response.headers["location"])["error"] == ["login_required"]
+
+
+def test_prompt_none_login_only_keeps_login_required() -> None:
+    """``prompt=login`` seul reste ``login_required`` (OIDC Core 1.0 §3.1.2.6).
+
+    Instruction d'interaction, pas une exigence d'authentification au sens
+    de la RFC 9470 §2.
+    """
+    with TestClient(_require_login_app()) as client:
+        _login_unrelated_session(client)
+
+        response = client.get(
+            "/authorize",
+            params={**_authorize_login_params(), "prompt": "login none"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert _redirect_query(response.headers["location"])["error"] == ["login_required"]
+
+
+def test_discovery_publishes_acr_values_supported() -> None:
+    """Discovery publie ``acr_values_supported`` (OIDC Discovery 1.0 §2)."""
+    with TestClient(_require_login_app()) as client:
+        metadata = client.get("/.well-known/openid-configuration").json()
+
+    assert metadata["acr_values_supported"] == list(SUPPORTED_ACR_VALUES)
 
 
 def test_authorize_post_issues_code_for_authenticated_user() -> None:

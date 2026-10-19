@@ -17,15 +17,19 @@ Le scénario vérifie :
    erreur `login_required` **signée** (kid opposable, vérifiable via le
    JWKS de l'OP) ;
 3. `POST /login` (alice) → session authentifiée ;
-4. `/authorize` avec `response_mode=jwt` → `302` : toujours uniquement
+4. `/authorize` + `prompt=none` avec session active : `max_age=1` dépassé
+   (session vieillie) ou `acr_values` étranger → erreur
+   `unmet_authentication_requirements` **signée** dans l'enveloppe (RFC 9470
+   §2) — la session existe, seul le niveau demandé n'est pas atteint ;
+5. `/authorize` avec `response_mode=jwt` → `302` : toujours uniquement
    `?response=<jwt>` (aucun `code`/`state` en clair, pas de fragment) ;
    l'enveloppe contient `code` + `state` avec `iss`, `aud` = client_id et
    `exp` - `iat` = 600 s ;
-5. vérification de la signature de l'enveloppe contre le JWKS de l'OP
+6. vérification de la signature de l'enveloppe contre le JWKS de l'OP
    (`kid` du header opposé à la clé publiée) ;
-6. `/token` échange du code extrait de l'enveloppe (PKCE) → `200`
+7. `/token` échange du code extrait de l'enveloppe (PKCE) → `200`
    access_token ;
-7. un client **sans** `authorization_signed_response_alg` qui demande
+8. un client **sans** `authorization_signed_response_alg` qui demande
    `response_mode=jwt` reçoit `unsupported_response_mode` en
    **transport clair** (le refus ne peut pas être porté par l'enveloppe
    qu'il refuse — JARM Final 1.0 §4).
@@ -54,6 +58,10 @@ L'algorithme de signature est déclaré **par client** via
 en transport clair — le refus ne peut pas être porté par l'enveloppe qu'il
 refuse.
 
-Les erreurs redirigeables (`login_required`, `access_denied`, …) sont
-**aussi** signées dans l'enveloppe, conformément à JARM Final 1.0 §3 : le
-client distingue une erreur authentique de l'OP d'une injection d'URL.
+Les erreurs redirigeables (`login_required`,
+`unmet_authentication_requirements`, `access_denied`, …) sont **aussi**
+signées dans l'enveloppe, conformément à JARM Final 1.0 §3 : le client
+distingue une erreur authentique de l'OP d'une injection d'URL. Le code
+`unmet_authentication_requirements` (RFC 9470 §2) signale une session
+active dont le niveau demandé (`max_age`, `acr_values`) n'est pas atteint —
+il diffère de `login_required`, qui suppose justement l'absence de session.

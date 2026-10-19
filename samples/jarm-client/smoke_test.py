@@ -15,15 +15,20 @@ algorithme) puis joue le scénario :
    l'enveloppe est une erreur ``login_required`` **signée** (kid opposable,
    vérifiable via le JWKS de l'OP) ;
 3. ``POST /login`` (alice) -> session authentifiée ;
-4. ``/authorize`` avec ``response_mode=jwt`` -> ``302`` : toujours
+4. ``/authorize`` + ``prompt=none`` avec session active : ``max_age=1``
+   dépassé (session vieillie) ou ``acr_values`` étranger -> erreur
+   ``unmet_authentication_requirements`` **signée** dans l'enveloppe
+   (RFC 9470 §2, issue #167) — la session existe, seul le niveau demandé
+   n'est pas atteint ;
+5. ``/authorize`` avec ``response_mode=jwt`` -> ``302`` : toujours
    uniquement ``?response=<jwt>`` (aucun ``code``/``state`` en clair, pas de
    fragment) ; l'enveloppe contient ``code`` + ``state`` avec ``iss``,
    ``aud`` = client_id et ``exp`` - ``iat`` = 600 s ;
-5. vérification de la signature de l'enveloppe contre le JWKS de l'OP
+6. vérification de la signature de l'enveloppe contre le JWKS de l'OP
    (``kid`` du header opposé à la clé publiée) ;
-6. ``/token`` échange du code extrait de l'enveloppe (PKCE) -> ``200``
+7. ``/token`` échange du code extrait de l'enveloppe (PKCE) -> ``200``
    access_token ;
-7. un client **sans** ``authorization_signed_response_alg`` qui demande
+8. un client **sans** ``authorization_signed_response_alg`` qui demande
    ``response_mode=jwt`` reçoit ``unsupported_response_mode`` en
    **transport clair** (le refus ne peut pas être porté par l'enveloppe qu'il
    refuse — JARM Final 1.0 §4).
@@ -141,7 +146,7 @@ def _run_scenario() -> None:
         assert "jwt" in metadata["response_modes_supported"], sorted(metadata)
         signing_algs = metadata["authorization_signing_alg_values_supported"]
         assert "RS256" in signing_algs, signing_algs
-        print(f"  [1/7] discovery OK (response_modes_supported contient jwt, algos={signing_algs})")
+        print(f"  [1/8] discovery OK (response_modes_supported contient jwt, algos={signing_algs})")
 
         jwks = http.get(f"{SERVER_URL}/.well-known/jwks.json").json()["keys"]
 
@@ -158,14 +163,54 @@ def _run_scenario() -> None:
         assert error_claims["error"] == "login_required", sorted(error_claims)
         assert error_claims["state"] == "st-error"
         assert "code" not in error_claims
-        print("  [2/7] prompt=none sans session -> login_required signé dans l'enveloppe OK")
+        print("  [2/8] prompt=none sans session -> login_required signé dans l'enveloppe OK")
 
         login = http.post(
             f"{SERVER_URL}/login",
             data={"username": "alice@example.com", "password": "password", "next": "/"},
         )
         assert login.status_code == 302, login.text
-        print("  [3/7] POST /login (alice) -> session authentifiée OK")
+        print("  [3/8] POST /login (alice) -> session authentifiée OK")
+
+        time.sleep(2)  # la session doit dépasser max_age=1 (RFC 9470 §2)
+        state = "st-unmet"
+        response = http.get(
+            f"{SERVER_URL}/authorize",
+            params=_authorize_params(
+                client_id=CLIENT_ID,
+                state=state,
+                verifier=verifier,
+                prompt="none",
+                max_age="1",
+            ),
+        )
+        assert response.status_code == 302, response.text
+        error_claims = _envelope_from_location(
+            response.headers["location"], jwks, audience=CLIENT_ID
+        )
+        assert error_claims["error"] == "unmet_authentication_requirements", sorted(error_claims)
+        assert error_claims["state"] == state
+
+        response = http.get(
+            f"{SERVER_URL}/authorize",
+            params=_authorize_params(
+                client_id=CLIENT_ID,
+                state=state,
+                verifier=verifier,
+                prompt="none",
+                acr_values="urn:inconnu:loa2",
+            ),
+        )
+        assert response.status_code == 302, response.text
+        error_claims = _envelope_from_location(
+            response.headers["location"], jwks, audience=CLIENT_ID
+        )
+        assert error_claims["error"] == "unmet_authentication_requirements", sorted(error_claims)
+        assert error_claims["state"] == state
+        print(
+            "  [4/8] prompt=none + session : max_age dépassé et acr_values étranger "
+            "-> unmet_authentication_requirements signé (RFC 9470 §2, #167) OK"
+        )
 
         state = "st-jarm-ok"
         response = http.get(
@@ -179,11 +224,11 @@ def _run_scenario() -> None:
         assert claims["iss"] == SERVER_URL
         assert claims["exp"] - claims["iat"] == 600
         print(
-            "  [4/7] /authorize response_mode=jwt -> 302 (?response= seul, "
+            "  [5/8] /authorize response_mode=jwt -> 302 (?response= seul, "
             "code+state dans l'enveloppe) OK"
         )
 
-        print("  [5/7] signature de l'enveloppe vérifiée via le JWKS de l'OP (kid) OK")
+        print("  [6/8] signature de l'enveloppe vérifiée via le JWKS de l'OP (kid) OK")
 
         token = http.post(
             f"{SERVER_URL}/token",
@@ -199,7 +244,7 @@ def _run_scenario() -> None:
         body = token.json()
         assert body["token_type"] == "Bearer"
         assert body["access_token"]
-        print("  [6/7] échange du code (extrait de l'enveloppe) au /token -> 200 OK")
+        print("  [7/8] échange du code (extrait de l'enveloppe) au /token -> 200 OK")
 
         response = http.get(
             f"{SERVER_URL}/authorize",
@@ -214,7 +259,7 @@ def _run_scenario() -> None:
         assert query["error"] == ["unsupported_response_mode"], sorted(query)
         assert "response" not in query
         print(
-            "  [7/7] client sans authorization_signed_response_alg -> "
+            "  [8/8] client sans authorization_signed_response_alg -> "
             "unsupported_response_mode en clair OK"
         )
     print()

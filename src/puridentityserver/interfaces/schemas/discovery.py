@@ -2,6 +2,7 @@
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from puridentityserver.application.authorize import SUPPORTED_ACR_VALUES
 from puridentityserver.domain.jwe import (
     ALL_ENCRYPTION_ALGORITHMS,
     ALL_ENCRYPTION_METHODS,
@@ -92,6 +93,10 @@ class DiscoveryDocument(BaseModel):
     prompt_values_supported: list[str] = Field(
         default_factory=lambda: ["none", "login", "consent", "create"]
     )
+    # ACR atteignables par l'OP (OIDC Discovery 1.0 §2) : une valeur
+    # étrangère avec session active et ``prompt=none`` produit
+    # ``unmet_authentication_requirements`` (RFC 9470 §2, issue #167).
+    acr_values_supported: list[str] = Field(default_factory=lambda: list(SUPPORTED_ACR_VALUES))
     grant_types_supported: list[str] = Field(
         default_factory=lambda: [
             "authorization_code",

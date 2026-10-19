@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from puridentityserver.application.authorize import SUPPORTED_ACR_VALUES
 from puridentityserver.application.request_object import (
     PUBLISHED_REQUEST_OBJECT_SIGNING_ALGORITHMS,
 )
@@ -73,6 +74,9 @@ class DiscoveryConfig:
     # ``create`` = Initiating User Registration via OIDC 1.0 (issue #166) —
     # champ ``prompt_values_supported`` de convention, non mandate par Core.
     prompt_values_supported: tuple[str, ...] = ("none", "login", "consent", "create")
+    # ACR atteignables (OIDC Discovery 1.0 §2) : base du contrôle
+    # ``unmet_authentication_requirements`` (RFC 9470 §2, issue #167).
+    acr_values_supported: tuple[str, ...] = SUPPORTED_ACR_VALUES
 
 
 class DiscoveryUseCase:
@@ -157,6 +161,10 @@ class DiscoveryUseCase:
             # ``create`` : Initiating User Registration via OIDC 1.0,
             # issue #166 — champ de convention, non mandate par Core).
             "prompt_values_supported": list(self._config.prompt_values_supported),
+            # ACR atteignables déclarés (OIDC Discovery 1.0 §2) : une valeur
+            # étrangère avec session active et ``prompt=none`` produit
+            # ``unmet_authentication_requirements`` (RFC 9470 §2, issue #167).
+            "acr_values_supported": list(self._config.acr_values_supported),
         }
         if self._config.registration_enabled:
             metadata["registration_endpoint"] = f"{base}/register"
