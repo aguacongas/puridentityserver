@@ -134,6 +134,48 @@ class TestRegister:
         assert stored is not None
         assert stored.par_required is True
 
+    def test_registers_signed_userinfo_client(self) -> None:
+        """§5.3.1 : ``userinfo_signed_response_alg=RS256`` écho et stocké (RFC 7591 §3.2)."""
+        usecase = _usecase()
+
+        result = run(
+            usecase.register(
+                RegisterRequest(
+                    {**_REGISTRATION, "userinfo_signed_response_alg": "RS256"},
+                    initial_access_token=_INITIAL_TOKEN,
+                )
+            )
+        )
+
+        assert isinstance(result, ClientRegistration)
+        assert result.userinfo_signed_response_alg == "RS256"
+        stored = run(usecase._clients.find_by_id(result.client_id))
+        assert stored is not None
+        assert stored.userinfo_signed_response_alg == "RS256"
+
+    def test_registers_unsigned_userinfo_by_default(self) -> None:
+        """§5.3.2 : sans déclaration, la réponse ``/userinfo`` reste en JSON non signé."""
+        result = _registered(_usecase())
+
+        assert result.userinfo_signed_response_alg == ""
+
+    def test_rejects_unsupported_userinfo_signing_alg(self) -> None:
+        """§5.3.1 : seul un algorithme publié (``RS256``) est admis (RFC 7591 §2.3)."""
+        usecase = _usecase()
+
+        result = run(
+            usecase.register(
+                RegisterRequest(
+                    {**_REGISTRATION, "userinfo_signed_response_alg": "HS256"},
+                    initial_access_token=_INITIAL_TOKEN,
+                )
+            )
+        )
+
+        assert isinstance(result, RegistrationError)
+        assert result.error == "invalid_client_metadata"
+        assert "userinfo_signed_response_alg" in result.error_description
+
     def test_registered_web_origins_are_cors_allowed(self) -> None:
         usecase = _usecase()
         _registered(usecase)
@@ -733,6 +775,18 @@ class TestRegistrationEndpoint:
                 registration_initial_access_tokens=(_INITIAL_TOKEN,),
             )
         )
+
+    def test_registration_echoes_userinfo_signing_alg(self) -> None:
+        """§5.3.1 : la métadonnée RS256 est échoée dans la réponse HTTP (RFC 7591 §3.2)."""
+        with TestClient(self._app()) as client:
+            response = client.post(
+                "/register",
+                json={**_REGISTRATION, "userinfo_signed_response_alg": "RS256"},
+                headers={"authorization": f"Bearer {_INITIAL_TOKEN}"},
+            )
+
+        assert response.status_code == 201, response.text
+        assert response.json()["userinfo_signed_response_alg"] == "RS256"
 
     def test_full_registration_lifecycle(self) -> None:
         with TestClient(self._app()) as client:

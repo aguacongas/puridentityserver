@@ -158,6 +158,7 @@ def _registration_json(result: ClientRegistration) -> str:
             result.tls_client_certificate_bound_access_tokens,
         ),
         ("id_token_signed_response_alg", result.id_token_signed_response_alg),
+        ("userinfo_signed_response_alg", result.userinfo_signed_response_alg),
         ("id_token_encrypted_response_alg", result.id_token_encrypted_response_alg),
         ("id_token_encrypted_response_enc", result.id_token_encrypted_response_enc),
         ("frontchannel_logout_uri", result.frontchannel_logout_uri),

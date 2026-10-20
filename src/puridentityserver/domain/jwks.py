@@ -175,6 +175,14 @@ JARM_SIGNING_ALGORITHMS: tuple[str, ...] = (
     JWTAlgorithm.RS256.value,
 )
 
+#: Algorithmes JWS admis pour signer la réponse UserInfo en ``application/jwt``
+#: (OIDC Core 1.0 §5.3.2) : ``RS256`` seul, signé par l'OP avec sa propre
+#: clé (``kid`` inclus). Publiés au discovery sous
+#: ``userinfo_signing_alg_values_supported`` et contrôlés à l'enregistrement
+#: (``userinfo_signed_response_alg``, OIDC Registration 1.0 §2.1) — sans
+#: déclaration du client, la réponse reste en JSON non signé.
+USERINFO_SIGNING_ALGORITHMS: tuple[str, ...] = (JWTAlgorithm.RS256.value,)
+
 
 @dataclass(frozen=True, slots=True)
 class KeyPair:

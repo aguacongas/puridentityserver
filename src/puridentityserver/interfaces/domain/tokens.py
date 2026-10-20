@@ -133,6 +133,25 @@ class TokenManager(Protocol):
         """
         ...
 
+    async def create_userinfo_jwt(
+        self,
+        *,
+        issuer: str,
+        audience: str,
+        algorithm: JWTAlgorithm,
+        claims: Mapping[str, object],
+    ) -> str:
+        """Crée la réponse UserInfo signée en JWT (OIDC Core 1.0 §5.3.2).
+
+        Les claims standards ``iss`` (émetteur), ``aud`` (``client_id``
+        destinataire, §5.3.2) et ``iat`` encadrent les claims fournis
+        (``sub`` + claims filtrés) : une collision de nom les préserve,
+        ``iss``/``aud`` devant refléter l'émetteur et le destinataire.
+        L'en-tête JWS porte le ``kid`` de la clé active publiée au JWKS,
+        pour que le client vérifie la signature contre ``jwks_uri``.
+        """
+        ...
+
     async def validate_access_token(
         self,
         *,

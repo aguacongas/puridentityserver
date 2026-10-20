@@ -46,6 +46,7 @@ def test_discovery_usecase_builds_document_from_base_url() -> None:
     assert document["authorization_endpoint"] == f"{_BASE_URL}/authorize"
     assert document["token_endpoint"] == f"{_BASE_URL}/token"
     assert document["userinfo_endpoint"] == f"{_BASE_URL}/userinfo"
+    assert document["userinfo_signing_alg_values_supported"] == ["RS256"]
     assert document["jwks_uri"] == f"{_BASE_URL}/.well-known/jwks.json"
     assert document["introspection_endpoint"] == f"{_BASE_URL}/introspect"
     assert document["revocation_endpoint"] == f"{_BASE_URL}/revoke"

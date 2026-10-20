@@ -31,7 +31,14 @@ scénario :
 16. ``/userinfo`` expose la même ``sub`` que l'``id_token`` ;
 17. un client ephemeral -> ``sub`` jamais réutilisée entre deux sessions ;
 18. un client public (défaut) -> ``sub`` réelle (non dérivée) ;
-19. ``sector_identifier_uri`` incohérent -> ``400 invalid_client_metadata``.
+19. ``sector_identifier_uri`` incohérent -> ``400 invalid_client_metadata`` ;
+20. le discovery annonce ``userinfo_signing_alg_values_supported`` = ``["RS256"]`` ;
+21. ``POST /register`` avec ``userinfo_signed_response_alg=RS256`` -> ``201`` + écho
+    (RFC 7591 §3.2) ;
+22. ``userinfo_signed_response_alg=HS256`` (non publié) -> ``400 invalid_client_metadata`` ;
+23. ``/userinfo`` de ce client -> ``application/jwt``, signature RS256 vérifiée sur
+    le JWKS, claims ``iss`` / ``aud`` / ``sub`` (OIDC Core 1.0 §5.3.2) ;
+24. un client sans la métadonnée -> ``/userinfo`` reste ``application/json`` non signé.
 
 Le sous-processus est terminé dans tous les cas (``finally``) et un
 garde-fou borne la durée totale.
@@ -43,6 +50,7 @@ Usage (depuis n'importe où dans le dépôt) :
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from pathlib import Path
@@ -50,6 +58,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import jwt as pyjwt
+from jwt.algorithms import RSAAlgorithm
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -289,6 +298,7 @@ def _run_scenario() -> None:
         print("  [12/12] GET /register/{{client_id}} après suppression -> 404 OK")
 
         _run_subject_types_scenario(http)
+        _run_signed_userinfo_scenario(http)
     print()
 
 
@@ -434,6 +444,86 @@ def _run_subject_types_scenario(http: httpx.Client) -> None:
     assert bad.status_code == 400, bad.text
     assert bad.json()["error"] == "invalid_client_metadata"
     print("  [7/7] sector_identifier_uri incohérent -> 400 invalid_client_metadata OK")
+
+
+def _run_signed_userinfo_scenario(http: httpx.Client) -> None:
+    """Vérifie les réponses UserInfo signées RS256 (OIDC Core 1.0 §5.3.1, §5.3.2).
+
+    1. le discovery annonce ``userinfo_signing_alg_values_supported=["RS256"]`` ;
+    2. un client déclarant ``userinfo_signed_response_alg=RS256`` voit la
+       métadonnée échoée à l'enregistrement (RFC 7591 §3.2) ;
+    3. ``userinfo_signed_response_alg=HS256`` (non publié par l'OP) ->
+       ``400 invalid_client_metadata`` ;
+    4. ``/userinfo`` de ce client -> ``application/jwt``, signature RS256
+       vérifiée contre le JWKS, claims ``iss`` / ``aud`` / ``sub`` (§5.3.2) ;
+    5. un client sans la métadonnée -> ``/userinfo`` reste ``application/json``.
+    """
+    metadata = http.get(f"{SERVER_URL}/.well-known/openid-configuration").json()
+    assert metadata["userinfo_signing_alg_values_supported"] == ["RS256"]
+    print("  [1/5] discovery userinfo_signing_alg_values_supported = [RS256] OK")
+
+    login = http.post(
+        f"{SERVER_URL}/login",
+        data={"username": "alice@example.com", "password": "password", "next": "/"},
+    )
+    assert login.status_code == 302, login.text
+
+    signed = _register(http, {**_METADATA, "userinfo_signed_response_alg": "RS256"})
+    assert signed.status_code == 201, signed.text
+    signed_json = signed.json()
+    assert signed_json["userinfo_signed_response_alg"] == "RS256"
+    signed_client_id = str(signed_json["client_id"])
+    print("  [2/5] POST /register userinfo_signed_response_alg=RS256 -> 201 + écho OK")
+
+    bad = _register(http, {**_METADATA, "userinfo_signed_response_alg": "HS256"})
+    assert bad.status_code == 400, bad.text
+    assert bad.json()["error"] == "invalid_client_metadata"
+    print("  [3/5] userinfo_signed_response_alg=HS256 (non publié) -> 400 OK")
+
+    tokens = _exchange_for_tokens(
+        http,
+        client_id=signed_client_id,
+        client_secret=str(signed_json["client_secret"]),
+        scope="openid profile",
+        redirect_uri=REDIRECT_URI,
+    )
+    response = http.get(
+        f"{SERVER_URL}/userinfo", headers={"authorization": f"Bearer {tokens['access_token']}"}
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("application/jwt")
+    header = pyjwt.get_unverified_header(response.text)
+    assert header["alg"] == "RS256"
+    jwks = http.get(f"{SERVER_URL}/.well-known/jwks.json").json()
+    jwk = next(key for key in jwks["keys"] if key["kid"] == header["kid"])
+    claims = pyjwt.decode(
+        response.text,
+        RSAAlgorithm.from_jwk(json.dumps(jwk)),
+        algorithms=["RS256"],
+        audience=signed_client_id,
+        issuer=str(metadata["issuer"]),
+    )
+    assert claims["sub"]
+    print("  [4/5] /userinfo -> application/jwt RS256 vérifiée au JWKS (iss/aud/sub) OK")
+
+    plain = _register(http, _METADATA)
+    assert plain.status_code == 201, plain.text
+    plain_json = plain.json()
+    assert "userinfo_signed_response_alg" not in plain_json
+    tokens = _exchange_for_tokens(
+        http,
+        client_id=str(plain_json["client_id"]),
+        client_secret=str(plain_json["client_secret"]),
+        scope="openid profile",
+        redirect_uri=REDIRECT_URI,
+    )
+    response = http.get(
+        f"{SERVER_URL}/userinfo", headers={"authorization": f"Bearer {tokens['access_token']}"}
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["sub"]
+    print("  [5/5] client sans métadonnée -> /userinfo reste application/json OK")
 
 
 def main() -> None:

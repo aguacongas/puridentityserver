@@ -91,7 +91,9 @@ def userinfo_router(
 
 
 def _success_response(result: UserInfoResponse) -> Response:
-    """Sérialise les claims au format JSON (RFC 6750 §3.1)."""
+    """Sert le JWT signé (OIDC Core 1.0 §5.3.2) ou les claims en JSON (RFC 6750 §3.1)."""
+    if result.signed_jwt:
+        return Response(content=result.signed_jwt, media_type="application/jwt")
     return Response(
         content=json.dumps(result.claims, ensure_ascii=False),
         media_type="application/json",
