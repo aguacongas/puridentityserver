@@ -224,6 +224,21 @@ de l'API d'administration est branchée sur le claim `client_id`
 `certification/config.render.toml`) — le scope `admin` par défaut n'étant pas
 enregistré, il serait impossible à un client d'obtenir un jeton d'administration.
 
+Le **secret** du client `certification-admin` n'est **jamais committé** : le
+seed le référence par `${CERTIFICATION_ADMIN_CLIENT_SECRET}` (résolu dans
+l'environnement du serveur par les settings) et le job CI lit la même
+variable. Deux valeurs sont donc à aligner manuellement :
+
+| Où | Variable | Valeur |
+|---|---|---|
+| Instance hébergée (tableau de bord Render) | `CERTIFICATION_ADMIN_CLIENT_SECRET` | secret de l'opérateur |
+| Secret GitHub du dépôt | `CERTIFICATION_ADMIN_CLIENT_SECRET` | **la même** valeur |
+| Harnais local / job CI local | `CERTIFICATION_ADMIN_CLIENT_SECRET` | valeur locale par défaut (`local-certification-admin-secret`), l'instance tournant sur `localhost` |
+
+Si le secret GitHub manque, le job hébergé ne peut pas appeler l'endpoint :
+le module `oidcc-server-rotate-keys` reproduit alors son écart attendu
+(l'auto-attestation OIDF reste alors possible).
+
 Ainsi, **aucune rotation permanente** n'est configurée sur l'instance de
 certification : les neuf plans (local, CI, hébergé) partagent le même
 mécanisme, sans churn du JWKS sur les plans qui ne portent pas le module.

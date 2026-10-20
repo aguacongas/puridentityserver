@@ -170,11 +170,12 @@ password = "password"
 # `client_id` vaut `certification-admin`, puis appelle
 # `POST /signing-keys/rotate` pour faire pivoter les cles de signature de
 # l'OP entre les deux releves du JWKS du module `oidcc-server-rotate-keys`.
-# Instance de demonstration uniquement (le secret est commite, comme ceux
-# des clients FAPI des plans).
+# Le secret n'est PAS commite : il est lu dans l'environnement du serveur
+# (variable `CERTIFICATION_ADMIN_CLIENT_SECRET` - tableau de bord Render pour
+# l'instance hebergee, variable du job CI pour le harnais local).
 [[settings.clients_seed]]
 client_id = "certification-admin"
-client_secret = "certification-admin-secret"
+client_secret = "${CERTIFICATION_ADMIN_CLIENT_SECRET}"
 redirect_uris = []
 scopes = "openid"
 client_type = "confidential"

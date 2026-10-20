@@ -7,6 +7,7 @@ rétention — OIDC Core 1.0 §10.1) et le refus des jetons non habilités.
 
 from __future__ import annotations
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -100,3 +101,42 @@ def test_rotate_endpoint_publishes_a_new_key_and_keeps_the_previous_one() -> Non
         after = _kids(client)
         assert after - before, "aucune nouvelle clé publiée"
         assert before & after, "l'ancienne clé de signature a disparu du JWKS"
+
+
+def _seed_client_settings(secret: str) -> Settings:
+    """Settings dont le client seed porte le secret donné."""
+    return Settings(
+        _env_file=None,
+        issuer=_ISSUER,
+        base_url=_ISSUER,
+        clients_seed=(
+            {
+                "client_id": "certification-admin",
+                "client_secret": secret,
+                "scopes": "openid",
+                "client_type": "confidential",
+            },
+        ),
+    )
+
+
+def test_seed_client_secret_can_be_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Un secret de seed peut etre reference par l'environnement (jamais commite)."""
+    monkeypatch.setenv("CERTIFICATION_ADMIN_CLIENT_SECRET", "s3cr3t-de-lenvironnement")
+
+    referenced = _seed_client_settings("${CERTIFICATION_ADMIN_CLIENT_SECRET}").seed_clients[0]
+    literal = _seed_client_settings("s3cr3t-de-lenvironnement").seed_clients[0]
+
+    assert referenced.client_secret_hash == literal.client_secret_hash
+
+
+def test_seed_client_secret_unresolved_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Un placeholder non resolu donne un secret vide : il n'est jamais devine."""
+    monkeypatch.delenv("CERTIFICATION_ADMIN_CLIENT_SECRET", raising=False)
+
+    unresolved = _seed_client_settings("${CERTIFICATION_ADMIN_CLIENT_SECRET}").seed_clients[0]
+    empty = _seed_client_settings("").seed_clients[0]
+
+    assert unresolved.client_secret_hash == empty.client_secret_hash

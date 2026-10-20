@@ -36,3 +36,10 @@ services:
         value: 0.0.0.0
       - key: PURIDENTITYSERVER_SETTINGS_FILE
         value: /app/certification/config.render.toml
+      # Secret du client d'administration de la certification (issue #194) :
+      # lu par le seed `certification-admin` (`${CERTIFICATION_ADMIN_CLIENT_SECRET}`)
+      # et par le job CI pour appeler `POST /signing-keys/rotate`. Valeur a
+      # definir dans le tableau de bord Render (jamais commitee) - elle doit
+      # etre identique au secret GitHub `CERTIFICATION_ADMIN_CLIENT_SECRET`.
+      - key: CERTIFICATION_ADMIN_CLIENT_SECRET
+        sync: false

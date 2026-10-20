@@ -91,7 +91,9 @@ bash "$SCRIPT_DIR/prepare-suite.sh"
 # les deux releves. Le patch `conformance-key-rotation` du driver appelle
 # l'endpoint d'administration `POST /signing-keys/rotate` juste avant de
 # demarrer le module - il lui faut donc un jeton d'administration, obtenu ici
-# (grant `client_credentials`, client seed `certification-admin`).
+# (grant `client_credentials`, client seed `certification-admin`). Le secret
+# n'est jamais commite : il est lu dans l'environnement.
+export CERTIFICATION_ADMIN_CLIENT_SECRET="${CERTIFICATION_ADMIN_CLIENT_SECRET:-local-certification-admin-secret}"
 admin_token="$(bash "$SCRIPT_DIR/admin-token.sh" "http://127.0.0.1:${OP_PORT:-8000}" \
   "$LOCAL_DIR/op-config.toml" || true)"
 if [ -n "$admin_token" ]; then
