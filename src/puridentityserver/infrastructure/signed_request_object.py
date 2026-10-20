@@ -1,17 +1,20 @@
-"""Vérification du ``request`` signé (JAR, RFC 9101) côté backchannel et FAPI.
+"""Vérification du ``request`` signé (JAR, RFC 9101) côté backchannel, FAPI et clients standards.
 
 Le request object (JAR, RFC 9101) est un JWT signé par le client : sa
 signature est vérifiée contre ses JWKS enregistrés (``jwks`` embarqués ou
-``jwks_uri`` distante) et les claims temporels sont bornés — ``exp`` ≤
-maintenant + 60 minutes, ``nbf`` ≥ maintenant - 60 minutes et la durée de
-vie ``exp - nbf`` limitée à 60 minutes (CIBA §7.1.1, FAPI-CIBA-ID1 et
-FAPI1-ADV-5.2.2-13/-17). Les claims exigés sont paramétrés : ``iss``,
-``aud``, ``exp``, ``iat``, ``nbf`` et ``jti`` pour le backchannel (CIBA
-§7.1.1, ``jti`` anti-replay requis), ``exp``/``nbf``/``scope``/``nonce``/
-``redirect_uri`` (plus ``iss``/``aud`` contrôlés par la vérification)
-pour un request object FAPI (FAPI1-ADV-5.2.2), sans ``jti`` ni anti-replay.
-Tout refus est rendu ``invalid_request`` côté endpoint backchannel (CIBA
-§13) ou ``invalid_request_object`` côté request object FAPI (JAR §6.3).
+``jwks_uri`` distante). Les claims temporels sont bornés selon l'appelant :
+``exp`` ≤ maintenant + 60 minutes, ``nbf`` ≥ maintenant - 60 minutes et la
+durée de vie ``exp - nbf`` limitée à 60 minutes (CIBA §7.1.1, FAPI-CIBA-ID1
+et FAPI1-ADV-5.2.2-13/-17) quand le jeu de claims exigés comprend ``nbf`` ;
+pour un client standard (issue #188, ``nbf`` non exigé) seules les bornes
+JWT natives d'``exp``/``nbf`` s'appliquent (RFC 9101 §6.1). Les claims
+exigés sont paramétrés : ``iss``, ``aud``, ``exp``, ``iat``, ``nbf`` et
+``jti`` pour le backchannel (CIBA §7.1.1, ``jti`` anti-replay requis),
+``exp``/``nbf``/``scope``/``nonce``/``redirect_uri`` (plus ``iss``/``aud``
+contrôlés par la vérification) pour un request object FAPI (FAPI1-ADV-5.2.2),
+sans ``jti`` ni anti-replay, ``iss``/``aud`` pour un client standard. Tout
+refus est rendu ``invalid_request`` côté endpoint backchannel (CIBA §13) ou
+``invalid_request_object`` côté request object (JAR §6.3).
 """
 
 from __future__ import annotations
@@ -115,10 +118,12 @@ class PyJWTSignedRequestObjectVerifier:
         ``client`` est le client nommé par le claim ``iss`` (dont les JWKS
         servent à vérifier la signature), ``issuer`` la valeur d'``aud``
         attendue et ``allowed_algorithms`` les en-têtes ``alg`` admis.
-        ``required_claims`` liste les claims exigés (CIBA §7.1.1 ou FAPI
-        1.0 Advanced selon l'appelant) ; ``enforce_jti`` exige et
-        mémorise le ``jti`` (anti-replay) — désactivé pour les request
-        objects FAPI, qui n'en portent pas.
+        ``required_claims`` liste les claims exigés (CIBA §7.1.1, FAPI
+        1.0 Advanced ou client standard selon l'appelant) ; ``enforce_jti``
+        exige et mémorise le ``jti`` (anti-replay) — désactivé pour les
+        request objects FAPI et standards, qui n'en portent pas. Les
+        fenêtres 60 minutes CIBA/FAPI ne s'appliquent que si ``nbf`` fait
+        partie des claims exigés.
         """
         try:
             header = pyjwt.get_unverified_header(token)  # NOSONAR(S5659)
@@ -135,6 +140,25 @@ class PyJWTSignedRequestObjectVerifier:
         )
         if claims is None:
             return _refus(reason)
+        bounded = self._temporal_bounds(claims, required_claims)
+        if bounded.claims is None:
+            return bounded
+        if not enforce_jti:
+            return bounded
+        return await self._remember_jti(claims)
+
+    @staticmethod
+    def _temporal_bounds(
+        claims: dict[str, object], required_claims: Sequence[str]
+    ) -> SignedRequestObjectResult:
+        """Bornes 60 minutes CIBA/FAPI si ``nbf`` exigé, sinon JWT natives.
+
+        Un request object standard (issue #188) n'exige ni ``exp`` ni
+        ``nbf`` : les seules bornes JWT natives (validées par PyJWT si les
+        claims sont présents, RFC 9101 §6.1) s'appliquent alors.
+        """
+        if "nbf" not in required_claims:
+            return SignedRequestObjectResult(claims=claims)
         try:
             exp = _timestamp(claims, "exp")
             nbf = _timestamp(claims, "nbf")
@@ -147,9 +171,7 @@ class PyJWTSignedRequestObjectVerifier:
             return _refus("claim exp plus de 60 minutes dans le futur (FAPI1-ADV-5.2.2-13)")
         if nbf < now - MAX_REQUEST_OBJECT_LIFETIME_SECONDS:
             return _refus("claim nbf plus de 60 minutes dans le passé (FAPI1-ADV-5.2.2-17)")
-        if not enforce_jti:
-            return SignedRequestObjectResult(claims=claims)
-        return await self._remember_jti(claims)
+        return SignedRequestObjectResult(claims=claims)
 
     async def _signing_key(self, token: str, client: Client) -> object | None:
         """Clé de vérification du jeton parmi les JWKS du client, ``None`` si absente."""

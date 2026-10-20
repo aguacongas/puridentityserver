@@ -8,6 +8,16 @@ du jeton priment sur les paramètres de requête (OIDC Core 1.0 §6.1) : c'est
 ce qui rend valide la ``redirect_uri`` portée par le request object quand la
 query en porte une non enregistrée.
 
+Les clients standards peuvent aussi présenter un request object **signé
+RS256** (OIDC Core 1.0 §10.1/§10.3 ; le profil « dynamic » de la suite de
+certification l'exige — module ``oidcc-request-uri-signed-rs256``, issue
+#188) : la signature est vérifiée contre leurs JWKS enregistrés (``jwks``
+embarqués ou ``jwks_uri``) par le port ``SignedRequestObjectVerifier``, avec
+les claims ``iss`` (client_id) et ``aud`` (issuer) exigés — ``exp``/``nbf``
+sont contrôlés par la vérification s'ils sont présents (RFC 9101 §6.1), sans
+les fenêtres FAPI/CIBA. Sans clé vérifiable (client inconnu, aucun JWKS),
+le JAR est refusé ``invalid_request_object``.
+
 Les clients marqués ``fapi_enabled`` (FAPI 1.0 Advanced Final) suivent au
 contraire le profil signé : le request object est **obligatoire**, sa
 signature doit être ``PS256``/``ES256`` (FAPI1-ADV-5.2.2-1), il doit porter
@@ -37,18 +47,35 @@ from puridentityserver.interfaces.domain.request_object import (
 )
 from puridentityserver.interfaces.repositories.readers import ClientReader
 
-#: Seul ``alg=none`` est accepté pour les clients standards (JWA RFC 7519
-#: §6) : c'est l'algorithme que la suite de certification annonce pour
-#: rejouer les modules ``request`` non FAPI.
+#: Seul ``alg=none`` est lu **sans vérification de signature** pour les
+#: clients standards (JWA RFC 7519 §6) : c'est l'algorithme que la suite de
+#: certification annonce pour rejouer les modules ``request`` non FAPI.
 REQUEST_OBJECT_SIGNING_ALGORITHMS: tuple[str, ...] = (JWTAlgorithm.NONE.value,)
 
-#: Algorithmes de request object publiés au discovery : ``none`` pour les
-#: clients standards, ``PS256``/``ES256`` pour le profil FAPI 1.0 Advanced
-#: (FAPI1-ADV-5.2.2-1). Le port ``none`` n'en vérifie jamais la signature
-#: (aucun segment de signature admis) — seuls les clients ``fapi_enabled``
-#: passent par la vérification JWKS.
+#: Algorithmes de request object admis pour un client **standard** présentant
+#: un JAR signé (OIDC Core 1.0 §10.1/§10.3 — RS256 recommandé, exigé par le
+#: profil « dynamic » de la suite de certification, module
+#: ``oidcc-request-uri-signed-rs256``) : la signature est vérifiée contre le
+#: JWKS du client. ``none`` en est exclu — il emprunte le port non vérifié
+#: ``REQUEST_OBJECT_SIGNING_ALGORITHMS``.
+STANDARD_SIGNED_REQUEST_OBJECT_ALGORITHMS: tuple[str, ...] = (JWTAlgorithm.RS256.value,)
+
+#: Claims exigés d'un request object signé par un client standard : ``iss``
+#: (client_id) et ``aud`` (issuer). ``exp``/``nbf`` sont validés par la
+#: vérification de signature s'ils sont présents (RFC 9101 §6.1) mais non
+#: exigés — le module ``oidcc-request-uri-signed-rs256`` n'en émet pas.
+STANDARD_SIGNED_REQUIRED_CLAIMS: tuple[str, ...] = ("iss", "aud")
+
+#: Algorithmes de request object publiés au discovery : ``none`` et ``RS256``
+#: pour les clients standards (le profil « dynamic » exige la présence de
+#: ``RS256`` — ``CheckDiscEndpointRequestObjectSigningAlgValuesSupported-
+#: ContainsRS256``), ``PS256``/``ES256`` pour le profil FAPI 1.0 Advanced
+#: (FAPI1-ADV-5.2.2-1 — au moins un des deux exigé par la suite). Le port
+#: ``none`` n'en vérifie jamais la signature (aucun segment de signature
+#: admis) ; ``RS256`` est vérifié contre le JWKS du client.
 PUBLISHED_REQUEST_OBJECT_SIGNING_ALGORITHMS: tuple[str, ...] = (
     JWTAlgorithm.NONE.value,
+    JWTAlgorithm.RS256.value,
     JWTAlgorithm.PS256.value,
     JWTAlgorithm.ES256.value,
 )
@@ -128,13 +155,12 @@ class RequestObjectResolver:
         clients: ClientReader | None = None,
         signed: SignedRequestObjectVerifier | None = None,
     ) -> None:
-        """Injection de la configuration, du port de lecture et, pour FAPI, du client.
+        """Injection de la configuration, du port de lecture et de la vérification.
 
-        ``clients`` identifie le client ``fapi_enabled`` (profil signé) ;
-        ``signed`` vérifie alors la signature contre ses JWKS. Sans eux,
-        les clients FAPI ne sont pas servis (le request object obligatoire
-        ne peut pas être contrôlé) : la configuration de composition doit
-        les fournir.
+        ``clients`` résout le client émetteur (profil FAPI obligatoire, ou
+        vérification d'un JAR RS256 standard — issue #188) ; ``signed``
+        vérifie alors la signature contre ses JWKS. Sans ``issuer``, la
+        vérification de signature est inactive (``aud`` non contrôlable).
         """
         self._config = config
         self._fetcher = fetcher
@@ -171,10 +197,54 @@ class RequestObjectResolver:
             if isinstance(resolved, RequestObjectError):
                 return _with_state(resolved, document)
             return resolved
-        claims, error = _claims(document, self._config.signing_algorithms)
+        claims, error = await self._resolve_standard(document, client)
         if error is not None:
             return _with_state(error, document)
         return _merge(params, claims)
+
+    async def _resolve_standard(
+        self, document: str, client: Client | None
+    ) -> tuple[dict[str, str], RequestObjectError | None]:
+        """Traite le request object d'un client standard : non signé ou RS256.
+
+        ``alg=none`` est lu sans vérification (port configuré) ; un JAR
+        ``RS256`` est vérifié contre le JWKS du client (embarqué ou
+        ``jwks_uri``), avec les claims ``iss``/``aud`` exigés (OIDC Core
+        1.0 §10.1/§10.3). Refus (``invalid_request_object``) si le client
+        est inconnu, si la vérification n'est pas configurée, ou si la
+        signature et les claims échouent.
+        """
+        algorithm = _header_algorithm(document)
+        if algorithm == "" or algorithm in self._config.signing_algorithms:
+            return _claims(document, self._config.signing_algorithms)
+        if algorithm not in STANDARD_SIGNED_REQUEST_OBJECT_ALGORITHMS:
+            return {}, RequestObjectError(
+                error="invalid_request_object",
+                error_description=f"algorithme de request object non supporté : {algorithm!r}",
+            )
+        if client is None:
+            return {}, _malformed(
+                "client inconnu : la signature du request object n'est pas vérifiable"
+            )
+        if self._signed is None or not self._config.issuer:
+            return {}, RequestObjectError(
+                error="invalid_request",
+                error_description="vérification du request object signé non configurée",
+            )
+        result = await self._signed.verify(
+            token=document,
+            client=client,
+            issuer=self._config.issuer,
+            allowed_algorithms=STANDARD_SIGNED_REQUEST_OBJECT_ALGORITHMS,
+            required_claims=STANDARD_SIGNED_REQUIRED_CLAIMS,
+            enforce_jti=False,
+        )
+        if result.claims is None:
+            return {}, RequestObjectError(
+                error="invalid_request_object",
+                error_description=result.reason,
+            )
+        return {name: _stringify(value) for name, value in result.claims.items()}, None
 
     async def _resolve_fapi(
         self, params: Mapping[str, str], document: str, client: Client
@@ -241,6 +311,17 @@ class RequestObjectResolver:
             error="invalid_request_uri",
             error_description="request_uri injoignable ou refusée (RFC 9101 §5.2)",
         )
+
+
+def _header_algorithm(document: str) -> str:
+    """Retourne le claim ``alg`` de l'en-tête, ``""`` si le document est illisible."""
+    segments = document.split(".")
+    if len(segments) not in (2, 3):
+        return ""
+    header = _decode_segment(segments[0])
+    if header is None:
+        return ""
+    return str(header.get("alg", JWTAlgorithm.NONE.value))
 
 
 def _claims(

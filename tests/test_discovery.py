@@ -117,12 +117,15 @@ def test_discovery_advertises_request_object_signing_algorithms() -> None:
     usecase = DiscoveryUseCase(DiscoveryConfig(issuer=_ISSUER))
     document = run(usecase.execute())
 
-    # RFC 9101 §5.2 : ``alg=none`` pour les clients standards, ``PS256``/
-    # ``ES256`` pour le profil FAPI1 Advanced (FAPI1-ADV-5.2.2-1) ; les
-    # deux indicateurs restent vrais — la suite de certification émet un
-    # avertissement dès qu'un d'eux vaut ``false``.
+    # RFC 9101 §5.2 : ``none`` et ``RS256`` pour les clients standards
+    # (issue #188 — ``CheckDiscEndpointRequestObjectSigningAlgValues-
+    # SupportedContainsRS256``), ``PS256``/``ES256`` pour le profil FAPI1
+    # Advanced (FAPI1-ADV-5.2.2-1) ; les deux indicateurs ``request_…``
+    # restent vrais — la suite émet un avertissement dès qu'un d'eux vaut
+    # ``false``.
     assert document["request_object_signing_alg_values_supported"] == [
         "none",
+        "RS256",
         "PS256",
         "ES256",
     ]
