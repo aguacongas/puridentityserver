@@ -124,6 +124,39 @@ def test_jwks_endpoint_keys_are_verifiable_with_pyjwt() -> None:
         assert pyjwt.PyJWK(key, algorithm=key["alg"]).key is not None
 
 
+def test_jwks_endpoint_omits_the_members_inapplicable_to_a_key() -> None:
+    """RFC 7517 §4 : un JWK ne porte que les paramètres de sa clé.
+
+    Les membres absents (``crv``/``x``/``y`` pour une clé RSA) sont omis du
+    JSON et non sérialisés ``null`` : la condition
+    ``VerifyNewJwksHasNewSigningKey`` de la suite de certification lit ces
+    membres sans tolérer de ``null`` (elle compare le JWKS avant/après
+    rotation des clés de signature).
+    """
+    settings = Settings(
+        issuer=_ISSUER,
+        base_url=_ISSUER,
+        jwks_key_size=_KEY_SIZE,
+        jwks_algorithms=("RS256", "ES256"),
+    )
+    with TestClient(create_app(settings)) as client:
+        keys = client.get("/.well-known/jwks.json").json()["keys"]
+
+    for key in keys:
+        if key["kty"] == "RSA":
+            assert "n" in key
+            assert "e" in key
+            assert "crv" not in key
+            assert "x" not in key
+            assert "y" not in key
+        else:
+            assert "crv" in key
+            assert "x" in key
+            assert "y" in key
+            assert "n" not in key
+            assert "e" not in key
+
+
 def test_discovery_advertises_jwks_uri() -> None:
     settings = Settings(issuer=_ISSUER, base_url=_ISSUER, jwks_key_size=_KEY_SIZE)
     with TestClient(create_app(settings)) as client:

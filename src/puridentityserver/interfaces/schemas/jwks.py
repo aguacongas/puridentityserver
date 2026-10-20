@@ -15,7 +15,12 @@ class JWKKeyResponse(BaseModel):
     """Clé publique au format JSON Web Key (RFC 7517 §4).
 
     Les champs présents dépendent de la famille de clé : ``n``/``e`` pour
-    RSA, ``crv``/``x``/``y`` pour EC.
+    RSA, ``crv``/``x``/``y`` pour EC. Les membres inapplicables sont
+    **ommis** du JSON (et non sérialisés ``null``) : un JWK ne porte que
+    les paramètres de sa clé (RFC 7517 §4) - la suite de certification
+    lit ces membres sans tolérer de ``null``. L'omission est appliquée par
+    la route (``response_model_exclude_none``) : pydantic 2.13 n'accepte
+    plus ``exclude_none`` dans le ``ConfigDict`` du modèle.
     """
 
     kty: str
