@@ -207,9 +207,9 @@ workflow local.
 
 `certification/expected-failures/<plan>.json` déclare, au format du driver
 (`--expected-failures-file`, cf. `conformance-suite/scripts/run-test-plan.py`),
-les conditions de modules connues et non résolues (capacités OP absentes :
+les conditions de modules connues et non résolues (capacité OP absente :
 rotation des clés OP — module manuel autorisé en self-assertion par
-l'OIDF —, request objects RS256 des clients standards).
+l'OIDF).
 Le driver les classe en « expected failure » : le plan ne sort en code non nul
 que pour les écarts **inattendus** — la strictude #130 est préservée et les
 gaps documentés ne bloquent pas (mode witness). Chaque entrée non consommée
