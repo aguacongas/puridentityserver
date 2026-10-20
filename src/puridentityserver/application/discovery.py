@@ -25,6 +25,7 @@ from puridentityserver.domain.jwks import (
     CIBA_REQUEST_SIGNING_ALGORITHMS,
     DPOP_SIGNING_ALGORITHMS,
     JARM_SIGNING_ALGORITHMS,
+    USERINFO_SIGNING_ALGORITHMS,
     JWTAlgorithm,
 )
 from puridentityserver.interfaces.repositories.readers import (
@@ -70,6 +71,10 @@ class DiscoveryConfig:
     # ``jwt`` (JARM Final 1.0 §3, ``CheckDiscEndpointResponseModesSupportedContainsJwt``).
     response_modes_supported: tuple[str, ...] = ("query", "fragment", "form_post", "jwt")
     authorization_signing_alg_values_supported: tuple[str, ...] = JARM_SIGNING_ALGORITHMS
+    # Réponses UserInfo signées (OIDC Core 1.0 §5.3.2) : algorithmes admis
+    # pour ``userinfo_signed_response_alg`` à l'enregistrement (§5.3.1) —
+    # sans déclaration du client, la réponse reste en JSON non signé.
+    userinfo_signing_alg_values_supported: tuple[str, ...] = USERINFO_SIGNING_ALGORITHMS
     # Valeurs de ``prompt`` honorées sur /authorize (OIDC Core 1.0 §3.1.2.1) :
     # ``create`` = Initiating User Registration via OIDC 1.0 (issue #166) —
     # champ ``prompt_values_supported`` de convention, non mandate par Core.
@@ -156,6 +161,13 @@ class DiscoveryUseCase:
             # déclaré par les clients).
             "authorization_signing_alg_values_supported": list(
                 self._config.authorization_signing_alg_values_supported
+            ),
+            # Réponses UserInfo signées (OIDC Core 1.0 §5.3.2) : algorithme
+            # exigé pour ``userinfo_signed_response_alg`` (§5.3.1) — la
+            # réponse devient alors ``application/jwt``, ``iss``/``aud``
+            # obligatoires ; sans déclaration, JSON non signé.
+            "userinfo_signing_alg_values_supported": list(
+                self._config.userinfo_signing_alg_values_supported
             ),
             # Valeurs de ``prompt`` honorées (OIDC Core 1.0 §3.1.2.1 ;
             # ``create`` : Initiating User Registration via OIDC 1.0,

@@ -8,6 +8,7 @@ le jeton avec le ``kid`` correspondant (JWS compact, RFC 7519).
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import cast
 from uuid import uuid4
 
@@ -154,6 +155,27 @@ class PyJWTTokenManager:
         if sid:
             payload["sid"] = sid
         return await self._sign(JWTAlgorithm.RS256, payload)
+
+    async def create_userinfo_jwt(
+        self,
+        *,
+        issuer: str,
+        audience: str,
+        algorithm: JWTAlgorithm,
+        claims: Mapping[str, object],
+    ) -> str:
+        """Crée la réponse UserInfo signée en JWT (OIDC Core 1.0 §5.3.2).
+
+        ``iss``/``aud``/``iat`` priment sur les claims fournis : le JWT
+        signé doit porter l'émetteur et le ``client_id`` destinataire
+        (§5.3.2), une collision de nom ne peut les écraser. ``_sign``
+        emploie la clé active de l'algorithme avec son ``kid`` (JWKS).
+        """
+        now = int(datetime.now(timezone.utc).timestamp())
+        payload: dict[str, object] = {"iss": issuer, "aud": audience, "iat": now}
+        for name, value in claims.items():
+            payload.setdefault(name, value)
+        return await self._sign(algorithm, payload)
 
     async def validate_access_token(
         self,

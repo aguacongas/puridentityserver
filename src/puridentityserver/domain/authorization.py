@@ -225,6 +225,11 @@ class Client:
     les réponses de ce client quand ``response_mode=jwt`` est demandé :
     vide (défaut) ou valeur non publiée par l'OP = la demande est refusée
     ``unsupported_response_mode``.
+    ``userinfo_signed_response_alg`` (OIDC Core 1.0 §5.3.1, OIDC
+    Registration 1.0 §2.1) impose une réponse ``/userinfo`` signée en
+    ``application/jwt`` : vide (défaut) ou valeur non publiée par l'OP =
+    la réponse reste un JSON non signé, ``RS256`` la signe avec la clé OP
+    publiée au JWKS.
      ``frontchannel_logout_uri`` / ``backchannel_logout_uri`` (OIDC
      Front-Channel Logout 1.0 §2 / Back-Channel Logout 1.0 §2) : URI de
      terminaison de session du client appelées par ``/end_session`` après la
@@ -294,6 +299,11 @@ class Client:
     #: client ; ``""`` (défaut) signifie ``response_mode=jwt`` refusé en
     #: ``unsupported_response_mode``.
     authorization_signed_response_alg: str = ""
+    #: ``userinfo_signed_response_alg`` (OIDC Core 1.0 §5.3.1, OIDC
+    #: Registration 1.0 §2.1) : algorithme JWS signant la réponse
+    #: ``/userinfo`` de ce client en ``application/jwt`` ; ``""`` (défaut)
+    #: ou valeur non publiée par l'OP = réponse JSON non signée.
+    userinfo_signed_response_alg: str = ""
     frontchannel_logout_uri: str = ""
     frontchannel_logout_session_required: bool = False
     backchannel_logout_uri: str = ""

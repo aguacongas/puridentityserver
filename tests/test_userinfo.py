@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import hashlib
+import json
 from collections.abc import Awaitable
 from typing import TypeVar, cast
 from urllib.parse import parse_qs, urlparse
@@ -10,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 import jwt as pyjwt
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from jwt.algorithms import RSAAlgorithm
 
 from puridentityserver.application.userinfo import (
     UserInfoConfig,
@@ -18,12 +20,15 @@ from puridentityserver.application.userinfo import (
     UserInfoResponse,
     UserInfoUseCase,
 )
-from puridentityserver.domain.authorization import Scope
+from puridentityserver.domain.authorization import Client, Scope
 from puridentityserver.domain.jwks import JWTAlgorithm
 from puridentityserver.domain.revocation import RevokedToken, token_hash
 from puridentityserver.domain.userinfo import UserClaims
 from puridentityserver.infrastructure.claims import UserStoreClaimsProvider
-from puridentityserver.infrastructure.jwks import DefaultKeyManager
+from puridentityserver.infrastructure.jwks import DefaultKeyManager, first_active_key
+from puridentityserver.infrastructure.persistence.memory.clients import (
+    InMemoryClientRepository,
+)
 from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKeyPairRepository
 from puridentityserver.infrastructure.persistence.memory.revoked_tokens import (
     InMemoryRevokedTokenRepository,
@@ -43,6 +48,15 @@ _CLIENT_JSON = {
     "redirect_uris": ["https://app.example/callback"],
     "scopes": "openid profile email",
     "client_type": "confidential",
+}
+
+_SIGNED_CLIENT_JSON = {
+    "client_id": "signed-app",
+    "client_secret": "signed-secret",
+    "redirect_uris": ["https://app.example/callback"],
+    "scopes": "openid profile email",
+    "client_type": "confidential",
+    "userinfo_signed_response_alg": "RS256",
 }
 
 
@@ -313,17 +327,166 @@ class TestUserInfoUseCase:
         assert result.error == "invalid_token"
 
 
+class TestSignedUserinfo:
+    """Réponses UserInfo signées ``application/jwt`` (OIDC Core 1.0 §5.3.1, §5.3.2)."""
+
+    def _usecase(
+        self, client: Client
+    ) -> tuple[UserInfoUseCase, PyJWTTokenManager, DefaultKeyManager]:
+        """Construit le use case avec ``client`` dans le registre et ses propres clés."""
+        key_manager = DefaultKeyManager(InMemoryKeyPairRepository())
+        token_manager = PyJWTTokenManager(key_manager)
+        clients = InMemoryClientRepository()
+        run(clients.save(client))
+        usecase = UserInfoUseCase(
+            UserInfoConfig(issuer=_ISSUER),
+            token_manager,
+            UserStoreClaimsProvider(InMemoryUserRepository()),
+            InMemoryRevokedTokenRepository(),
+            clients=clients,
+        )
+        return usecase, token_manager, key_manager
+
+    @staticmethod
+    def _token(token_manager: PyJWTTokenManager, *, client_id: str) -> str:
+        """Émet un access token portant le claim privé ``client_id`` posé à l'émission."""
+        return run(
+            token_manager.create_access_token(
+                algorithm=JWTAlgorithm.RS256,
+                issuer=_ISSUER,
+                subject="alice",
+                audience=client_id,
+                expires_at=9999999999,
+                issued_at=1000000000,
+                scopes=frozenset({Scope.OPENID}),
+                additional_claims={"client_id": client_id},
+            )
+        )
+
+    def test_signs_response_for_rs256_client(self) -> None:
+        """§5.3.2 : ``iss``/``aud``/``iat`` en plus des claims, signature RS256 au ``kid``."""
+        client = Client(client_id="signed-app", userinfo_signed_response_alg="RS256")
+        usecase, token_manager, key_manager = self._usecase(client)
+        token = self._token(token_manager, client_id="signed-app")
+
+        result = run(usecase.execute(UserInfoRequest(access_token=token)))
+
+        assert not isinstance(result, UserInfoError)
+        assert result.claims == {"sub": "alice"}
+        header = pyjwt.get_unverified_header(result.signed_jwt)
+        assert header["alg"] == "RS256"
+        assert header["kid"]
+        key = run(first_active_key(key_manager, JWTAlgorithm.RS256))
+        payload = pyjwt.decode(
+            result.signed_jwt,
+            key.public_key_pem,
+            algorithms=["RS256"],
+            audience="signed-app",
+            issuer=_ISSUER,
+        )
+        assert payload["iss"] == _ISSUER
+        assert payload["aud"] == "signed-app"
+        assert payload["sub"] == "alice"
+        assert payload["iat"] > 0
+
+    def test_signs_response_for_fapi_client(self) -> None:
+        """Profil FAPI : ``PS256`` publiés et signables (FAPI1/FAPI2/CIBA discovery)."""
+        client = Client(client_id="fapi-app", userinfo_signed_response_alg="PS256")
+        usecase, token_manager, key_manager = self._usecase(client)
+        token = self._token(token_manager, client_id="fapi-app")
+
+        result = run(usecase.execute(UserInfoRequest(access_token=token)))
+
+        assert not isinstance(result, UserInfoError)
+        header = pyjwt.get_unverified_header(result.signed_jwt)
+        assert header["alg"] == "PS256"
+        key = run(first_active_key(key_manager, JWTAlgorithm.PS256))
+        payload = pyjwt.decode(
+            result.signed_jwt,
+            key.public_key_pem,
+            algorithms=["PS256"],
+            audience="fapi-app",
+            issuer=_ISSUER,
+        )
+        assert payload["sub"] == "alice"
+
+    def test_returns_json_for_client_without_registered_alg(self) -> None:
+        """Sans ``userinfo_signed_response_alg``, la réponse reste en JSON (§5.3.2)."""
+        client = Client(client_id="plain-app")
+        usecase, token_manager, _ = self._usecase(client)
+        token = self._token(token_manager, client_id="plain-app")
+
+        result = run(usecase.execute(UserInfoRequest(access_token=token)))
+
+        assert not isinstance(result, UserInfoError)
+        assert result.signed_jwt == ""
+
+    def test_returns_json_for_alg_not_published_by_op(self) -> None:
+        """§5.3.1 : un algorithme non publié (``HS256``) n'impose pas de signature."""
+        client = Client(client_id="hmac-app", userinfo_signed_response_alg="HS256")
+        usecase, token_manager, _ = self._usecase(client)
+        token = self._token(token_manager, client_id="hmac-app")
+
+        result = run(usecase.execute(UserInfoRequest(access_token=token)))
+
+        assert not isinstance(result, UserInfoError)
+        assert result.signed_jwt == ""
+
+    def test_returns_json_when_access_token_has_no_client_claim(self) -> None:
+        """Sans claim privé ``client_id``, le client émetteur n'est pas résolvable."""
+        client = Client(client_id="signed-app", userinfo_signed_response_alg="RS256")
+        usecase, token_manager, _ = self._usecase(client)
+        token = run(
+            token_manager.create_access_token(
+                algorithm=JWTAlgorithm.RS256,
+                issuer=_ISSUER,
+                subject="alice",
+                audience="signed-app",
+                expires_at=9999999999,
+                issued_at=1000000000,
+                scopes=frozenset({Scope.OPENID}),
+            )
+        )
+
+        result = run(usecase.execute(UserInfoRequest(access_token=token)))
+
+        assert not isinstance(result, UserInfoError)
+        assert result.signed_jwt == ""
+
+    def test_userinfo_jwt_primes_iss_and_aud_over_claims(self) -> None:
+        """§5.3.2 : ``iss``/``aud``/``iat`` ne peuvent pas être écrasés par les claims."""
+        token_manager = _make_token_manager()
+
+        token = run(
+            token_manager.create_userinfo_jwt(
+                issuer=_ISSUER,
+                audience="signed-app",
+                algorithm=JWTAlgorithm.RS256,
+                claims={"sub": "alice", "iss": "https://evil.example", "aud": "evil"},
+            )
+        )
+
+        payload = pyjwt.decode(token, options={"verify_signature": False})
+        assert payload["iss"] == _ISSUER
+        assert payload["aud"] == "signed-app"
+        assert payload["sub"] == "alice"
+        assert pyjwt.get_unverified_header(token)["alg"] == "RS256"
+
+
 class TestUserInfoEndpoint:
     """Couvre les endpoints HTTP ``GET``/``POST /userinfo`` (RFC 6750)."""
 
-    def _app(self) -> FastAPI:
+    def _app(self, *, clients_seed: tuple[dict[str, object], ...] = (_CLIENT_JSON,)) -> FastAPI:
         return create_app(
             Settings(
                 issuer=_ISSUER,
                 base_url=_ISSUER,
                 jwks_algorithms=("RS256",),
-                clients_seed=(_CLIENT_JSON,),
+                clients_seed=clients_seed,
                 api_resources_seed=(),
+                identity_seed_users={
+                    "alice": {"email": "alice@example.com", "password": "password"}
+                },
             )
         )
 
@@ -332,13 +495,20 @@ class TestUserInfoEndpoint:
         digest = hashlib.sha256(verifier.encode("ascii")).digest()
         return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
-    def _access_token(self, client: TestClient) -> str:
+    def _access_token(
+        self,
+        client: TestClient,
+        *,
+        client_id: str = "web-app",
+        client_secret: str = "super-secret",  # ruff: ignore[hardcoded-password-default] (secret du client seed de test)
+        redirect_uri: str = "https://app.example/callback",
+    ) -> str:
         auth = client.get(
             "/authorize",
             params={
                 "response_type": "code",
-                "client_id": "web-app",
-                "redirect_uri": "https://app.example/callback",
+                "client_id": client_id,
+                "redirect_uri": redirect_uri,
                 "scope": "openid profile email",
                 "code_challenge": self._s256_challenge("verifier-verifier"),
                 "code_challenge_method": "S256",
@@ -351,14 +521,51 @@ class TestUserInfoEndpoint:
             data={
                 "grant_type": "authorization_code",
                 "code": code,
-                "redirect_uri": "https://app.example/callback",
-                "client_id": "web-app",
-                "client_secret": "super-secret",
+                "redirect_uri": redirect_uri,
+                "client_id": client_id,
+                "client_secret": client_secret,
                 "code_verifier": "verifier-verifier",
             },
         )
         payload = response.json()
         return str(payload["access_token"])
+
+    def test_serves_signed_jwt_for_client_with_userinfo_alg(self) -> None:
+        """§5.3.2 : client RS256 → ``/userinfo`` en ``application/jwt`` vérifiable au JWKS."""
+        with TestClient(self._app(clients_seed=(_CLIENT_JSON, _SIGNED_CLIENT_JSON))) as client:
+            metadata = client.get("/.well-known/openid-configuration").json()
+            assert metadata["userinfo_signing_alg_values_supported"] == [
+                "PS256",
+                "ES256",
+                "RS256",
+            ]
+            login = client.post(
+                "/login",
+                data={"username": "alice@example.com", "password": "password", "next": "/"},
+                follow_redirects=False,
+            )
+            assert login.status_code == 302
+            token = self._access_token(
+                client, client_id="signed-app", client_secret="signed-secret"
+            )
+            response = client.get("/userinfo", headers={"Authorization": f"Bearer {token}"})
+            jwks = client.get("/.well-known/jwks.json").json()
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("application/jwt")
+        header = pyjwt.get_unverified_header(response.text)
+        assert header["alg"] == "RS256"
+        jwk = next(key for key in jwks["keys"] if key["kid"] == header["kid"])
+        payload = pyjwt.decode(
+            response.text,
+            RSAAlgorithm.from_jwk(json.dumps(jwk)),
+            algorithms=["RS256"],
+            audience="signed-app",
+            issuer=_ISSUER,
+        )
+        assert payload["iss"] == _ISSUER
+        assert payload["aud"] == "signed-app"
+        assert payload["sub"]  # sujet réel émis après login
 
     def test_returns_claims_for_valid_bearer_token(self) -> None:
         with TestClient(self._app()) as client:

@@ -37,7 +37,16 @@ Le scénario vérifie :
     après une nouvelle connexion (ESID 1.0 §4) ;
 18. un client `public` (défaut) → `sub` réelle, non dérivée ;
 19. `POST /register` avec un `sector_identifier_uri` inaccessible ou
-    incohérent → `400 invalid_client_metadata`.
+    incohérent → `400 invalid_client_metadata` ;
+20. le discovery annonce `userinfo_signing_alg_values_supported` =
+    `["PS256", "ES256", "RS256"]` ;
+21. `POST /register` avec `userinfo_signed_response_alg: "RS256"` → `201` +
+    métadonnée échoée (OIDC Core 1.0 §5.3.1) ;
+22. `userinfo_signed_response_alg: "HS256"` (non publié par l'OP) →
+    `400 invalid_client_metadata` ;
+23. `/userinfo` de ce client → `application/jwt`, signature RS256 vérifiée
+    contre le JWKS, avec les claims `iss` / `aud` / `sub` (OIDC Core 1.0 §5.3.2) ;
+24. un client sans la métadonnée → `/userinfo` reste `application/json` non signé.
 
 ## Lancement
 
@@ -68,6 +77,11 @@ Démarrage du serveur puridentityserver (config générée par le test)...
   [5/7] client ephemeral -> sub constante en session, nouvelle jamais réutilisée OK
   [6/7] client public (défaut) -> sub réelle non dérivée OK
   [7/7] sector_identifier_uri incohérent -> 400 invalid_client_metadata OK
+  [1/5] discovery userinfo_signing_alg_values_supported = [PS256, ES256, RS256] OK
+  [2/5] POST /register userinfo_signed_response_alg=RS256 -> 201 + écho OK
+  [3/5] userinfo_signed_response_alg=HS256 (non publié) -> 400 OK
+  [4/5] /userinfo -> application/jwt RS256 vérifiée au JWKS (iss/aud/sub) OK
+  [5/5] client sans métadonnée -> /userinfo reste application/json OK
 
 === SCÉNARIO OK en X.Xs ===
 ```
@@ -138,3 +152,36 @@ curl -s -X DELETE http://127.0.0.1:8000/register/<client_id> \
 Le client ainsi enregistré est un client **confidentiel** utilisable
 immédiatement dans les autres samples (Authorization Code, secret client,
 sans PKCE obligatoire) : le secret prouvé à l'étape 7 du smoke test.
+
+## Réponses UserInfo signées (OIDC Core 1.0 §5.3.1 / §5.3.2)
+
+```bash
+# enregistrement d'un client exigeant une réponse /userinfo signée RS256
+curl -s -X POST http://127.0.0.1:8000/register \
+  -H "Authorization: Bearer dev-registrar-token" \
+  -H "Content-Type: application/json" \
+  -d '{"redirect_uris": ["http://127.0.0.1:5173/callback"],
+       "scope": "openid profile",
+       "userinfo_signed_response_alg": "RS256"}'
+# → 201 avec "userinfo_signed_response_alg": "RS256" échoé dans la réponse
+# (PS256 / ES256 / RS256 admis ; toute autre valeur -> 400 invalid_client_metadata)
+```
+
+Après un flow Authorization Code classique avec ce client, `GET /userinfo`
+avec l'access token renvoie un **JWT RS256** servi en `application/jwt` au
+lieu du JSON, vérifiable contre `/.well-known/jwks.json` :
+
+```python
+header = jwt.get_unverified_header(userinfo_jwt)  # {"alg": "RS256", "kid": ...}
+claims = jwt.decode(  # clé du JWKS portant le même kid
+    userinfo_jwt,
+    jwk_public_key,
+    algorithms=["RS256"],
+    audience="<client_id>",
+    issuer="http://127.0.0.1:8000",
+)
+# claims = {"iss": ..., "sub": ..., "aud": "<client_id>", "iat": ..., profil...}
+```
+
+Sans la métadonnée à l'enregistrement, la réponse reste le JSON non signé
+historique : la signature n'est imposée que si le client la demande.

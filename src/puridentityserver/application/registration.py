@@ -72,6 +72,7 @@ from puridentityserver.domain.jwe import (
 from puridentityserver.domain.jwks import (
     CIBA_REQUEST_SIGNING_ALGORITHMS,
     SYMMETRIC_ALGORITHMS,
+    USERINFO_SIGNING_ALGORITHMS,
     JWTAlgorithm,
 )
 from puridentityserver.domain.key_validation import (
@@ -167,6 +168,7 @@ class RegistrationMetadata:
     par_required: bool = False
     require_consent: bool = False
     id_token_signed_response_alg: str = ""
+    userinfo_signed_response_alg: str = ""
     id_token_encrypted_response_alg: str = ""
     id_token_encrypted_response_enc: str = ""
     frontchannel_logout_uri: str = ""
@@ -247,6 +249,7 @@ class ClientRegistration:
     require_pushed_authorization_requests: bool = False
     require_consent: bool = False
     id_token_signed_response_alg: str = ""
+    userinfo_signed_response_alg: str = ""
     id_token_encrypted_response_alg: str = ""
     id_token_encrypted_response_enc: str = ""
     frontchannel_logout_uri: str = ""
@@ -352,6 +355,7 @@ class RegistrationUseCase:
                 metadata.tls_client_certificate_bound_access_tokens
             ),
             id_token_signed_response_alg=metadata.id_token_signed_response_alg,
+            userinfo_signed_response_alg=metadata.userinfo_signed_response_alg,
             id_token_encrypted_response_alg=metadata.id_token_encrypted_response_alg,
             id_token_encrypted_response_enc=metadata.id_token_encrypted_response_enc,
             frontchannel_logout_uri=metadata.frontchannel_logout_uri,
@@ -444,6 +448,7 @@ class RegistrationUseCase:
                 metadata.tls_client_certificate_bound_access_tokens
             ),
             id_token_signed_response_alg=metadata.id_token_signed_response_alg,
+            userinfo_signed_response_alg=metadata.userinfo_signed_response_alg,
             id_token_encrypted_response_alg=metadata.id_token_encrypted_response_alg,
             id_token_encrypted_response_enc=metadata.id_token_encrypted_response_enc,
             frontchannel_logout_uri=metadata.frontchannel_logout_uri,
@@ -877,6 +882,7 @@ class RegistrationUseCase:
                 client.tls_client_certificate_bound_access_tokens
             ),
             id_token_signed_response_alg=client.id_token_signed_response_alg,
+            userinfo_signed_response_alg=client.userinfo_signed_response_alg,
             id_token_encrypted_response_alg=client.id_token_encrypted_response_alg,
             id_token_encrypted_response_enc=client.id_token_encrypted_response_enc,
             frontchannel_logout_uri=client.frontchannel_logout_uri,
@@ -920,6 +926,9 @@ def _parse_metadata(
     sector_identifier_uri = _parse_sector_identifier_uri(raw)
     if isinstance(sector_identifier_uri, RegistrationError):
         return sector_identifier_uri
+    userinfo_signing_alg = _parse_userinfo_signing_alg(raw)
+    if isinstance(userinfo_signing_alg, RegistrationError):
+        return userinfo_signing_alg
     extras = _parse_metadata_extras(raw, known_scopes)
     if isinstance(extras, RegistrationError):
         return extras
@@ -963,6 +972,7 @@ def _parse_metadata(
         par_required=par_required,
         require_consent=require_consent,
         id_token_signed_response_alg=id_token_signing_alg,
+        userinfo_signed_response_alg=userinfo_signing_alg,
         id_token_encrypted_response_alg=id_token_encryption_alg,
         id_token_encrypted_response_enc=id_token_encryption_enc,
         frontchannel_logout_uri=frontchannel_logout_uri,
@@ -1347,6 +1357,27 @@ def _parse_id_token_signing_alg(raw: dict[str, object]) -> str | RegistrationErr
         return RegistrationError(
             "invalid_client_metadata",
             "id_token_signed_response_alg non supporté (attendu un algorithme JWS)",
+        )
+    return value
+
+
+def _parse_userinfo_signing_alg(raw: dict[str, object]) -> str | RegistrationError:
+    """Lit ``userinfo_signed_response_alg`` (OIDC Core §5.3.1, RFC 7591 §2.1).
+
+    Vide par défaut (réponse ``/userinfo`` en JSON non signé) ; toute
+    autre valeur doit être un algorithme publié par l'OP au discovery
+    sous ``userinfo_signing_alg_values_supported`` (``RS256`` seul à ce
+    stade) — la réponse devient alors un JWT ``application/jwt``.
+    """
+    value = raw.get("userinfo_signed_response_alg")
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str) or value not in USERINFO_SIGNING_ALGORITHMS:
+        return RegistrationError(
+            "invalid_client_metadata",
+            "userinfo_signed_response_alg non supporté (attendu : "
+            + ", ".join(USERINFO_SIGNING_ALGORITHMS)
+            + ")",
         )
     return value
 

@@ -130,6 +130,7 @@ def _parse_client(raw: dict[str, object]) -> Client:
             raw.get("tls_client_certificate_bound_access_tokens")
         ),
         id_token_signed_response_alg=str(raw.get("id_token_signed_response_alg", "")),
+        userinfo_signed_response_alg=str(raw.get("userinfo_signed_response_alg", "")),
         authorization_signed_response_alg=str(raw.get("authorization_signed_response_alg", "")),
         id_token_encrypted_response_alg=str(raw.get("id_token_encrypted_response_alg", "")),
         id_token_encrypted_response_enc=str(raw.get("id_token_encrypted_response_enc", "")),

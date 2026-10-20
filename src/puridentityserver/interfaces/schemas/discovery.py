@@ -12,6 +12,7 @@ from puridentityserver.domain.jwks import (
     ALL_SIGNING_ALGORITHMS,
     DPOP_SIGNING_ALGORITHMS,
     JARM_SIGNING_ALGORITHMS,
+    USERINFO_SIGNING_ALGORITHMS,
 )
 
 
@@ -87,6 +88,12 @@ class DiscoveryDocument(BaseModel):
     )
     authorization_signing_alg_values_supported: list[str] = Field(
         default_factory=lambda: list(JARM_SIGNING_ALGORITHMS)
+    )
+    # Réponses UserInfo signées (OIDC Core 1.0 §5.3.2) : algorithme admis
+    # pour ``userinfo_signed_response_alg`` (§5.3.1) — sans déclaration du
+    # client, la réponse reste en JSON non signé.
+    userinfo_signing_alg_values_supported: list[str] = Field(
+        default_factory=lambda: list(USERINFO_SIGNING_ALGORITHMS)
     )
     # Valeurs de ``prompt`` honorées (OIDC Core 1.0 §3.1.2.1 ; ``create`` :
     # Initiating User Registration via OIDC 1.0, issue #166 — champ de

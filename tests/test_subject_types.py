@@ -208,10 +208,10 @@ class TestDerivation:
 
         assert display_subject(client, "", seed=_SEED) == ""
 
-    def test_access_token_claims_empty_for_public_client(self) -> None:
+    def test_access_token_claims_identify_public_client(self) -> None:
         client = Client(client_id="c", subject_type=SubjectType.PUBLIC)
 
-        assert access_token_subject_claims(client, "alice") == {}
+        assert access_token_subject_claims(client, "alice") == {"client_id": "c"}
 
     def test_access_token_claims_identify_pairwise_client(self) -> None:
         client = Client(client_id="c", subject_type=SubjectType.PAIRWISE)

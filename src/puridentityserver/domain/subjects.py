@@ -84,14 +84,16 @@ def display_subject(client: Client, subject: str, *, material: str = "", seed: s
 def access_token_subject_claims(
     client: Client, subject: str, *, material: str = ""
 ) -> dict[str, str]:
-    """Claims privés d'access token permettant à ``/userinfo`` de dériver.
+    """Claims privés d'access token identifiant le client émetteur du jeton.
 
-    ``client_id`` identifie le client du jeton (portée d'émission de la
-    ``sub``) ; ``subject_material`` porte la matière de session
-    ephemeral. Rien n'est ajouté pour un client ``public`` : le payload
-    des clients existants reste strictement identique.
+    ``client_id`` identifie le client du jeton : ``/userinfo`` le recharge
+    pour dériver la ``sub`` (OIDC Core 1.0 §8.1) et décider de signer sa
+    réponse (§5.3.2) — il est donc émis dès qu'un sujet l'est, quel que
+    soit le ``subject_type``. ``subject_material`` porte la matière de
+    session ephemeral ; sans sujet (grant ``client_credentials``), rien
+    n'est ajouté.
     """
-    if client.subject_type is SubjectType.PUBLIC or not subject:
+    if not subject:
         return {}
     claims = {"client_id": client.client_id}
     if client.subject_type is SubjectType.EPHEMERAL and material:

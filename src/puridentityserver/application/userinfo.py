@@ -14,6 +14,11 @@ Un access token lié à un certificat client mTLS (RFC 8705 §3.3, claim
 ``cnf.x5t#S256``) n'est accepté que présenté avec ce certificat, lu par
 le resource server depuis le contexte TLS ou les en-têtes du proxy de
 terminaison.
+
+Quand le client émetteur a enregistré ``userinfo_signed_response_alg``
+(OIDC Core 1.0 §5.3.1), la réponse réussie est un JWT signé RS256 servi
+en ``application/jwt`` (§5.3.2) portant ``iss`` / ``aud`` / ``iat`` —
+sinon elle reste un JSON ``application/json`` non signé.
 """
 
 from __future__ import annotations
@@ -25,8 +30,9 @@ from puridentityserver.application.claims_request import (
     requested_userinfo_claims,
 )
 from puridentityserver.application.tls_binding import certificate_binding_error
-from puridentityserver.domain.authorization import ClientCertificate
+from puridentityserver.domain.authorization import Client, ClientCertificate
 from puridentityserver.domain.dpop import access_token_hash
+from puridentityserver.domain.jwks import USERINFO_SIGNING_ALGORITHMS, JWTAlgorithm
 from puridentityserver.domain.revocation import token_hash
 from puridentityserver.domain.subjects import display_subject
 from puridentityserver.interfaces.domain.dpop import DpopProofValidator, DpopValidationError
@@ -73,9 +79,16 @@ class UserInfoRequest:
 
 @dataclass(frozen=True, slots=True)
 class UserInfoResponse:
-    """Claims utilisateur renvoyés au client, filtrés par scopes accordés."""
+    """Claims utilisateur renvoyés au client, filtrés par scopes accordés.
+
+    ``signed_jwt`` porte la réponse sérialisée en JWT signé
+    (``application/jwt``, OIDC Core 1.0 §5.3.2) quand le client émetteur
+    a enregistré ``userinfo_signed_response_alg`` ; ``""`` = réponse
+    JSON classique.
+    """
 
     claims: dict[str, object]
+    signed_jwt: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,8 +132,9 @@ class UserInfoUseCase:
         rejeté — aucun lien ne pouvant être prouvé sans validateur.
         ``clients`` recharge le client émetteur du jeton (claim privé
         ``client_id``) pour dériver la ``sub`` affichée (OIDC Core 1.0
-        §8.1, ESID 1.0 §4) : sans injection, la ``sub`` du jeton est
-        rendue telle quelle (client ``public``).
+        §8.1, ESID 1.0 §4) et résoudre sa ``userinfo_signed_response_alg``
+        (§5.3.1) : sans injection, la ``sub`` du jeton est rendue telle
+        quelle (client ``public``) et la réponse jamais signée.
         """
         self._config = config
         self._token_manager = token_manager
@@ -131,7 +145,7 @@ class UserInfoUseCase:
         self._clients = clients
 
     async def execute(self, request: UserInfoRequest) -> UserInfoResponse | UserInfoError:
-        """Traite la requête et retourne les claims filtrés ou une erreur."""
+        """Traite la requête et retourne les claims (signés si demandés) ou une erreur."""
         claims = await self._token_manager.validate_access_token(
             token=request.access_token, issuer=self._config.issuer
         )
@@ -159,28 +173,34 @@ class UserInfoUseCase:
         allowed = await self._allowed_claims(str(claims.get("scope", "")))
         allowed |= requested_userinfo_claims(claims.get("claims"))
         user_claims = await self._claims_provider.get_claims(str(subject))
-
-        return UserInfoResponse(
+        client = await self._emitting_client(claims)
+        response = UserInfoResponse(
             claims={
-                "sub": await self._display_sub(claims, str(subject)),
+                "sub": self._displayed_sub(client, str(subject), claims),
                 **{name: value for name, value in user_claims.claims.items() if name in allowed},
             }
         )
+        return await self._sign_response(client, response)
 
-    async def _display_sub(self, claims: dict[str, object], subject: str) -> str:
-        """``sub`` à rendre : dérivée pour le client émetteur du jeton (§8.1).
+    async def _emitting_client(self, claims: dict[str, object]) -> Client | None:
+        """Client émetteur du jeton lu dans le claim privé ``client_id``.
 
-        Le client est rechargé depuis le claim privé ``client_id`` de
-        l'access token ; ``subject_material`` (claim privé ephemeral)
-        reprend la matière posée à l'émission pour reproduire exactement
-        la ``sub`` de l'``id_token``. Sans ``client_id`` (client
-        ``public``) ou sans client résolu, le sujet du jeton est rendu
-        tel quel — le profil, lui, est toujours résolu sur le sujet réel.
+        ``None`` sans ``client_id`` ou sans registre injecté : le sujet
+        est alors rendu tel quel et la réponse jamais signée.
         """
         client_id = claims.get("client_id")
         if not isinstance(client_id, str) or not client_id or self._clients is None:
-            return subject
-        client = await self._clients.find_by_id(client_id)
+            return None
+        return await self._clients.find_by_id(client_id)
+
+    def _displayed_sub(self, client: Client | None, subject: str, claims: dict[str, object]) -> str:
+        """``sub`` à rendre : dérivée pour le client émetteur (§8.1), telle quelle sinon.
+
+        ``subject_material`` (claim privé ephemeral) reprend la matière
+        posée à l'émission pour reproduire exactement la ``sub`` de
+        l'``id_token`` — le profil, lui, est toujours résolu sur le
+        sujet réel.
+        """
         if client is None:
             return subject
         material = claims.get("subject_material")
@@ -190,6 +210,30 @@ class UserInfoUseCase:
             material=material if isinstance(material, str) else "",
             seed=self._config.subject_seed,
         )
+
+    async def _sign_response(
+        self, client: Client | None, response: UserInfoResponse
+    ) -> UserInfoResponse:
+        """Signe la réponse en JWT ``application/jwt`` si le client l'a enregistrée (§5.3.2).
+
+        :func:`userinfo_signing_alg` n'oppose qu'un algorithme publié par
+        l'OP (``userinfo_signing_alg_values_supported``) : sans
+        déclaration, la réponse reste le JSON sérialisé. Sinon elle
+        devient un JWT portant ``iss``, ``aud`` (``client_id``) et
+        ``iat`` en plus des claims, vérifiable sur le ``jwks_uri``.
+        """
+        if client is None:
+            return response
+        algorithm = userinfo_signing_alg(client)
+        if not algorithm:
+            return response
+        signed_jwt = await self._token_manager.create_userinfo_jwt(
+            issuer=self._config.issuer,
+            audience=client.client_id,
+            algorithm=JWTAlgorithm(algorithm),
+            claims=response.claims,
+        )
+        return UserInfoResponse(claims=response.claims, signed_jwt=signed_jwt)
 
     async def _validate_dpop_binding(
         self, request: UserInfoRequest, claims: dict[str, object]
@@ -256,6 +300,19 @@ class UserInfoUseCase:
         ensemble.
         """
         return await allowed_scope_claims(scope, self._identity_resources)
+
+
+def userinfo_signing_alg(client: Client) -> str:
+    """Algorithme de signature de la réponse UserInfo du client, sinon ``""``.
+
+    Le ``userinfo_signed_response_alg`` déclaré à l'enregistrement n'est
+    retenu que s'il figure parmi ``userinfo_signing_alg_values_supported``
+    (OIDC Core 1.0 §5.3.1, OIDC Registration 1.0 §2.1) ; toute autre
+    valeur rend ``""`` — la réponse reste un JSON non signé.
+    """
+    if client.userinfo_signed_response_alg not in USERINFO_SIGNING_ALGORITHMS:
+        return ""
+    return client.userinfo_signed_response_alg
 
 
 def _bound_jkt(claims: dict[str, object]) -> str:
