@@ -40,6 +40,12 @@ port = 8000
 storage_type = "sql"
 storage_dsn = "sqlite:///puridentityserver.db"
 
+# Clés de signature RSA 2048 (au lieu du défaut 4096) : la certification
+# rejoue la rotation des clés de signature (module oidcc-server-rotate-keys),
+# qui génère une paire par publication du JWKS. 2048 bits reste conforme aux
+# profils FAPI (RSA >= 2048) et rend la génération ~8x plus rapide.
+jwks_key_size = 2048
+
 registration_enabled = true
 registration_initial_access_token_mode = "disabled"
 

@@ -264,11 +264,23 @@ log "démarrage de l'OP (uvicorn :$OP_PORT, issuer https://$OP_ALIAS:$MTLS_PORT)
 # request_uri sur localhost.emobix.co.uk (→127.0.0.1), destination loopback
 # refusée par la garde anti-SSRF tant que l'OP bind 0.0.0.0 (issue #152).
 # SSL_CERT_FILE : certificat SAN de la suite (étape 3.5) + bundle système.
-PURIDENTITYSERVER_SETTINGS_FILE="$(winpath "$LOCAL_DIR/op-config.toml")" \
-PURIDENTITYSERVER_HOST="$OP_HOST" \
-PURIDENTITYSERVER_PORT="$OP_PORT" \
-PURIDENTITYSERVER_REQUEST_URI_ALLOW_LOCAL_TARGETS=true \
-SSL_CERT_FILE="$(winpath "$SUITE_TRUST")" \
+# Rotation proactive des clés de signature (OIDC Core 1.0 §10.1) : activée par
+# le harnais pour le seul plan portant le module oidcc-server-rotate-keys
+# (run-plan.sh exporte ces variables ; absentes, l'OP garde son comportement
+# par défaut - aucune rotation).
+op_env=()
+[ -n "${OP_JWKS_ROTATION_SECONDS:-}" ] &&
+  op_env+=("PURIDENTITYSERVER_JWKS_ROTATION_SECONDS=$OP_JWKS_ROTATION_SECONDS")
+[ -n "${OP_JWKS_ROTATION_ALGORITHMS:-}" ] &&
+  op_env+=("PURIDENTITYSERVER_JWKS_ROTATION_ALGORITHMS=$OP_JWKS_ROTATION_ALGORITHMS")
+[ -n "${OP_JWKS_RETAINED_KEYS:-}" ] &&
+  op_env+=("PURIDENTITYSERVER_JWKS_RETAINED_KEYS=$OP_JWKS_RETAINED_KEYS")
+env "${op_env[@]+"${op_env[@]}"}" \
+  PURIDENTITYSERVER_SETTINGS_FILE="$(winpath "$LOCAL_DIR/op-config.toml")" \
+  PURIDENTITYSERVER_HOST="$OP_HOST" \
+  PURIDENTITYSERVER_PORT="$OP_PORT" \
+  PURIDENTITYSERVER_REQUEST_URI_ALLOW_LOCAL_TARGETS=true \
+  SSL_CERT_FILE="$(winpath "$SUITE_TRUST")" \
   nohup uv run python -m puridentityserver \
     >"$LOCAL_DIR/op.log" 2>&1 & echo $! > "$LOCAL_DIR/op.pid"
 

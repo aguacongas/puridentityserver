@@ -207,17 +207,21 @@ workflow local.
 
 `certification/expected-failures/<plan>.json` déclare, au format du driver
 (`--expected-failures-file`, cf. `conformance-suite/scripts/run-test-plan.py`),
-les conditions de modules connues et non résolues (capacité OP absente :
-rotation des clés OP — module manuel autorisé en self-assertion par
-l'OIDF).
-Le driver les classe en « expected failure » : le plan ne sort en code non nul
-que pour les écarts **inattendus** — la strictude #130 est préservée et les
-gaps documentés ne bloquent pas (mode witness). Chaque entrée non consommée
-(condition résolue entre-temps, ex. capacité implémentée) fait échec
-`EXPECTED_*_NOT_HAPPEN` : le fichier doit être purgé dès qu'une capacité est
-livrée. `run-plan.sh` et le job plan de `certification-local.yml` appliquent
-le fichier quand il existe (chemin et comportement identiques) ; le workflow
-hébergé reste witness pur (`continue-on-error` sur le lancement).
+les conditions de modules connues et non résolues. **Les neuf plans locaux
+sont aujourd'hui sans écart** : le dossier ne contient plus de fichier (la
+rotation des clés de signature de l'OP est livrée — issue #189, le module
+`oidcc-server-rotate-keys` passe ; le rejeu local affiche 17 PASSED / 6 REVIEW
+/ 0 FAILED sur le plan `dynamic`).
+
+Le driver classe ces conditions en « expected failure » : le plan ne sort en
+code non nul que pour les écarts **inattendus** — la strictude #130 est
+préservée et les gaps documentés ne bloquent pas (mode witness). Chaque entrée
+non consommée (condition résolue entre-temps, ex. capacité implémentée) fait
+échec `EXPECTED_*_NOT_HAPPEN` : le fichier doit être purgé dès qu'une
+capacité est livrée. `run-plan.sh` et le job plan de
+`certification-local.yml` appliquent le fichier quand il existe (chemin et
+comportement identiques) ; le workflow hébergé reste witness pur
+(`continue-on-error` sur le lancement).
 
 En CI : le workflow `Certification OIDC (Local)`
 (`.github/workflows/certification-local.yml`) exécute exactement cette
