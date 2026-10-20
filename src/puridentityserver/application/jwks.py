@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from puridentityserver.domain.jwks import (
     ALL_SIGNING_ALGORITHMS,
@@ -22,14 +23,39 @@ def _managed_algorithms(algorithms: tuple[JWTAlgorithm, ...]) -> tuple[JWTAlgori
     return tuple(algorithm for algorithm in algorithms if algorithm not in SYMMETRIC_ALGORITHMS)
 
 
+def _age_seconds(created_at: datetime, now: datetime) -> float:
+    """Âge d'une clé en secondes (les horodatages naïfs sont lus en UTC).
+
+    Les magasins relationnels (SQLite) ne conservent pas le fuseau : la
+    lecture peut renvoyer un horodatage naïf, que l'on interprets en UTC.
+    """
+    reference = (
+        created_at if created_at.tzinfo is not None else created_at.replace(tzinfo=timezone.utc)
+    )
+    return (now - reference).total_seconds()
+
+
 @dataclass(frozen=True, slots=True)
 class JWKSetConfig:
-    """Paramètres de gestion des clés JWKS."""
+    """Paramètres de gestion des clés JWKS.
+
+    ``rotation_days`` / ``grace_period_days`` pilotent la rotation
+    **journalière** (une clé plus vieille que ``rotation_days`` est retirée,
+    puis supprimée au-delà de la période de grâce). ``rotation_seconds``
+    ajoute une rotation **proactive** : au-delà de cet âge (en secondes), la
+    clé de signature est remplacée à la prochaine publication du JWKS ; ``0``
+    (défaut) la désactive. ``rotation_algorithms`` restreint la rotation
+    proactive à certains algorithmes (vide = tous). ``retained_keys`` borne
+    le nombre de clés retirées encore publiées au JWKS (OIDC Core 1.0 §10.1).
+    """
 
     key_size: int = 4096
     algorithms: tuple[JWTAlgorithm, ...] = ALL_SIGNING_ALGORITHMS
     rotation_days: int = 90
     grace_period_days: int = 7
+    rotation_seconds: float = 0.0
+    rotation_algorithms: tuple[JWTAlgorithm, ...] = ()
+    retained_keys: int = 1
 
 
 class JWKSetUseCase:
@@ -56,11 +82,25 @@ class JWKSetUseCase:
 
     async def get_active_keys(self) -> list[KeyPair]:
         """Retourne les clés actives prêtes à être exposées dans le JWKS."""
-        await self._rotate_if_needed()
+        await self._mark_expired_keys()
         return await self._key_manager.get_active_keys()
 
-    async def _rotate_if_needed(self) -> None:
-        """Effectue la rotation : marque les clés expirées, nettoie les obsolètes."""
+    async def get_published_keys(self) -> list[KeyPair]:
+        """Retourne les clés publiées au JWKS : actives et retirées retenues.
+
+        OIDC Core 1.0 §10.1 : le JWK Set SHOULD conserver les clés de
+        signature récemment retirées pour une transition en douceur — un
+        jeton signé juste avant la rotation reste donc vérifiable.
+        """
+        await self._mark_expired_keys()
+        await self._rotate_signing_keys()
+        await self._key_manager.prune_inactive_keys(self._config.retained_keys)
+        keys = await self._key_manager.get_active_keys()
+        keys.extend(await self._key_manager.get_retained_keys(self._config.retained_keys))
+        return keys
+
+    async def _mark_expired_keys(self) -> None:
+        """Applique la politique de rotation journalière (retrait puis purge)."""
         removed = await self._key_manager.mark_expired_keys(
             self._config.rotation_days, self._config.grace_period_days
         )
@@ -73,3 +113,35 @@ class JWKSetUseCase:
                 ]
                 if not active:
                     await self._key_manager.ensure_active_key(self._config.key_size, algorithm)
+
+    async def _rotate_signing_keys(self) -> None:
+        """Fait pivoter les clés de signature trop anciennes.
+
+        La rotation est **paresseuse** : elle est déclenchée par la
+        publication du JWKS (et non par une tâche de fond), seule interaction
+        possible avec l'OP entre deux relevés du module de certification
+        ``oidcc-server-rotate-keys``. La clé retirée reste publiée pendant
+        la rétention (OIDC Core 1.0 §10.1).
+        """
+        if self._config.rotation_seconds <= 0:
+            return
+        now = datetime.now(timezone.utc)
+        for algorithm in self._rotation_algorithms():
+            active = [
+                key
+                for key in await self._key_manager.get_active_keys()
+                if key.algorithm is algorithm
+            ]
+            if not active:
+                await self._key_manager.ensure_active_key(self._config.key_size, algorithm)
+                continue
+            current = max(active, key=lambda key: key.created_at)
+            if _age_seconds(current.created_at, now) < self._config.rotation_seconds:
+                continue
+            await self._key_manager.rotate_key(self._config.key_size, algorithm)
+
+    def _rotation_algorithms(self) -> tuple[JWTAlgorithm, ...]:
+        """Algorithmes concernés par la rotation proactive (vide = tous)."""
+        if self._config.rotation_algorithms:
+            return self._config.rotation_algorithms
+        return _managed_algorithms(self._config.algorithms)

@@ -17,6 +17,7 @@ from puridentityserver.domain.jwks import ALL_SIGNING_ALGORITHMS, JWTAlgorithm, 
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
 from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKeyPairRepository
 from puridentityserver.infrastructure.settings import Settings
+from puridentityserver.infrastructure.tokens import PyJWTTokenManager
 from puridentityserver.interfaces.schemas.jwks import JWKKeyResponse
 from puridentityserver.server import create_app
 
@@ -405,3 +406,157 @@ def _plant_keys(manager: DefaultKeyManager, algorithm: JWTAlgorithm, *ages_days:
                 )
             )
         )
+
+
+def _plant_key(manager: DefaultKeyManager, algorithm: JWTAlgorithm, age: timedelta) -> KeyPair:
+    """Remplit le magasin avec une clé datée artificiellement (précision seconde)."""
+    aged = replace(
+        run(manager.generate_key_pair(_KEY_SIZE, algorithm)),
+        created_at=datetime.now(timezone.utc) - age,
+    )
+    run(manager._repository.save(aged))
+    return aged
+
+
+class TestSigningKeyRotation:
+    """Rotation proactive des clés de signature (OIDC Core 1.0 §10.1)."""
+
+    def test_rotation_is_disabled_by_default(self) -> None:
+        """Sans période configurée, la clé de signature ne tourne pas."""
+        manager = _manager()
+        planted = _plant_key(manager, JWTAlgorithm.RS256, timedelta(seconds=30))
+        usecase = JWKSetUseCase(
+            JWKSetConfig(key_size=_KEY_SIZE, algorithms=(JWTAlgorithm.RS256,)), manager
+        )
+
+        published = run(usecase.get_published_keys())
+
+        assert [key.kid for key in published] == [planted.kid]
+
+    def test_publication_rotates_a_key_older_than_the_period(self) -> None:
+        """La publication du JWKS fait pivoter la clé de signature Trop ancienne."""
+        manager = _manager()
+        planted = _plant_key(manager, JWTAlgorithm.RS256, timedelta(seconds=30))
+        usecase = JWKSetUseCase(
+            JWKSetConfig(
+                key_size=_KEY_SIZE,
+                algorithms=(JWTAlgorithm.RS256,),
+                rotation_seconds=10.0,
+            ),
+            manager,
+        )
+
+        published = run(usecase.get_published_keys())
+
+        active = [key for key in published if key.is_active]
+        retired = [key for key in published if not key.is_active]
+        assert len(active) == 1
+        assert active[0].kid != planted.kid
+        # OIDC Core 1.0 §10.1 : la clé retirée reste publiée (transition en douceur).
+        assert [key.kid for key in retired] == [planted.kid]
+
+    def test_rotation_only_applies_to_the_configured_algorithms(self) -> None:
+        """``rotation_algorithms`` restreint la rotation proactive."""
+        manager = _manager()
+        rsa_key = _plant_key(manager, JWTAlgorithm.RS256, timedelta(seconds=30))
+        ec_key = _plant_key(manager, JWTAlgorithm.ES256, timedelta(seconds=30))
+        usecase = JWKSetUseCase(
+            JWKSetConfig(
+                key_size=_KEY_SIZE,
+                algorithms=(JWTAlgorithm.RS256, JWTAlgorithm.ES256),
+                rotation_seconds=10.0,
+                rotation_algorithms=(JWTAlgorithm.RS256,),
+            ),
+            manager,
+        )
+
+        published = run(usecase.get_published_keys())
+
+        kids = {key.kid for key in published}
+        assert rsa_key.kid in kids
+        assert ec_key.kid in kids
+        assert len(kids) == 3
+
+    def test_retention_bounds_the_retired_keys(self) -> None:
+        """Au-delà de la rétention, les clés retirées sont purgées du magasin."""
+        manager = _manager()
+        for _ in range(3):
+            _plant_key(manager, JWTAlgorithm.RS256, timedelta(seconds=30))
+        usecase = JWKSetUseCase(
+            JWKSetConfig(
+                key_size=_KEY_SIZE,
+                algorithms=(JWTAlgorithm.RS256,),
+                rotation_seconds=10.0,
+                retained_keys=1,
+            ),
+            manager,
+        )
+
+        published = run(usecase.get_published_keys())
+
+        assert len(published) == 2
+        assert len(run(manager._repository.find_all())) == 2
+
+    def test_token_signed_before_the_rotation_is_still_valid(self) -> None:
+        """La clé retirée continue de valider les jetons qu'elle a signés."""
+        manager = _manager()
+        _plant_key(manager, JWTAlgorithm.RS256, timedelta(seconds=30))
+        usecase = JWKSetUseCase(
+            JWKSetConfig(
+                key_size=_KEY_SIZE,
+                algorithms=(JWTAlgorithm.RS256,),
+                rotation_seconds=10.0,
+            ),
+            manager,
+        )
+        token_manager = PyJWTTokenManager(manager)
+        now = int(datetime.now(timezone.utc).timestamp())
+        token = run(
+            token_manager.create_id_token(
+                algorithm=JWTAlgorithm.RS256,
+                issuer=_ISSUER,
+                subject="alice",
+                audience="web-app",
+                expires_at=now + 300,
+                issued_at=now,
+            )
+        )
+
+        run(usecase.get_published_keys())
+
+        claims = run(token_manager.validate_id_token(token=token, issuer=_ISSUER))
+        assert claims is not None
+        assert claims["sub"] == "alice"
+
+    def test_jwks_endpoint_rotates_and_keeps_the_previous_key(self) -> None:
+        """Au niveau HTTP : une nouvelle clé apparaît, l'ancienne reste publiée."""
+        settings = Settings(
+            issuer=_ISSUER,
+            base_url=_ISSUER,
+            jwks_key_size=_KEY_SIZE,
+            jwks_algorithms=("RS256",),
+            jwks_rotation_seconds=0.001,
+        )
+        with TestClient(create_app(settings)) as client:
+            first = client.get("/.well-known/jwks.json").json()["keys"]
+            second = client.get("/.well-known/jwks.json").json()["keys"]
+
+        first_kids = {key["kid"] for key in first}
+        second_kids = {key["kid"] for key in second}
+        assert len(first_kids) == 2
+        assert len(second_kids) == 2
+        assert first_kids != second_kids
+        assert first_kids & second_kids
+
+
+def test_settings_read_rotation_parameters_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PURIDENTITYSERVER_JWKS_ROTATION_SECONDS", "0.5")
+    monkeypatch.setenv("PURIDENTITYSERVER_JWKS_ROTATION_ALGORITHMS", "RS256")
+    settings = Settings(_env_file=None)
+
+    assert settings.jwks_rotation_seconds == pytest.approx(0.5)
+    assert settings.jwks_rotation_algorithms == ("RS256",)
+    assert settings.jwks_rotation_signing_algorithms == (JWTAlgorithm.RS256,)
+    assert settings.jwks_retained_keys == 1

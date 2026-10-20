@@ -37,6 +37,32 @@ class KeyManager(Protocol):
         """
         ...
 
+    async def rotate_key(self, key_size: int, algorithm: JWTAlgorithm) -> KeyPair:
+        """Remplace la clé active de l'algorithme par une nouvelle paire.
+
+        L'ancienne clé est *retirée* (inactive) mais conservée au magasin :
+        elle reste publiée au JWKS pendant la période de rétention et
+        continue de valider les jetons qu'elle a signés (OIDC Core 1.0 §10.1).
+        La nouvelle paire est générée **avant** le retrait pour qu'une clé
+        active existe en permanence.
+        """
+        ...
+
+    async def get_retained_keys(self, limit: int) -> list[KeyPair]:
+        """Clés retirées encore conservées, de la plus récente à la plus ancienne.
+
+        ``limit`` borne le nombre de clés renvoyées (0 = aucune).
+        """
+        ...
+
+    async def prune_inactive_keys(self, keep: int) -> int:
+        """Supprime les clés retirées au-delà des ``keep`` plus récentes.
+
+        Retourne le nombre de clés supprimées : la rotation ne doit pas
+        faire croître indéfiniment le magasin de clés.
+        """
+        ...
+
     async def ensure_active_key(self, key_size: int, algorithm: JWTAlgorithm) -> None:
         """S'assure qu'au moins une clé active de l'algorithme existe."""
         ...

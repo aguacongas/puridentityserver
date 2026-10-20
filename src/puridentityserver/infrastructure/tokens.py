@@ -236,11 +236,17 @@ class PyJWTTokenManager:
             return None
 
     async def _key_for(self, kid: object | None, algorithm: JWTAlgorithm) -> KeyPair | None:
-        """Retourne la clé active de l'algorithme correspondant au ``kid``."""
+        """Retourne la clé de validation : par ``kid``, sinon la clé active.
+
+        La résolution par ``kid`` couvre aussi les clés **retirées** encore
+        conservées : un jeton signé juste avant une rotation reste
+        vérifiable (OIDC Core 1.0 §10.1).
+        """
+        if isinstance(kid, str) and kid:
+            key = await self._key_manager.get_key_by_kid(kid)
+            return key if key is not None and key.algorithm is algorithm else None
         for key in await self._key_manager.get_active_keys():
-            if key.algorithm is not algorithm:
-                continue
-            if kid is None or key.kid == kid:
+            if key.algorithm is algorithm:
                 return key
         return None
 
