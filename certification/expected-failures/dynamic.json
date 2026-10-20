@@ -1,0 +1,66 @@
+[
+    {
+        "test-name": "oidcc-userinfo-rs256",
+        "variant": "*",
+        "configuration-filename": "*dynamic.json",
+        "current-block": "*",
+        "condition": "CheckDiscEndpointUserinfoSigningAlgValuesSupportedContainsRS256",
+        "expected-result": "failure"
+    },
+    {
+        "test-name": "oidcc-userinfo-rs256",
+        "variant": "*",
+        "configuration-filename": "*dynamic.json",
+        "current-block": "*",
+        "condition": "EnsureContentTypeApplicationJwt",
+        "expected-result": "failure"
+    },
+    {
+        "test-name": "oidcc-userinfo-rs256",
+        "variant": "*",
+        "configuration-filename": "*dynamic.json",
+        "current-block": "*",
+        "condition": "ValidateUserInfoResponseSignature",
+        "expected-result": "failure"
+    },
+    {
+        "test-name": "oidcc-userinfo-rs256",
+        "variant": "*",
+        "configuration-filename": "*dynamic.json",
+        "current-block": "*",
+        "condition": "ExtractSignedUserInfoFromUserInfoEndpointResponse",
+        "expected-result": "failure"
+    },
+    {
+        "test-name": "oidcc-discovery-endpoint-verification",
+        "variant": "*",
+        "configuration-filename": "*dynamic.json",
+        "current-block": "*",
+        "condition": "CheckDiscEndpointRequestObjectSigningAlgValuesSupportedIncludesRS256",
+        "expected-result": "warning"
+    },
+    {
+        "test-name": "oidcc-server-rotate-keys",
+        "variant": "*",
+        "configuration-filename": "*dynamic.json",
+        "current-block": "*",
+        "condition": "VerifyNewJwksHasNewSigningKey",
+        "expected-result": "failure"
+    },
+    {
+        "test-name": "oidcc-request-uri-signed-rs256",
+        "variant": "*",
+        "configuration-filename": "*dynamic.json",
+        "current-block": "*",
+        "condition": "CheckDiscEndpointRequestObjectSigningAlgValuesSupportedContainsRS256",
+        "expected-result": "failure"
+    },
+    {
+        "test-name": "oidcc-request-uri-signed-rs256",
+        "variant": "*",
+        "configuration-filename": "*dynamic.json",
+        "current-block": "*",
+        "condition": "CheckIfAuthorizationEndpointError",
+        "expected-result": "failure"
+    }
+]

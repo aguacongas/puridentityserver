@@ -91,7 +91,7 @@ def test_discovery_endpoint_returns_oidc_metadata() -> None:
         "code token",
         "code id_token token",
     ]
-    assert metadata["subject_types_supported"] == ["public"]
+    assert metadata["subject_types_supported"] == ["public", "pairwise", "ephemeral"]
     assert metadata["device_authorization_endpoint"] == f"{_BASE_URL}/device_authorization"
     assert "urn:ietf:params:oauth:grant-type:device_code" in metadata["grant_types_supported"]
     assert "implicit" in metadata["grant_types_supported"]

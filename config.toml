@@ -213,6 +213,17 @@ registration_enabled = true
 registration_requires_initial_access_token = true
 registration_initial_access_tokens = ["dev-registrar-token"]
 
+# Subject types pairwise / ephemeral (OIDC Core 1.0 §8.1, ESID 1.0 §4) :
+# seed de dérivation HMAC-SHA256 des `sub` non publiques, exigé (non vide)
+# dès qu'un client seedé ou enregistré déclare `subject_type = pairwise`
+# ou `ephemeral` — sans clé serveur la `sub` serait déductible de
+# l'identité. La valeur doit rester stable d'un redémarrage à l'autre
+# (changer le seed invalide toutes les `sub` dérivées émises) et être
+# gardée secrète ; les clients `public` (défaut, rétrocompatible) ne
+# l'utilisent pas. Surchargeable via
+# `PURIDENTITYSERVER_SUBJECT_PAIRWISE_SEED`.
+subject_pairwise_seed = "change-me-subject-seed-dev-only"
+
 # Chiffrement au repos des secrets clients HMAC (`client_secret_jwt`,
 # grant jwt-bearer signé), issue #46 — clé de scellement AUTOMATIQUE :
 # une clé RSA de la famille `KeyUse.SECRET` est générée dans le store

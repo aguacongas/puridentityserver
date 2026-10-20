@@ -229,24 +229,46 @@ def resolve_signing_key(
 
     ``PyJWKSet`` ne propose pas de résolution par JWT : le ``kid`` de
     l'en-tête est donc lu directement et la clé correspondante est choisie
-    dans le set (le ``kid`` est obligatoire pour les assertions à JWKS).
+    dans le set. Un en-tête sans ``kid`` (RFC 7515 §4.1.2 — cas des
+    assertions émises par la suite de certification) n'est ambigu qu'à
+    clés multiples : la clé signante unique est alors retenue, sinon la
+    vérification échoue. Un en-tête illisible est rejeté.
     """
+    header = pyjwt.get_unverified_header(token)
+    kid = header.get("kid")
     if jwks:
-        signing_jwks = usable_for_signing(jwks)
-        if not signing_jwks:
-            return None
-        try:
-            kid = pyjwt.get_unverified_header(token).get("kid")
-        except pyjwt.PyJWTError:
-            return None
-        if not kid:
-            return None
-        jwk_set = PyJWKSet(list(signing_jwks))
-        for candidate in jwk_set.keys:
-            if candidate.key_id == kid:
-                return cast(object, candidate)
+        return _embedded_signing_key(jwks, kid)
+    return _remote_signing_key(token, jwks_uri, kid)
+
+
+def _embedded_signing_key(jwks: tuple[dict[str, object], ...], kid: str | None) -> object | None:
+    """Clé signante du JWKS embarqué : ``kid`` recherché dans le set.
+
+    Sans ``kid``, la clé signante unique est retenue ; plusieurs clés sans
+    ``kid`` sont ambiguës et refusées (comme les clés non signantes seules).
+    """
+    signing_jwks = usable_for_signing(jwks)
+    if not signing_jwks:
         return None
+    candidates = PyJWKSet(list(signing_jwks)).keys
+    if not kid:
+        return cast(object, candidates[0]) if len(candidates) == 1 else None
+    for candidate in candidates:
+        if candidate.key_id == kid:
+            return cast(object, candidate)
+    return None
+
+
+def _remote_signing_key(token: str, jwks_uri: str, kid: str | None) -> object | None:
+    """Clé signante à la ``jwks_uri`` du client : ``kid`` ou clé unique.
+
+    Même règle sans ``kid`` que :func:`_embedded_signing_key` ; les erreurs
+    réseau ou de ``kid`` inconnu lèvent (traitées par l'appelant).
+    """
     client = PyJWKClient(jwks_uri, timeout=_JWKS_TIMEOUT)
+    if not kid:
+        keys = client.get_signing_keys()
+        return cast(object, keys[0]) if len(keys) == 1 else None
     return cast(object, client.get_signing_key_from_jwt(token))
 
 

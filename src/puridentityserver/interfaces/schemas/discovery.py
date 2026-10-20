@@ -3,6 +3,7 @@
 from pydantic import BaseModel, ConfigDict, Field
 
 from puridentityserver.application.authorize import SUPPORTED_ACR_VALUES
+from puridentityserver.domain.authorization import SubjectType
 from puridentityserver.domain.jwe import (
     ALL_ENCRYPTION_ALGORITHMS,
     ALL_ENCRYPTION_METHODS,
@@ -122,7 +123,9 @@ class DiscoveryDocument(BaseModel):
     )
     code_challenge_methods_supported: list[str] = Field(default_factory=lambda: ["S256", "plain"])
     tls_client_certificate_bound_access_tokens: bool = True
-    subject_types_supported: list[str] = Field(default_factory=lambda: ["public"])
+    subject_types_supported: list[str] = Field(
+        default_factory=lambda: [subject_type.value for subject_type in SubjectType]
+    )
     id_token_signing_alg_values_supported: list[str] = Field(
         default_factory=lambda: [algorithm.value for algorithm in ALL_SIGNING_ALGORITHMS]
     )

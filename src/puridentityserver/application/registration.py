@@ -57,6 +57,7 @@ from puridentityserver.domain.authorization import (
     Client,
     ClientType,
     Scope,
+    SubjectType,
     TokenEndpointAuthMethod,
     der_certificate_hash,
     origin_of_uri,
@@ -78,6 +79,7 @@ from puridentityserver.domain.key_validation import (
     require_signing_key,
     validate_client_jwks,
 )
+from puridentityserver.interfaces.domain.registration import SectorIdentifierFetcher
 from puridentityserver.interfaces.domain.secrets import SecretCipher
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 
@@ -144,6 +146,7 @@ class RegistrationConfig:
     requires_initial_access_token: bool = True
     initial_access_token_hashes: frozenset[str] = frozenset()
     initial_access_token_mode: str = "static"  # ruff: ignore[hardcoded-password-string] (nom de mode, pas un secret)
+    subject_seed: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +178,8 @@ class RegistrationMetadata:
     backchannel_token_delivery_mode: str = ""
     backchannel_client_notification_endpoint: str = ""
     backchannel_authentication_request_signing_alg: str = ""
+    subject_type: str = "public"
+    sector_identifier_uri: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,6 +258,8 @@ class ClientRegistration:
     backchannel_token_delivery_mode: str = ""
     backchannel_client_notification_endpoint: str = ""
     backchannel_authentication_request_signing_alg: str = ""
+    subject_type: str = "public"
+    sector_identifier_uri: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,6 +295,7 @@ class RegistrationUseCase:
         scope_registry: ScopeRegistry | None = None,
         initial_access_authorizer: BearerClaimAuthorizer | None = None,
         secret_cipher: SecretCipher | None = None,
+        sector_fetcher: SectorIdentifierFetcher | None = None,
     ) -> None:
         """Injection de la configuration, des registres, de l'autoriseur initial et du chiffreur."""
         self._config = config
@@ -295,6 +303,7 @@ class RegistrationUseCase:
         self._scope_registry = scope_registry
         self._initial_access_authorizer = initial_access_authorizer
         self._secret_cipher = secret_cipher
+        self._sector_fetcher = sector_fetcher
 
     async def _known_scopes(self) -> frozenset[str]:
         """Scopes acceptés à l'enregistrement (scopes standard si pas de registre)."""
@@ -314,18 +323,9 @@ class RegistrationUseCase:
         metadata = _parse_metadata(request.metadata, known)
         if isinstance(metadata, RegistrationError):
             return metadata
-        material_error = self._validate_method_material(metadata)
-        if material_error is not None:
-            return material_error
-        usage_error = self._validate_jwks_usage(metadata)
-        if usage_error is not None:
-            return usage_error
-        signing_error = self._validate_signing_material(metadata)
-        if signing_error is not None:
-            return signing_error
-        encryption_error = self._validate_encryption_material(metadata)
-        if encryption_error is not None:
-            return encryption_error
+        validation_error = await self._validate_new_metadata(metadata)
+        if validation_error is not None:
+            return validation_error
 
         client_id = token_urlsafe(24)
         secret_hash, secret_ciphertext, client_secret = await self._credentials_for(metadata)
@@ -363,6 +363,8 @@ class RegistrationUseCase:
             backchannel_authentication_request_signing_alg=(
                 metadata.backchannel_authentication_request_signing_alg
             ),
+            subject_type=SubjectType(metadata.subject_type),
+            sector_identifier_uri=metadata.sector_identifier_uri,
         )
         await self._clients.save(client)
         return self._response(
@@ -398,18 +400,9 @@ class RegistrationUseCase:
         metadata = _parse_metadata(request.metadata, known)
         if isinstance(metadata, RegistrationError):
             return metadata
-        material_error = self._validate_method_material(metadata)
-        if material_error is not None:
-            return material_error
-        usage_error = self._validate_jwks_usage(metadata)
-        if usage_error is not None:
-            return usage_error
-        signing_error = self._validate_signing_material(metadata)
-        if signing_error is not None:
-            return signing_error
-        encryption_error = self._validate_encryption_material(metadata)
-        if encryption_error is not None:
-            return encryption_error
+        validation_error = await self._validate_new_metadata(metadata)
+        if validation_error is not None:
+            return validation_error
         rotation_error = self._validate_signing_rotation(client, metadata)
         if rotation_error is not None:
             return rotation_error
@@ -462,6 +455,8 @@ class RegistrationUseCase:
             backchannel_authentication_request_signing_alg=(
                 metadata.backchannel_authentication_request_signing_alg
             ),
+            subject_type=SubjectType(metadata.subject_type),
+            sector_identifier_uri=metadata.sector_identifier_uri,
         )
         await self._clients.save(updated)
         return self._response(updated, client_secret=rotation.issued_secret)
@@ -491,6 +486,25 @@ class RegistrationUseCase:
                 401,
             )
         return client
+
+    async def _validate_new_metadata(
+        self, metadata: RegistrationMetadata
+    ) -> RegistrationError | None:
+        """Enchaîne les validations communes d'un corps de métadonnées (RFC 7591 §2).
+
+        Matériel d'authentification, usage du JWKS, algorithmes de
+        signature/chiffrement et cohérence du subject type demandé — la
+        première erreur rencontrée est retournée telle quelle.
+        """
+        for check in (
+            self._validate_method_material(metadata),
+            self._validate_jwks_usage(metadata),
+            self._validate_signing_material(metadata),
+            self._validate_encryption_material(metadata),
+        ):
+            if check is not None:
+                return check
+        return await self._validate_subject_metadata(metadata)
 
     def _validate_method_material(self, metadata: RegistrationMetadata) -> RegistrationError | None:
         """Vérifie que le matériel requis par la méthode d'auth est présent (RFC 7591 §2.3)."""
@@ -639,6 +653,76 @@ class RegistrationUseCase:
         problem = require_signing_key(_keys_from_jwks_json(metadata.jwks))
         if problem:
             return RegistrationError("invalid_client_metadata", problem)
+        return None
+
+    async def _validate_subject_metadata(
+        self, metadata: RegistrationMetadata
+    ) -> RegistrationError | None:
+        """Valide le subject type et le secteur demandés (Core §8.1, ESID §5).
+
+        Un client ``pairwise``/``ephemeral`` exige que l'OP dispose du seed
+        de dérivation (``subject_pairwise_seed``) : la ``sub`` serait
+        inopérante sans clé serveur. Un ``sector_identifier_uri`` est
+        vérifié par fetch — document JSON **liste** hébergeant toutes les
+        ``redirect_uris`` déclarées (Core §8.1) — et refusé
+        ``invalid_client_metadata`` s'il est inaccessible ou incohérent.
+        """
+        if metadata.subject_type != "public" and not self._config.subject_seed:
+            return RegistrationError(
+                "invalid_client_metadata",
+                f"subject_type={metadata.subject_type} exige le seed serveur "
+                "subject_pairwise_seed configuré sur l'OP",
+            )
+        if metadata.subject_type == "pairwise":
+            if not metadata.sector_identifier_uri:
+                hosts = {
+                    host
+                    for host in (urlsplit(uri).hostname for uri in metadata.redirect_uris)
+                    if host
+                }
+                if len(hosts) != 1:
+                    return RegistrationError(
+                        "invalid_client_metadata",
+                        "subject_type=pairwise exige un sector_identifier_uri "
+                        "ou des redirect_uris d'hôte unique",
+                    )
+            else:
+                sector_error = await self._validate_sector(metadata)
+                if sector_error is not None:
+                    return sector_error
+        return None
+
+    async def _validate_sector(self, metadata: RegistrationMetadata) -> RegistrationError | None:
+        """Vérifie le document secteur par fetch (Core §8.1) pour un client pairwise."""
+        if not metadata.sector_identifier_uri:
+            return None
+        if self._sector_fetcher is None:
+            return RegistrationError(
+                "invalid_client_metadata",
+                "sector_identifier_uri non vérifiable : fetcher de secteur non configuré",
+            )
+        document = await self._sector_fetcher.fetch(metadata.sector_identifier_uri)
+        if document is None:
+            return RegistrationError(
+                "invalid_client_metadata",
+                "sector_identifier_uri inaccessible ou non conforme",
+            )
+        try:
+            payload = json.loads(document)
+        except ValueError:
+            payload = None
+        if not isinstance(payload, list) or not all(isinstance(item, str) for item in payload):
+            return RegistrationError(
+                "invalid_client_metadata",
+                "sector_identifier_uri doit référencer un document JSON liste",
+            )
+        missing = sorted(set(metadata.redirect_uris) - set(payload))
+        if missing:
+            return RegistrationError(
+                "invalid_client_metadata",
+                "sector_identifier_uri ne couvre pas toutes les redirect_uris déclarées "
+                + ", ".join(missing),
+            )
         return None
 
     async def _credentials_for(self, metadata: RegistrationMetadata) -> tuple[str, str, str]:
@@ -804,6 +888,8 @@ class RegistrationUseCase:
             backchannel_authentication_request_signing_alg=(
                 client.backchannel_authentication_request_signing_alg
             ),
+            subject_type=client.subject_type.value,
+            sector_identifier_uri=client.sector_identifier_uri,
         )
 
     def _base_url(self) -> str:
@@ -828,6 +914,12 @@ def _parse_metadata(
     web_origins = _parse_web_origins(raw)
     if isinstance(web_origins, RegistrationError):
         return web_origins
+    subject_type = _parse_subject_type(raw)
+    if isinstance(subject_type, RegistrationError):
+        return subject_type
+    sector_identifier_uri = _parse_sector_identifier_uri(raw)
+    if isinstance(sector_identifier_uri, RegistrationError):
+        return sector_identifier_uri
     extras = _parse_metadata_extras(raw, known_scopes)
     if isinstance(extras, RegistrationError):
         return extras
@@ -884,6 +976,8 @@ def _parse_metadata(
         backchannel_authentication_request_signing_alg=(
             backchannel_authentication_request_signing_alg
         ),
+        subject_type=subject_type,
+        sector_identifier_uri=sector_identifier_uri,
     )
 
 
@@ -1155,6 +1249,47 @@ def _is_web_origin(uri: str) -> bool:
     if parsed.scheme not in ({"http", "https"}) or not parsed.netloc:
         return False
     return parsed.path in ("", "/") and parsed.query == "" and parsed.fragment == ""
+
+
+def _parse_subject_type(raw: dict[str, object]) -> str | RegistrationError:
+    """Lit ``subject_type`` (OIDC Core 1.0 §8.1, ESID 1.0 §5).
+
+    ``public``, ``pairwise`` ou ``ephemeral`` ; absent = ``public`` (le
+    sujet reste le même entre tous les clients).
+    """
+    value = raw.get("subject_type")
+    if value is None or value == "":
+        return "public"
+    if not isinstance(value, str) or value not in SubjectType._value2member_map_:
+        return RegistrationError(
+            "invalid_client_metadata",
+            "subject_type doit être public, pairwise ou ephemeral",
+        )
+    return value
+
+
+def _parse_sector_identifier_uri(raw: dict[str, object]) -> str | RegistrationError:
+    """Lit ``sector_identifier_uri`` (OIDC Core 1.0 §8.1) : https absolu sans fragment.
+
+    La conformité du document (liste JSON hébergeant toutes les
+    ``redirect_uris``) est vérifiée par fetch dans le cas d'utilisation,
+    qui refuse l'enregistrement ``invalid_client_metadata`` si le secteur
+    est inaccessible ou incohérent.
+    """
+    value = raw.get("sector_identifier_uri")
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str):
+        return RegistrationError(
+            "invalid_client_metadata", "sector_identifier_uri doit être une chaîne"
+        )
+    parsed = urlsplit(value)
+    if parsed.scheme != "https" or not parsed.netloc or parsed.fragment:
+        return RegistrationError(
+            "invalid_client_metadata",
+            "sector_identifier_uri doit être une URI https absolue sans fragment",
+        )
+    return value
 
 
 def _parse_scopes(

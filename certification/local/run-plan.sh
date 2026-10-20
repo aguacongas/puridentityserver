@@ -9,10 +9,13 @@
 #      propre ; chemin relatif impose par la grammaire du driver) ;
 #   4. lancement du driver officiel en sortie stricte (code retour non nul des
 #      qu'un module est FAILED/INTERRUPTED ou un warning inattendu survient) ;
+#      les ecarts connus declares dans certification/expected-failures/
+#      <plan>.json sont classes « expected » par le driver (mode witness) et
+#      ne bloquent pas — idem CI, meme chemin de fichier ;
 #   5. bilan PASSED/FAILED/REVIEW lu dans l'export, + chemins log/export.
 #
 # Usage : bash certification/local/run-plan.sh <plan> [--export-dir <dir>]
-#   plans : basic | implicit | hybrid | formpost | ciba | fapi1 | fapi2 | fapi2-message-signing
+#   plans : basic | implicit | hybrid | formpost | dynamic | ciba | fapi1 | fapi2 | fapi2-message-signing
 #
 # Variables d'environnement (defauts en accord avec setup.sh) :
 #   REPO_ROOT, SUITE_DIR, LOCAL_DIR  chemins racine du depot / clone suite /
@@ -41,7 +44,7 @@ log() { printf '[run-plan] %s\n' "$*"; }
 
 usage() {
   echo "Usage : bash certification/local/run-plan.sh <plan> [--export-dir <dir>]" >&2
-  echo "  plans : basic | implicit | hybrid | formpost | ciba | fapi1 | fapi2 | fapi2-message-signing" >&2
+  echo "  plans : basic | implicit | hybrid | formpost | dynamic | ciba | fapi1 | fapi2 | fapi2-message-signing" >&2
   exit 2
 }
 
@@ -112,12 +115,24 @@ mkdir -p "$export_dir"
 run_log="$LOCAL_DIR/last-$plan.log"
 
 log "lancement du plan $plan (log : $run_log)"
+# Temoignage (mode witness) : les ecarts de modules connus et documentes
+# (capacites OP absentes, module manuel) sont declares dans
+# certification/expected-failures/<plan>.json. Le driver les classe en
+# « expected failure » et le plan ne sort en code non nul que pour les
+# ecarts INATTENDUS (strictude #130 preservee).
+expected_args=()
+expected_file="$REPO_ROOT/certification/expected-failures/$plan.json"
+if [ -f "$expected_file" ]; then
+  expected_args=(--expected-failures-file "$expected_file")
+  log "ecarts attendus (witness) : $expected_file"
+fi
 code=0
 (
   cd "$SUITE_DIR"
   uv run --no-project --with httpx --with pyparsing \
     python scripts/run-test-plan.py \
     --export-dir "$export_dir" \
+    ${expected_args[@]+"${expected_args[@]}"} \
     "$selector" "$driver_cfg"
 ) 2>&1 | tee "$run_log" || code=$?
 
@@ -153,6 +168,12 @@ print(f"bilan des modules : {detail} (total {sum(totals.values())})")
 PY
 if [ "$bilan_code" -ne 0 ]; then
   log "bilan indisponible (export absent ou illisible)"
+fi
+if [ -f "$expected_file" ]; then
+  # Le bilan lit les resultats module bruts des exports : les ecarts witness
+  # restent visibles en FAILED/INTERRUPTED la, ou le code retour du driver
+  # (ci-dessus) les a classes en « expected ».
+  log "ecarts attendus (witness) : certification/expected-failures/$plan.json"
 fi
 
 log "export : $export_dir"

@@ -28,10 +28,14 @@ from puridentityserver.application.tls_binding import certificate_binding_error
 from puridentityserver.domain.authorization import ClientCertificate
 from puridentityserver.domain.dpop import access_token_hash
 from puridentityserver.domain.revocation import token_hash
+from puridentityserver.domain.subjects import display_subject
 from puridentityserver.interfaces.domain.dpop import DpopProofValidator, DpopValidationError
 from puridentityserver.interfaces.domain.tokens import TokenManager
 from puridentityserver.interfaces.domain.userinfo import ClaimsProvider
-from puridentityserver.interfaces.repositories.readers import IdentityResourceReader
+from puridentityserver.interfaces.repositories.readers import (
+    ClientReader,
+    IdentityResourceReader,
+)
 from puridentityserver.interfaces.repositories.revoked_token_repository import (
     RevokedTokenRepository,
 )
@@ -45,6 +49,7 @@ class UserInfoConfig:
 
     issuer: str
     userinfo_endpoint: str = ""
+    subject_seed: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,12 +110,17 @@ class UserInfoUseCase:
         identity_resources: IdentityResourceReader | None = None,
         *,
         dpop: DpopProofValidator | None = None,
+        clients: ClientReader | None = None,
     ) -> None:
         """Injection config, validateur, fournisseur, denylist, registre et DPoP.
 
         ``dpop`` (RFC 9449) vérifie les preuves présentées au userinfo ;
         sans injection, un access token lié (``cnf.jkt``) est toujours
         rejeté — aucun lien ne pouvant être prouvé sans validateur.
+        ``clients`` recharge le client émetteur du jeton (claim privé
+        ``client_id``) pour dériver la ``sub`` affichée (OIDC Core 1.0
+        §8.1, ESID 1.0 §4) : sans injection, la ``sub`` du jeton est
+        rendue telle quelle (client ``public``).
         """
         self._config = config
         self._token_manager = token_manager
@@ -118,6 +128,7 @@ class UserInfoUseCase:
         self._blacklist = revoked_token_repository
         self._identity_resources = identity_resources
         self._dpop = dpop
+        self._clients = clients
 
     async def execute(self, request: UserInfoRequest) -> UserInfoResponse | UserInfoError:
         """Traite la requête et retourne les claims filtrés ou une erreur."""
@@ -151,9 +162,33 @@ class UserInfoUseCase:
 
         return UserInfoResponse(
             claims={
-                "sub": str(subject),
+                "sub": await self._display_sub(claims, str(subject)),
                 **{name: value for name, value in user_claims.claims.items() if name in allowed},
             }
+        )
+
+    async def _display_sub(self, claims: dict[str, object], subject: str) -> str:
+        """``sub`` à rendre : dérivée pour le client émetteur du jeton (§8.1).
+
+        Le client est rechargé depuis le claim privé ``client_id`` de
+        l'access token ; ``subject_material`` (claim privé ephemeral)
+        reprend la matière posée à l'émission pour reproduire exactement
+        la ``sub`` de l'``id_token``. Sans ``client_id`` (client
+        ``public``) ou sans client résolu, le sujet du jeton est rendu
+        tel quel — le profil, lui, est toujours résolu sur le sujet réel.
+        """
+        client_id = claims.get("client_id")
+        if not isinstance(client_id, str) or not client_id or self._clients is None:
+            return subject
+        client = await self._clients.find_by_id(client_id)
+        if client is None:
+            return subject
+        material = claims.get("subject_material")
+        return display_subject(
+            client,
+            subject,
+            material=material if isinstance(material, str) else "",
+            seed=self._config.subject_seed,
         )
 
     async def _validate_dpop_binding(

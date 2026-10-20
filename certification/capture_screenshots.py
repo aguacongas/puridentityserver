@@ -8,13 +8,16 @@ La suite officielle attend une capture d'écran pour 4 modules Core
 sans image, le mode witness remplit ces placeholders avec un PNG 1x1 de
 secours — le verdict tombe juste, mais la preuve est un artifice.
 
-Ce script rejoue les 24 scénarios contre l'OP réellement déployé avec un
+Ce script rejoue les 30 scénarios contre l'OP réellement déployé avec un
 navigateur headless (Playwright/chromium) et produit, pour chaque module,
 une capture authentique de la page servie par l'OP :
 
 1. les 4 scénarios Core (paramètre absent, ``redirect_uri`` non enregistrée,
    second ``prompt=login``, second ``max_age=1``) ;
-2. les 16 scénarios FAPI1 : un request object (JAR, ``by_value``) défectueux
+2. les 6 scénarios propres au plan dynamic (issue #168) : ``redirect_uri``
+   absente / supplémentaire / non concordante et pages de connexion des
+   clients DCR porteurs d'un ``logo_uri``/``policy_uri``/``tos_uri`` ;
+3. les 16 scénarios FAPI1 : un request object (JAR, ``by_value``) défectueux
    par module — claim absent, bornes ``exp``/``nbf``, ``aud``/signature,
    ``alg=none``/``RS256``, clé inconnue, request object absent, ``redirect_uri``
    non enregistrée — signé avec la clé privée du client statique seedé par
@@ -23,7 +26,7 @@ une capture authentique de la page servie par l'OP :
    enregistrée et ``response_type=code id_token`` : l'erreur repart en
    fragment de la callback (RFC 6749 §4.2.2.1, issue #178), sauf pour les
    deux scénarios servis en page HTML (scénarios « page ») ;
-3. les 4 scénarios FAPI2 : requête signée sans PAR, réutilisation d'un
+4. les 4 scénarios FAPI2 : requête signée sans PAR, réutilisation d'un
    ``request_uri``, ``request_uri`` expiré, ``request_uri`` d'un autre client.
 
 Chaque capture est validée (statut, marqueurs de la page) avant export : un
@@ -108,6 +111,17 @@ _CORE_TEST_NAMES = (
     "oidcc-ensure-registered-redirect-uri",
     "oidcc-prompt-login",
     "oidcc-max-age-1",
+)
+
+#: Modules du plan dynamic laissés en REVIEW (placeholders de capture) —
+#: arbitrages de ``redirect_uri`` et présentation du client DCR au login.
+_DYNAMIC_TEST_NAMES = (
+    "oidcc-ensure-redirect-uri-in-authorization-request",
+    "oidcc-redirect-uri-query-mismatch",
+    "oidcc-redirect-uri-query-added",
+    "oidcc-registration-logo-uri",
+    "oidcc-registration-policy-uri",
+    "oidcc-registration-tos-uri",
 )
 
 #: Modules FAPI1 du plan fapi1-advanced-final laissés en REVIEW : un request
@@ -266,17 +280,30 @@ def _authorize_url(
     return f"{base_url.rstrip('/')}/authorize?{urlencode({k: v for k, v in params.items() if v})}"
 
 
-def _register_client(request: APIRequestContext, base_url: str) -> RegisteredClient:
-    """Enregistre le client de capture via ``POST /register`` (RFC 7591)."""
+def _register_client(
+    request: APIRequestContext,
+    base_url: str,
+    *,
+    redirect_uris: list[str] | None = None,
+    metadata: dict[str, str] | None = None,
+) -> RegisteredClient:
+    """Enregistre le client de capture via ``POST /register`` (RFC 7591).
+
+    ``redirect_uris`` et ``metadata`` couvrent les variantes des scénarios
+    dynamic (issue #168) : plusieurs redirections, requête avec query
+    enregistrée, métadonnées ``logo_uri``/``policy_uri``/``tos_uri``.
+    """
+    data: dict[str, object] = {
+        "client_name": _CLIENT_NAME,
+        "redirect_uris": redirect_uris or [_REDIRECT_URI],
+        "grant_types": ["authorization_code"],
+        "response_types": ["code"],
+        "scope": "openid profile",
+    }
+    data.update(metadata or {})
     response = request.post(
         f"{base_url.rstrip('/')}/register",
-        data={
-            "client_name": _CLIENT_NAME,
-            "redirect_uris": [_REDIRECT_URI],
-            "grant_types": ["authorization_code"],
-            "response_types": ["code"],
-            "scope": "openid profile",
-        },
+        data=data,
     )
     if response.status != 201:
         raise RuntimeError(
@@ -599,6 +626,20 @@ def _capture_error_page(page: Page, url: str, error_code: str, path: Path) -> No
     _screenshot(page, path)
 
 
+def _capture_missing_param_page(page: Page, url: str, param: str, path: Path) -> None:
+    """Capture la page 400 « paramètres requis manquants » (aucun code de motif).
+
+    L'AS sert un rappel de la RFC 6749 §3.1.1 listant le paramètre absent —
+    sans ``<code>`` de motif exploitable — quand ``redirect_uri`` manque à
+    une demande portant plusieurs redirections enregistrées.
+    """
+    _assert_status(page, url, 400)
+    marker = f"manquants : {param}"
+    if marker not in page.content():
+        raise RuntimeError(f"marqueur {marker!r} absent de la page d'erreur {url}")
+    _screenshot(page, path)
+
+
 def _capture_redirect_error(
     page: Page, url: str, callback_uri: str, error_code: str, path: Path
 ) -> None:
@@ -758,6 +799,83 @@ def _capture_core_scenarios(
         )
     finally:
         _unregister_client(context_request, base_url, client)
+
+
+def _capture_dynamic_scenarios(
+    page: Page,
+    context_request: APIRequestContext,
+    base_url: str,
+    out: Path,
+) -> None:
+    """Rejoue les 6 scénarios REVIEW du plan dynamic (issue #168).
+
+    Trois arbitrages de ``redirect_uri`` (absente, supplémentaire,
+    non concordante) servis en page d'erreur HTTP 400 avant login, puis
+    trois pages de connexion présentant un client DCR porteur d'un
+    ``logo_uri``/``policy_uri``/``tos_uri`` (session vidée au préalable).
+    """
+    two_uris = _register_client(
+        context_request,
+        base_url,
+        redirect_uris=[_REDIRECT_URI, "https://rp.example.invalid/callback-alt"],
+    )
+    plain_client = _register_client(context_request, base_url)
+    queried = f"{_REDIRECT_URI}?registered=1"
+    queried_client = _register_client(context_request, base_url, redirect_uris=[queried])
+    try:
+        # `redirect_uri` absente : deux redirections enregistrées, l'AS ne
+        # peut pas déduire la cible et doit afficher l'erreur (RFC 6749
+        # §3.1.2.3 / §4.1.2.1) au lieu de rediriger.
+        _capture_missing_param_page(
+            page,
+            _authorize_url(base_url, two_uris.client_id, extra={"redirect_uri": None}),
+            "redirect_uri",
+            out / "oidcc-ensure-redirect-uri-in-authorization-request.png",
+        )
+        # `redirect_uri` portant une query alors que la version enregistrée
+        # n'en porte pas.
+        _capture_error_page(
+            page,
+            _authorize_url(
+                base_url,
+                plain_client.client_id,
+                extra={"redirect_uri": f"{_REDIRECT_URI}?added=1"},
+            ),
+            "invalid_redirect_uri",
+            out / "oidcc-redirect-uri-query-added.png",
+        )
+        # `redirect_uri` dont la query diffère de celle enregistrée.
+        _capture_error_page(
+            page,
+            _authorize_url(
+                base_url,
+                queried_client.client_id,
+                extra={"redirect_uri": f"{_REDIRECT_URI}?registered=2"},
+            ),
+            "invalid_redirect_uri",
+            out / "oidcc-redirect-uri-query-mismatch.png",
+        )
+    finally:
+        _unregister_client(context_request, base_url, two_uris)
+        _unregister_client(context_request, base_url, plain_client)
+        _unregister_client(context_request, base_url, queried_client)
+    # Présentation du client DCR au login : session vidée, chaque
+    # ``/authorize`` retombe sur le formulaire de connexion.
+    for test_name, field, value in (
+        ("oidcc-registration-logo-uri", "logo_uri", "https://example.org/logo.png"),
+        ("oidcc-registration-policy-uri", "policy_uri", "https://example.org/policy.html"),
+        ("oidcc-registration-tos-uri", "tos_uri", "https://example.org/tos.html"),
+    ):
+        client = _register_client(context_request, base_url, metadata={field: value})
+        try:
+            page.context.clear_cookies()
+            _capture_login_page(
+                page,
+                _authorize_url(base_url, client.client_id),
+                out / f"{test_name}.png",
+            )
+        finally:
+            _unregister_client(context_request, base_url, client)
 
 
 def _capture_fapi1_scenarios(
@@ -937,11 +1055,11 @@ def capture_all(
     fapi1_redirect: str,
     fapi2_redirect: str,
 ) -> list[Path]:
-    """Rejoue les 24 scénarios et écrit les PNG nommés ``<testName>.png``.
+    """Rejoue les 30 scénarios et écrit les PNG nommés ``<testName>.png``.
 
-    Les familles FAPI sont indépendantes : l'échec d'une famille est logué
-    sans interrompre les autres (la certification retombe sur le PNG de
-    secours pour les fichiers manquants).
+    Les familles FAPI et dynamic sont indépendantes : l'échec d'une famille
+    est logué sans interrompre les autres (la certification retombe sur le
+    PNG de secours pour les fichiers manquants).
     """
     out.mkdir(parents=True, exist_ok=True)
     browser = playwright.chromium.launch()
@@ -976,13 +1094,19 @@ def capture_all(
             )
         except Exception as error:
             _LOGGER.error("Captures fapi2 impossibles : %s", error)
+        # En dernier : les scénarios login vident les cookies du contexte,
+        # sans effet sur les familles déjà jouées.
+        try:
+            _capture_dynamic_scenarios(page, context.request, base_url, out)
+        except Exception as error:
+            _LOGGER.error("Captures dynamic impossibles : %s", error)
     finally:
         browser.close()
     return sorted(out.glob("*.png"))
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Capture les pages ; renvoie 0 si les 24 fichiers sont produits."""
+    """Capture les pages ; renvoie 0 si les 30 fichiers sont produits."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--base-url",
@@ -1019,6 +1143,7 @@ def main(argv: list[str] | None = None) -> int:
     fapi1_redirect = f"{suite_base}{_FAPI1_CALLBACK_PATH}"
     fapi2_redirect = f"{suite_base}{_FAPI2_CALLBACK_PATH}"
     expected = {f"{name}.png" for name in _CORE_TEST_NAMES}
+    expected |= {f"{name}.png" for name in _DYNAMIC_TEST_NAMES}
     expected |= {f"{name}.png" for name, _mode, _error in _FAPI1_JAR_SCENARIOS}
     expected |= {f"{name}.png" for name in _FAPI2_TEST_NAMES}
     try:

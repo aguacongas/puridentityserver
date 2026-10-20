@@ -43,6 +43,12 @@ storage_dsn = "sqlite:///puridentityserver.db"
 registration_enabled = true
 registration_initial_access_token_mode = "disabled"
 
+# Subject types (OIDC Core 1.0 §8.1, ESID 1.0 §4) : seed de dérivation
+# des `sub` pairwise/ephemeral exigé par les modules
+# oidcc-registration-sector-* du plan dynamic (un client `pairwise`
+# sans seed serveur serait refusé `invalid_client_metadata`).
+subject_pairwise_seed = "certification-subject-seed"
+
 # CIBA (issue #50) : backchannel_authentication_endpoint + approbation
 # automatisée de la suite (plan fapi-ciba-id1-test-plan, witness).
 ciba_enabled = true

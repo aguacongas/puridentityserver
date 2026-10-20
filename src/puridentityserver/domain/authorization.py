@@ -91,6 +91,23 @@ class ClientType(str, Enum):
     PUBLIC = "public"
 
 
+class SubjectType(str, Enum):
+    """Type de subject identifier émis pour un client (OIDC Core 1.0 §8.1).
+
+    ``public`` : ``sub`` = identifiant utilisateur local, corrélable entre
+    tous les clients. ``pairwise`` : ``sub`` dérivée par secteur (hôte du
+    ``sector_identifier_uri`` ou des ``redirect_uris``), non corrélable
+    entre clients de secteurs différents. ``ephemeral`` : ``sub`` opaque
+    jamais réutilisée entre deux authentifications, constante pendant la
+    session d'authentification (OpenID Connect Ephemeral Subject
+    Identifier 1.0, Final, §4).
+    """
+
+    PUBLIC = "public"
+    PAIRWISE = "pairwise"
+    EPHEMERAL = "ephemeral"
+
+
 class TokenEndpointAuthMethod(str, Enum):
     """Méthode d'authentification du client au token endpoint.
 
@@ -229,6 +246,16 @@ class Client:
       de ce client : ``None`` = plafond serveur par défaut
       (``ciba_binding_message_max_length``). Au-delà, la demande est rejetée
       avec ``invalid_binding_message`` (§13).
+
+     ``subject_type`` (OIDC Core 1.0 §8.1) et ``sector_identifier_uri``
+     choisissent le type de ``sub`` émis à l'issue des flows pour ce
+     client : ``pairwise`` dérive par secteur (hôte du
+     ``sector_identifier_uri`` ou des ``redirect_uris``), ``ephemeral``
+     par session d'authentification (ESID 1.0 §4), ``public`` (défaut)
+     expose le sujet réel. Le ``sector_identifier_uri`` est validé **à
+     l'enregistrement** (https, document JSON liste contenant les
+     ``redirect_uris``, Core §8.1) — jamais au runtime, le secteur de
+     dérivation n'étant plus qu'un hôte.
     """
 
     client_id: str
@@ -279,6 +306,14 @@ class Client:
     #: valeurs de ``[settings.password_policy]``) appliquée aux flows
     #: d'inscription (``prompt=create``) de ce client.
     password_policy: PasswordPolicyPatch = field(default_factory=PasswordPolicyPatch)
+    #: Type de subject identifier émis pour ce client (OIDC Core 1.0 §8.1,
+    #: ESID 1.0 §5) : ``public`` (défaut), ``pairwise`` ou ``ephemeral`` —
+    #: dérivation de la ``sub`` détaillée dans ``domain/subjects.py``.
+    subject_type: SubjectType = SubjectType.PUBLIC
+    #: URI du document secteur (OIDC Core 1.0 §8.1) : son composant hôte
+    #: définit le secteur de dérivation ``pairwise`` ; ``""`` = secteur
+    #: déduit de l'hôte unique des ``redirect_uris``.
+    sector_identifier_uri: str = ""
 
     @property
     def effective_auth_method(self) -> TokenEndpointAuthMethod:
@@ -299,6 +334,23 @@ class Client:
         origins = {origin_of_uri(uri) for uri in self.redirect_uris}
         origins |= {origin_of_uri(uri) for uri in self.web_origins}
         return frozenset(origin for origin in origins if origin is not None)
+
+    def subject_sector(self) -> str:
+        """Secteur de dérivation ``pairwise`` de ce client (OIDC Core 1.0 §8.1).
+
+        Le secteur est le composant hôte de ``sector_identifier_uri``
+        quand l'URI est déclarée ; sinon l'hôte commun des
+        ``redirect_uris`` — unicité vérifiée à l'enregistrement, le
+        multi-hôte exigeant un ``sector_identifier_uri``. ``""`` si aucun
+        secteur n'est déterminable (client sans redirection) : l'appelant
+        retombe alors sur la ``sub`` réelle.
+        """
+        if self.sector_identifier_uri:
+            return urlsplit(self.sector_identifier_uri).hostname or ""
+        hosts = {host for host in (urlsplit(uri).hostname for uri in self.redirect_uris) if host}
+        if len(hosts) == 1:
+            return hosts.pop()
+        return ""
 
 
 def origin_of_uri(uri: str) -> str | None:
@@ -337,6 +389,11 @@ class AuthorizationCode:
     ``session_id`` (OIDC Session Management §2) porte le ``sid`` de la
     session navigateur au moment de l'émission : il relie le code au
     ``sid`` qui sera reproduit dans l'``id_token`` à l'échange.
+    ``subject_material`` porte la matière de dérivation de la ``sub``
+    ``pairwise``/``ephemeral`` (ESID 1.0 §4) : le ``sid`` de session
+    quand il existe, sinon la valeur du code — constante pendant tout le
+    flow, reprise par l'access token (claims ``client_id`` /
+    ``subject_material``) et par le refresh token émis à l'échange.
     ``acr`` conserve la première valeur ``acr_values`` demandée à
     ``/authorize`` pour la reproduire dans l'id_token du token endpoint
     (OIDC Core 1.0 §3.1.2.1) ; ``claims`` conserve le paramètre ``claims``
@@ -364,6 +421,7 @@ class AuthorizationCode:
     redirect_uri: str = ""
     subject: str = ""
     session_id: str = ""
+    subject_material: str = ""
     scopes: frozenset[Scope] = frozenset()
     code_challenge: str = ""
     code_challenge_method: str = "S256"
@@ -404,11 +462,17 @@ class RefreshToken:
     doit présenter le même certificat (empreinte
     base64url(SHA-256(DER))), sinon ``invalid_grant``. Vide = jeton
     porteur (aucun certificat exigé au renouvellement).
+
+    ``subject_material`` reprend la matière de dérivation de la ``sub``
+    ``pairwise``/``ephemeral`` (ESID 1.0 §4) de l'émission d'origine :
+    les renouvellements et le ``/userinfo`` reproduisent exactement la
+    même ``sub`` que l'``id_token`` initial.
     """
 
     token_hash: str
     client_id: str = ""
     subject: str = ""
+    subject_material: str = ""
     scopes: frozenset[Scope] = frozenset()
     expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     is_consumed: bool = False

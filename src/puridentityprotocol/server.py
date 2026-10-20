@@ -284,6 +284,7 @@ class ProtocolDependencies:
                 issuer=settings.issuer,
                 secret_cipher=self.secret_cipher,
                 id_token_encrypter=self.id_token_encrypter,
+                subject_seed=settings.subject_pairwise_seed,
             ),
             self.readers.client,
             stores.code,
@@ -303,6 +304,7 @@ class ProtocolDependencies:
                 token_endpoint=f"{settings.base_url or settings.issuer}".rstrip("/") + "/token",
                 secret_cipher=self.secret_cipher,
                 id_token_encrypter=self.id_token_encrypter,
+                subject_seed=settings.subject_pairwise_seed,
             ),
             self.readers.client,
             stores.code,
@@ -351,12 +353,13 @@ class ProtocolDependencies:
             stores.backchannel, ping_notifier=HTTPCibaPingNotifier()
         )
         self.userinfo_usecase = UserInfoUseCase(
-            UserInfoConfig(issuer=settings.issuer),
+            UserInfoConfig(issuer=settings.issuer, subject_seed=settings.subject_pairwise_seed),
             self.token_manager,
             self.claims_provider,
             stores.revoked,
             self.readers.identity_resource,
             dpop=self.dpop_validator,
+            clients=self.readers.client,
         )
         self.protected_resource_usecase: ProtectedResourceUseCase | None = None
         if settings.protected_resource_enabled:
@@ -379,7 +382,7 @@ class ProtocolDependencies:
             stores.revoked,
         )
         self.logout_usecase = LogoutUseCase(
-            LogoutConfig(issuer=settings.issuer),
+            LogoutConfig(issuer=settings.issuer, subject_seed=settings.subject_pairwise_seed),
             self.readers.client,
             self.token_manager,
             HTTPBackchannelNotifier(),
@@ -391,11 +394,17 @@ class ProtocolDependencies:
                 requires_initial_access_token=settings.registration_requires_initial_access_token,
                 initial_access_token_hashes=settings.registration_initial_access_token_hashes,
                 initial_access_token_mode=settings.registration_initial_access_token_mode,
+                subject_seed=settings.subject_pairwise_seed,
             ),
             stores.client,
             self.scope_registry,
             self.registration_authorizer,
             self.secret_cipher,
+            sector_fetcher=HTTPRequestObjectFetcher(
+                allow_local_targets=loopback_bind(settings.host)
+                or settings.request_uri_allow_local_targets,
+                content_type="application/json",
+            ),
         )
         self.par_usecase = PushedAuthorizationUseCase(
             PushedAuthorizationConfig(

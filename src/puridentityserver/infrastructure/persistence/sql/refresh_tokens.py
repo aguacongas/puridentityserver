@@ -30,6 +30,9 @@ class RefreshTokenRow(PersistenceBase):
     token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
     client_id: Mapped[str] = mapped_column(String(128), index=True)
     subject: Mapped[str] = mapped_column(String(256), default="")
+    subject_material: Mapped[str] = mapped_column(
+        String(256), default="", server_default=text("''")
+    )
     scopes: Mapped[list[str]] = mapped_column(JSON)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     is_consumed: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -99,6 +102,7 @@ def _to_row(token: RefreshToken) -> RefreshTokenRow:
         token_hash=token.token_hash,
         client_id=token.client_id,
         subject=token.subject,
+        subject_material=token.subject_material,
         scopes=sorted(scope.value for scope in token.scopes),
         expires_at=token.expires_at,
         is_consumed=token.is_consumed,
@@ -117,6 +121,7 @@ def _from_row(row: RefreshTokenRow) -> RefreshToken:
         token_hash=row.token_hash,
         client_id=row.client_id,
         subject=row.subject,
+        subject_material=row.subject_material or "",
         scopes=frozenset(Scope(value) for value in row.scopes),
         expires_at=expires_at,
         is_consumed=row.is_consumed,

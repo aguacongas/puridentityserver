@@ -135,6 +135,7 @@ def _registration_json(result: ClientRegistration) -> str:
         "scope": result.scope,
         "redirect_uris": result.redirect_uris,
         "client_secret_expires_at": result.client_secret_expires_at,
+        "subject_type": result.subject_type,
     }
     jwks: object = json.loads(result.jwks) if result.jwks else ""
     optional_fields: tuple[tuple[str, object], ...] = (
@@ -178,6 +179,7 @@ def _registration_json(result: ClientRegistration) -> str:
             "backchannel_authentication_request_signing_alg",
             result.backchannel_authentication_request_signing_alg,
         ),
+        ("sector_identifier_uri", result.sector_identifier_uri),
     )
     data.update({name: value for name, value in optional_fields if value})
     return json.dumps(data, separators=(",", ":"))

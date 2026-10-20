@@ -25,7 +25,19 @@ Le scénario vérifie :
 9. `/token` avec l'ancien secret → `400 invalid_client` (rotation) ;
 10. `/token` avec le nouveau secret → `200` access_token ;
 11. `DELETE /register/{client_id}` → `204` ;
-12. `GET /register/{client_id}` → `404` (suppression effective).
+12. `GET /register/{client_id}` → `404` (suppression effective) ;
+13. le discovery annonce `subject_types_supported` =
+    `["public", "pairwise", "ephemeral"]` ;
+14. deux clients `pairwise` (secteurs distincts) → `sub` différentes pour le
+    même utilisateur, non corrélables entre elles (OIDC Core 1.0 §8.1) ;
+15. un même client `pairwise` → `sub` stable entre deux sessions ;
+16. `/userinfo` expose la même `sub` que l'id_token (profil résolu sur le
+    sujet réel) ;
+17. un client `ephemeral` → `sub` constante dans la session, jamais réutilisée
+    après une nouvelle connexion (ESID 1.0 §4) ;
+18. un client `public` (défaut) → `sub` réelle, non dérivée ;
+19. `POST /register` avec un `sector_identifier_uri` inaccessible ou
+    incohérent → `400 invalid_client_metadata`.
 
 ## Lancement
 
@@ -49,6 +61,13 @@ Démarrage du serveur puridentityserver (config générée par le test)...
   [10/12] nouveau secret (après rotation) -> 200 access_token OK
   [11/12] DELETE /register/{client_id} -> 204 corps vide OK
   [12/12] GET /register/{client_id} après suppression -> 404 OK
+  [1/7] discovery subject_types_supported = public, pairwise, ephemeral OK
+  [2/7] deux clients pairwise -> sub distinctes (secteurs différents) OK
+  [3/7] même client pairwise -> sub stable entre deux sessions OK
+  [4/7] /userinfo expose la sub de l'id_token OK
+  [5/7] client ephemeral -> sub constante en session, nouvelle jamais réutilisée OK
+  [6/7] client public (défaut) -> sub réelle non dérivée OK
+  [7/7] sector_identifier_uri incohérent -> 400 invalid_client_metadata OK
 
 === SCÉNARIO OK en X.Xs ===
 ```
@@ -58,13 +77,20 @@ Démarrage du serveur puridentityserver (config générée par le test)...
 Le smoke test génère sa configuration (port dédié `8104`, clés de signature
 limitées à `RS256` pour un démarrage rapide) via
 [`smoke_common.py`](../smoke_common.py) : aucun client seed — le client est
-créé dynamiquement au cours du scénario. La seule donnée d'administration
-fournie est l'**initial access token** de démonstration :
+créé dynamiquement au cours du scénario. Les données d'administration
+fournies sont l'**initial access token** de démonstration et le **seed de
+dérivation des subjects** :
 
 | Clé                        | Valeur                          |
 | -------------------------- | ------------------------------- |
 | `registration_enabled`     | `true`                          |
 | `initial_access_token`     | `dev-registrar-token`           |
+| `subject_pairwise_seed`    | `smoke-subject-seed-8104`       |
+
+Le seed est requis pour tout client `pairwise`/`ephemeral` : sans lui, la
+registration de tel client est refusée (`invalid_client_metadata`). Le smoke
+test seed aussi un compte `alice@example.com` (connexion au formulaire
+`/login`, nécessaire pour que le flow porte un sujet réel).
 
 C'est la même valeur que dans la configuration **par défaut** du serveur
 ([`config.toml`](../../config.toml) à la racine) : tester manuellement sur
