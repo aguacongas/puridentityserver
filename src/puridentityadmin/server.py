@@ -22,6 +22,7 @@ from fastapi import FastAPI
 from puridentityserver.application.api_resource import ApiResourceUseCase
 from puridentityserver.application.claim_authorizer import BearerClaimAuthorizer, ClaimRule
 from puridentityserver.application.identity_resource import IdentityResourceUseCase
+from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
 from puridentityserver.infrastructure.bearer import build_bearer_verifier
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
 from puridentityserver.infrastructure.persistence.stores import (
@@ -36,6 +37,7 @@ from puridentityserver.interfaces.api.api_resources import api_resources_router
 from puridentityserver.interfaces.api.cors import DynamicCORSMiddleware
 from puridentityserver.interfaces.api.identity_resources import identity_resources_router
 from puridentityserver.interfaces.api.security import swagger_oauth2_dependencies
+from puridentityserver.interfaces.api.signing_keys import signing_keys_router
 
 _PACKAGE_VERSION = "0.1.0"
 
@@ -67,6 +69,21 @@ class AdminDependencies:
         )
         self.identity_resources_usecase = IdentityResourceUseCase(stores.identity_resource)
         self.api_resources_usecase = ApiResourceUseCase(stores.api_resource)
+        # Rotation à la demande des clés de signature : le magasin de clés est
+        # partagé avec l'OP, la rotation est visible à sa prochaine
+        # publication du JWKS.
+        self.jwks_usecase = JWKSetUseCase(
+            JWKSetConfig(
+                key_size=settings.jwks_key_size,
+                algorithms=settings.jwks_signing_algorithms,
+                rotation_days=settings.jwks_rotation_days,
+                grace_period_days=settings.jwks_grace_period_days,
+                rotation_seconds=settings.jwks_rotation_seconds,
+                rotation_algorithms=settings.jwks_rotation_signing_algorithms,
+                retained_keys=settings.jwks_retained_keys,
+            ),
+            DefaultKeyManager(stores.key_pair),
+        )
 
     @asynccontextmanager
     async def lifespan(self, _app: FastAPI) -> AsyncGenerator[None, None]:
@@ -93,6 +110,10 @@ class AdminDependencies:
         )
         app.include_router(
             api_resources_router(self.api_resources_usecase, authorizer=self.admin_authorizer),
+            dependencies=oauth2,
+        )
+        app.include_router(
+            signing_keys_router(self.jwks_usecase, authorizer=self.admin_authorizer),
             dependencies=oauth2,
         )
 

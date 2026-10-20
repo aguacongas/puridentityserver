@@ -2,3 +2,7 @@
 # core.autocrlf=true (Windows) les convertirait au checkout — les scripts du
 # harness de certification ne seraient alors plus executables sous git-bash.
 *.sh text eol=lf
+
+# Les patches du driver de la suite sont appliques par `git apply` : ils
+# exigent LF (un patch CRLF est refuse par git).
+certification/*.patch text eol=lf

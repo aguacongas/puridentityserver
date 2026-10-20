@@ -35,17 +35,27 @@ sentinel_of() {
     conformance-alias-release) printf '%s' 'async def release_alias(self, alias, timeout=180):' ;;
     conformance-interrupted-diagnostics) printf '%s' 'async def describe_interruption(self, module_id):' ;;
     conformance-stale-plan-recovery) printf '%s' "'test module not found' in str(body.get" ;;
+    conformance-key-rotation) printf '%s' 'async def rotate_op_signing_keys():' ;;
     *) return 1 ;;
   esac
 }
 
-target="$SUITE_DIR/scripts/conformance.py"
+# Fichier cible de chaque patch (relatif a la racine du clone de la suite).
+target_of() {
+  case "$1" in
+    conformance-key-rotation) printf '%s' 'scripts/run-test-plan.py' ;;
+    *) printf '%s' 'scripts/conformance.py' ;;
+  esac
+}
+
 for patch in \
   conformance-reuse-plan \
   conformance-screenshots \
   conformance-alias-release \
   conformance-interrupted-diagnostics \
-  conformance-stale-plan-recovery; do
+  conformance-stale-plan-recovery \
+  conformance-key-rotation; do
+  target="$SUITE_DIR/$(target_of "$patch")"
   file="$PATCH_DIR/$patch.patch"
   sentinel="$(sentinel_of "$patch")"
   if grep -qF "$sentinel" "$target" 2>/dev/null; then

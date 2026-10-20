@@ -99,6 +99,22 @@ class JWKSetUseCase:
         keys.extend(await self._key_manager.get_retained_keys(self._config.retained_keys))
         return keys
 
+    async def rotate_signing_keys(self) -> list[KeyPair]:
+        """Fait pivoter à la demande les clés de signature gérées.
+
+        Rotation **ponctuelle** (endpoint d'administration) : chaque
+        algorithme géré reçoit une nouvelle paire, l'ancienne est retirée
+        (inactive) mais reste publiée au JWKS pendant la rétention
+        (OIDC Core 1.0 §10.1) et continue de valider les jetons qu'elle a
+        signés. L'OP publie les nouvelles clés à la publication suivante
+        du JWKS — le magasin de clés est partagé entre l'OP et le serveur
+        d'administration.
+        """
+        return [
+            await self._key_manager.rotate_key(self._config.key_size, algorithm)
+            for algorithm in _managed_algorithms(self._config.algorithms)
+        ]
+
     async def _mark_expired_keys(self) -> None:
         """Applique la politique de rotation journalière (retrait puis purge)."""
         removed = await self._key_manager.mark_expired_keys(

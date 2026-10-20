@@ -50,7 +50,7 @@ bash certification/local/down.sh             # arrêt du harness (--purge : cont
 ```
 
 - Plans : `basic | implicit | hybrid | formpost | dynamic | ciba | fapi1 | fapi2 | fapi2-message-signing`. `run-plan.sh` fait la
-  readiness (bootstrap via `setup.sh` si le harness est absent), applique les 5 patches
+  readiness (bootstrap via `setup.sh` si le harness est absent), applique les 6 patches
   driver par `prepare-suite.sh` (idempotent), substitue les URLs locales puis joue le
   driver officiel en sortie stricte ; log : `.harness-local/last-<plan>.log`,
   exports : `.harness-local/results/<plan>` (ou `--export-dir`).

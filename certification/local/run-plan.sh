@@ -85,30 +85,22 @@ fi
 # --- 2) Patches du driver (idempotents) --------------------------------------
 bash "$SCRIPT_DIR/prepare-suite.sh"
 
-# --- 2bis) OP redémarré avec la configuration du plan -------------------------
-# La rotation proactive des clés de signature (OIDC Core 1.0 §10.1) n'est
-# activée que pour le plan « dynamic », seul plan portant le module
-# oidcc-server-rotate-keys : les autres plans tournent avec le comportement par
-# défaut (aucune rotation), sans churn du JWKS ni invalidation de jeton. L'OP
-# est donc (re)démarré pour chaque plan avec la configuration correspondante.
-OP_JWKS_ROTATION_SECONDS="0"
-OP_JWKS_ROTATION_ALGORITHMS=""
-if [ "$plan" = "dynamic" ]; then
-  # Période très courte (0,1 ms) : le module oidcc-server-rotate-keys relève le
-  # JWKS deux fois à quelques dizaines de millisecondes d'intervalle (le
-  # driver démarre le module juste après sa configuration) - la clé
-  # courante n'a que quelques millisecondes d'âge au second relevé, il faut
-  # donc une période bien inférieure à cet intervalle pour que la rotation
-  # ait lieu entre les deux relevés.
-  OP_JWKS_ROTATION_SECONDS="${DYNAMIC_ROTATION_SECONDS:-0.0001}"
-  OP_JWKS_ROTATION_ALGORITHMS="${DYNAMIC_ROTATION_ALGORITHMS:-RS256}"
+# --- 2bis) Jeton d'administration (rotation des cles de signature) -----------
+# Le module `oidcc-server-rotate-keys` compare le JWKS avant et apres son
+# demarrage : la rotation des cles de signature de l'OP doit avoir lieu ENTRE
+# les deux releves. Le patch `conformance-key-rotation` du driver appelle
+# l'endpoint d'administration `POST /signing-keys/rotate` juste avant de
+# demarrer le module - il lui faut donc un jeton d'administration, obtenu ici
+# (grant `client_credentials`, client seed `certification-admin`).
+admin_token="$(bash "$SCRIPT_DIR/admin-token.sh" "http://127.0.0.1:${OP_PORT:-8000}" \
+  "$LOCAL_DIR/op-config.toml" || true)"
+if [ -n "$admin_token" ]; then
+  export KEY_ROTATION_ENDPOINT="http://127.0.0.1:${OP_PORT:-8000}/signing-keys/rotate"
+  export KEY_ROTATION_TOKEN="$admin_token"
+  log "jeton d'administration obtenu (rotation des cles de signature armee)"
+else
+  log "jeton d'administration indisponible : rotation des cles non armee"
 fi
-export OP_JWKS_ROTATION_SECONDS OP_JWKS_ROTATION_ALGORITHMS
-log "redémarrage de l'OP (rotation proactive : ${OP_JWKS_ROTATION_SECONDS}s, algorithmes : ${OP_JWKS_ROTATION_ALGORITHMS:-tous})"
-bash "$SCRIPT_DIR/setup.sh" >>"$LOCAL_DIR/setup-$plan.log" 2>&1 || {
-  echo "[run-plan] redémarrage de l'OP en échec (voir $LOCAL_DIR/setup-$plan.log)" >&2
-  exit 1
-}
 
 # --- 3) Substitution des URLs du plan (copie generee, working tree propre) ---
 # La copie va dans le clone de la suite (gitignore : conformance-suite/) et le

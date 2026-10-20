@@ -63,15 +63,28 @@ _CLIENT = {
     "client_type": "public",
 }
 
+#: Client d'administration de la demonstration : il obtient un access token
+#: (grant client_credentials) dont le claim ``client_id`` satisfait la regle
+#: d'autorisation de l'API d'administration.
+_ADMIN_CLIENT = {
+    "client_id": "sample-key-rotation-admin",
+    "client_secret": "sample-admin-secret",
+    "scopes": "openid",
+    "client_type": "confidential",
+}
+
 _USERS = {"alice": {"email": "alice@example.com", "password": "password"}}
 
 #: Réglages serveur du test : une rotation proactive courte - la rotation est
-#: déclenchée par la publication du JWKS (OIDC Core 1.0 §10.1).
+#: déclenchée par la publication du JWKS (OIDC Core 1.0 §10.1) - et
+#: l'API d'administration branchee sur le claim ``client_id``.
 _EXTRA_SETTINGS = {
     "jwks_key_size": 2048,
     "jwks_rotation_seconds": ROTATION_SECONDS,
     "jwks_rotation_algorithms": ["RS256"],
     "jwks_retained_keys": 1,
+    "admin_required_claim": "client_id",
+    "admin_required_claim_values": ["sample-key-rotation-admin"],
 }
 
 
@@ -153,19 +166,33 @@ def _verifiable(id_token: str, keys: list[dict[str, str]]) -> bool:
     return False
 
 
+def _admin_token(http: httpx.Client) -> str:
+    """Access token d'administration (client seed, grant client_credentials)."""
+    response = http.post(
+        f"{SERVER_URL}/token",
+        data={
+            "grant_type": "client_credentials",
+            "client_id": "sample-key-rotation-admin",
+            "client_secret": "sample-admin-secret",
+        },
+    )
+    assert response.status_code == 200, response.text
+    return str(response.json()["access_token"])
+
+
 def _run_scenario() -> None:
     """Joue le scénario de rotation des clés de signature."""
     with httpx.Client(follow_redirects=False, timeout=_HTTP_TIMEOUT) as http:
         metadata = http.get(f"{SERVER_URL}/.well-known/openid-configuration").json()
         assert metadata["jwks_uri"].endswith("/.well-known/jwks.json")
-        print(f"  [1/6] discovery OK (jwks_uri={metadata['jwks_uri']})")
+        print(f"  [1/7] discovery OK (jwks_uri={metadata['jwks_uri']})")
 
         before = _jwks(http)
         assert before
-        print(f"  [2/6] premier relevé du JWKS : {len(before)} clé(s) publiée(s)")
+        print(f"  [2/7] premier relevé du JWKS : {len(before)} clé(s) publiée(s)")
 
         id_token = _id_token(http)
-        print("  [3/6] id_token obtenu (signé par la clé de signature courante)")
+        print("  [3/7] id_token obtenu (signé par la clé de signature courante)")
 
         time.sleep(ROTATION_SECONDS + 0.2)
         after = _jwks(http)
@@ -174,16 +201,34 @@ def _run_scenario() -> None:
         assert after_kids - before_kids, "aucune nouvelle clé de signature publiée"
         assert before_kids & after_kids, "l'ancienne clé de signature a disparu du JWKS"
         print(
-            "  [4/6] rotation : nouvelle clé publiée, ancienne clé conservée (OIDC Core 1.0 §10.1)"
+            "  [4/7] rotation : nouvelle clé publiée, ancienne clé conservée (OIDC Core 1.0 §10.1)"
         )
 
         assert _verifiable(id_token, after), "l'id_token n'est plus vérifiable"
-        print("  [5/6] l'id_token signé avant la rotation reste vérifiable")
+        print("  [5/7] l'id_token signé avant la rotation reste vérifiable")
 
         time.sleep(ROTATION_SECONDS + 0.2)
         final = _jwks(http)
         assert len(final) <= len(after), "le JWKS croît sans borne"
-        print(f"  [6/6] le JWKS reste borné ({len(final)} clé(s) publiée(s))")
+        print(f"  [6/7] le JWKS reste borné ({len(final)} clé(s) publiée(s))")
+
+        token = _admin_token(http)
+        response = http.post(
+            f"{SERVER_URL}/signing-keys/rotate",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 200, response.text
+        rotated = response.json()["rotated"]
+        assert rotated, "aucune clé pivotée"
+        on_demand = _jwks(http)
+        on_demand_kids = {key["kid"] for key in on_demand}
+        final_kids = {key["kid"] for key in final}
+        assert on_demand_kids - final_kids, "la rotation à la demande n'a rien changé"
+        assert final_kids & on_demand_kids, "l'ancienne clé a disparu du JWKS"
+        print(
+            "  [7/7] rotation à la demande (POST /signing-keys/rotate) : "
+            f"{len(rotated)} clé(s) pivotée(s), ancienne conservée"
+        )
     print()
 
 
@@ -194,7 +239,7 @@ def main() -> None:
         watchdog(_DEADLINE),
         run_server(
             port=SERVER_PORT,
-            clients=(_CLIENT,),
+            clients=(_CLIENT, _ADMIN_CLIENT),
             users=_USERS,
             jwks_algorithms=("RS256",),
             extra_settings=_EXTRA_SETTINGS,

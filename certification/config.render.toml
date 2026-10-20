@@ -49,6 +49,14 @@ jwks_key_size = 2048
 registration_enabled = true
 registration_initial_access_token_mode = "disabled"
 
+# API d'administration (issue #194) : l'autorisation est branchee sur le
+# claim `client_id` (porte par tout access token) plutot que sur le scope
+# `admin` - ce scope n'etant pas enregistre, il serait impossible a un
+# client d'obtenir un jeton d'administration. Seul le client seed
+# `certification-admin` (ci-dessous) satisfait alors la regle.
+admin_required_claim = "client_id"
+admin_required_claim_values = ["certification-admin"]
+
 # Subject types (OIDC Core 1.0 §8.1, ESID 1.0 §4) : seed de dérivation
 # des `sub` pairwise/ephemeral exigé par les modules
 # oidcc-registration-sector-* du plan dynamic (un client `pairwise`
@@ -156,6 +164,20 @@ password = "password"
 [settings.identity_seed_users.bob]
 email = "bob@example.com"
 password = "password"
+
+# Client d'administration de la certification (issue #194) : le harnais
+# obtient un access token (grant client_credentials) dont le claim
+# `client_id` vaut `certification-admin`, puis appelle
+# `POST /signing-keys/rotate` pour faire pivoter les cles de signature de
+# l'OP entre les deux releves du JWKS du module `oidcc-server-rotate-keys`.
+# Instance de demonstration uniquement (le secret est commite, comme ceux
+# des clients FAPI des plans).
+[[settings.clients_seed]]
+client_id = "certification-admin"
+client_secret = "certification-admin-secret"
+redirect_uris = []
+scopes = "openid"
+client_type = "confidential"
 
 # Clients statiques FAPI (issue #113) : voir l'en-tête.
 [[settings.clients_seed]]

@@ -561,6 +561,23 @@ class TestSigningKeyRotation:
         assert claims is not None
         assert claims["sub"] == "alice"
 
+    def test_rotate_signing_keys_replaces_the_active_key(self) -> None:
+        """Rotation à la demande : nouvelle paire, ancienne retirée (non publiée)."""
+        manager = _manager()
+        usecase = JWKSetUseCase(
+            JWKSetConfig(key_size=_KEY_SIZE, algorithms=(JWTAlgorithm.RS256,)), manager
+        )
+        run(usecase.initialise())
+        before = run(usecase.get_published_keys())
+
+        rotated = run(usecase.rotate_signing_keys())
+
+        assert [key.algorithm for key in rotated] == [JWTAlgorithm.RS256]
+        published = run(usecase.get_published_keys())
+        kids = {key.kid for key in published}
+        assert rotated[0].kid in kids
+        assert {key.kid for key in before} & kids, "l'ancienne clé n'est plus publiée"
+
     def test_jwks_endpoint_rotates_and_keeps_the_previous_key(self) -> None:
         """Au niveau HTTP : une nouvelle clé apparaît, l'ancienne reste publiée."""
         settings = Settings(
