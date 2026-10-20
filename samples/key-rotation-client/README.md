@@ -18,7 +18,10 @@ Le scénario vérifie :
 5. l'`id_token` obtenu avant la rotation reste vérifiable avec le JWKS
    publié ;
 6. troisième relevé : le magasin de clés reste borné (les clés retirées
-   au-delà de la rétention sont purgées).
+   au-delà de la rétention sont purgées) ;
+7. **rotation à la demande** : `POST /signing-keys/rotate` (endpoint
+   d'administration, protégé par un jeton d'administration) fait pivoter les
+   clés immédiatement — l'ancienne reste publiée.
 
 ## Lancement
 
@@ -31,12 +34,13 @@ uv run python samples/key-rotation-client/smoke_test.py
 Sortie pas-à-pas se terminant par :
 
 ```text
-  [1/6] discovery OK (jwks_uri=http://127.0.0.1:8122/.well-known/jwks.json)
-  [2/6] premier relevé du JWKS : 1 clé(s) publiée(s)
-  [3/6] id_token obtenu (signé par la clé de signature courante)
-  [4/6] rotation : nouvelle clé publiée, ancienne clé conservée (OIDC Core 1.0 §10.1)
-  [5/6] l'id_token signé avant la rotation reste vérifiable
-  [6/6] le JWKS reste borné (2 clé(s) publiée(s))
+  [1/7] discovery OK (jwks_uri=http://127.0.0.1:8122/.well-known/jwks.json)
+  [2/7] premier relevé du JWKS : 1 clé(s) publiée(s)
+  [3/7] id_token obtenu (signé par la clé de signature courante)
+  [4/7] rotation : nouvelle clé publiée, ancienne clé conservée (OIDC Core 1.0 §10.1)
+  [5/7] l'id_token signé avant la rotation reste vérifiable
+  [6/7] le JWKS reste borné (2 clé(s) publiée(s))
+  [7/7] rotation à la demande (POST /signing-keys/rotate) : 1 clé(s) pivotée(s), ancienne conservée
 === SCÉNARIO OK en X.Xs ===
 ```
 
@@ -51,6 +55,11 @@ recommandation :
   clé de signature est remplacée. La rotation est *paresseuse* : elle est
   déclenchée par la publication du JWKS, et non par une tâche de fond —
   aucune clé n'est générée si personne ne consulte le JWKS ;
+- **rotation à la demande** (`POST /signing-keys/rotate`) : l'endpoint
+  d'administration force la rotation de toutes les familles de clés gérées.
+  Le magasin de clés est partagé entre l'OP et le serveur d'administration :
+  la nouvelle clé est publiée au JWKS à la publication suivante, l'ancienne
+  reste publiée pendant la rétention ;
 - **rétention** (`jwks_retained_keys`) : les clés retirées restent publiées au
   JWKS (et restent stockées) pendant la rétention ; au-delà, elles sont
   purgées, le magasin de clés reste donc borné ;
@@ -58,8 +67,9 @@ recommandation :
   pendant la rétention (la clé est résolue par `kid` sur toutes les clés
   conservées, pas seulement les clés actives).
 
-Les réglages sont documentés dans `docs/configuration.md` (paragraphe
-`PURIDENTITYSERVER_JWKS_ROTATION_SECONDS`). Par défaut la rotation
+Les réglages sont documentés dans `docs/configuration.md` (paragraphes
+`PURIDENTITYSERVER_JWKS_ROTATION_SECONDS` et
+`PURIDENTITYSERVER_ADMIN_REQUIRED_CLAIM`). Par défaut la rotation
 proactive est **désactivée** : la rotation journalière
 (`jwks_rotation_days` / `jwks_grace_period_days`) s'applique, comme
 jusqu'ici.
