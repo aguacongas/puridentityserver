@@ -38,7 +38,8 @@ Le scénario vérifie :
 18. un client `public` (défaut) → `sub` réelle, non dérivée ;
 19. `POST /register` avec un `sector_identifier_uri` inaccessible ou
     incohérent → `400 invalid_client_metadata` ;
-20. le discovery annonce `userinfo_signing_alg_values_supported` = `["RS256"]` ;
+20. le discovery annonce `userinfo_signing_alg_values_supported` =
+    `["PS256", "ES256", "RS256"]` ;
 21. `POST /register` avec `userinfo_signed_response_alg: "RS256"` → `201` +
     métadonnée échoée (OIDC Core 1.0 §5.3.1) ;
 22. `userinfo_signed_response_alg: "HS256"` (non publié par l'OP) →
@@ -76,7 +77,7 @@ Démarrage du serveur puridentityserver (config générée par le test)...
   [5/7] client ephemeral -> sub constante en session, nouvelle jamais réutilisée OK
   [6/7] client public (défaut) -> sub réelle non dérivée OK
   [7/7] sector_identifier_uri incohérent -> 400 invalid_client_metadata OK
-  [1/5] discovery userinfo_signing_alg_values_supported = [RS256] OK
+  [1/5] discovery userinfo_signing_alg_values_supported = [PS256, ES256, RS256] OK
   [2/5] POST /register userinfo_signed_response_alg=RS256 -> 201 + écho OK
   [3/5] userinfo_signed_response_alg=HS256 (non publié) -> 400 OK
   [4/5] /userinfo -> application/jwt RS256 vérifiée au JWKS (iss/aud/sub) OK
@@ -163,7 +164,7 @@ curl -s -X POST http://127.0.0.1:8000/register \
        "scope": "openid profile",
        "userinfo_signed_response_alg": "RS256"}'
 # → 201 avec "userinfo_signed_response_alg": "RS256" échoé dans la réponse
-# (toute autre valeur que RS256 -> 400 invalid_client_metadata)
+# (PS256 / ES256 / RS256 admis ; toute autre valeur -> 400 invalid_client_metadata)
 ```
 
 Après un flow Authorization Code classique avec ce client, `GET /userinfo`

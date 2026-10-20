@@ -153,6 +153,22 @@ class TestRegister:
         assert stored is not None
         assert stored.userinfo_signed_response_alg == "RS256"
 
+    def test_registers_fapi_userinfo_signing_client(self) -> None:
+        """Profil FAPI : ``PS256`` admis pour ``userinfo_signed_response_alg`` (§5.3.1)."""
+        usecase = _usecase()
+
+        result = run(
+            usecase.register(
+                RegisterRequest(
+                    {**_REGISTRATION, "userinfo_signed_response_alg": "PS256"},
+                    initial_access_token=_INITIAL_TOKEN,
+                )
+            )
+        )
+
+        assert isinstance(result, ClientRegistration)
+        assert result.userinfo_signed_response_alg == "PS256"
+
     def test_registers_unsigned_userinfo_by_default(self) -> None:
         """§5.3.2 : sans déclaration, la réponse ``/userinfo`` reste en JSON non signé."""
         result = _registered(_usecase())

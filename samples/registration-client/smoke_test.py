@@ -459,8 +459,8 @@ def _run_signed_userinfo_scenario(http: httpx.Client) -> None:
     5. un client sans la métadonnée -> ``/userinfo`` reste ``application/json``.
     """
     metadata = http.get(f"{SERVER_URL}/.well-known/openid-configuration").json()
-    assert metadata["userinfo_signing_alg_values_supported"] == ["RS256"]
-    print("  [1/5] discovery userinfo_signing_alg_values_supported = [RS256] OK")
+    assert metadata["userinfo_signing_alg_values_supported"] == ["PS256", "ES256", "RS256"]
+    print("  [1/5] discovery userinfo_signing_alg_values_supported = [PS256, ES256, RS256] OK")
 
     login = http.post(
         f"{SERVER_URL}/login",

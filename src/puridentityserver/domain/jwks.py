@@ -176,12 +176,19 @@ JARM_SIGNING_ALGORITHMS: tuple[str, ...] = (
 )
 
 #: Algorithmes JWS admis pour signer la réponse UserInfo en ``application/jwt``
-#: (OIDC Core 1.0 §5.3.2) : ``RS256`` seul, signé par l'OP avec sa propre
-#: clé (``kid`` inclus). Publiés au discovery sous
+#: (OIDC Core 1.0 §5.3.2) : ``PS256``/``ES256`` exigés par les profils FAPI
+#: (module ``FAPICheckDiscEndpointUserinfoSigningAlgValuesSupported`` — au
+#: moins un des deux exigé dès que le champ est publié), ``RS256`` admis pour
+#: les clients standards. Signée par l'OP avec sa propre clé (``kid`` inclus).
+#: Familles symétriques HS* et ``none`` exclus. Publiés au discovery sous
 #: ``userinfo_signing_alg_values_supported`` et contrôlés à l'enregistrement
 #: (``userinfo_signed_response_alg``, OIDC Registration 1.0 §2.1) — sans
 #: déclaration du client, la réponse reste en JSON non signé.
-USERINFO_SIGNING_ALGORITHMS: tuple[str, ...] = (JWTAlgorithm.RS256.value,)
+USERINFO_SIGNING_ALGORITHMS: tuple[str, ...] = (
+    JWTAlgorithm.PS256.value,
+    JWTAlgorithm.ES256.value,
+    JWTAlgorithm.RS256.value,
+)
 
 
 @dataclass(frozen=True, slots=True)

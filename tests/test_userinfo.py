@@ -389,6 +389,27 @@ class TestSignedUserinfo:
         assert payload["sub"] == "alice"
         assert payload["iat"] > 0
 
+    def test_signs_response_for_fapi_client(self) -> None:
+        """Profil FAPI : ``PS256`` publiés et signables (FAPI1/FAPI2/CIBA discovery)."""
+        client = Client(client_id="fapi-app", userinfo_signed_response_alg="PS256")
+        usecase, token_manager, key_manager = self._usecase(client)
+        token = self._token(token_manager, client_id="fapi-app")
+
+        result = run(usecase.execute(UserInfoRequest(access_token=token)))
+
+        assert not isinstance(result, UserInfoError)
+        header = pyjwt.get_unverified_header(result.signed_jwt)
+        assert header["alg"] == "PS256"
+        key = run(first_active_key(key_manager, JWTAlgorithm.PS256))
+        payload = pyjwt.decode(
+            result.signed_jwt,
+            key.public_key_pem,
+            algorithms=["PS256"],
+            audience="fapi-app",
+            issuer=_ISSUER,
+        )
+        assert payload["sub"] == "alice"
+
     def test_returns_json_for_client_without_registered_alg(self) -> None:
         """Sans ``userinfo_signed_response_alg``, la réponse reste en JSON (§5.3.2)."""
         client = Client(client_id="plain-app")
@@ -513,7 +534,11 @@ class TestUserInfoEndpoint:
         """§5.3.2 : client RS256 → ``/userinfo`` en ``application/jwt`` vérifiable au JWKS."""
         with TestClient(self._app(clients_seed=(_CLIENT_JSON, _SIGNED_CLIENT_JSON))) as client:
             metadata = client.get("/.well-known/openid-configuration").json()
-            assert metadata["userinfo_signing_alg_values_supported"] == ["RS256"]
+            assert metadata["userinfo_signing_alg_values_supported"] == [
+                "PS256",
+                "ES256",
+                "RS256",
+            ]
             login = client.post(
                 "/login",
                 data={"username": "alice@example.com", "password": "password", "next": "/"},
