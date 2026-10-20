@@ -126,6 +126,42 @@ class DefaultKeyManager:
                 await self._repository.update(replace(key, is_active=False))
         return removed
 
+    async def rotate_key(self, key_size: int, algorithm: JWTAlgorithm) -> KeyPair:
+        """Remplace la clé active de l'algorithme par une nouvelle paire.
+
+        La nouvelle paire est générée **avant** le retrait de l'ancienne :
+        une clé active existe donc en permanence, et l'ancienne reste au
+        magasin (inactive) pour la rétention publiée au JWKS.
+        """
+        current = [key for key in await self.get_active_keys() if key.algorithm is algorithm]
+        generated = await self.generate_key_pair(key_size, algorithm)
+        for key in current:
+            await self._repository.update(replace(key, is_active=False))
+        return generated
+
+    async def get_retained_keys(self, limit: int) -> list[KeyPair]:
+        """Clés retirées conservées, de la plus récente à la plus ancienne."""
+        if limit <= 0:
+            return []
+        return (await self._retired_keys())[:limit]
+
+    async def prune_inactive_keys(self, keep: int) -> int:
+        """Supprime les clés retirées au-delà des ``keep`` plus récentes."""
+        retired = await self._retired_keys()
+        removed = 0
+        for key in retired[max(keep, 0) :]:
+            await self._repository.delete(key.kid)
+            removed += 1
+        return removed
+
+    async def _retired_keys(self) -> list[KeyPair]:
+        """Clés retirées (inactives) de la famille, de la plus récente à la plus ancienne."""
+        return sorted(
+            (key for key in await self._keys() if not key.is_active),
+            key=lambda key: (key.created_at, key.kid),
+            reverse=True,
+        )
+
     async def ensure_active_key(self, key_size: int, algorithm: JWTAlgorithm) -> None:
         """Génère une clé de l'algorithme si aucune clé active n'est disponible."""
         active = [k for k in await self.get_active_keys() if k.algorithm is algorithm]

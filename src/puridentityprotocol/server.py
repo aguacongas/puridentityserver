@@ -230,6 +230,9 @@ class ProtocolDependencies:
                 algorithms=settings.jwks_signing_algorithms,
                 rotation_days=settings.jwks_rotation_days,
                 grace_period_days=settings.jwks_grace_period_days,
+                rotation_seconds=settings.jwks_rotation_seconds,
+                rotation_algorithms=settings.jwks_rotation_signing_algorithms,
+                retained_keys=settings.jwks_retained_keys,
             ),
             self.key_manager,
         )

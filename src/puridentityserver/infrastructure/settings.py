@@ -323,6 +323,15 @@ class Settings(BaseSettings):
     )
     jwks_rotation_days: int = 90
     jwks_grace_period_days: int = 7
+    # Rotation **proactive** des clés de signature : au-delà de cet âge (en
+    # secondes), la clé de signature est remplacée à la prochaine publication
+    # du JWKS (0 = désactivée, la rotation journalière reste inchangée).
+    jwks_rotation_seconds: float = 0.0
+    # Algorithmes concernés par la rotation proactive (vide = tous).
+    jwks_rotation_algorithms: Annotated[tuple[str, ...], NoDecode] = ()
+    # Clés retirées encore publiées au JWKS (OIDC Core 1.0 §10.1 : le JWK Set
+    # SHOULD conserver les clés de signature récemment retirées).
+    jwks_retained_keys: int = 1
 
     # Chiffrement JWE des id_token (OIDC Core 1.0 §3.1.3.6) : algorithmes
     # de gestion de clé (``alg``) et méthodes de chiffrement du contenu
@@ -582,6 +591,14 @@ class Settings(BaseSettings):
             return tuple(part.strip() for part in value.split(",") if part.strip())
         return value
 
+    @field_validator("jwks_rotation_algorithms", mode="before")
+    @classmethod
+    def _split_rotation_algorithms(cls, value: object) -> object:
+        """Transforme `PURIDENTITYSERVER_JWKS_ROTATION_ALGORITHMS="RS256"` en tuple."""
+        if isinstance(value, str):
+            return tuple(part.strip() for part in value.split(",") if part.strip())
+        return value
+
     @field_validator("registration_initial_access_tokens", mode="before")
     @classmethod
     def _split_initial_access_tokens(cls, value: object) -> object:
@@ -781,6 +798,11 @@ class Settings(BaseSettings):
     def jwks_signing_algorithms(self) -> tuple[JWTAlgorithm, ...]:
         """Algorithmes de signature résolus en membres JWTAlgorithm."""
         return tuple(JWTAlgorithm(name) for name in self.jwks_algorithms)
+
+    @cached_property
+    def jwks_rotation_signing_algorithms(self) -> tuple[JWTAlgorithm, ...]:
+        """Algorithmes concernés par la rotation proactive des clés de signature."""
+        return tuple(JWTAlgorithm(name) for name in self.jwks_rotation_algorithms)
 
     @cached_property
     def seed_clients(self) -> tuple[Client, ...]:

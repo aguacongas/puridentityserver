@@ -113,7 +113,23 @@ jobs:
           fi
           entries=()
           for p in "${plans[@]}"; do
-            entries+=("{\"plan\":\"$p\",\"selector\":\"$(selector_for "$p")\",\"file\":\"$p.json\"}")
+            # Rotation proactive des clés de signature (OIDC Core 1.0 §10.1) :
+            # activée uniquement pour le plan « dynamic », seul plan portant
+            # le module oidcc-server-rotate-keys. Les autres plans tournent
+            # avec le comportement par défaut (aucune rotation).
+            rotation="0"
+            rotation_algorithms=""
+            if [ "$p" = "dynamic" ]; then
+              # Période très courte (0,1 ms) : le module oidcc-server-rotate-keys
+              # relève le JWKS deux fois à quelques dizaines de millisecondes
+              # d'intervalle (le driver démarre le module juste après sa
+              # configuration) ; la clé courante n'a que quelques
+              # millisecondes d'âge au second relevé, la période doit donc
+              # être bien inférieure à cet intervalle.
+              rotation="0.0001"
+              rotation_algorithms="RS256"
+            fi
+            entries+=("{\"plan\":\"$p\",\"selector\":\"$(selector_for "$p")\",\"file\":\"$p.json\",\"rotation\":\"$rotation\",\"rotation_algorithms\":\"$rotation_algorithms\"}")
           done
           echo "matrix=$(printf '{"include":[%s]}' "$(IFS=,; echo "${entries[*]}")")" >> "$GITHUB_OUTPUT"
 
@@ -179,6 +195,15 @@ jobs:
     # jouer sans les captures exigées.
     if: ${{ needs.matrix.result == 'success' && needs.capture.result == 'success' }}
     runs-on: ubuntu-latest
+    env:
+      # Rotation proactive des clés de signature (OIDC Core 1.0 §10.1) :
+      # 0 = désactivée (comportement par défaut) pour tous les plans sauf
+      # « dynamic », seul plan portant le module oidcc-server-rotate-keys.
+      # L'OP est démarré par setup.sh (étape Bootstrap) : il hérite de ces
+      # variables. Les autres plans tournent sans aucune rotation, donc sans
+      # churn du JWKS ni invalidation de jeton en cours de plan.
+      PURIDENTITYSERVER_JWKS_ROTATION_SECONDS: ${{ matrix.rotation }}
+      PURIDENTITYSERVER_JWKS_ROTATION_ALGORITHMS: ${{ matrix.rotation_algorithms }}
     strategy:
       # Chaque plan continue même si un autre échoue : le rapport consolidé
       # montre l'état complet du run. Le job lui-même échoue dès que le driver
