@@ -1,0 +1,62 @@
+diff --git a/scripts/run-test-plan.py b/scripts/run-test-plan.py
+index 7fec982..0b08efd 100644
+--- a/scripts/run-test-plan.py
++++ b/scripts/run-test-plan.py
+@@ -7,6 +7,7 @@ import fnmatch
+ import json
+ import os
+ import re
++import ssl
+ import subprocess
+ import sys
+ import time
+@@ -255,6 +256,41 @@ async def run_test_plan(test_plan_obj, config_file, output_dir, client_certs):
+     return plan_results
+ 
+ 
++async def rotate_op_signing_keys():
++    """Force la rotation des cles de signature de l'OP (avant le demarrage du module).
++
++    Le module ``oidcc-server-rotate-keys`` compare le JWKS avant et apres le
++    demarrage du test : la rotation doit avoir lieu ENTRE les deux releves, ce
++    que seul l'OP peut faire (l'operateur de la certification ne peut pas
++    agir a ce moment-la). L'endpoint d'administration de l'OP est appele si
++    son URL et son jeton sont fournis par l'environnement
++    (``KEY_ROTATION_ENDPOINT`` / ``KEY_ROTATION_TOKEN``) ; sinon la rotation
++    n'est pas declenchee et le module reproduit son ecart attendu.
++    """
++    endpoint = os.getenv('KEY_ROTATION_ENDPOINT')
++    token = os.getenv('KEY_ROTATION_TOKEN')
++    if not endpoint or not token:
++        print('KEY_ROTATION_ENDPOINT/KEY_ROTATION_TOKEN absents : rotation des cles de signature non declenchee')
++        return
++    verify_ssl = 'CONFORMANCE_DEV_MODE' not in os.environ and 'DISABLE_SSL_VERIFY' not in os.environ
++    request = urllib.request.Request(
++        endpoint,
++        data=b'',
++        method='POST',
++        headers={'Authorization': 'Bearer ' + token},
++    )
++    context = None
++    if not verify_ssl:
++        context = ssl.create_default_context()
++        context.check_hostname = False
++        context.verify_mode = ssl.CERT_NONE
++    try:
++        with urllib.request.urlopen(request, timeout=60, context=context) as response:
++            print("Rotation des cles de signature de l'OP : HTTP {}".format(response.status))
++    except Exception as error:
++        print("Rotation des cles de signature de l'OP impossible : {}".format(error))
++
++
+ async def run_test_module(moduledict, plan_id, test_info, test_time_taken, variant, op_plan, plan_results, output_dir, brazil_client_scope, parsed_config, client_certs):
+     module=moduledict['testModule']
+     module_with_variants = get_string_name_for_module_with_variant(moduledict)
+@@ -291,6 +327,7 @@ async def run_test_module(moduledict, plan_id, test_info, test_time_taken, varia
+                 if module == 'oidcc-server-rotate-keys':
+                     # This test needs manually started once the OP keys have been rotated; we can't actually do that
+                     # but at least we can run the test and check it finishes even if it always fails.
++                    await rotate_op_signing_keys()
+                     print('Starting test')
+                     await conformance.start_test(module_id)
+                 state = await conformance.wait_for_state(module_id, ["WAITING", "FINISHED"])

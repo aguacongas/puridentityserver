@@ -190,8 +190,9 @@ bash certification/local/down.sh --purge     # + suppression de .harness-local/
 ```
 
 `run-plan.sh` reproduit le job plan du workflow CI : readiness (bootstrap via
-`setup.sh` si besoin), application idempotente des 5 patches du driver
-(`prepare-suite.sh`), substitution `{OPURL}`/`{SUITEURL}` dans une copie
+`setup.sh` si besoin), application idempotente des 6 patches du driver
+(`prepare-suite.sh`), obtention du jeton d'administration
+(`admin-token.sh`), substitution `{OPURL}`/`{SUITEURL}` dans une copie
 générée du clone (`conformance-suite/plans/<plan>.json` — gitignore, le
 working tree git reste propre), lancement du driver officiel en **sortie
 stricte** (code retour non nul dès
@@ -202,6 +203,30 @@ bilan `PASSED/FAILED/REVIEW` lu dans l'export, avec les chemins du log
 `certification/selectors.sh`, la **source unique** partagée avec les deux
 workflows CI ; `prepare-suite.sh` est le helper de patches partagé avec le
 workflow local.
+
+### Rotation des clés de signature (module `oidcc-server-rotate-keys`)
+
+Ce module compare le JWKS **avant et après** le démarrage du test : la
+rotation des clés de signature de l'OP doit avoir lieu **entre** les deux
+relevés. Le driver démarre le module sans délai après sa configuration (les
+deux relevés sont séparés de quelques dizaines de millisecondes) : l'opérateur
+ne peut donc pas agir à ce moment-là — c'est l'OP qui doit le faire.
+
+Le patch `conformance-key-rotation` du driver appelle l'endpoint
+d'administration `POST /signing-keys/rotate` juste avant de démarrer le
+module (l'appel est conditionné par les variables d'environnement
+`KEY_ROTATION_ENDPOINT` et `KEY_ROTATION_TOKEN`, absentes ⇒ aucune rotation
+et le module reproduit son écart attendu). Le jeton est un access token
+d'administration obtenu par le grant `client_credentials` sur le client seed
+`certification-admin` (`certification/local/admin-token.sh`) ; l'autorisation
+de l'API d'administration est branchée sur le claim `client_id`
+(`admin_required_claim` / `admin_required_claim_values` de
+`certification/config.render.toml`) — le scope `admin` par défaut n'étant pas
+enregistré, il serait impossible à un client d'obtenir un jeton d'administration.
+
+Ainsi, **aucune rotation permanente** n'est configurée sur l'instance de
+certification : les neuf plans (local, CI, hébergé) partagent le même
+mécanisme, sans churn du JWKS sur les plans qui ne portent pas le module.
 
 ### Écarts de modules attendus (mode witness)
 

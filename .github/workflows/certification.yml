@@ -370,6 +370,8 @@ jobs:
           grep -n "describe_interruption" conformance-suite/scripts/conformance.py
           git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-stale-plan-recovery.patch"
           grep -n "test module not found" conformance-suite/scripts/conformance.py
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-key-rotation.patch"
+          grep -n "rotate_op_signing_keys" conformance-suite/scripts/run-test-plan.py
 
       - name: Timeout par module piloté par CONFORMANCE_MODULE_TIMEOUT
         # Le driver upstream hardcode timeout=240 dans wait_for_state : on rend
@@ -378,6 +380,23 @@ jobs:
         run: |
           sed -i 's/def wait_for_state(self, module_id, required_states, timeout=240):/def wait_for_state(self, module_id, required_states, timeout=int(os.getenv("CONFORMANCE_MODULE_TIMEOUT", "240"))):/' scripts/conformance.py
           grep -n "CONFORMANCE_MODULE_TIMEOUT" scripts/conformance.py
+
+      - name: Jeton d'administration (rotation des clés de signature)
+        # Le patch `conformance-key-rotation` du driver appelle
+        # `POST /signing-keys/rotate` sur l'OP juste avant de démarrer le
+        # module `oidcc-server-rotate-keys` : la rotation des clés de
+        # signature doit tomber ENTRE les deux relevés du JWKS comparés par
+        # le module. Le jeton est obtenu par le grant client_credentials
+        # (client seed `certification-admin`).
+        run: |
+          token="$(bash certification/local/admin-token.sh "$OP_URL" certification/config.render.toml)"
+          if [ -z "$token" ]; then
+            echo "::error::jeton d'administration indisponible (client certification-admin)"
+            exit 1
+          fi
+          echo "KEY_ROTATION_ENDPOINT=$OP_URL/signing-keys/rotate" >> "$GITHUB_ENV"
+          echo "KEY_ROTATION_TOKEN=$token" >> "$GITHUB_ENV"
+          echo "rotation des clés de signature armée"
 
       - name: Récupération des captures d'écran réelles (artefact prepare)
         # Capture obligatoire (issue #161) : le job `prepare` vert garantit la
