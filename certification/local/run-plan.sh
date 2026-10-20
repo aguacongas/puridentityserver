@@ -94,7 +94,13 @@ bash "$SCRIPT_DIR/prepare-suite.sh"
 OP_JWKS_ROTATION_SECONDS="0"
 OP_JWKS_ROTATION_ALGORITHMS=""
 if [ "$plan" = "dynamic" ]; then
-  OP_JWKS_ROTATION_SECONDS="${DYNAMIC_ROTATION_SECONDS:-0.05}"
+  # Période très courte (0,1 ms) : le module oidcc-server-rotate-keys relève le
+  # JWKS deux fois à quelques dizaines de millisecondes d'intervalle (le
+  # driver démarre le module juste après sa configuration) - la clé
+  # courante n'a que quelques millisecondes d'âge au second relevé, il faut
+  # donc une période bien inférieure à cet intervalle pour que la rotation
+  # ait lieu entre les deux relevés.
+  OP_JWKS_ROTATION_SECONDS="${DYNAMIC_ROTATION_SECONDS:-0.0001}"
   OP_JWKS_ROTATION_ALGORITHMS="${DYNAMIC_ROTATION_ALGORITHMS:-RS256}"
 fi
 export OP_JWKS_ROTATION_SECONDS OP_JWKS_ROTATION_ALGORITHMS
