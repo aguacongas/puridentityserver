@@ -15,10 +15,14 @@ import json
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+import jwt as pyjwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -28,11 +32,21 @@ from puridentityserver.application.request_object import (
     RequestObjectResolver,
     is_pushed_request_uri,
 )
+from puridentityserver.domain.authorization import Client, ClientType, Scope
+from puridentityserver.infrastructure.persistence.memory.clients import (
+    InMemoryClientRepository,
+)
+from puridentityserver.infrastructure.persistence.memory.dpop_replays import (
+    InMemoryDpopReplayRepository,
+)
 from puridentityserver.infrastructure.request_object import (
     HTTPRequestObjectFetcher,
     loopback_bind,
 )
 from puridentityserver.infrastructure.settings import Settings
+from puridentityserver.infrastructure.signed_request_object import (
+    PyJWTSignedRequestObjectVerifier,
+)
 from puridentityserver.server import create_app
 
 _ISSUER = "https://id.example"
@@ -93,6 +107,75 @@ def _resolver(document: str | None) -> tuple[RequestObjectResolver, _StubFetcher
     return RequestObjectResolver(RequestObjectConfig(), fetcher), fetcher
 
 
+_JAR_KID = "standard-jar-test-key"
+
+
+def _jar_key(algorithm: str = "RS256") -> tuple[RSAPrivateKey, tuple[dict[str, object], ...]]:
+    """Paire RSA de test et JWKS embarqué (``kid``/``alg``) pour un JAR."""
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    numbers = private.public_key().public_numbers()
+    n = base64.urlsafe_b64encode(numbers.n.to_bytes((numbers.n.bit_length() + 7) // 8, "big"))
+    e = base64.urlsafe_b64encode(numbers.e.to_bytes((numbers.e.bit_length() + 7) // 8, "big"))
+    jwks = (
+        {
+            "kty": "RSA",
+            "use": "sig",
+            "kid": _JAR_KID,
+            "alg": algorithm,
+            "n": n.rstrip(b"=").decode("ascii"),
+            "e": e.rstrip(b"=").decode("ascii"),
+        },
+    )
+    return private, jwks
+
+
+def _signed_jar(
+    private_key: RSAPrivateKey,
+    *,
+    claims: dict[str, object] | None = None,
+    algorithm: str = "RS256",
+) -> str:
+    """Signe un request object (paramètres de demande + ``iss``/``aud``, §10.1)."""
+    payload: dict[str, object] = {"iss": "web-app", "aud": _ISSUER, **_base_params()}
+    if claims is not None:
+        payload.update(claims)
+    return str(pyjwt.encode(payload, private_key, algorithm=algorithm, headers={"kid": _JAR_KID}))
+
+
+def _standard_client(jwks: tuple[dict[str, object], ...]) -> Client:
+    """Client standard (non-FAPI) de ``web-app``, avec JWKS embarqués."""
+    return Client(
+        client_id="web-app",
+        redirect_uris=frozenset({"https://app.example/callback"}),
+        scopes=frozenset({Scope.OPENID, Scope.PROFILE}),
+        client_type=ClientType.CONFIDENTIAL,
+        jwks=jwks,
+    )
+
+
+def _jar_resolver(client: Client | None, *, configured: bool = True) -> RequestObjectResolver:
+    """Resolver standard avec issuer, registre clients et vérification JWKS."""
+    fetcher = _StubFetcher(None)
+    clients = InMemoryClientRepository()
+    if client is not None:
+        asyncio.run(clients.save(client))
+    signed = PyJWTSignedRequestObjectVerifier(InMemoryDpopReplayRepository())
+    return RequestObjectResolver(
+        RequestObjectConfig(issuer=_ISSUER),
+        fetcher,
+        clients=clients,
+        signed=signed if configured else None,
+    )
+
+
+_JAR_KEY, _JAR_JWKS = _jar_key()
+_SIGNED_CLIENT = {
+    **_CLIENT,
+    "client_id": "signed-app",
+    "jwks": [dict(key) for key in _JAR_JWKS],
+}
+
+
 def _base_params(**extra: str) -> dict[str, str]:
     """Paramètres d'une demande ``response_type=code`` de référence."""
     params = {
@@ -119,7 +202,7 @@ def _app() -> FastAPI:
             issuer=_ISSUER,
             base_url=_ISSUER,
             jwks_algorithms=("RS256",),
-            clients_seed=(_CLIENT, _UNSIGNED_CLIENT),
+            clients_seed=(_CLIENT, _UNSIGNED_CLIENT, _SIGNED_CLIENT),
         )
     )
 
@@ -201,7 +284,8 @@ def test_missing_alg_header_is_accepted_as_unsigned() -> None:
     assert resolved["nonce"] == "nonce-without-alg"
 
 
-def test_signed_request_object_is_refused() -> None:
+def test_signed_request_object_is_refused_without_client_keys() -> None:
+    """Sans registre clients, la signature RS256 n'est pas vérifiable (§10.3)."""
     resolver, _fetcher = _resolver(None)
 
     resolved = run(
@@ -212,6 +296,136 @@ def test_signed_request_object_is_refused() -> None:
 
     assert isinstance(resolved, RequestObjectError)
     assert resolved.error == "invalid_request_object"
+    assert "client inconnu" in resolved.error_description
+
+
+class TestSignedRequestObjectStandard:
+    """Request objects RS256 signés par des clients standards (issue #188)."""
+
+    def test_rs256_request_object_is_verified_and_merged(self) -> None:
+        """OIDC Core 1.0 §10.3 : signature vérifiée aux JWKS, claims du jeton primés."""
+        key, jwks = _jar_key()
+        resolver = _jar_resolver(_standard_client(jwks))
+
+        resolved = run(
+            resolver,
+            **_base_params(nonce="nonce-transport"),
+            request=_signed_jar(key, claims={"nonce": "nonce-from-jar"}),
+        )
+
+        assert isinstance(resolved, dict)
+        assert resolved["nonce"] == "nonce-from-jar"
+        assert resolved["state"] == "state-1"
+        assert "request" not in resolved
+
+    def test_rs256_request_object_signed_by_another_key_is_refused(self) -> None:
+        """OIDC Core 1.0 §10.3 : signature non vérifiable -> invalid_request_object."""
+        _registered, jwks = _jar_key()
+        foreign, _foreign_jwks = _jar_key()
+        resolver = _jar_resolver(_standard_client(jwks))
+
+        resolved = run(resolver, **_base_params(), request=_signed_jar(foreign))
+
+        assert isinstance(resolved, RequestObjectError)
+        assert resolved.error == "invalid_request_object"
+
+    def test_rs256_request_object_for_unknown_client_is_refused(self) -> None:
+        """OIDC Core 1.0 §10.3 : client inconnu, aucune clé à confronter."""
+        key, _jwks = _jar_key()
+        resolver = _jar_resolver(None)
+
+        resolved = run(resolver, **_base_params(), request=_signed_jar(key))
+
+        assert isinstance(resolved, RequestObjectError)
+        assert resolved.error == "invalid_request_object"
+        assert "client inconnu" in resolved.error_description
+
+    def test_rs256_request_object_with_wrong_iss_is_refused(self) -> None:
+        """OIDC Core 1.0 §10.1 : ``iss`` doit valoir le client_id émetteur."""
+        key, jwks = _jar_key()
+        resolver = _jar_resolver(_standard_client(jwks))
+
+        resolved = run(
+            resolver,
+            **_base_params(),
+            request=_signed_jar(key, claims={"iss": "intruder"}),
+        )
+
+        assert isinstance(resolved, RequestObjectError)
+        assert resolved.error == "invalid_request_object"
+        assert "claim iss" in resolved.error_description
+
+    def test_rs256_request_object_with_wrong_aud_is_refused(self) -> None:
+        """OIDC Core 1.0 §10.1 : ``aud`` doit valoir l'issuer."""
+        key, jwks = _jar_key()
+        resolver = _jar_resolver(_standard_client(jwks))
+
+        resolved = run(
+            resolver,
+            **_base_params(),
+            request=_signed_jar(key, claims={"aud": "https://other.example"}),
+        )
+
+        assert isinstance(resolved, RequestObjectError)
+        assert resolved.error == "invalid_request_object"
+        assert "claim aud" in resolved.error_description
+
+    def test_rs256_request_object_with_expired_exp_is_refused(self) -> None:
+        """RFC 9101 §6.1 : ``exp`` passé, borné nativement sans fenêtre FAPI."""
+        key, jwks = _jar_key()
+        resolver = _jar_resolver(_standard_client(jwks))
+        past = int(datetime.now(timezone.utc).timestamp()) - 3600
+
+        resolved = run(resolver, **_base_params(), request=_signed_jar(key, claims={"exp": past}))
+
+        assert isinstance(resolved, RequestObjectError)
+        assert resolved.error == "invalid_request_object"
+        assert "expiré" in resolved.error_description
+
+    def test_unsupported_algorithm_is_refused(self) -> None:
+        """Seuls ``none`` et ``RS256`` sont admis pour un client standard."""
+        _key, jwks = _jar_key()
+        resolver = _jar_resolver(_standard_client(jwks))
+
+        resolved = run(
+            resolver,
+            **_base_params(),
+            request=_request_object(_base_params(), header={"alg": "HS256"}),
+        )
+
+        assert isinstance(resolved, RequestObjectError)
+        assert resolved.error == "invalid_request_object"
+        assert "non supporté" in resolved.error_description
+
+    def test_verification_not_configured_is_refused(self) -> None:
+        """Sans port de vérification, le JAR RS256 n'est pas servable (invalid_request)."""
+        key, jwks = _jar_key()
+        resolver = _jar_resolver(_standard_client(jwks), configured=False)
+
+        resolved = run(resolver, **_base_params(), request=_signed_jar(key))
+
+        assert isinstance(resolved, RequestObjectError)
+        assert resolved.error == "invalid_request"
+        assert "non configurée" in resolved.error_description
+
+    def test_fapi_client_still_refuses_rs256(self) -> None:
+        """FAPI inchangé : seule PS256/ES256 admise (FAPI1-ADV-5.2.2-1)."""
+        key, jwks = _jar_key()
+        fapi_client = Client(
+            client_id="web-app",
+            redirect_uris=frozenset({"https://app.example/callback"}),
+            scopes=frozenset({Scope.OPENID, Scope.PROFILE}),
+            client_type=ClientType.CONFIDENTIAL,
+            jwks=jwks,
+            fapi_enabled=True,
+        )
+        resolver = _jar_resolver(fapi_client)
+
+        resolved = run(resolver, **_base_params(), request=_signed_jar(key))
+
+        assert isinstance(resolved, RequestObjectError)
+        assert resolved.error == "invalid_request_object"
+        assert "non admis" in resolved.error_description
 
 
 @pytest.mark.parametrize(
@@ -484,6 +698,57 @@ def test_authorize_redirect_uri_of_request_object_takes_precedence() -> None:
 
     assert response.status_code == 302
     assert response.headers["location"].startswith("https://app.example/callback?")
+
+
+def test_authorize_accepts_rs256_request_object_and_issues_code() -> None:
+    """OIDC Core 1.0 §10.1 : le JAR RS256 d'un client standard est vérifié (issue #188)."""
+    claims = {
+        **_base_params(
+            client_id="signed-app",
+            code_challenge=_s256_challenge("verifier-verifier"),
+            code_challenge_method="S256",
+        ),
+        "iss": "signed-app",
+    }
+    with TestClient(_app()) as client:
+        response = client.get(
+            "/authorize",
+            params={
+                "response_type": "code",
+                "client_id": "signed-app",
+                "redirect_uri": "https://app.example/callback",
+                "scope": "openid profile",
+                "request": _signed_jar(_JAR_KEY, claims=claims),
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    assert query["code"]
+    assert query["state"] == ["state-1"]
+
+
+def test_authorize_refuses_rs256_request_object_signed_by_a_foreign_key() -> None:
+    """OIDC Core 1.0 §10.3 : clé étrangère -> ``invalid_request_object`` redirigé au client."""
+    foreign, _foreign_jwks = _jar_key()
+    with TestClient(_app()) as client:
+        response = client.get(
+            "/authorize",
+            params={
+                "response_type": "code",
+                "client_id": "signed-app",
+                "redirect_uri": "https://app.example/callback",
+                "scope": "openid profile",
+                "request": _signed_jar(foreign, claims={"iss": "signed-app"}),
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    assert query["error"] == ["invalid_request_object"]
+    assert query["state"] == ["state-1"]
 
 
 def test_authorize_shows_error_page_for_invalid_request_object() -> None:
