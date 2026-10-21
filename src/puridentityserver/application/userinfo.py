@@ -29,6 +29,11 @@ from puridentityserver.application.claims_request import (
     allowed_scope_claims,
     requested_userinfo_claims,
 )
+from puridentityserver.application.identity_assurance import (
+    VERIFIED_CLAIMS_MEMBER,
+    IdentityAssuranceUseCase,
+    verified_claims_request_from_payload,
+)
 from puridentityserver.application.tls_binding import certificate_binding_error
 from puridentityserver.domain.authorization import Client, ClientCertificate
 from puridentityserver.domain.dpop import access_token_hash
@@ -124,6 +129,7 @@ class UserInfoUseCase:
         *,
         dpop: DpopProofValidator | None = None,
         clients: ClientReader | None = None,
+        identity_assurance: IdentityAssuranceUseCase | None = None,
     ) -> None:
         """Injection config, validateur, fournisseur, denylist, registre et DPoP.
 
@@ -135,6 +141,9 @@ class UserInfoUseCase:
         §8.1, ESID 1.0 §4) et résoudre sa ``userinfo_signed_response_alg``
         (§5.3.1) : sans injection, la ``sub`` du jeton est rendue telle
         quelle (client ``public``) et la réponse jamais signée.
+        ``identity_assurance`` résout les ``verified_claims`` (OpenID
+        Identity Assurance 1.0) : sans injection, le membre n'est jamais
+        rendu.
         """
         self._config = config
         self._token_manager = token_manager
@@ -143,6 +152,7 @@ class UserInfoUseCase:
         self._identity_resources = identity_resources
         self._dpop = dpop
         self._clients = clients
+        self._identity_assurance = identity_assurance
 
     async def execute(self, request: UserInfoRequest) -> UserInfoResponse | UserInfoError:
         """Traite la requête et retourne les claims (signés si demandés) ou une erreur."""
@@ -174,13 +184,36 @@ class UserInfoUseCase:
         allowed |= requested_userinfo_claims(claims.get("claims"))
         user_claims = await self._claims_provider.get_claims(str(subject))
         client = await self._emitting_client(claims)
+        rendered = {name: value for name, value in user_claims.claims.items() if name in allowed}
+        # Le membre `verified_claims` est rendu depuis sa version résolue
+        # (identité assurance) : le profil brut du user store ne doit jamais
+        # être servi tel quel.
+        rendered.pop(VERIFIED_CLAIMS_MEMBER, None)
+        verified_claims = await self._verified_claims(claims, str(subject))
+        if verified_claims is not None:
+            rendered[VERIFIED_CLAIMS_MEMBER] = verified_claims
         response = UserInfoResponse(
             claims={
                 "sub": self._displayed_sub(client, str(subject), claims),
-                **{name: value for name, value in user_claims.claims.items() if name in allowed},
+                **rendered,
             }
         )
         return await self._sign_response(client, response)
+
+    async def _verified_claims(
+        self, claims: dict[str, object], subject: str
+    ) -> dict[str, object] | None:
+        """Membre `verified_claims` résolu (identité assurance, spec IDA 1.0).
+
+        La demande rejouée est celle mémorisée dans l'access_token (le
+        ``/userinfo`` n'a pas accès au paramètre ``claims`` d'origine).
+        """
+        if self._identity_assurance is None:
+            return None
+        request = verified_claims_request_from_payload(claims.get("claims"))
+        if request is None:
+            return None
+        return await self._identity_assurance.resolve(request, subject)
 
     async def _emitting_client(self, claims: dict[str, object]) -> Client | None:
         """Client émetteur du jeton lu dans le claim privé ``client_id``.

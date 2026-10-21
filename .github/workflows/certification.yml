@@ -19,7 +19,7 @@ name: Certification OIDC
 # `release-vX.Y.Z` listé par `git ls-remote` sur
 # gitlab.com/openid/conformance-suite (échec = run en erreur) — cf. issue #150.
 #
-# Issue #122 : les 9 plans s'exécutent EN PARALLÈLE (matrix de jobs, même
+# Issue #122 : les 10 s'exécutent EN PARALLÈLE (matrix de jobs, même
 # patron que certification-local.yml ; fapi2-message-signing ajouté par
 # l'issue #164, formpost par l'issue #165, dynamic par l'issue #168) : ~3 h
 # séquentielles deviennent la durée
@@ -46,8 +46,16 @@ on:
     inputs:
       plan:
         # Permet un cycle de diagnostic rapide : ne lancer qu'un seul plan au
-        # lieu des neuf (~30 min, même en parallèle le gain nul).
-        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + Dynamic + CIBA + FAPI1 + FAPI2 + FAPI2 Message Signing)"
+        # lieu des dix (~30 min, même en parallèle le gain nul).
+        # `ekyc` (identité assurance) est HORS programme officiel de
+        # certification mais est joué dans le run `all` comme les autres.
+        # ⚠ Le plan `ekyc-test-plan-oidccore` n'existe que depuis le tag
+        # `release-v5.3.3` de la suite (14/10/2026) : si la suite déployée par
+        # l'OIDF est antérieure, ce job échoue (plan inconnu). Repli : retirer
+        # `ekyc` de `CERTIFICATION_PLANS` (certification/selectors.sh) — le
+        # workflow local, lui, épingle la dernière release et n'est pas
+        # concerné.
+        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + Dynamic + CIBA + FAPI1 + FAPI2 + FAPI2 Message Signing + ekyc ; ekyc = identité assurance, hors programme officiel)"
         type: choice
         required: false
         default: all
@@ -62,6 +70,7 @@ on:
           - fapi1
           - fapi2
           - fapi2-message-signing
+          - ekyc
 
 permissions:
   contents: read
@@ -103,7 +112,7 @@ jobs:
         # toute consommation d'infra (deploy hook, Playwright, clone).
         id: matrix
         env:
-          # Vide sur push/schedule : les neuf plans sont joués.
+          # Vide sur push/schedule : les dix sont joués.
           PLAN_FILTER: ${{ inputs.plan || 'all' }}
         run: |
           set -euo pipefail

@@ -32,7 +32,12 @@ from puridentityserver.application.registration import (
     RegistrationError,
     RegistrationUseCase,
 )
-from puridentityserver.application.token import TokenConfig, TokenRequest, TokenUseCase
+from puridentityserver.application.token import (
+    TokenConfig,
+    TokenDependencies,
+    TokenRequest,
+    TokenUseCase,
+)
 from puridentityserver.application.userinfo import (
     UserInfoConfig,
     UserInfoError,
@@ -407,7 +412,7 @@ class TestTokenUseCaseDPoP:
             token_manager,
             refresh_tokens,
             device_codes,
-            dpop=DpopGrantGuard(PyJWTDpopProofValidator(replays)),
+            dependencies=TokenDependencies(dpop=DpopGrantGuard(PyJWTDpopProofValidator(replays))),
         )
         return usecase, codes, refresh_tokens
 

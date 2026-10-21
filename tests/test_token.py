@@ -10,7 +10,12 @@ from typing import TypeVar
 import jwt
 import pytest
 
-from puridentityserver.application.token import TokenConfig, TokenRequest, TokenUseCase
+from puridentityserver.application.token import (
+    TokenConfig,
+    TokenDependencies,
+    TokenRequest,
+    TokenUseCase,
+)
 from puridentityserver.domain.authorization import (
     AuthorizationCode,
     Client,
@@ -103,7 +108,7 @@ def _make_usecase(
             token_manager,
             refresh_tokens,
             device_codes,
-            revoked_tokens=revoked_tokens,
+            dependencies=TokenDependencies(revoked_tokens=revoked_tokens),
         ),
         codes,
         refresh_tokens,

@@ -167,3 +167,11 @@ class DiscoveryDocument(BaseModel):
             "roles",
         ]
     )
+    # Identité assurance (OpenID Identity Assurance 1.0) : ce que l'OP sait
+    # servir en matière de claims vérifiés. Membres absents du document
+    # lorsque l'OP n'expose aucun profil vérifié (``exclude_none``).
+    trust_frameworks_supported: list[str] | None = None
+    claims_in_verified_claims_supported: list[str] | None = None
+    evidence_supported: list[str] | None = None
+    documents_supported: list[str] | None = None
+    documents_check_methods_supported: list[str] | None = None

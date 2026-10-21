@@ -44,6 +44,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 - [OpenID Connect Front-Channel Logout] + [Back-Channel Logout] (OIDC spec) — notifications de déconnexion
 - [OpenID Connect Session Management] (OIDC Session Management 1.0) — `session_state`, iframe `check_session_iframe`
 - [OpenID 2.0 to OpenID Connect Migration] (OIDF, version finale) — scope `openid2`, claim `openid2_id`, rôle OpenID 2.0 de l'OP (`checkid_setup` / `check_authentication`) et preuve d'autorité — **désactivé par défaut** (`openid20_migration_enabled`)
+- [OpenID Identity Assurance] (OIDF, version finale) — claim `verified_claims` (demande via le paramètre `claims`), metadata eKYC du discovery ; profil `verified_claims` dans le user store, **aucun réglage à activer**
 - [OAuth 2.0 Dynamic Client Registration] (RFC 7591) + [Client Management] (RFC 7592) — `/register`
 - CORS — origines autorisées **déduites des URIs des clients actifs** (`redirect_uris` + `web_origins`, OAuth 2.0 for Browser-Based Apps), pour les SPA publics en Authorization Code + PKCE
 - **Ressources protégées** (ApiResources) — registre des audiences API et de leurs scopes : l'`aud` d'un access token porte le nom des resources dont des scopes ont été accordés, tout scope non enregistré est refusé (`invalid_scope`)
@@ -76,6 +77,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 - [Installation](docs/installation.md) — prérequis, installation, lancement, déploiement
 - [Configuration du serveur](docs/configuration.md) — variables `PURIDENTITYSERVER_*`, `.env`, démarrage
 - [Migration OpenID 2.0 vers OpenID Connect](docs/openid20-migration.md) — spec OIDF, scope `openid2`, claim `openid2_id`, parcours RP
+- [Identité assurance (verified_claims)](docs/identity-assurance.md) — spec OIDF, claim `verified_claims`, metadata eKYC, parcours RP
 
 ## Structure (Clean Architecture)
 

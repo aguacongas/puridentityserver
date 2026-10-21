@@ -15,7 +15,9 @@ Regroupe trois responsabilités partagées par les cas d'utilisation
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Any
 
 from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCES
 from puridentityserver.interfaces.domain.userinfo import ClaimsProvider
@@ -32,10 +34,17 @@ class ClaimsRequest:
     (``essential``, ``value``/``values``) sont acceptées à la validation mais
     les valeurs rendues restent toujours celles du user store — l'OP ne
     fabrique aucune donnée de profil.
+
+    Les structures brutes (``raw_userinfo`` / ``raw_id_token``) sont
+    néanmoins conservées : les extensions qui portent leurs propres
+    contraintes (e.g. les ``verified_claims`` de l'identité assurance) ont
+    besoin de la demande complète, pas de la seule liste des noms.
     """
 
     userinfo: tuple[str, ...] = ()
     id_token: tuple[str, ...] = ()
+    raw_userinfo: Mapping[str, Any] = field(default_factory=dict)
+    raw_id_token: Mapping[str, Any] = field(default_factory=dict)
 
 
 def parse_claims_parameter(value: str) -> ClaimsRequest | None:
@@ -57,6 +66,7 @@ def parse_claims_parameter(value: str) -> ClaimsRequest | None:
     if not isinstance(parsed, dict):
         return None
     members: dict[str, tuple[str, ...]] = {}
+    raw_members: dict[str, Mapping[str, Any]] = {}
     for member in _CLAIMS_MEMBERS:
         if member not in parsed:
             continue
@@ -69,9 +79,12 @@ def parse_claims_parameter(value: str) -> ClaimsRequest | None:
                 return None
             names.append(str(name))
         members[member] = tuple(names)
+        raw_members[member] = dict(claims_object)
     return ClaimsRequest(
         userinfo=members.get("userinfo", ()),
         id_token=members.get("id_token", ()),
+        raw_userinfo=raw_members.get("userinfo", {}),
+        raw_id_token=raw_members.get("id_token", {}),
     )
 
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from puridentityserver.application.authorize import SUPPORTED_ACR_VALUES
+from puridentityserver.application.identity_assurance import IdentityAssuranceUseCase
 from puridentityserver.application.request_object import (
     PUBLISHED_REQUEST_OBJECT_SIGNING_ALGORITHMS,
 )
@@ -92,11 +93,18 @@ class DiscoveryUseCase:
         config: DiscoveryConfig,
         identity_resources: IdentityResourceReader | None = None,
         api_resources: ApiResourceReader | None = None,
+        identity_assurance: IdentityAssuranceUseCase | None = None,
     ) -> None:
-        """Injection de la configuration de l'émetteur et des registres de resources."""
+        """Injection de la configuration de l'émetteur et des registres de resources.
+
+        ``identity_assurance`` publie la metadata eKYC (OpenID Identity
+        Assurance 1.0) : les listes advertised sont dérivées des profils
+        vérifiés connus ; sans injection, la metadata eKYC est absente.
+        """
         self._config = config
         self._identity_resources = identity_resources
         self._api_resources = api_resources
+        self._identity_assurance = identity_assurance
 
     async def execute(self) -> dict[str, object]:
         """Construit les métadonnées OIDC Discovery (§3 OIDC Discovery 1.0)."""
@@ -219,7 +227,20 @@ class DiscoveryUseCase:
         # signer une preuve — ``none`` et les familles symétriques HS*
         # y sont exclus (le RS partage leur secret : preuve forgeable).
         metadata["dpop_signing_alg_values_supported"] = list(self._config.dpop_signing_algorithms)
+        # Identité assurance (OpenID Identity Assurance 1.0) : la metadata
+        # eKYC décrit ce que l'OP sait servir ; elle est dérivée des profils
+        # vérifiés connus et reste absente si l'OP n'en expose aucun.
+        ekyc = await self._identity_assurance_metadata()
+        if ekyc:
+            metadata.update(ekyc)
         return metadata
+
+    async def _identity_assurance_metadata(self) -> dict[str, list[str]]:
+        """Metadata eKYC publiée (listes dérivées des profils vérifiés)."""
+        if self._identity_assurance is None:
+            return {}
+        metadata = await self._identity_assurance.metadata()
+        return {name: list(values) for name, values in metadata.items() if values}
 
     async def _scopes_and_claims(self) -> tuple[list[str], list[str]]:
         """Scopes et claims publiés, dérivés des IdentityResources + scopes d'API."""

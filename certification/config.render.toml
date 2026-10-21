@@ -132,6 +132,43 @@ locality = "Paris"
 postal_code = "75002"
 country = "FR"
 
+# Claims vérifiés d'Alice (OpenID Identity Assurance 1.0) : le plan ekyc de
+# la suite demande le membre `verified_claims` via le parametre `claims` et
+# verifie que l'OP publie la metadata eKYC correspondante
+# (trust_frameworks_supported, claims_in_verified_claims_supported,
+# evidence_supported, documents_supported, documents_check_methods_supported).
+
+[settings.users_seed.alice.verified_claims.verification]
+trust_framework = "de_aml"
+assurance_level = "substantial"
+verification_process = "certification-513645-e44b-4951-942c-7091cf7d891d"
+time = "2026-04-23T18:25Z"
+
+[[settings.users_seed.alice.verified_claims.verification.evidence]]
+type = "document"
+
+[[settings.users_seed.alice.verified_claims.verification.evidence.check_details]]
+check_method = "pvp"
+time = "2026-04-22T11:30Z"
+
+[[settings.users_seed.alice.verified_claims.verification.evidence.check_details]]
+check_method = "vpip"
+
+[settings.users_seed.alice.verified_claims.verification.evidence.document_details]
+type = "de_erp_replacement_idcard"
+document_number = "53554554"
+date_of_issuance = "2020-04-23"
+date_of_expiry = "2030-04-22"
+
+[settings.users_seed.alice.verified_claims.verification.evidence.document_details.issuer]
+name = "Ville de Demo"
+country = "FR"
+
+[settings.users_seed.alice.verified_claims.claims]
+given_name = "Alice"
+family_name = "Martin"
+birthdate = "1990-04-12"
+
 [settings.users_seed.bob]
 name = "Bob Durand"
 family_name = "Durand"

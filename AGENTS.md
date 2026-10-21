@@ -20,8 +20,9 @@ uv run python -m pytest -p no:cacheprovider -q   # tests + couverture >= 80 % (9
 
 - **Harness local (mode courant)** : la suite de conformance OIDF tourne en docker
   sur le runner, OP local derrière un nginx mTLS — workflow
-  `.github/workflows/certification-local.yml`, matrix des 9 plans (basic,
-  implicit, hybrid, formpost, dynamic, ciba, fapi1, fapi2, fapi2-message-signing), mode *witness*
+  `.github/workflows/certification-local.yml`, matrix des 10 plans (basic,
+  implicit, hybrid, formpost, dynamic, ciba, fapi1, fapi2, fapi2-message-signing,
+  ekyc), mode *witness*
   (les gaps module ne
   bloquent pas), déclenché sur chaque PR vers `main` touchant `certification/**`
   ou à la demande (`workflow_dispatch`, filtre de plan).
@@ -29,11 +30,13 @@ uv run python -m pytest -p no:cacheprovider -q   # tests + couverture >= 80 % (9
   défaut vit dans `SUITE_VERSION` (`certification/local/setup.sh`) ; avant chaque
   usage/rejeu, vérifier qu'une release plus récente n'est pas publiée et bumper
   `SUITE_VERSION` + la doc (`certification/README.md`) en conséquence, puis
-  rejouer les 9 plans pour valider le bump. Ne jamais fixer une version
+  rejouer les 10 plans pour valider le bump. Ne jamais fixer une version
   périmée dans la doc ou les scripts.
 - **Run hébergé officiel OIDF** : `.github/workflows/certification.yml` (secret
   `CONFORMANCE_TOKEN`, publication GitHub Pages) — reste la référence finale de
-  certification.
+  certification. Il joue les **10 plans** : les 9 du programme officiel **plus**
+  `ekyc` (identité assurance, hors programme officiel — choix du
+  maintainer : l'assurance conformité vaut aussi pour la spec de niche).
 - L'ancien rejeu pytest `tests/conformance/` a été supprimé ; le mini-RP client
   (harness de parcours) vit dans `samples/oidc_harness/` et sert les smoke
   tests `samples/fapi1-client/` et `samples/fapi2-client/`.
@@ -49,7 +52,7 @@ bash certification/local/run-plan.sh basic   # 1 plan en sortie stricte (log + e
 bash certification/local/down.sh             # arrêt du harness (--purge : conteneurs + clone)
 ```
 
-- Plans : `basic | implicit | hybrid | formpost | dynamic | ciba | fapi1 | fapi2 | fapi2-message-signing`. `run-plan.sh` fait la
+- Plans : `basic | implicit | hybrid | formpost | dynamic | ciba | fapi1 | fapi2 | fapi2-message-signing | ekyc`. `run-plan.sh` fait la
   readiness (bootstrap via `setup.sh` si le harness est absent), applique les 6 patches
   driver par `prepare-suite.sh` (idempotent), substitue les URLs locales puis joue le
   driver officiel en sortie stricte ; log : `.harness-local/last-<plan>.log`,

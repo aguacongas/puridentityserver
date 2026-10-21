@@ -37,6 +37,7 @@ from puridentityserver.application.device_authorize import (
 )
 from puridentityserver.application.discovery import DiscoveryConfig, DiscoveryUseCase
 from puridentityserver.application.dpop import DpopGrantGuard
+from puridentityserver.application.identity_assurance import IdentityAssuranceUseCase
 from puridentityserver.application.introspect import IntrospectConfig, IntrospectUseCase
 from puridentityserver.application.jarm import JarmSigner
 from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
@@ -53,7 +54,7 @@ from puridentityserver.application.request_object import RequestObjectConfig, Re
 from puridentityserver.application.revocation import RevocationConfig, RevocationUseCase
 from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.application.session_management import SessionManagementUseCase
-from puridentityserver.application.token import TokenConfig, TokenUseCase
+from puridentityserver.application.token import TokenConfig, TokenDependencies, TokenUseCase
 from puridentityserver.application.userinfo import UserInfoConfig, UserInfoUseCase
 from puridentityserver.domain.authorization import Scope, TokenEndpointAuthMethod
 from puridentityserver.domain.jwks import SYMMETRIC_ALGORITHMS, JWTAlgorithm, KeyUse
@@ -284,6 +285,7 @@ class ProtocolDependencies:
         )
         self.session_management = SessionManagementUseCase()
         self.claims_provider = UserStoreClaimsProvider(self.readers.user)
+        self.identity_assurance = IdentityAssuranceUseCase(self.claims_provider, self.readers.user)
         self.request_object_resolver = RequestObjectResolver(
             RequestObjectConfig(issuer=settings.issuer),
             HTTPRequestObjectFetcher(
@@ -317,6 +319,7 @@ class ProtocolDependencies:
             identity_resources=self.readers.identity_resource,
             jarm_signer=self.jarm_signer,
             openid20_migration=self.openid20_migration,
+            identity_assurance=self.identity_assurance,
         )
         self.token_usecase = TokenUseCase(
             TokenConfig(
@@ -337,10 +340,13 @@ class ProtocolDependencies:
             stores.backchannel,
             self.scope_registry,
             self.client_assertions,
-            claims_provider=self.claims_provider,
-            revoked_tokens=stores.revoked,
-            dpop=DpopGrantGuard(self.dpop_validator),
-            openid20_migration=self.openid20_migration,
+            TokenDependencies(
+                claims_provider=self.claims_provider,
+                revoked_tokens=stores.revoked,
+                dpop=DpopGrantGuard(self.dpop_validator),
+                openid20_migration=self.openid20_migration,
+                identity_assurance=self.identity_assurance,
+            ),
         )
         self.device_usecase = DeviceAuthorizationUseCase(
             DeviceConfig(
@@ -384,6 +390,7 @@ class ProtocolDependencies:
             self.readers.identity_resource,
             dpop=self.dpop_validator,
             clients=self.readers.client,
+            identity_assurance=self.identity_assurance,
         )
         self.protected_resource_usecase: ProtectedResourceUseCase | None = None
         if settings.protected_resource_enabled:
@@ -531,6 +538,7 @@ class ProtocolDependencies:
                     self.config,
                     identity_resources=self.readers.identity_resource,
                     api_resources=self.readers.api_resource,
+                    identity_assurance=self.identity_assurance,
                 )
             )
         )
