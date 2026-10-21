@@ -213,6 +213,78 @@ def test_authorize_error_redirect_includes_state() -> None:
     assert query["state"] == ["some-state"]
 
 
+def test_authorize_error_redirect_in_query_carries_iss_parameter() -> None:
+    """RFC 9207 §2 : l'erreur redirigée en query porte ``iss`` = issuer."""
+    with TestClient(_app()) as client:
+        response = client.get(
+            "/authorize",
+            params={
+                "response_type": "foo",
+                "client_id": "web-app",
+                "redirect_uri": "https://app.example/callback",
+                "scope": "openid",
+                "state": "some-state",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    query = _redirect_query(response.headers["location"])
+    assert query["error"] == ["unsupported_response_type"]
+    assert query["iss"] == [_ISSUER]
+
+
+def test_authorize_error_redirect_in_fragment_carries_iss_parameter() -> None:
+    """RFC 9207 §2 : l'erreur redirigée en fragment porte ``iss`` = issuer.
+
+    Le flow implicite ( ``response_type=id_token`` ) exige un ``nonce`` :
+    son absence produit l'erreur redirigée, en fragment (RFC 6749 §4.2.2.1).
+    """
+    with TestClient(_app()) as client:
+        response = client.get(
+            "/authorize",
+            params={
+                "response_type": "id_token",
+                "client_id": "web-app",
+                "redirect_uri": "https://app.example/callback",
+                "scope": "openid",
+                "state": "some-state",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert "#" in location
+    fragment = parse_qs(urlparse(location).fragment)
+    assert fragment["error"] == ["invalid_request"]
+    assert fragment["iss"] == [_ISSUER]
+
+
+def test_authorize_error_redirect_omits_iss_without_issuer() -> None:
+    """Sans émetteur configuré, l'erreur redirigée ne porte pas ``iss``."""
+    settings = Settings(
+        issuer="",
+        base_url="",
+        jwks_algorithms=("RS256",),
+        clients_seed=(_CLIENT_JSON,),
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.get(
+            "/authorize",
+            params={
+                "response_type": "foo",
+                "client_id": "web-app",
+                "redirect_uri": "https://app.example/callback",
+                "scope": "openid",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert "iss" not in _redirect_query(response.headers["location"])
+
+
 def test_authorize_rejects_unsupported_response_type() -> None:
     with TestClient(_app()) as client:
         response = client.get(

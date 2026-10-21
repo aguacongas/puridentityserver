@@ -8,7 +8,8 @@ Deux formats coexistent selon que l'erreur est **redirigeable** ou non :
   signée dans l'enveloppe JARM portée par ``response`` (JARM Final 1.0 §3) ;
   en ``response_mode=form_post``, elle part dans le ``POST`` auto-soumis
   vers la ``redirect_uri`` avec ``iss`` (Form Post Response Mode 1.0 §2,
-  RFC 9207 §2) ;
+  RFC 9207 §2) ; les transports clairs ``query``/``fragment`` portent
+  également ``iss`` (RFC 9207 §2 : « including error responses ») ;
 - ``error_page`` : une page HTML d'erreur affichée dans le navigateur de
   l'utilisateur, exigée dès que la ``redirect_uri`` n'est pas de confiance
   (non enregistrée) ou que le ``client_id`` est invalide — la RFC 6749
@@ -57,8 +58,8 @@ def _form_post_error_params(result: AuthorizeError, issuer: str) -> dict[str, st
 
     Valeurs brutes comme dans l'enveloppe JARM — ni percent-encodage ni
     ``#`` : le corps ``x-www-form-urlencoded`` fait ce travail. ``iss``
-    accompagne l'erreur (RFC 9207 §2, « including error responses »),
-    même si le transport ``query``/``fragment`` ne l'émet pas encore.
+    accompagne l'erreur (RFC 9207 §2, « including error responses »), comme
+    dans les transports clairs ``query``/``fragment``.
     """
     params = {"error": result.error}
     if result.error_description:
@@ -90,9 +91,9 @@ async def error_redirect(
     l'erreur redirigeable part dans le ``POST`` auto-soumis vers la
     ``redirect_uri`` — mêmes paramètres ``error`` / ``error_description``
     / ``state`` / ``iss`` que la réponse de succès. ``issuer`` porte la
-    valeur ``iss`` publiée par discovery (RFC 9207 §2) : ignorée hors
-    ``form_post``, l'émetteur n'étant pas encore émis sur les transports
-    clairs (cf. issue de suivi RFC 9207).
+    valeur ``iss`` publiée par discovery (RFC 9207 §2) : présente dans les
+    trois transports (query, fragment, form_post), absente quand aucun
+    émetteur n'est configuré.
     """
     if result.response_mode is ResponseMode.FORM_POST:
         return form_post_page(result.redirect_uri, _form_post_error_params(result, issuer))
@@ -113,6 +114,12 @@ async def error_redirect(
         parts.append(f"error_description={description}")
     if result.state:
         parts.append(f"state={result.state}")
+    if issuer:
+        # RFC 9207 §2 : l'émetteur accompagne TOUTE réponse d'autorisation,
+        # y compris les réponses d'erreur (« including error responses ») -
+        # même valeur et même règle d'omission que la réponse de succès
+        # (émetteur absent : pas de paramètre).
+        parts.append(f"iss={issuer}")
     params = "&".join(parts)
     if result.response_mode is ResponseMode.FRAGMENT:
         separator = "#"

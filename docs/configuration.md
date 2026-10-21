@@ -10,7 +10,7 @@ Elle est lue au démarrage par [pydantic-settings](https://docs.pydantic.dev/lat
 
 | Variable | Défaut | Description |
 | --- | --- | --- |
-| `PURIDENTITYSERVER_ISSUER` | `http://127.0.0.1:8000` | Identifiant public de l'émetteur : l'URL où le serveur est joignable. Doit être stable et, en production, en **HTTPS**. |
+| `PURIDENTITYSERVER_ISSUER` | `http://127.0.0.1:8000` | Identifiant public de l'émetteur : l'URL où le serveur est joignable. Doit être stable et, en production, en **HTTPS**. Il est publié par le discovery (`issuer`) et le paramètre `iss` accompagne **toute** réponse de l'endpoint d'autorisation — succès comme erreur, dans les transports `query`, `fragment` et `form_post` (RFC 9207 §2, « including error responses ») ; la métadonnée `authorization_response_iss_parameter_supported` vaut `true`. |
 | `PURIDENTITYSERVER_BASE_URL` | *(issuer)* | Base utilisée pour construire les URL des endpoints publiées dans le document de discovery (`/authorize`, `/token`, `/userinfo`, `/.well-known/jwks.json`, …). Par défaut : l'issuer. |
 | `PURIDENTITYSERVER_HOST` | `127.0.0.1` | Interface réseau sur laquelle écoute le serveur Uvicorn. |
 | `PURIDENTITYSERVER_PORT` | `8000` | Port d'écoute. |
