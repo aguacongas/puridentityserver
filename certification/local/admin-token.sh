@@ -19,9 +19,12 @@ op_url="${1:?URL de l OP requise (ex. http://127.0.0.1:8000)}"
 config="${2:-certification/config.render.toml}"
 
 client_id="$(sed -n 's/^client_id = "\(certification-admin\)"$/\1/p' "$config" | head -n1)"
-client_secret="$(sed -n 's/^client_secret = "\(.*\)"$/\1/p' "$config" | head -n1)"
+# Le secret n'est jamais commite : il est lu dans l'environnement (variable
+# `CERTIFICATION_ADMIN_CLIENT_SECRET`).
+client_secret="${CERTIFICATION_ADMIN_CLIENT_SECRET:-}"
 if [ -z "$client_id" ] || [ -z "$client_secret" ]; then
-  echo "[admin-token] client d'administration introuvable dans $config" >&2
+  echo "[admin-token] client d'administration ou secret introuvable" \
+    "(client_id dans $config, secret dans CERTIFICATION_ADMIN_CLIENT_SECRET)" >&2
   exit 1
 fi
 

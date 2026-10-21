@@ -267,6 +267,14 @@ jobs:
     name: Plan ${{ matrix.plan }} (witness)
     needs: prepare
     runs-on: ubuntu-latest
+    env:
+      # Secret du client d'administration de la certification (instance
+      # hebergee) : meme valeur que la variable
+      # `CERTIFICATION_ADMIN_CLIENT_SECRET` du tableau de bord Render, jamais
+      # commitee. Sans elle, le job ne peut pas appeler
+      # `POST /signing-keys/rotate` (le module oidcc-server-rotate-keys
+      # reproduit alors son ecart attendu).
+      CERTIFICATION_ADMIN_CLIENT_SECRET: ${{ secrets.CERTIFICATION_ADMIN_CLIENT_SECRET }}
     strategy:
       # Chaque plan continue même si un autre échoue : le rapport consolidé
       # doit montrer l'état complet du run, pas s'arrêter au premier plan

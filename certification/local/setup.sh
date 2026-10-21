@@ -260,6 +260,12 @@ while curl -s --max-time 1 -o /dev/null "http://127.0.0.1:$OP_PORT/" 2>/dev/null
   sleep 1
 done
 log "démarrage de l'OP (uvicorn :$OP_PORT, issuer https://$OP_ALIAS:$MTLS_PORT)"
+# Secret du client d'administration de la certification : lu dans
+# l'environnement (jamais committé - le seed le référence par
+# `${CERTIFICATION_ADMIN_CLIENT_SECRET}`). Valeur locale par défaut pour le
+# harnais local (instance sur localhost) ; l'instance hébergée fournit la
+# sienne via le tableau de bord Render.
+export CERTIFICATION_ADMIN_CLIENT_SECRET="${CERTIFICATION_ADMIN_CLIENT_SECRET:-local-certification-admin-secret}"
 # PURIDENTITYSERVER_REQUEST_URI_ALLOW_LOCAL_TARGETS : la suite sert le document
 # request_uri sur localhost.emobix.co.uk (→127.0.0.1), destination loopback
 # refusée par la garde anti-SSRF tant que l'OP bind 0.0.0.0 (issue #152).

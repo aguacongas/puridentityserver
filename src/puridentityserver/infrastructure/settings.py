@@ -1,6 +1,7 @@
 """Configuration de l'infrastructure (variable d'environnement, .env, config.toml)."""
 
 import os
+import re
 from functools import cached_property
 from hashlib import sha256
 from pathlib import Path
@@ -49,6 +50,10 @@ _REGISTRATION_INITIAL_ACCESS_TOKEN_MODES = ("static", "jwt", "disabled")
 
 _SETTINGS_FILE_ENV = "PURIDENTITYSERVER_SETTINGS_FILE"
 
+# Référence à un secret d'environnement dans une configuration : la valeur
+# n'est jamais committée, elle est lue dans l'environnement du serveur.
+_SECRET_PLACEHOLDER = re.compile(r"^\$\{(\w+)\}$")
+
 
 def _hash_client_secret(secret: str) -> str:
     """Calcule l'empreinte SHA-256 du secret client (jamais stocké en clair)."""
@@ -83,10 +88,26 @@ def _parse_password_policy_patch(raw: object) -> PasswordPolicyPatch:
     return PasswordPolicyPatch.from_mapping(raw)
 
 
+def _resolve_secret(value: str) -> str:
+    """Résout un secret référencé par l'environnement (``${NOM_VARIABLE}``).
+
+    Un client seed peut ainsi déclarer
+    ``client_secret = "${CERTIFICATION_ADMIN_CLIENT_SECRET}"`` : la valeur
+    n'est alors **jamais committée**, elle provient de l'environnement du
+    serveur (tableau de bord de l'hébergeur, secret CI). Un placeholder non
+    résolu donne un secret vide : le client est inutilisable (aucun jeton
+    d'administration), jamais deviné.
+    """
+    match = _SECRET_PLACEHOLDER.match(value)
+    if match is None:
+        return value
+    return os.environ.get(match.group(1), "")
+
+
 def _parse_client(raw: dict[str, object]) -> Client:
     """Convertit un dictionnaire de configuration en Client domaine."""
     client_id = str(raw["client_id"])
-    secret = str(raw.get("client_secret", ""))
+    secret = _resolve_secret(str(raw.get("client_secret", "")))
     redirect_raw = raw.get("redirect_uris", ())
     if isinstance(redirect_raw, (list, tuple)):
         redirect_uris = frozenset(str(uri) for uri in redirect_raw)

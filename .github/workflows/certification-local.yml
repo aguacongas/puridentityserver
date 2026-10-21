@@ -179,6 +179,11 @@ jobs:
     # jouer sans les captures exigées.
     if: ${{ needs.matrix.result == 'success' && needs.capture.result == 'success' }}
     runs-on: ubuntu-latest
+    env:
+      # Secret du client d'administration de la certification : lu dans
+      # l'environnement, jamais committé. Valeur locale par défaut (le job
+      # local joue sur localhost) ; un secret GitHub permet de la surcharger.
+      CERTIFICATION_ADMIN_CLIENT_SECRET: ${{ secrets.CERTIFICATION_ADMIN_CLIENT_SECRET || 'local-certification-admin-secret' }}
     strategy:
       # Chaque plan continue même si un autre échoue : le rapport consolidé
       # montre l'état complet du run. Le job lui-même échoue dès que le driver
