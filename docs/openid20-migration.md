@@ -54,6 +54,9 @@ OP  ──▶  claimed_id:https://op.example/openid20/id/…
 
 L'état du flux et le `assoc_handle` sont des jetons **signés** par l'OP : ils
 ne sont ni falsifiables ni expirables par le tiers (10 minutes de validité).
+Le `checkid_handle` reçu n'est pas renvoyé dans l'assertion (c'est une donnée
+fournie par l'appelant : la refléter ouvrirait une faille d'injection) ; le
+RP connaît déjà le handle qu'il a transmis.
 
 ### 2. Demande de l'identifiant OpenID 2.0 en OpenID Connect
 

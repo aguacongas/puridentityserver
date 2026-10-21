@@ -46,9 +46,7 @@ class InMemoryOpenID20IdentifierRepository:
             return list(self._identifiers.values())
 
     async def initialise(self) -> None:
-        """Prépare le store (rien à faire en mémoire)."""
-        return None
+        """Rien à préparer : le magasin existe dès la construction."""
 
     async def close(self) -> None:
-        """Libère les ressources du store (rien à faire en mémoire)."""
-        return None
+        """Rien à libérer."""

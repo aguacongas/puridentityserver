@@ -146,9 +146,12 @@ def _mount_assertion_routes(router: APIRouter, usecase: OpenID20ProviderUseCase)
             f"op_endpoint:{usecase.base_url}/openid20/check_authentication",
             f"claimed_id:{claimed_id}",
             f"identity:{claimed_id}",
-            f"assoc_handle:{handle}",
             "expired:false",
         )
+        # Le ``openid.assoc_handle`` reçu n'est pas renvoyé : c'est une
+        # donnée fournie par l'appelant, la refléter dans le corps de la
+        # réponse ouvrirait une faille d'injection (XSS reflété). Le RP
+        # connaît déjà le handle qu'il a transmis.
         return Response(content="\n".join(lines) + "\n", media_type=_TEXT_MEDIA_TYPE)
 
 
