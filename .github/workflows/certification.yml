@@ -47,7 +47,10 @@ on:
       plan:
         # Permet un cycle de diagnostic rapide : ne lancer qu'un seul plan au
         # lieu des neuf (~30 min, même en parallèle le gain nul).
-        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + Dynamic + CIBA + FAPI1 + FAPI2 + FAPI2 Message Signing)"
+        # `ekyc` (identité assurance) est HORS programme officiel de
+        # certification : il n'est PAS dans le run `all` (référence de
+        # certification officielle) mais reste lançable seul, à la demande.
+        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + Dynamic + CIBA + FAPI1 + FAPI2 + FAPI2 Message Signing ; ekyc = identité assurance, hors programme officiel)"
         type: choice
         required: false
         default: all
@@ -62,6 +65,7 @@ on:
           - fapi1
           - fapi2
           - fapi2-message-signing
+          - ekyc
 
 permissions:
   contents: read
