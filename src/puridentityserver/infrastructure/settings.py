@@ -52,7 +52,7 @@ _SETTINGS_FILE_ENV = "PURIDENTITYSERVER_SETTINGS_FILE"
 
 # Référence à un secret d'environnement dans une configuration : la valeur
 # n'est jamais committée, elle est lue dans l'environnement du serveur.
-_SECRET_PLACEHOLDER = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
+_SECRET_PLACEHOLDER = re.compile(r"^\$\{(\w+)\}$")
 
 
 def _hash_client_secret(secret: str) -> str:
