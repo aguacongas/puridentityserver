@@ -49,6 +49,12 @@ on:
         # lieu des dix (~30 min, même en parallèle le gain nul).
         # `ekyc` (identité assurance) est HORS programme officiel de
         # certification mais est joué dans le run `all` comme les autres.
+        # ⚠ Le plan `ekyc-test-plan-oidccore` n'existe que depuis le tag
+        # `release-v5.3.3` de la suite (14/10/2026) : si la suite déployée par
+        # l'OIDF est antérieure, ce job échoue (plan inconnu). Repli : retirer
+        # `ekyc` de `CERTIFICATION_PLANS` (certification/selectors.sh) — le
+        # workflow local, lui, épingle la dernière release et n'est pas
+        # concerné.
         description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + Dynamic + CIBA + FAPI1 + FAPI2 + FAPI2 Message Signing + ekyc ; ekyc = identité assurance, hors programme officiel)"
         type: choice
         required: false
