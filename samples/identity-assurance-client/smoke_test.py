@@ -218,11 +218,14 @@ def _run_scenario() -> None:
 
 def main() -> int:
     """Lance le serveur de test puis joue le scénario."""
-    with watchdog(_DEADLINE), run_server(
-        port=SERVER_PORT,
-        clients=(_CLIENT,),
-        users=_USERS,
-        users_seed=_USERS_SEED,
+    with (
+        watchdog(_DEADLINE),
+        run_server(
+            port=SERVER_PORT,
+            clients=(_CLIENT,),
+            users=_USERS,
+            users_seed=_USERS_SEED,
+        ),
     ):
         _run_scenario()
     print("\n=== SCENARIO OK ===")
