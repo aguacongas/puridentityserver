@@ -107,7 +107,7 @@ jobs:
           # Selecteurs des plans : source unique partagee avec le lancement
           # local (certification/local/run-plan.sh) et le workflow herberge.
           source certification/selectors.sh
-          plans=("${CERTIFICATION_PLANS[@]}")
+          plans=("${CERTIFICATION_LOCAL_PLANS[@]}")
           if [ "$PLAN_FILTER" != "all" ]; then
             selector_for "$PLAN_FILTER" > /dev/null || { echo "::error::Plan inconnu : $PLAN_FILTER"; exit 1; }
             plans=("$PLAN_FILTER")

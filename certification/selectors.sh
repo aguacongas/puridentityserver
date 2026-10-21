@@ -5,8 +5,16 @@
 # Usage : source certification/selectors.sh puis selector_for <plan>.
 # shellcheck shell=bash
 
-# Les dix plans joues par defaut (filtre `all` des workflows).
-CERTIFICATION_PLANS=(basic implicit hybrid formpost dynamic ciba fapi1 fapi2 fapi2-message-signing ekyc)
+# Les neuf plans du programme OFFICIEL de certification, joues par le workflow
+# heberge (`certification.yml`) comme par le workflow local
+# (`certification-local.yml`).
+CERTIFICATION_PLANS=(basic implicit hybrid formpost dynamic ciba fapi1 fapi2 fapi2-message-signing)
+
+# Les plans joues par le workflow LOCAL uniquement : les plans officiels plus
+# `ekyc`, qui est HORS programme officiel de certification (a confirmer aupres
+# de l'OIDF). Le workflow heberge ne le joue pas : son run publie les
+# resultats a l'OIDF, ou seuls les plans du programme officiel ont place.
+CERTIFICATION_LOCAL_PLANS=("${CERTIFICATION_PLANS[@]}" ekyc)
 
 # Retourne le selecteur de variante d'un plan sur stdout ; code retour 1 si le
 # plan est inconnu (appelant : message d'erreur + sortie securisee).
