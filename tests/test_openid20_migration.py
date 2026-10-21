@@ -327,6 +327,44 @@ def test_openid2_realm_survives_the_par_flow() -> None:
     assert claims[OPENID20_ID_CLAIM] == "https://openid2.example.com/u"
 
 
+def test_openid2_id_claim_is_emitted_in_the_implicit_flow() -> None:
+    """Le claim `openid2_id` est aussi porté par l'id_token implicite (spec §4)."""
+    with TestClient(_app(enabled=True)) as client:
+        _login(client)
+        claims = _id_token(client, _code(client))
+        subject = str(claims["sub"])
+        token = _admin_token(client)
+        linked = client.post(
+            "/openid20-identifiers",
+            json={
+                "subject": subject,
+                "identifier": "https://openid2.example.com/u",
+                "realm": "",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert linked.status_code == 201, linked.text
+
+        response = client.get(
+            "/authorize",
+            params={
+                "response_type": "id_token",
+                "client_id": "web-app",
+                "redirect_uri": "https://app.example/callback",
+                "scope": "openid openid2",
+                "nonce": "n-0S6_WzA2Mj",
+                "state": "st-implicit",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302, response.text
+    fragment = parse_qs(urlparse(response.headers["location"]).fragment)
+    id_token = fragment["id_token"][0]
+    implicit_claims = pyjwt.decode(id_token, options={"verify_signature": False})
+    assert implicit_claims[OPENID20_ID_CLAIM] == "https://openid2.example.com/u"
+
+
 def test_admin_routes_are_absent_when_the_support_is_disabled() -> None:
     """Drapeau OFF : aucune route d'administration n'est exposée (404)."""
     with TestClient(_app(enabled=False)) as client:

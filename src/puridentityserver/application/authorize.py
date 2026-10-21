@@ -46,6 +46,7 @@ from puridentityserver.application.claims_request import (
 from puridentityserver.application.id_token_encryption import encrypt_id_token_for_client
 from puridentityserver.application.id_token_material import resolve_id_token_material
 from puridentityserver.application.jarm import JarmSigner, jarm_signing_alg
+from puridentityserver.application.openid20_migration import OpenID20MigrationUseCase
 from puridentityserver.application.resource_indicators import (
     is_resource_uri,
     parse_resource_parameter,
@@ -64,6 +65,7 @@ from puridentityserver.domain.authorization import (
     resolve_lifetime_seconds,
 )
 from puridentityserver.domain.jwks import JWTAlgorithm
+from puridentityserver.domain.openid20 import OPENID20_ID_CLAIM
 from puridentityserver.domain.subjects import access_token_subject_claims, display_subject
 from puridentityserver.interfaces.domain.secrets import SecretCipher
 from puridentityserver.interfaces.domain.tokens import (
@@ -590,6 +592,7 @@ class AuthorizeUseCase:
         claims_provider: ClaimsProvider | None = None,
         identity_resources: IdentityResourceReader | None = None,
         jarm_signer: JarmSigner | None = None,
+        openid20_migration: OpenID20MigrationUseCase | None = None,
     ) -> None:
         """Injection de la configuration, des repositories et de l'émetteur de jetons.
 
@@ -601,6 +604,10 @@ class AuthorizeUseCase:
         standard minimal. ``jarm_signer`` enveloppe la réponse de succès
         en ``response_mode=jwt`` (JARM Final 1.0 §3) ; sans injection, le
         mode ``jwt`` retombe sur le transport ``query`` clair.
+        ``openid20_migration`` porte les associations OpenID 2.0 (spec «
+        OpenID 2.0 to OpenID Connect Migration 1.0 ») : sans injection —
+        ou lorsque le support est désactivé — aucun claim ``openid2_id``
+        n'est émis.
         """
         self._config = config
         self._clients = client_repository
@@ -611,6 +618,7 @@ class AuthorizeUseCase:
         self._claims_provider = claims_provider
         self._identity_resources = identity_resources
         self._jarm_signer = jarm_signer
+        self._openid20_migration = openid20_migration
 
     async def execute(self, request: AuthorizeRequest) -> AuthorizeResult:
         """Traite la demande d'autorisation et retourne le redirect ou l'erreur."""
@@ -875,7 +883,23 @@ class AuthorizeUseCase:
                     self._identity_resources,
                 )
             )
+        openid20_id = await self._openid20_identifier(request)
+        if openid20_id:
+            additional[OPENID20_ID_CLAIM] = openid20_id
         return additional or None
+
+    async def _openid20_identifier(self, request: AuthorizeRequest) -> str:
+        """Identifiant OpenID 2.0 associé au compte (spec de migration, §4).
+
+        Le claim ``openid2_id`` n'est produit que si le RP a demandé le scope
+        ``openid2`` **et** qu'un identifiant OpenID 2.0 est associé au
+        compte : sinon l'identifiant est vide et le claim est omis.
+        """
+        if self._openid20_migration is None or not self._openid20_migration.enabled:
+            return ""
+        if Scope.OPENID20 not in Scope.from_space_separated(request.scope):
+            return ""
+        return await self._openid20_migration.identifier_for(request.subject, request.openid2_realm)
 
     async def _resolve_audience(
         self, client: Client, scopes: frozenset[Scope], resource: str = ""

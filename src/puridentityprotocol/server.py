@@ -316,6 +316,7 @@ class ProtocolDependencies:
             claims_provider=self.claims_provider,
             identity_resources=self.readers.identity_resource,
             jarm_signer=self.jarm_signer,
+            openid20_migration=self.openid20_migration,
         )
         self.token_usecase = TokenUseCase(
             TokenConfig(
