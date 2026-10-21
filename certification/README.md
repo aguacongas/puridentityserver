@@ -89,7 +89,7 @@ retenue :
   photographie les `kid` du JWKS, déclenche le deploy hook puis patiente
   (15 min max) jusqu'à ce que les `kid` changent — preuve que le build est
   terminé **et** que le disque éphémère (donc l'état) a été recréé avant le
-  premier enregistrement de client ; joue ensuite les **neuf plans en
+  premier enregistrement de client ; joue ensuite les **dix plans en
   parallèle** (9 jobs matrix, `fail-fast: false` — ~40 min au lieu de ~3 h
   séquentielles, issue #122 ; les plans FAPI1 Advanced, FAPI2 Security
   Profile, FAPI2 Message Signing (JARM, issue #164), Form Post
@@ -449,7 +449,7 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés ; recopie les captures réelles dans `_site/screenshots/` (`--screenshots`) et les affiche dans la section du module correspondant |
 | `local/setup.sh` | bootstrap du harness **auto-hébergé** : alias réseau, clone + déploiement docker de la suite, cert auto-signé + nginx mTLS `op`, config OP locale (issuer `https://op:9443`), OP uvicorn, attente de disponibilité |
 | `local/nginx-mtls.conf` | nginx de terminaison mTLS devant l'OP local : certificat client optionnel (`optional_no_ca`), extraction `$ssl_client_escaped_cert` → `X-SSL-Client-Cert` (pas de newline brute), proxy vers l'OP uvicorn de l'hôte |
-| `../.github/workflows/certification.yml` | workflow hébergé à la demande (`workflow_dispatch` uniquement) : `prepare` (deploy + captures, une fois), `plan` (les 9 plans officiels en parallèle, un job matrix chacun, mode witness), `report` (fusion des exports en artefact - publication OIDC des résultats à venir) ; `ekyc` (identité assurance, **hors programme officiel**) est lançable **seul** via l'input `plan`, jamais dans le run `all` |
+| `../.github/workflows/certification.yml` | workflow hébergé à la demande (`workflow_dispatch` uniquement) : `prepare` (deploy + captures, une fois), `plan` (les 10 plans en parallèle — les 9 du programme officiel **plus** `ekyc` (identité assurance, hors programme officiel) — un job matrix chacun, mode witness), `report` (fusion des exports en artefact - publication OIDC des résultats à venir) |
 | `../.github/workflows/certification-local.yml` | workflow **auto-hébergé strict** : déclenché à chaque merge sur `main`, sur les PR (`certification/**`) et à la demande ; 10 plans en matrix (les 9 de l'hébergé + `ekyc`, hors programme officiel de certification), code non nul du driver = job en échec, job `capture` **bloquant** (Playwright, artefact `certification-local-screenshots`, #158/#161 : captures REVIEW obligatoires), **publication GitHub Pages** (sauf sur les PR) |
 
 ## Captures d'écran des modules de relecture (modes hébergé et local)

@@ -34,9 +34,9 @@ uv run python -m pytest -p no:cacheprovider -q   # tests + couverture >= 80 % (9
   périmée dans la doc ou les scripts.
 - **Run hébergé officiel OIDF** : `.github/workflows/certification.yml` (secret
   `CONFORMANCE_TOKEN`, publication GitHub Pages) — reste la référence finale de
-  certification. Les **9 plans du programme officiel** y sont joués ; le plan
-  `ekyc` (identité assurance, hors programme officiel) n'y est **pas** inclus
-  dans le run `all` mais reste lançable seul à la demande (input `plan`).
+  certification. Il joue les **10 plans** : les 9 du programme officiel **plus**
+  `ekyc` (identité assurance, hors programme officiel — choix du
+  maintainer : l'assurance conformité vaut aussi pour la spec de niche).
 - L'ancien rejeu pytest `tests/conformance/` a été supprimé ; le mini-RP client
   (harness de parcours) vit dans `samples/oidc_harness/` et sert les smoke
   tests `samples/fapi1-client/` et `samples/fapi2-client/`.

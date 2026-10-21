@@ -4,7 +4,7 @@ name: Certification OIDC (Local)
 # le runner, avec l'OP PurIdentityServer local derrière un nginx mTLS — aucune
 # dépendance à l'infra hébergée de la Fondation ni à Render.
 #
-# Assurance conformité COURANTE et déterministe. Les NEUF plans sont joués en
+# Assurance conformité COURANTE et déterministe. Les DIX sont joués en
 # matrix (patron du job hébergé, issue #122 ; fapi2-message-signing ajouté par
 # l'issue #164, formpost par l'issue #165, dynamic par l'issue #168) : chaque
 # job boot son propre
@@ -107,7 +107,7 @@ jobs:
           # Selecteurs des plans : source unique partagee avec le lancement
           # local (certification/local/run-plan.sh) et le workflow herberge.
           source certification/selectors.sh
-          plans=("${CERTIFICATION_LOCAL_PLANS[@]}")
+          plans=("${CERTIFICATION_PLANS[@]}")
           if [ "$PLAN_FILTER" != "all" ]; then
             selector_for "$PLAN_FILTER" > /dev/null || { echo "::error::Plan inconnu : $PLAN_FILTER"; exit 1; }
             plans=("$PLAN_FILTER")

@@ -19,7 +19,7 @@ name: Certification OIDC
 # `release-vX.Y.Z` listé par `git ls-remote` sur
 # gitlab.com/openid/conformance-suite (échec = run en erreur) — cf. issue #150.
 #
-# Issue #122 : les 9 plans s'exécutent EN PARALLÈLE (matrix de jobs, même
+# Issue #122 : les 10 s'exécutent EN PARALLÈLE (matrix de jobs, même
 # patron que certification-local.yml ; fapi2-message-signing ajouté par
 # l'issue #164, formpost par l'issue #165, dynamic par l'issue #168) : ~3 h
 # séquentielles deviennent la durée
@@ -46,11 +46,10 @@ on:
     inputs:
       plan:
         # Permet un cycle de diagnostic rapide : ne lancer qu'un seul plan au
-        # lieu des neuf (~30 min, même en parallèle le gain nul).
+        # lieu des dix (~30 min, même en parallèle le gain nul).
         # `ekyc` (identité assurance) est HORS programme officiel de
-        # certification : il n'est PAS dans le run `all` (référence de
-        # certification officielle) mais reste lançable seul, à la demande.
-        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + Dynamic + CIBA + FAPI1 + FAPI2 + FAPI2 Message Signing ; ekyc = identité assurance, hors programme officiel)"
+        # certification mais est joué dans le run `all` comme les autres.
+        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + Dynamic + CIBA + FAPI1 + FAPI2 + FAPI2 Message Signing + ekyc ; ekyc = identité assurance, hors programme officiel)"
         type: choice
         required: false
         default: all
@@ -107,7 +106,7 @@ jobs:
         # toute consommation d'infra (deploy hook, Playwright, clone).
         id: matrix
         env:
-          # Vide sur push/schedule : les neuf plans sont joués.
+          # Vide sur push/schedule : les dix sont joués.
           PLAN_FILTER: ${{ inputs.plan || 'all' }}
         run: |
           set -euo pipefail
