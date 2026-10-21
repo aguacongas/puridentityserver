@@ -181,7 +181,12 @@ class TestParseClaimsParameter:
 
         parsed = parse_claims_parameter(value)
 
-        assert parsed == ClaimsRequest(userinfo=("name", "email"), id_token=("acr",))
+        assert parsed == ClaimsRequest(
+            userinfo=("name", "email"),
+            id_token=("acr",),
+            raw_userinfo={"name": {"essential": True}, "email": {"essential": True}},
+            raw_id_token={"acr": {}},
+        )
 
     def test_keeps_only_claim_names(self) -> None:
         value = json.dumps(
@@ -219,7 +224,12 @@ class TestParseClaimsParameter:
 
         parsed = parse_claims_parameter(value)
 
-        assert parsed == ClaimsRequest(userinfo=("given_name",), id_token=("name",))
+        assert parsed == ClaimsRequest(
+            userinfo=("given_name",),
+            id_token=("name",),
+            raw_userinfo={"given_name": None},
+            raw_id_token={"name": None},
+        )
 
     def test_rejects_constraint_of_wrong_shape(self) -> None:
         assert parse_claims_parameter(json.dumps({"userinfo": {"name": "essential"}})) is None

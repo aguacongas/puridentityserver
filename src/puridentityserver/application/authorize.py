@@ -45,6 +45,13 @@ from puridentityserver.application.claims_request import (
 )
 from puridentityserver.application.id_token_encryption import encrypt_id_token_for_client
 from puridentityserver.application.id_token_material import resolve_id_token_material
+from puridentityserver.application.identity_assurance import (
+    ID_TOKEN_LOCATION,
+    VERIFIED_CLAIMS_MEMBER,
+    IdentityAssuranceUseCase,
+    verified_claims_payload,
+    verified_claims_request,
+)
 from puridentityserver.application.jarm import JarmSigner, jarm_signing_alg
 from puridentityserver.application.openid20_migration import OpenID20MigrationUseCase
 from puridentityserver.application.resource_indicators import (
@@ -593,6 +600,7 @@ class AuthorizeUseCase:
         identity_resources: IdentityResourceReader | None = None,
         jarm_signer: JarmSigner | None = None,
         openid20_migration: OpenID20MigrationUseCase | None = None,
+        identity_assurance: IdentityAssuranceUseCase | None = None,
     ) -> None:
         """Injection de la configuration, des repositories et de l'émetteur de jetons.
 
@@ -607,7 +615,9 @@ class AuthorizeUseCase:
         ``openid20_migration`` porte les associations OpenID 2.0 (spec «
         OpenID 2.0 to OpenID Connect Migration 1.0 ») : sans injection —
         ou lorsque le support est désactivé — aucun claim ``openid2_id``
-        n'est émis.
+        n'est émis. ``identity_assurance`` résout les ``verified_claims``
+        (OpenID Identity Assurance 1.0) : sans injection, aucun membre
+        ``verified_claims`` n'est émis.
         """
         self._config = config
         self._clients = client_repository
@@ -619,6 +629,7 @@ class AuthorizeUseCase:
         self._identity_resources = identity_resources
         self._jarm_signer = jarm_signer
         self._openid20_migration = openid20_migration
+        self._identity_assurance = identity_assurance
 
     async def execute(self, request: AuthorizeRequest) -> AuthorizeResult:
         """Traite la demande d'autorisation et retourne le redirect ou l'erreur."""
@@ -873,6 +884,13 @@ class AuthorizeUseCase:
                     claims_request.id_token, request.subject, self._claims_provider
                 )
             )
+            # Le membre `verified_claims` est résolu par le cas d'usage
+            # d'identité assurance (contraintes de la demande appliquées) :
+            # le profil brut du user store ne doit jamais être servi.
+            additional.pop(VERIFIED_CLAIMS_MEMBER, None)
+            verified_claims = await self._verified_claims(claims_request, request.subject)
+            if verified_claims is not None:
+                additional[VERIFIED_CLAIMS_MEMBER] = verified_claims
         pure_id_token = not code and not wants_token
         if pure_id_token:
             additional.update(
@@ -887,6 +905,17 @@ class AuthorizeUseCase:
         if openid20_id:
             additional[OPENID20_ID_CLAIM] = openid20_id
         return additional or None
+
+    async def _verified_claims(
+        self, claims_request: ClaimsRequest, subject: str
+    ) -> dict[str, object] | None:
+        """Membre `verified_claims` résolu (identité assurance, spec IDA 1.0)."""
+        if self._identity_assurance is None:
+            return None
+        request = verified_claims_request(claims_request, ID_TOKEN_LOCATION)
+        if request is None:
+            return None
+        return await self._identity_assurance.resolve(request, subject)
 
     async def _openid20_identifier(self, request: AuthorizeRequest) -> str:
         """Identifiant OpenID 2.0 associé au compte (spec de migration, §4).
@@ -1087,6 +1116,11 @@ def _merged_userinfo_payload(
     payload: dict[str, object] = dict(
         requested_userinfo_payload(claims_request) if claims_request else {}
     )
+    ekyc = verified_claims_payload(claims_request)
+    if ekyc:
+        claims_payload = payload.setdefault("claims", {})
+        if isinstance(claims_payload, dict):
+            claims_payload.update(ekyc)
     payload.update(subject_claims)
     return payload or None
 

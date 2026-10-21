@@ -68,6 +68,13 @@ from puridentityserver.application.dpop import (
 )
 from puridentityserver.application.id_token_encryption import encrypt_id_token_for_client
 from puridentityserver.application.id_token_material import resolve_id_token_material
+from puridentityserver.application.identity_assurance import (
+    ID_TOKEN_LOCATION,
+    VERIFIED_CLAIMS_MEMBER,
+    IdentityAssuranceUseCase,
+    verified_claims_payload,
+    verified_claims_request,
+)
 from puridentityserver.application.openid20_migration import OpenID20MigrationUseCase
 from puridentityserver.application.resource_indicators import (
     is_resource_uri,
@@ -233,6 +240,7 @@ class TokenUseCase:
         revoked_tokens: RevokedTokenRepository | None = None,
         dpop: DpopGrantGuard | None = None,
         openid20_migration: OpenID20MigrationUseCase | None = None,
+        identity_assurance: IdentityAssuranceUseCase | None = None,
     ) -> None:
         """Injection de la configuration, des repositories et de l'émetteur de jetons.
 
@@ -248,7 +256,9 @@ class TokenUseCase:
         ``openid20_migration`` porte les associations OpenID 2.0 (spec «
         OpenID 2.0 to OpenID Connect Migration 1.0 ») : sans injection —
         ou lorsque le support est désactivé — aucun claim ``openid2_id``
-        n'est émis.
+        n'est émis. ``identity_assurance`` résout les ``verified_claims``
+        (OpenID Identity Assurance 1.0) : sans injection, aucun membre
+        ``verified_claims`` n'est émis.
         """
         self._config = config
         self._clients = client_repository
@@ -263,6 +273,7 @@ class TokenUseCase:
         self._revoked_tokens = revoked_tokens
         self._dpop = dpop
         self._openid20_migration = openid20_migration
+        self._identity_assurance = identity_assurance
 
     async def execute(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Traite le grant type demandé et retourne les jetons ou une erreur."""
@@ -1097,6 +1108,22 @@ class TokenUseCase:
             return self._config.token_endpoint
         return f"{self._config.issuer.rstrip('/')}/token"
 
+    async def _verified_claims(
+        self, claims_request: ClaimsRequest, location: str, subject: str
+    ) -> dict[str, object] | None:
+        """Membre `verified_claims` résolu (identité assurance, spec IDA 1.0).
+
+        ``None`` quand aucune claim vérifiée ne peut être servie : le membre
+        est alors omis de l'`id_token` plutôt que servi incomplet.
+        """
+        if self._identity_assurance is None:
+            return None
+        request = verified_claims_request(claims_request, location)
+        if request is None:
+            return None
+        resolved = await self._identity_assurance.resolve(request, subject)
+        return resolved
+
     async def _openid20_identifier(self, scopes: frozenset[Scope], subject: str, realm: str) -> str:
         """Identifiant OpenID 2.0 associé au compte (spec de migration, §4).
 
@@ -1166,6 +1193,15 @@ class TokenUseCase:
                     claims_request.id_token, subject, self._claims_provider
                 )
             )
+            # Le membre `verified_claims` est résolu par le cas d'usage
+            # d'identité assurance (contraintes de la demande appliquées) :
+            # le profil brut du user store ne doit jamais être servi.
+            additional.pop(VERIFIED_CLAIMS_MEMBER, None)
+            verified_claims = await self._verified_claims(
+                claims_request, ID_TOKEN_LOCATION, subject
+            )
+            if verified_claims is not None:
+                additional[VERIFIED_CLAIMS_MEMBER] = verified_claims
         openid20_id = await self._openid20_identifier(
             scopes, subject, id_token_context.openid2_realm
         )
@@ -1416,6 +1452,11 @@ def _access_token_additional_claims(
     payload = requested_userinfo_payload(claims_request) if claims_request else None
     if payload:
         additional.update(payload)
+    ekyc = verified_claims_payload(claims_request)
+    if ekyc:
+        claims_payload = additional.setdefault("claims", {})
+        if isinstance(claims_payload, dict):
+            claims_payload.update(ekyc)
     confirmation: dict[str, object] = {}
     if dpop_jkt:
         confirmation["jkt"] = dpop_jkt
