@@ -425,7 +425,7 @@ def _openid20_realm_error(
     L'OP **doit** vérifier que le realm et l'URI de redirection du RP
     correspondent : le realm transmis doit donc être un préfixe d'au moins
     une URI de redirection enregistrée du client. Un realm absent n'est pas
-    contrôlé (l'identifiant OpenID 2.0 est alors sought sans realm).
+    contrôlé (l'identifiant OpenID 2.0 est alors cherché sans realm).
     """
     if Scope.OPENID20 not in scopes or not request.openid2_realm:
         return None
