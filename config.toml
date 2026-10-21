@@ -186,6 +186,19 @@ ciba_ttl_seconds = 600
 ciba_min_ttl_seconds = 60
 ciba_interval_seconds = 5
 
+# Migration OpenID 2.0 vers OpenID Connect (spec OIDF, version finale) :
+# - openid20_migration_enabled : accepte le scope `openid2` à /authorize,
+#   porte le claim `openid2_id` dans l'id_token quand un identifiant
+#   OpenID 2.0 est associé au compte, vérifie le `openid2_realm` contre les
+#   URI de redirection du client et monte le rôle OpenID 2.0 de l'OP
+#   (/openid20/checkid_setup, /openid20/check_authentication,
+#   /openid20/id/{id}) ainsi que l'export d'administration
+#   (/openid20-identifiers).
+# Désactivé par défaut — même ici : la spec est de niche, aucun chemin ne
+# doit être actif sans besoin explicite. Surchargeable via
+# `PURIDENTITYSERVER_OPENID20_MIGRATION_ENABLED`.
+# openid20_migration_enabled = false
+
 # identité (FastAPI Users, spike) : durée par défaut du cookie et comptes de
 # connexion démo. Surchargeables via `PURIDENTITYSERVER_IDENTITY_*` (env) ou une
 # entrée `.env`. Le cookie de session est signé RS256 avec une clé rotative
