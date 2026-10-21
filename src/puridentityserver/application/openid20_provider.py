@@ -55,7 +55,6 @@ class OpenID20ProviderUseCase:
         base_url: str = "",
         enabled: bool = False,
         algorithm: JWTAlgorithm = JWTAlgorithm.RS256,
-        ttl_seconds: int = OPENID20_STATE_TTL_SECONDS,
     ) -> None:
         """Injection des clés, du cas d'usage de migration et de l'activation."""
         self._key_manager = key_manager
@@ -64,7 +63,7 @@ class OpenID20ProviderUseCase:
         self._base_url = (base_url or issuer).rstrip("/")
         self._enabled = enabled
         self._algorithm = algorithm
-        self._ttl_seconds = ttl_seconds
+        self._ttl_seconds = OPENID20_STATE_TTL_SECONDS
 
     @property
     def enabled(self) -> bool:
