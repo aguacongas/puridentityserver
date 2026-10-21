@@ -68,6 +68,7 @@ from puridentityserver.application.dpop import (
 )
 from puridentityserver.application.id_token_encryption import encrypt_id_token_for_client
 from puridentityserver.application.id_token_material import resolve_id_token_material
+from puridentityserver.application.openid20_migration import OpenID20MigrationUseCase
 from puridentityserver.application.resource_indicators import (
     is_resource_uri,
     parse_resource_parameter,
@@ -91,6 +92,7 @@ from puridentityserver.domain.authorization import (
     resolve_lifetime_seconds,
 )
 from puridentityserver.domain.jwks import JWTAlgorithm
+from puridentityserver.domain.openid20 import OPENID20_ID_CLAIM
 from puridentityserver.domain.revocation import RevokedToken, token_hash
 from puridentityserver.domain.subjects import access_token_subject_claims, display_subject
 from puridentityserver.interfaces.domain.client_assertions import (
@@ -178,6 +180,25 @@ class TokenResponse:
 
 
 @dataclass(frozen=True, slots=True)
+class IdTokenContext:
+    """Contexte d'émission de l'``id_token`` (claims conditionnels).
+
+    Regroupe les éléments qui décrivent le contenu de l'``id_token`` :
+    ``nonce`` (OIDC Core 1.0 §3.1.2.1), ``session_id`` (claim ``sid``),
+    ``auth_time``, ``acr`` (§3.1.2.1), le paramètre ``claims`` brut (§5.5)
+    et le ``openid2_realm`` de la spec « OpenID 2.0 to OpenID Connect
+    Migration 1.0 » (§2).
+    """
+
+    nonce: str = ""
+    session_id: str = ""
+    auth_time: int = 0
+    acr: str = ""
+    claims: str = ""
+    openid2_realm: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class TokenError:
     """Erreur du token endpoint (RFC 6749 §5.2)."""
 
@@ -211,6 +232,7 @@ class TokenUseCase:
         claims_provider: ClaimsProvider | None = None,
         revoked_tokens: RevokedTokenRepository | None = None,
         dpop: DpopGrantGuard | None = None,
+        openid20_migration: OpenID20MigrationUseCase | None = None,
     ) -> None:
         """Injection de la configuration, des repositories et de l'émetteur de jetons.
 
@@ -223,6 +245,10 @@ class TokenUseCase:
         applique les règles DPoP (RFC 9449) : sans injection, aucun proof
         n'est traité et ``require_dpop`` n'est honoré que pour le rejet de
         la requête dépourvue d'en-tête ``DPoP``.
+        ``openid20_migration`` porte les associations OpenID 2.0 (spec «
+        OpenID 2.0 to OpenID Connect Migration 1.0 ») : sans injection —
+        ou lorsque le support est désactivé — aucun claim ``openid2_id``
+        n'est émis.
         """
         self._config = config
         self._clients = client_repository
@@ -236,6 +262,7 @@ class TokenUseCase:
         self._claims_provider = claims_provider
         self._revoked_tokens = revoked_tokens
         self._dpop = dpop
+        self._openid20_migration = openid20_migration
 
     async def execute(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Traite le grant type demandé et retourne les jetons ou une erreur."""
@@ -315,12 +342,15 @@ class TokenUseCase:
             client,
             auth_code.subject,
             auth_code.scopes,
-            nonce=auth_code.nonce,
             now=now,
-            session_id=auth_code.session_id,
-            auth_time=auth_code.auth_time,
-            acr=auth_code.acr,
-            claims=auth_code.claims,
+            context=IdTokenContext(
+                nonce=auth_code.nonce,
+                session_id=auth_code.session_id,
+                auth_time=auth_code.auth_time,
+                acr=auth_code.acr,
+                claims=auth_code.claims,
+                openid2_realm=auth_code.openid2_realm,
+            ),
             dpop_jkt=binding.jkt if binding.bound else "",
             resources=resources,
             tls_cert_hash=tls_cert_hash,
@@ -478,7 +508,6 @@ class TokenUseCase:
             client,
             stored.subject,
             scopes,
-            nonce="",
             now=now,
             dpop_jkt=binding.jkt if binding.bound else "",
             resources=resources,
@@ -753,7 +782,6 @@ class TokenUseCase:
             client,
             stored.subject,
             stored.scopes,
-            nonce="",
             now=now,
             dpop_jkt=dpop_jkt,
             resources=resources,
@@ -895,9 +923,8 @@ class TokenUseCase:
             client,
             stored.subject,
             stored.scopes,
-            nonce="",
             now=now,
-            acr=stored.acr,
+            context=IdTokenContext(acr=stored.acr),
             dpop_jkt=dpop_jkt,
             resources=resources,
             tls_cert_hash=tls_cert_hash,
@@ -1070,18 +1097,27 @@ class TokenUseCase:
             return self._config.token_endpoint
         return f"{self._config.issuer.rstrip('/')}/token"
 
+    async def _openid20_identifier(self, scopes: frozenset[Scope], subject: str, realm: str) -> str:
+        """Identifiant OpenID 2.0 associé au compte (spec de migration, §4).
+
+        Le claim ``openid2_id`` n'est produit que si le RP a demandé le scope
+        ``openid2`` **et** qu'un identifiant OpenID 2.0 est associé au
+        compte : sinon l'identifiant est vide et le claim est omis.
+        """
+        if self._openid20_migration is None or not self._openid20_migration.enabled:
+            return ""
+        if Scope.OPENID20 not in scopes:
+            return ""
+        return await self._openid20_migration.identifier_for(subject, realm)
+
     async def _issue_tokens(
         self,
         client: Client,
         subject: str,
         scopes: frozenset[Scope],
         *,
-        nonce: str,
         now: datetime,
-        session_id: str = "",
-        auth_time: int = 0,
-        acr: str = "",
-        claims: str = "",
+        context: IdTokenContext | None = None,
         dpop_jkt: str = "",
         resources: tuple[str, ...] = (),
         tls_cert_hash: str = "",
@@ -1089,11 +1125,12 @@ class TokenUseCase:
     ) -> tuple[str, str, int] | TokenError:
         """Émet et retourne l'``id_token``, l'``access_token`` et la TTL effective.
 
-        ``acr`` (première valeur ``acr_values`` conservée sur le code,
-        OIDC Core 1.0 §3.1.2.1) complète l'id_token du claim ``acr`` ;
-        ``claims`` porte le paramètre ``claims`` (§5.5) : son member
+        ``context`` porte les claims conditionnels de l'id_token : ``acr``
+        (première valeur ``acr_values`` conservée sur le code, OIDC Core
+        1.0 §3.1.2.1), le paramètre ``claims`` (§5.5) — son member
         ``id_token`` est résolu dans l'id_token et son member ``userinfo``
-        voyage dans l'access_token, relu par ``/userinfo``. ``dpop_jkt``
+        voyage dans l'access_token, relu par ``/userinfo`` — et le
+        ``openid2_realm`` de la spec de migration OpenID 2.0. ``dpop_jkt``
         (RFC 9449 §5) lie l'access token à la clé prouvée via le claim
         ``cnf`` — chaîne vide = jeton porteur classique. ``resources``
         (RFC 8707 §3) porte l'``aud`` du jeton quand il est renseigné.
@@ -1104,7 +1141,10 @@ class TokenUseCase:
         et l'access token embarque les claims permettant à ``/userinfo``
         de la reproduire.
         """
-        claims_request = parse_claims_parameter(claims) if claims else None
+        id_token_context = context or IdTokenContext()
+        claims_request = (
+            parse_claims_parameter(id_token_context.claims) if id_token_context.claims else None
+        )
         token_ttl = resolve_lifetime_seconds(
             client.access_token_lifetime_seconds, self._config.access_token_ttl_seconds
         )
@@ -1118,14 +1158,19 @@ class TokenUseCase:
             return material
         id_token_algorithm, shared_secret = material
         additional: dict[str, object] = {}
-        if acr:
-            additional["acr"] = acr
+        if id_token_context.acr:
+            additional["acr"] = id_token_context.acr
         if claims_request is not None:
             additional.update(
                 await resolve_requested_claims(
                     claims_request.id_token, subject, self._claims_provider
                 )
             )
+        openid20_id = await self._openid20_identifier(
+            scopes, subject, id_token_context.openid2_realm
+        )
+        if openid20_id:
+            additional[OPENID20_ID_CLAIM] = openid20_id
         id_token = await self._token_manager.create_id_token(
             algorithm=id_token_algorithm,
             issuer=self._config.issuer,
@@ -1139,9 +1184,9 @@ class TokenUseCase:
             expires_at=expires_epoch,
             issued_at=issued_at,
             conditional_claims=IdTokenConditionalClaims(
-                nonce=nonce,
-                session_id=session_id,
-                auth_time=auth_time,
+                nonce=id_token_context.nonce,
+                session_id=id_token_context.session_id,
+                auth_time=id_token_context.auth_time,
             ),
             shared_secret=shared_secret,
             additional_claims=additional or None,

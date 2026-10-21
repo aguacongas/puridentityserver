@@ -37,6 +37,7 @@ class Scope(str):
     ADDRESS: ClassVar[Scope]
     PHONE: ClassVar[Scope]
     OFFLINE_ACCESS: ClassVar[Scope]
+    OPENID20: ClassVar[Scope]
 
     @property
     def value(self) -> str:
@@ -61,6 +62,9 @@ class Scope(str):
 # dans le corps lèverait ``NameError``).
 Scope.OPENID = Scope("openid")
 Scope.PROFILE = Scope("profile")
+#: Scope de la spec « OpenID 2.0 to OpenID Connect Migration 1.0 » (§2) :
+#: demande l'identifiant OpenID 2.0 de l'utilisateur (claim ``openid2_id``).
+Scope.OPENID20 = Scope("openid2")
 Scope.EMAIL = Scope("email")
 Scope.ADDRESS = Scope("address")
 Scope.PHONE = Scope("phone")
@@ -408,7 +412,10 @@ class AuthorizationCode:
     ``/authorize`` pour la reproduire dans l'id_token du token endpoint
     (OIDC Core 1.0 §3.1.2.1) ; ``claims`` conserve le paramètre ``claims``
     brut (OIDC Core 1.0 §5.5) pour honorer ses members ``userinfo`` /
-    ``id_token`` lors de l'échange du code.
+    ``id_token`` lors de l'échange du code. ``openid2_realm`` conserve le
+    ``openid.realm`` demandé par le RP (spec « OpenID 2.0 to OpenID Connect
+    Migration 1.0 » §2) : il sert à retrouver l'identifiant OpenID 2.0
+    associé au compte au moment de l'échange.
 
     ``dpop_jkt`` (RFC 9449 §10) porte l'empreinte RFC 7638 de la clé
     déclarée par le paramètre ``dpop_jkt`` de la demande d'autorisation :
@@ -439,6 +446,7 @@ class AuthorizationCode:
     auth_time: int = 0
     acr: str = ""
     claims: str = ""
+    openid2_realm: str = ""
     expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     is_consumed: bool = False
     access_token_hash: str = ""

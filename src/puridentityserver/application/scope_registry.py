@@ -26,10 +26,12 @@ class ScopeRegistry:
         self,
         identity_resources: IdentityResourceReader | None = None,
         api_resources: ApiResourceReader | None = None,
+        extra_scopes: frozenset[str] = frozenset(),
     ) -> None:
-        """Injection des registres de resources (identité et API)."""
+        """Injection des registres de resources (identit�� et API)."""
         self._identity_resources = identity_resources
         self._api_resources = api_resources
+        self._extra_scopes = extra_scopes
 
     async def unknown_scopes(self, scopes: frozenset[str]) -> tuple[str, ...]:
         """Scopes demandés jamais enregistrés (identité ⊕ API), triés."""
@@ -39,6 +41,7 @@ class ScopeRegistry:
     async def known_scope_names(self) -> frozenset[str]:
         """Noms de tous les scopes acceptés (défauts identité + registres)."""
         names = {resource.name for resource in DEFAULT_IDENTITY_RESOURCES}
+        names |= self._extra_scopes
         if self._identity_resources is not None:
             identity_stored = await self._identity_resources.find_all()
             names.update(resource.name for resource in identity_stored)

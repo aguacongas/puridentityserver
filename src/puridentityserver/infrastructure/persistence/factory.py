@@ -33,6 +33,9 @@ from puridentityserver.interfaces.repositories.identity_resource_repository impo
     IdentityResourceRepository,
 )
 from puridentityserver.interfaces.repositories.key_pair_repository import KeyPairRepository
+from puridentityserver.interfaces.repositories.openid20_identifier_repository import (
+    OpenID20IdentifierRepository,
+)
 from puridentityserver.interfaces.repositories.pushed_authorization_repository import (
     PushedAuthorizationRepository,
 )
@@ -208,6 +211,25 @@ def build_dpop_replay_repository(settings: Settings) -> DpopReplayRepository:
         )
 
         return SQLDpopReplayRepository(settings.storage_dsn)
+    raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")
+
+
+def build_openid20_identifier_repository(
+    settings: Settings,
+) -> OpenID20IdentifierRepository:
+    """Retourne le repository des associations OpenID 2.0 selon ``storage_type``."""
+    if settings.storage_type == "memory":
+        from puridentityserver.infrastructure.persistence.memory.openid20_identifiers import (
+            InMemoryOpenID20IdentifierRepository,
+        )
+
+        return InMemoryOpenID20IdentifierRepository()
+    if settings.storage_type == "sql":
+        from puridentityserver.infrastructure.persistence.sql.openid20_identifiers import (
+            SQLOpenID20IdentifierRepository,
+        )
+
+        return SQLOpenID20IdentifierRepository(settings.storage_dsn)
     raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")
 
 

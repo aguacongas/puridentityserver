@@ -41,6 +41,8 @@ from puridentityserver.application.introspect import IntrospectConfig, Introspec
 from puridentityserver.application.jarm import JarmSigner
 from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
 from puridentityserver.application.logout import LogoutConfig, LogoutUseCase
+from puridentityserver.application.openid20_migration import OpenID20MigrationUseCase
+from puridentityserver.application.openid20_provider import OpenID20ProviderUseCase
 from puridentityserver.application.par import PushedAuthorizationConfig, PushedAuthorizationUseCase
 from puridentityserver.application.protected_resource import (
     ProtectedResourceConfig,
@@ -53,7 +55,7 @@ from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.application.session_management import SessionManagementUseCase
 from puridentityserver.application.token import TokenConfig, TokenUseCase
 from puridentityserver.application.userinfo import UserInfoConfig, UserInfoUseCase
-from puridentityserver.domain.authorization import TokenEndpointAuthMethod
+from puridentityserver.domain.authorization import Scope, TokenEndpointAuthMethod
 from puridentityserver.domain.jwks import SYMMETRIC_ALGORITHMS, JWTAlgorithm, KeyUse
 from puridentityserver.domain.password_policy import PasswordPolicy
 from puridentityserver.domain.userinfo import UserClaims
@@ -109,6 +111,7 @@ from puridentityserver.interfaces.api.discovery import discovery_router
 from puridentityserver.interfaces.api.introspect import introspect_router
 from puridentityserver.interfaces.api.jwks import jwk_set_router
 from puridentityserver.interfaces.api.logout import logout_router
+from puridentityserver.interfaces.api.openid20_provider import openid20_provider_router
 from puridentityserver.interfaces.api.par import par_router
 from puridentityserver.interfaces.api.protected_resource import protected_resource_router
 from puridentityserver.interfaces.api.registration import registration_router
@@ -261,7 +264,23 @@ class ProtocolDependencies:
             api_resource=stores.api_resource,
         )
         self.scope_registry = ScopeRegistry(
-            self.readers.identity_resource, self.readers.api_resource
+            self.readers.identity_resource,
+            self.readers.api_resource,
+            extra_scopes=(
+                frozenset({Scope.OPENID20}) if settings.openid20_migration_enabled else frozenset()
+            ),
+        )
+        self.openid20_migration = OpenID20MigrationUseCase(
+            stores.openid20_identifier,
+            enabled=settings.openid20_migration_enabled,
+        )
+        self.openid20_provider = OpenID20ProviderUseCase(
+            self.key_manager,
+            self.openid20_migration,
+            issuer=settings.issuer,
+            base_url=settings.base_url or settings.issuer,
+            enabled=settings.openid20_migration_enabled,
+            algorithm=_primary_algorithm(settings),
         )
         self.session_management = SessionManagementUseCase()
         self.claims_provider = UserStoreClaimsProvider(self.readers.user)
@@ -297,6 +316,7 @@ class ProtocolDependencies:
             claims_provider=self.claims_provider,
             identity_resources=self.readers.identity_resource,
             jarm_signer=self.jarm_signer,
+            openid20_migration=self.openid20_migration,
         )
         self.token_usecase = TokenUseCase(
             TokenConfig(
@@ -320,6 +340,7 @@ class ProtocolDependencies:
             claims_provider=self.claims_provider,
             revoked_tokens=stores.revoked,
             dpop=DpopGrantGuard(self.dpop_validator),
+            openid20_migration=self.openid20_migration,
         )
         self.device_usecase = DeviceAuthorizationUseCase(
             DeviceConfig(
@@ -524,6 +545,13 @@ class ProtocolDependencies:
         )
         app.include_router(auth_router)
         app.include_router(register_router, prefix="/auth")
+        if self.settings.openid20_migration_enabled:
+            # Rôle OpenID 2.0 de l'OP (spec de migration) : les routes ne
+            # sont montées que si le support est activé — sans lui, aucun
+            # chemin n'est exposé.
+            app.include_router(
+                openid20_provider_router(self.openid20_provider, issuer=self.settings.issuer)
+            )
         _mount_authorization_routers(
             app,
             authorize_usecase=self.authorize_usecase,

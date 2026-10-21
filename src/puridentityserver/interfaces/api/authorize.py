@@ -91,6 +91,7 @@ class AuthorizeQueryParams(BaseModel):
     request_uri: str = ""
     acr_values: str = ""
     claims: str = ""
+    openid2_realm: str = ""
     dpop_jkt: str = ""
     resource: list[str] = []
     # Marqueur OP du parcours ``prompt=create`` (issue #166) : ``cancelled``
@@ -320,6 +321,7 @@ async def _direct_authorize_request(
         max_age=parse_max_age(params.get("max_age", "")),
         acr_values=params.get("acr_values", ""),
         claims=params.get("claims", ""),
+        openid2_realm=params.get("openid2_realm", ""),
         dpop_jkt=params.get("dpop_jkt", ""),
         resource=params.get("resource", ""),
     )
@@ -563,6 +565,7 @@ async def _with_authenticated_subject(
         acr_values=auth_request.acr_values,
         claims=auth_request.claims,
         dpop_jkt=auth_request.dpop_jkt,
+        openid2_realm=auth_request.openid2_realm,
     )
 
 

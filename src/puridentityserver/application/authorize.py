@@ -46,6 +46,7 @@ from puridentityserver.application.claims_request import (
 from puridentityserver.application.id_token_encryption import encrypt_id_token_for_client
 from puridentityserver.application.id_token_material import resolve_id_token_material
 from puridentityserver.application.jarm import JarmSigner, jarm_signing_alg
+from puridentityserver.application.openid20_migration import OpenID20MigrationUseCase
 from puridentityserver.application.resource_indicators import (
     is_resource_uri,
     parse_resource_parameter,
@@ -64,6 +65,7 @@ from puridentityserver.domain.authorization import (
     resolve_lifetime_seconds,
 )
 from puridentityserver.domain.jwks import JWTAlgorithm
+from puridentityserver.domain.openid20 import OPENID20_ID_CLAIM
 from puridentityserver.domain.subjects import access_token_subject_claims, display_subject
 from puridentityserver.interfaces.domain.secrets import SecretCipher
 from puridentityserver.interfaces.domain.tokens import (
@@ -126,6 +128,7 @@ class AuthorizeRequest:
     auth_time: int = 0
     acr_values: str = ""  # valeurs ACR demandées, séparées par des espaces (§3.1.2.1)
     claims: str = ""  # paramètre claims brut (OIDC Core 1.0 §5.5)
+    openid2_realm: str = ""  # openid.realm demandé (spec de migration OpenID 2.0 §2)
     dpop_jkt: str = ""  # empreinte de la clé DPoP liant le code (RFC 9449 §4.2)
     resource: str = ""  # resource indicators RFC 8707 (URI uniques ou tableau JSON compact)
 
@@ -316,13 +319,10 @@ async def validate_authorization_request(
             redirectable=False,
         )
 
-    if request.redirect_uri not in client.redirect_uris:
-        return _authorize_error(
-            "invalid_redirect_uri",
-            request,
-            response_mode=response_mode,
-            redirectable=False,
-        )
+    scopes = Scope.from_space_separated(request.scope)
+    client_error = _client_request_error(request, client, scopes, response_mode)
+    if client_error is not None:
+        return client_error
 
     if request.response_mode == ResponseMode.JWT.value and not jarm_signing_alg(
         client, request.response_mode
@@ -348,7 +348,6 @@ async def validate_authorization_request(
     if param_error is not None:
         return param_error
 
-    scopes = Scope.from_space_separated(request.scope)
     scope_error = await _scope_profile_error(scopes, scope_registry, request, response_mode)
     if scope_error is not None:
         return scope_error
@@ -391,6 +390,56 @@ async def _scope_profile_error(
             response_mode=response_mode,
         )
     return await _unknown_scope_error(scopes, scope_registry, request, response_mode)
+
+
+def _client_request_error(
+    request: AuthorizeRequest,
+    client: Client,
+    scopes: frozenset[Scope],
+    response_mode: ResponseMode,
+) -> AuthorizeError | None:
+    """Vérifie la ``redirect_uri`` enregistrée et le realm OpenID 2.0.
+
+    La redirection doit pointer vers une URI enregistrée du client
+    (RFC 6749 §3.1.2.3) ; le ``openid2_realm`` doit, s'il est fourni,
+    correspondre à cette URI (spec de migration §3, OpenID 2.0 §9.2).
+    """
+    if request.redirect_uri not in client.redirect_uris:
+        return _authorize_error(
+            "invalid_redirect_uri",
+            request,
+            response_mode=response_mode,
+            redirectable=False,
+        )
+    return _openid20_realm_error(request, client, scopes, response_mode)
+
+
+def _openid20_realm_error(
+    request: AuthorizeRequest,
+    client: Client,
+    scopes: frozenset[Scope],
+    response_mode: ResponseMode,
+) -> AuthorizeError | None:
+    """Vérifie le ``openid2_realm`` (spec de migration §3, OpenID 2.0 §9.2).
+
+    L'OP **doit** vérifier que le realm et l'URI de redirection du RP
+    correspondent : le realm transmis doit donc être un préfixe d'au moins
+    une URI de redirection enregistrée du client. Un realm absent n'est pas
+    contrôlé (l'identifiant OpenID 2.0 est alors cherché sans realm).
+    """
+    if Scope.OPENID20 not in scopes or not request.openid2_realm:
+        return None
+    if any(uri.startswith(request.openid2_realm) for uri in client.redirect_uris):
+        return None
+    return _authorize_error(
+        "invalid_request",
+        request,
+        description=(
+            "openid2_realm ne correspond à aucune URI de redirection enregistrée "
+            "(spec de migration OpenID 2.0 §3, OpenID 2.0 §9.2)"
+        ),
+        response_mode=response_mode,
+    )
 
 
 def _client_profile_error(
@@ -543,6 +592,7 @@ class AuthorizeUseCase:
         claims_provider: ClaimsProvider | None = None,
         identity_resources: IdentityResourceReader | None = None,
         jarm_signer: JarmSigner | None = None,
+        openid20_migration: OpenID20MigrationUseCase | None = None,
     ) -> None:
         """Injection de la configuration, des repositories et de l'émetteur de jetons.
 
@@ -554,6 +604,10 @@ class AuthorizeUseCase:
         standard minimal. ``jarm_signer`` enveloppe la réponse de succès
         en ``response_mode=jwt`` (JARM Final 1.0 §3) ; sans injection, le
         mode ``jwt`` retombe sur le transport ``query`` clair.
+        ``openid20_migration`` porte les associations OpenID 2.0 (spec «
+        OpenID 2.0 to OpenID Connect Migration 1.0 ») : sans injection —
+        ou lorsque le support est désactivé — aucun claim ``openid2_id``
+        n'est émis.
         """
         self._config = config
         self._clients = client_repository
@@ -564,6 +618,7 @@ class AuthorizeUseCase:
         self._claims_provider = claims_provider
         self._identity_resources = identity_resources
         self._jarm_signer = jarm_signer
+        self._openid20_migration = openid20_migration
 
     async def execute(self, request: AuthorizeRequest) -> AuthorizeResult:
         """Traite la demande d'autorisation et retourne le redirect ou l'erreur."""
@@ -677,6 +732,7 @@ class AuthorizeUseCase:
             auth_time=request.auth_time,
             acr=first_acr_value(request.acr_values),
             claims=request.claims,
+            openid2_realm=request.openid2_realm,
             dpop_jkt=request.dpop_jkt,
             resource_uris=parse_resource_parameter(request.resource),
             expires_at=now + timedelta(seconds=code_ttl),
@@ -827,7 +883,23 @@ class AuthorizeUseCase:
                     self._identity_resources,
                 )
             )
+        openid20_id = await self._openid20_identifier(request)
+        if openid20_id:
+            additional[OPENID20_ID_CLAIM] = openid20_id
         return additional or None
+
+    async def _openid20_identifier(self, request: AuthorizeRequest) -> str:
+        """Identifiant OpenID 2.0 associé au compte (spec de migration, §4).
+
+        Le claim ``openid2_id`` n'est produit que si le RP a demandé le scope
+        ``openid2`` **et** qu'un identifiant OpenID 2.0 est associé au
+        compte : sinon l'identifiant est vide et le claim est omis.
+        """
+        if self._openid20_migration is None or not self._openid20_migration.enabled:
+            return ""
+        if Scope.OPENID20 not in Scope.from_space_separated(request.scope):
+            return ""
+        return await self._openid20_migration.identifier_for(request.subject, request.openid2_realm)
 
     async def _resolve_audience(
         self, client: Client, scopes: frozenset[Scope], resource: str = ""
