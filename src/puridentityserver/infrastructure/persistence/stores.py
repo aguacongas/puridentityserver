@@ -30,6 +30,7 @@ from puridentityserver.infrastructure.persistence.factory import (
     build_dpop_replay_repository,
     build_identity_resource_repository,
     build_key_pair_repository,
+    build_openid20_identifier_repository,
     build_pushed_authorization_repository,
     build_refresh_token_repository,
     build_revoked_token_repository,
@@ -57,6 +58,9 @@ from puridentityserver.interfaces.repositories.identity_resource_repository impo
     IdentityResourceRepository,
 )
 from puridentityserver.interfaces.repositories.key_pair_repository import KeyPairRepository
+from puridentityserver.interfaces.repositories.openid20_identifier_repository import (
+    OpenID20IdentifierRepository,
+)
 from puridentityserver.interfaces.repositories.pushed_authorization_repository import (
     PushedAuthorizationRepository,
 )
@@ -86,10 +90,11 @@ class Stores:
     identity_resource: IdentityResourceRepository
     api_resource: ApiResourceRepository
     dpop_replay: DpopReplayRepository
+    openid20_identifier: OpenID20IdentifierRepository
 
 
 def build_stores(settings: Settings) -> Stores:
-    """Construit les treize repositories selon ``STORAGE_TYPE``/``STORAGE_DSN``."""
+    """Construit les quatorze repositories selon ``STORAGE_TYPE``/``STORAGE_DSN``."""
     return Stores(
         key_pair=build_key_pair_repository(settings),
         client=build_client_repository(settings),
@@ -104,6 +109,7 @@ def build_stores(settings: Settings) -> Stores:
         identity_resource=build_identity_resource_repository(settings),
         api_resource=build_api_resource_repository(settings),
         dpop_replay=build_dpop_replay_repository(settings),
+        openid20_identifier=build_openid20_identifier_repository(settings),
     )
 
 
@@ -137,6 +143,7 @@ async def initialise_protocol_stores(stores: Stores, settings: Settings) -> None
     await stores.pushed.initialise()
     await stores.consent.initialise()
     await stores.dpop_replay.initialise()
+    await stores.openid20_identifier.initialise()
     for client in settings.seed_clients:
         await stores.client.save(client)
 
@@ -160,3 +167,4 @@ async def close_protocol_stores(stores: Stores) -> None:
     await stores.pushed.close()
     await stores.consent.close()
     await stores.dpop_replay.close()
+    await stores.openid20_identifier.close()

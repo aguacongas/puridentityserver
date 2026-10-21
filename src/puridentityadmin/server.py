@@ -23,6 +23,7 @@ from puridentityserver.application.api_resource import ApiResourceUseCase
 from puridentityserver.application.claim_authorizer import BearerClaimAuthorizer, ClaimRule
 from puridentityserver.application.identity_resource import IdentityResourceUseCase
 from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
+from puridentityserver.application.openid20_migration import OpenID20MigrationUseCase
 from puridentityserver.infrastructure.bearer import build_bearer_verifier
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
 from puridentityserver.infrastructure.persistence.stores import (
@@ -36,6 +37,7 @@ from puridentityserver.infrastructure.tokens import PyJWTTokenManager
 from puridentityserver.interfaces.api.api_resources import api_resources_router
 from puridentityserver.interfaces.api.cors import DynamicCORSMiddleware
 from puridentityserver.interfaces.api.identity_resources import identity_resources_router
+from puridentityserver.interfaces.api.openid20_identifiers import openid20_identifiers_router
 from puridentityserver.interfaces.api.security import swagger_oauth2_dependencies
 from puridentityserver.interfaces.api.signing_keys import signing_keys_router
 
@@ -112,6 +114,17 @@ class AdminDependencies:
             api_resources_router(self.api_resources_usecase, authorizer=self.admin_authorizer),
             dependencies=oauth2,
         )
+        if self.settings.openid20_migration_enabled:
+            # Associations OpenID 2.0 (spec de migration) : les routes ne
+            # sont montées que si le support est activé — sans lui, aucun
+            # chemin n'est exposé.
+            app.include_router(
+                openid20_identifiers_router(
+                    OpenID20MigrationUseCase(self.stores.openid20_identifier, enabled=True),
+                    authorizer=self.admin_authorizer,
+                ),
+                dependencies=oauth2,
+            )
         app.include_router(
             signing_keys_router(self.jwks_usecase, authorizer=self.admin_authorizer),
             dependencies=oauth2,

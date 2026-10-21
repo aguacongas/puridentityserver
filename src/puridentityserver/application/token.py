@@ -68,6 +68,7 @@ from puridentityserver.application.dpop import (
 )
 from puridentityserver.application.id_token_encryption import encrypt_id_token_for_client
 from puridentityserver.application.id_token_material import resolve_id_token_material
+from puridentityserver.application.openid20_migration import OpenID20MigrationUseCase
 from puridentityserver.application.resource_indicators import (
     is_resource_uri,
     parse_resource_parameter,
@@ -91,6 +92,7 @@ from puridentityserver.domain.authorization import (
     resolve_lifetime_seconds,
 )
 from puridentityserver.domain.jwks import JWTAlgorithm
+from puridentityserver.domain.openid20 import OPENID20_ID_CLAIM
 from puridentityserver.domain.revocation import RevokedToken, token_hash
 from puridentityserver.domain.subjects import access_token_subject_claims, display_subject
 from puridentityserver.interfaces.domain.client_assertions import (
@@ -211,6 +213,7 @@ class TokenUseCase:
         claims_provider: ClaimsProvider | None = None,
         revoked_tokens: RevokedTokenRepository | None = None,
         dpop: DpopGrantGuard | None = None,
+        openid20_migration: OpenID20MigrationUseCase | None = None,
     ) -> None:
         """Injection de la configuration, des repositories et de l'émetteur de jetons.
 
@@ -223,6 +226,10 @@ class TokenUseCase:
         applique les règles DPoP (RFC 9449) : sans injection, aucun proof
         n'est traité et ``require_dpop`` n'est honoré que pour le rejet de
         la requête dépourvue d'en-tête ``DPoP``.
+        ``openid20_migration`` porte les associations OpenID 2.0 (spec «
+        OpenID 2.0 to OpenID Connect Migration 1.0 ») : sans injection —
+        ou lorsque le support est désactivé — aucun claim ``openid2_id``
+        n'est émis.
         """
         self._config = config
         self._clients = client_repository
@@ -236,6 +243,7 @@ class TokenUseCase:
         self._claims_provider = claims_provider
         self._revoked_tokens = revoked_tokens
         self._dpop = dpop
+        self._openid20_migration = openid20_migration
 
     async def execute(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Traite le grant type demandé et retourne les jetons ou une erreur."""
@@ -321,6 +329,7 @@ class TokenUseCase:
             auth_time=auth_code.auth_time,
             acr=auth_code.acr,
             claims=auth_code.claims,
+            openid2_realm=auth_code.openid2_realm,
             dpop_jkt=binding.jkt if binding.bound else "",
             resources=resources,
             tls_cert_hash=tls_cert_hash,
@@ -1070,6 +1079,19 @@ class TokenUseCase:
             return self._config.token_endpoint
         return f"{self._config.issuer.rstrip('/')}/token"
 
+    async def _openid20_identifier(self, scopes: frozenset[Scope], subject: str, realm: str) -> str:
+        """Identifiant OpenID 2.0 associé au compte (spec de migration, §4).
+
+        Le claim ``openid2_id`` n'est produit que si le RP a demandé le scope
+        ``openid2`` **et** qu'un identifiant OpenID 2.0 est associé au
+        compte : sinon l'identifiant est vide et le claim est omis.
+        """
+        if self._openid20_migration is None or not self._openid20_migration.enabled:
+            return ""
+        if Scope.OPENID20 not in scopes:
+            return ""
+        return await self._openid20_migration.identifier_for(subject, realm)
+
     async def _issue_tokens(
         self,
         client: Client,
@@ -1082,6 +1104,7 @@ class TokenUseCase:
         auth_time: int = 0,
         acr: str = "",
         claims: str = "",
+        openid2_realm: str = "",
         dpop_jkt: str = "",
         resources: tuple[str, ...] = (),
         tls_cert_hash: str = "",
@@ -1126,6 +1149,9 @@ class TokenUseCase:
                     claims_request.id_token, subject, self._claims_provider
                 )
             )
+        openid20_id = await self._openid20_identifier(scopes, subject, openid2_realm)
+        if openid20_id:
+            additional[OPENID20_ID_CLAIM] = openid20_id
         id_token = await self._token_manager.create_id_token(
             algorithm=id_token_algorithm,
             issuer=self._config.issuer,

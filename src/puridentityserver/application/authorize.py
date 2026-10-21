@@ -126,6 +126,7 @@ class AuthorizeRequest:
     auth_time: int = 0
     acr_values: str = ""  # valeurs ACR demandées, séparées par des espaces (§3.1.2.1)
     claims: str = ""  # paramètre claims brut (OIDC Core 1.0 §5.5)
+    openid2_realm: str = ""  # openid.realm demandé (spec de migration OpenID 2.0 §2)
     dpop_jkt: str = ""  # empreinte de la clé DPoP liant le code (RFC 9449 §4.2)
     resource: str = ""  # resource indicators RFC 8707 (URI uniques ou tableau JSON compact)
 
@@ -316,13 +317,10 @@ async def validate_authorization_request(
             redirectable=False,
         )
 
-    if request.redirect_uri not in client.redirect_uris:
-        return _authorize_error(
-            "invalid_redirect_uri",
-            request,
-            response_mode=response_mode,
-            redirectable=False,
-        )
+    scopes = Scope.from_space_separated(request.scope)
+    client_error = _client_request_error(request, client, scopes, response_mode)
+    if client_error is not None:
+        return client_error
 
     if request.response_mode == ResponseMode.JWT.value and not jarm_signing_alg(
         client, request.response_mode
@@ -348,7 +346,6 @@ async def validate_authorization_request(
     if param_error is not None:
         return param_error
 
-    scopes = Scope.from_space_separated(request.scope)
     scope_error = await _scope_profile_error(scopes, scope_registry, request, response_mode)
     if scope_error is not None:
         return scope_error
@@ -391,6 +388,56 @@ async def _scope_profile_error(
             response_mode=response_mode,
         )
     return await _unknown_scope_error(scopes, scope_registry, request, response_mode)
+
+
+def _client_request_error(
+    request: AuthorizeRequest,
+    client: Client,
+    scopes: frozenset[Scope],
+    response_mode: ResponseMode,
+) -> AuthorizeError | None:
+    """Vérifie la ``redirect_uri`` enregistrée et le realm OpenID 2.0.
+
+    La redirection doit pointer vers une URI enregistrée du client
+    (RFC 6749 §3.1.2.3) ; le ``openid2_realm`` doit, s'il est fourni,
+    correspondre à cette URI (spec de migration §3, OpenID 2.0 §9.2).
+    """
+    if request.redirect_uri not in client.redirect_uris:
+        return _authorize_error(
+            "invalid_redirect_uri",
+            request,
+            response_mode=response_mode,
+            redirectable=False,
+        )
+    return _openid20_realm_error(request, client, scopes, response_mode)
+
+
+def _openid20_realm_error(
+    request: AuthorizeRequest,
+    client: Client,
+    scopes: frozenset[Scope],
+    response_mode: ResponseMode,
+) -> AuthorizeError | None:
+    """Vérifie le ``openid2_realm`` (spec de migration §3, OpenID 2.0 §9.2).
+
+    L'OP **doit** vérifier que le realm et l'URI de redirection du RP
+    correspondent : le realm transmis doit donc être un préfixe d'au moins
+    une URI de redirection enregistrée du client. Un realm absent n'est pas
+    contrôlé (l'identifiant OpenID 2.0 est alors sought sans realm).
+    """
+    if Scope.OPENID20 not in scopes or not request.openid2_realm:
+        return None
+    if any(uri.startswith(request.openid2_realm) for uri in client.redirect_uris):
+        return None
+    return _authorize_error(
+        "invalid_request",
+        request,
+        description=(
+            "openid2_realm ne correspond à aucune URI de redirection enregistrée "
+            "(spec de migration OpenID 2.0 §3, OpenID 2.0 §9.2)"
+        ),
+        response_mode=response_mode,
+    )
 
 
 def _client_profile_error(
@@ -677,6 +724,7 @@ class AuthorizeUseCase:
             auth_time=request.auth_time,
             acr=first_acr_value(request.acr_values),
             claims=request.claims,
+            openid2_realm=request.openid2_realm,
             dpop_jkt=request.dpop_jkt,
             resource_uris=parse_resource_parameter(request.resource),
             expires_at=now + timedelta(seconds=code_ttl),

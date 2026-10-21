@@ -396,6 +396,12 @@ class Settings(BaseSettings):
     # désactivé par défaut — sans lui, la route répond 404.
     ciba_enabled: bool = False
     ciba_approval_enabled: bool = False
+    # `openid20_migration_enabled` active le support de la spec « OpenID 2.0 to
+    # OpenID Connect Migration 1.0 » : le scope `openid2` est alors accepte et
+    # le claim `openid2_id` peut porter l'identifiant OpenID 2.0 d'un compte.
+    # Desactive par defaut : sans lui, le scope est refuse comme inconnu et
+    # aucun claim `openid2_id` n'est emis.
+    openid20_migration_enabled: bool = False
     ciba_ttl_seconds: int = 600
     ciba_min_ttl_seconds: int = 60
     ciba_interval_seconds: int = 5

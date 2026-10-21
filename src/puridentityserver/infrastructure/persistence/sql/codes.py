@@ -42,6 +42,7 @@ class AuthorizationCodeRow(PersistenceBase):
     auth_time: Mapped[int] = mapped_column(Integer, default=0)
     acr: Mapped[str] = mapped_column(String(256), default="")
     claims: Mapped[str] = mapped_column(Text, default="")
+    openid2_realm: Mapped[str] = mapped_column(String(512), default="", server_default=text("''"))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     is_consumed: Mapped[bool] = mapped_column(Boolean, default=False)
     access_token_hash: Mapped[str] = mapped_column(String(64), default="")
@@ -120,6 +121,7 @@ def _to_row(code: AuthorizationCode) -> AuthorizationCodeRow:
         auth_time=code.auth_time,
         acr=code.acr,
         claims=code.claims,
+        openid2_realm=code.openid2_realm,
         expires_at=code.expires_at,
         is_consumed=code.is_consumed,
         access_token_hash=code.access_token_hash,
@@ -152,6 +154,7 @@ def _from_row(row: AuthorizationCodeRow) -> AuthorizationCode:
         auth_time=row.auth_time or 0,
         acr=row.acr or "",
         claims=row.claims or "",
+        openid2_realm=row.openid2_realm or "",
         expires_at=expires_at,
         is_consumed=row.is_consumed,
         access_token_hash=row.access_token_hash or "",
