@@ -68,7 +68,7 @@ les politiques de sécurité** — le glue entre la spec et la lib crypto.
 | `/protected-resource`              | Resource server intégré (RFC 8707, FAPI-R-6.2.1) | ✅   |
 | `/end_session`                      | RP-Initiated Logout                       | ✅   |
 | `/session_state` + `/check_session` | Session Management (iframe OP + statut)   | ✅   |
-| `/openid20/checkid_setup`, `/openid20/check_authentication`, `/openid20/id/{id}` | Migration OpenID 2.0 → OpenID Connect (spec OIDF, **désactivé par défaut**) | ✅ |
+| `/openid20/checkid_setup`, `/openid20/continue`, `/openid20/check_authentication`, `/openid20/id/{id}` | Migration OpenID 2.0 → OpenID Connect (spec OIDF, **désactivé par défaut**) | ✅ |
 | `/openid20-identifiers`             | Export / liaison des identifiants OpenID 2.0 (administration, **désactivé par défaut**) | ✅ |
 
 ## Documentation
