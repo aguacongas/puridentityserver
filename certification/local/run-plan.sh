@@ -12,7 +12,9 @@
 #      les ecarts connus declares dans certification/expected-failures/
 #      <plan>.json sont classes « expected » par le driver (mode witness) et
 #      ne bloquent pas — idem CI, meme chemin de fichier ;
-#   5. bilan PASSED/FAILED/REVIEW lu dans l'export, + chemins log/export.
+#   5. bilan PASSED/FAILED/REVIEW lu dans les exports produits par CE run
+#      (le dossier d'export local conserve les sessions precedentes : seuls
+#      les zip du run courant sont comptes), + chemins log/export.
 #
 # Usage : bash certification/local/run-plan.sh <plan> [--export-dir <dir>]
 #   plans : basic | implicit | hybrid | formpost | dynamic | ciba | fapi1 | fapi2 | fapi2-message-signing
@@ -133,6 +135,30 @@ export CONFORMANCE_SERVER="$SUITE_URL"
 mkdir -p "$export_dir"
 run_log="$LOCAL_DIR/last-$plan.log"
 
+# Snapshot des exports deja presents : le dossier d'export local accumule les
+# sessions precedentes et le bilan (etape 5) ne doit porter que sur les
+# exports produits par CE run. Les archives anciennes sont conservees : elles
+# restent utiles au diagnostic.
+#
+# Le driver reutilise parfois le NOM d'une archive (identifiant de plan +
+# date du jour) et l'ecrase : la detection ne peut donc pas reposer sur le
+# seul nom. Un export est attribue a ce run s'il est nouveau (absent du
+# snapshot) OU s'il a ete modifie apres le lancement du driver.
+export_manifest="$LOCAL_DIR/.exports-before-$plan.txt"
+mkdir -p "$LOCAL_DIR"
+: > "$export_manifest"
+for archive in "$export_dir"/*.zip; do
+  if [ -e "$archive" ]; then
+    basename "$archive" >> "$export_manifest"
+  fi
+done
+run_started="$(date +%s)"
+
+# Date de modification d'un fichier (secondes), portable GNU/BSD.
+mtime_of() {
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0
+}
+
 log "lancement du plan $plan (log : $run_log)"
 # Temoignage (mode witness) : les ecarts de modules connus et documentes
 # (capacites OP absentes, module manuel) sont declares dans
@@ -156,20 +182,33 @@ code=0
 ) 2>&1 | tee "$run_log" || code=$?
 
 # --- 5) Bilan lu dans l'export (meme source que la CI) -----------------------
+# Seuls les exports produits par ce run sont comptes (le dossier d'export
+# local conserve les sessions precedentes).
+run_exports=()
+total_exports=0
+for archive in "$export_dir"/*.zip; do
+  if [ -e "$archive" ]; then
+    total_exports=$((total_exports + 1))
+    name="$(basename "$archive")"
+    modified="$(mtime_of "$archive")"
+    if ! grep -qxF "$name" "$export_manifest" || [ "$modified" -ge "$run_started" ]; then
+      run_exports+=("$archive")
+    fi
+  fi
+done
+log "exports du run : ${#run_exports[@]} / $total_exports dans $export_dir"
 bilan_code=0
-uv run --no-project python - "$export_dir" <<'PY' || bilan_code=$?
-"""Bilan des resultats module lus dans les exports zip de la suite."""
+uv run --no-project python - "$export_dir" ${run_exports[@]+"${run_exports[@]}"} <<'PY' || bilan_code=$?
+"""Bilan des resultats module lus dans les exports zip du run courant."""
 import collections
-import glob
 import json
-import os
 import sys
 import zipfile
 
 export_dir = sys.argv[1]
+paths = sys.argv[2:]
 totals: collections.Counter[str] = collections.Counter()
-zips = glob.glob(os.path.join(export_dir, "*.zip"))
-for path in zips:
+for path in paths:
     with zipfile.ZipFile(path) as archive:
         for name in archive.namelist():
             if not name.endswith(".json"):
@@ -179,8 +218,8 @@ for path in zips:
             except (json.JSONDecodeError, zipfile.BadZipFile, UnicodeDecodeError):
                 continue
             totals[str(info.get("result") or "INCONNU")] += 1
-if not zips:
-    print(f"aucun export dans {export_dir} : le harness a crashé avant tout module")
+if not paths:
+    print(f"aucun export produit par ce run dans {export_dir} : le harness a crashé avant tout module")
     sys.exit(3)
 detail = " / ".join(f"{count} {name}" for name, count in sorted(totals.items()))
 print(f"bilan des modules : {detail} (total {sum(totals.values())})")
