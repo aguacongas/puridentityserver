@@ -5,8 +5,8 @@
 # Usage : source certification/selectors.sh puis selector_for <plan>.
 # shellcheck shell=bash
 
-# Les neuf plans joues par defaut (filtre `all` des workflows).
-CERTIFICATION_PLANS=(basic implicit hybrid formpost dynamic ciba fapi1 fapi2 fapi2-message-signing)
+# Les dix plans joues par defaut (filtre `all` des workflows).
+CERTIFICATION_PLANS=(basic implicit hybrid formpost dynamic ciba fapi1 fapi2 fapi2-message-signing ekyc)
 
 # Retourne le selecteur de variante d'un plan sur stdout ; code retour 1 si le
 # plan est inconnu (appelant : message d'erreur + sortie securisee).
@@ -47,6 +47,16 @@ selector_for() {
     # echoue sans valeur (« requires a value for variant fapi_request_method ») ;
     # le plan fapi2 ne l'expose que via la reutilisation d'un plan anterieur.
     fapi2-message-signing) echo 'fapi2-message-signing-final-test-plan[fapi_profile=plain_fapi][client_auth_type=private_key_jwt][fapi_request_method=unsigned][authorization_request_type=simple][openid=openid_connect][sender_constrain=dpop][fapi_response_mode=jarm]' ;;
+    # eKYC (issue #171) : plan "OpenID Connect for Identity Assurance" - HORS
+    # programme officiel de certification (a confirmer aupres de l'OIDF), mais
+    # rejouable : 12 modules. Le claim `verified_claims` est demande via le
+    # parametre `claims` ; `ekyc_verified_claims_response_support` fixe la
+    # localisation attendue - la valeur `id_token_userinfo` (defaut de la
+    # suite) est retenue : la valeur `id_token` fait SKIPPER les modules
+    # userinfo, ce que le mode strict du driver refuse comme skip
+    # inattendu. `ekyc_profile=plain_ekyc` = sous-profil simple (select_id
+    # ajouterait un parametre `transaction_id` a la demande d'autorisation).
+    ekyc) echo 'ekyc-test-plan-oidccore[security_profile=none][server_metadata=discovery][client_registration=dynamic_client][response_type=code][auth_request_method=http_query][auth_request_non_repudiation_method=unsigned][client_auth_type=client_secret_basic][ekyc_profile=plain_ekyc][ekyc_verified_claims_response_support=id_token_userinfo][fapi_response_mode=plain_response][response_mode=default][sender_constrain=none]' ;;
     *) return 1 ;;
   esac
 }
