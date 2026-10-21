@@ -71,6 +71,24 @@ def _form_post_error_params(result: AuthorizeError, issuer: str) -> dict[str, st
     return params
 
 
+def _clear_error_params(result: AuthorizeError, issuer: str) -> str:
+    """Paramètres d'erreur du transport clair (``query`` / ``fragment``).
+
+    ``iss`` accompagne l'erreur (RFC 9207 §2 : « including error
+    responses »), avec la même valeur et la même règle d'omission que la
+    réponse de succès (aucun émetteur configuré : pas de paramètre).
+    """
+    parts = [f"error={result.error}"]
+    if result.error_description:
+        description = quote(ascii_error_description(result.error_description), safe="")
+        parts.append(f"error_description={description}")
+    if result.state:
+        parts.append(f"state={result.state}")
+    if issuer:
+        parts.append(f"iss={issuer}")
+    return "&".join(parts)
+
+
 async def error_redirect(
     result: AuthorizeError, signer: JarmSigner | None = None, *, issuer: str = ""
 ) -> RedirectResponse | HTMLResponse:
@@ -108,19 +126,7 @@ async def error_redirect(
             return RedirectResponse(
                 f"{result.redirect_uri}{separator}response={envelope}", status_code=302
             )
-    parts = [f"error={result.error}"]
-    if result.error_description:
-        description = quote(ascii_error_description(result.error_description), safe="")
-        parts.append(f"error_description={description}")
-    if result.state:
-        parts.append(f"state={result.state}")
-    if issuer:
-        # RFC 9207 §2 : l'émetteur accompagne TOUTE réponse d'autorisation,
-        # y compris les réponses d'erreur (« including error responses ») -
-        # même valeur et même règle d'omission que la réponse de succès
-        # (émetteur absent : pas de paramètre).
-        parts.append(f"iss={issuer}")
-    params = "&".join(parts)
+    params = _clear_error_params(result, issuer)
     if result.response_mode is ResponseMode.FRAGMENT:
         separator = "#"
     else:
