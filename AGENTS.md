@@ -54,6 +54,11 @@ bash certification/local/down.sh             # arrêt du harness (--purge : cont
   driver par `prepare-suite.sh` (idempotent), substitue les URLs locales puis joue le
   driver officiel en sortie stricte ; log : `.harness-local/last-<plan>.log`,
   exports : `.harness-local/results/<plan>` (ou `--export-dir`).
+- **Bilan local = exports du run courant seulement** : le dossier d'export local accumule
+  les sessions précédentes (le zip porte un id aléatoire + la date) ; `run-plan.sh`
+  instantanie les archives présentes avant le driver et ne compte que les nouvelles
+  (les anciennes sont conservées). Sans cette restriction, le bilan mélange les runs
+  (issue #199). La CI est immunisée : dossier d'export neuf par job.
 - Captures REVIEW : produire les 30 PNG avec
   `python certification/capture_screenshots.py --base-url https://localhost:9443 --out <dir>`,
   puis `SCREENSHOTS_DIR=<dir> bash certification/local/run-plan.sh <plan>` ; sans

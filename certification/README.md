@@ -199,7 +199,13 @@ stricte** (code retour non nul dès
 qu'un module est FAILED/INTERRUPTED ou qu'un warning inattendu survient), puis
 bilan `PASSED/FAILED/REVIEW` lu dans l'export, avec les chemins du log
 (`.harness-local/last-<plan>.log`) et des exports
-(`.harness-local/results/<plan>/`). Les sélecteurs de plans viennent de
+(`.harness-local/results/<plan>/`). Le dossier d'export local **accumule les
+sessions précédentes** (le nom de l'archive porte un id aléatoire et la
+date) : le bilan ne compte donc que les archives **produites par le run
+courant** (instantané des archives présentes avant le lancement du driver),
+les archives anciennes étant conservées pour le diagnostic. Le nombre
+d'archives du run est affiché avant le bilan. La CI n'est pas concernée :
+chaque job part d'un dossier d'export neuf. Les sélecteurs de plans viennent de
 `certification/selectors.sh`, la **source unique** partagée avec les deux
 workflows CI ; `prepare-suite.sh` est le helper de patches partagé avec le
 workflow local.
