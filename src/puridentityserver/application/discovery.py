@@ -83,6 +83,11 @@ class DiscoveryConfig:
     # ACR atteignables (OIDC Discovery 1.0 §2) : base du contrôle
     # ``unmet_authentication_requirements`` (RFC 9470 §2, issue #167).
     acr_values_supported: tuple[str, ...] = SUPPORTED_ACR_VALUES
+    # Fédération (OpenID Federation 1.1 §12) : modes d'enregistrement des
+    # clients (``automatic`` / ``explicit``) et endpoint d'enregistrement
+    # par la fédération. Publiés seulement quand la Fédération est activée.
+    client_registration_types_supported: tuple[str, ...] = ()
+    federation_registration_endpoint: str = ""
 
 
 class DiscoveryUseCase:
@@ -233,6 +238,17 @@ class DiscoveryUseCase:
         ekyc = await self._identity_assurance_metadata()
         if ekyc:
             metadata.update(ekyc)
+        # Fédération (OpenID Federation 1.1 §12) : modes d'enregistrement
+        # acceptés et endpoint d'enregistrement par la fédération. Publiés
+        # seulement quand la Fédération est activée.
+        if self._config.client_registration_types_supported:
+            metadata["client_registration_types_supported"] = list(
+                self._config.client_registration_types_supported
+            )
+        if self._config.federation_registration_endpoint:
+            metadata["federation_registration_endpoint"] = (
+                self._config.federation_registration_endpoint
+            )
         return metadata
 
     async def _identity_assurance_metadata(self) -> dict[str, list[str]]:

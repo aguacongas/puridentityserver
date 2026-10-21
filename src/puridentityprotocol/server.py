@@ -37,6 +37,11 @@ from puridentityserver.application.device_authorize import (
 )
 from puridentityserver.application.discovery import DiscoveryConfig, DiscoveryUseCase
 from puridentityserver.application.dpop import DpopGrantGuard
+from puridentityserver.application.federation import (
+    DiscoveryFederationMetadataProvider,
+    FederationConfig,
+    FederationUseCase,
+)
 from puridentityserver.application.identity_assurance import IdentityAssuranceUseCase
 from puridentityserver.application.introspect import IntrospectConfig, IntrospectUseCase
 from puridentityserver.application.jarm import JarmSigner
@@ -77,6 +82,11 @@ from puridentityserver.infrastructure.claims import UserStoreClaimsProvider
 from puridentityserver.infrastructure.client_assertions import PyJWTClientAssertionVerifier
 from puridentityserver.infrastructure.client_tls import ClientCertificateHeaderNames
 from puridentityserver.infrastructure.dpop import PyJWTDpopProofValidator
+from puridentityserver.infrastructure.federation import (
+    HTTPFederationEntityFetcher,
+    KeyManagerFederationKeyProvider,
+    PyJWTFederationTokenManager,
+)
 from puridentityserver.infrastructure.jarm import PyJarmEnvelopeSigner
 from puridentityserver.infrastructure.jwe import JWEIdTokenEncrypter
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
@@ -109,6 +119,7 @@ from puridentityserver.interfaces.api.cors import DynamicCORSMiddleware
 from puridentityserver.interfaces.api.device_authorize import device_authorization_router
 from puridentityserver.interfaces.api.device_page import device_page_router
 from puridentityserver.interfaces.api.discovery import discovery_router
+from puridentityserver.interfaces.api.federation import federation_router
 from puridentityserver.interfaces.api.introspect import introspect_router
 from puridentityserver.interfaces.api.jwks import jwk_set_router
 from puridentityserver.interfaces.api.logout import logout_router
@@ -227,6 +238,14 @@ class ProtocolDependencies:
             encryption_algorithms=settings.jwks_encryption_algorithms,
             encryption_methods=settings.jwks_encryption_methods,
             token_endpoint_auth_methods=self._token_endpoint_auth_methods(),
+            client_registration_types_supported=(
+                ("automatic", "explicit") if settings.federation_enabled else ()
+            ),
+            federation_registration_endpoint=(
+                f"{(settings.base_url or settings.issuer).rstrip('/')}/federation/register"
+                if settings.federation_enabled
+                else ""
+            ),
         )
         self.jwks_usecase = JWKSetUseCase(
             JWKSetConfig(
@@ -286,6 +305,35 @@ class ProtocolDependencies:
         self.session_management = SessionManagementUseCase()
         self.claims_provider = UserStoreClaimsProvider(self.readers.user)
         self.identity_assurance = IdentityAssuranceUseCase(self.claims_provider, self.readers.user)
+        self.discovery_usecase = DiscoveryUseCase(
+            self.config,
+            identity_resources=self.readers.identity_resource,
+            api_resources=self.readers.api_resource,
+            identity_assurance=self.identity_assurance,
+        )
+
+        self.federation_key_manager = DefaultKeyManager(stores.key_pair, use=KeyUse.FEDERATION)
+        self.federation_usecase: FederationUseCase | None = None
+        if settings.federation_enabled:
+            self.federation_usecase = FederationUseCase(
+                config=FederationConfig(
+                    entity_identifier=(
+                        settings.federation_entity_identifier or settings.issuer
+                    ).rstrip("/"),
+                    trust_anchors=settings.federation_trust_anchors,
+                    statement_ttl_seconds=settings.federation_statement_ttl_seconds,
+                    algorithm=JWTAlgorithm(settings.federation_signing_alg),
+                    registration_types=("automatic", "explicit"),
+                ),
+                token_manager=PyJWTFederationTokenManager(
+                    self.federation_key_manager, JWTAlgorithm(settings.federation_signing_alg)
+                ),
+                key_provider=KeyManagerFederationKeyProvider(self.federation_key_manager),
+                fetcher=HTTPFederationEntityFetcher(
+                    allow_local_targets=loopback_bind(settings.host)
+                ),
+                metadata_provider=DiscoveryFederationMetadataProvider(self.discovery_usecase),
+            )
         self.request_object_resolver = RequestObjectResolver(
             RequestObjectConfig(issuer=settings.issuer),
             HTTPRequestObjectFetcher(
@@ -494,6 +542,13 @@ class ProtocolDependencies:
         """Alimente clients + user store et génère les clés (protocole/full)."""
         identity_users = await seed_users(self.settings.identity_seed_users)
         await initialise_protocol_stores(self.stores, self.settings)
+        if self.federation_usecase is not None:
+            # Fédération : une clé de signature dédiée aux entity statements
+            # (distincte des clés `sig` du JWKS OIDC, OpenID Federation 1.1
+            # §2.1) doit exister avant la publication du statement.
+            await self.federation_key_manager.ensure_active_key(
+                2048, JWTAlgorithm(self.settings.federation_signing_alg)
+            )
         await self.stores.user.save_all(
             [
                 UserClaims(subject=subject, claims=claims)
@@ -532,17 +587,13 @@ class ProtocolDependencies:
 
     def mount(self, app: FastAPI) -> None:
         """Monte les endpoints de protocole OIDC/OAuth sur ``app``."""
-        app.include_router(
-            discovery_router(
-                DiscoveryUseCase(
-                    self.config,
-                    identity_resources=self.readers.identity_resource,
-                    api_resources=self.readers.api_resource,
-                    identity_assurance=self.identity_assurance,
-                )
-            )
-        )
+        app.include_router(discovery_router(self.discovery_usecase))
         app.include_router(jwk_set_router(self.jwks_usecase))
+        if self.federation_usecase is not None:
+            # Fédération (OpenID Federation 1.1) : l'entity configuration de
+            # l'OP. Les routes ne sont montées que si le support est activé —
+            # sans lui, aucun chemin n'est exposé.
+            app.include_router(federation_router(self.federation_usecase))
         app.include_router(login_router(self.resolve_session_lifetime))
         app.include_router(
             signup_router(

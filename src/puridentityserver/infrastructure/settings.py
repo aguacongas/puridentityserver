@@ -402,6 +402,23 @@ class Settings(BaseSettings):
     # Desactive par defaut : sans lui, le scope est refuse comme inconnu et
     # aucun claim `openid2_id` n'est emis.
     openid20_migration_enabled: bool = False
+    # `federation_enabled` active le support d'OpenID Federation 1.1 :
+    # l'OP publie alors son entity statement (/.well-known/openid-federation)
+    # et peut resoudre la chaine de confiance d'un RP federe. Desactive par
+    # defaut : sans lui, aucune route de federation n'est montee.
+    federation_enabled: bool = False
+    # `federation_entity_identifier` est l'Entity Identifier de l'OP (une URL
+    # https sans query ni fragment, spec 1.2) ; vide = l'issuer de l'OP.
+    federation_entity_identifier: str = ""
+    # `federation_trust_anchors` : les ancres de confiance acceptees pour la
+    # resolution de chaine ; vide = resolution vers n'importe quelle ancre
+    # (developpement uniquement).
+    federation_trust_anchors: Annotated[tuple[str, ...], NoDecode] = ()
+    # `federation_statement_ttl_seconds` : duree de vie de l'entity statement.
+    federation_statement_ttl_seconds: int = 3600
+    # `federation_signing_alg` : algorithme de signature des entity statements
+    # (ES256 par defaut ; la suite accepte RSA >= 2048 et EC >= 256).
+    federation_signing_alg: str = "ES256"
     ciba_ttl_seconds: int = 600
     ciba_min_ttl_seconds: int = 60
     ciba_interval_seconds: int = 5

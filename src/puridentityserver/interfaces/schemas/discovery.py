@@ -175,3 +175,7 @@ class DiscoveryDocument(BaseModel):
     evidence_supported: list[str] | None = None
     documents_supported: list[str] | None = None
     documents_check_methods_supported: list[str] | None = None
+    # Fédération (OpenID Federation 1.1 §12) : modes d'enregistrement des
+    # clients et endpoint d'enregistrement par la fédérateur.
+    client_registration_types_supported: list[str] | None = None
+    federation_registration_endpoint: str | None = None

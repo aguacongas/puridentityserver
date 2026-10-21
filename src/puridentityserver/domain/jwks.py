@@ -36,13 +36,22 @@ class KeyUse(str, Enum):
                  automatiquement mais **jamais purgée** : un secret est
                  chiffré à vie dans le registre, l'ancienne clé doit
                  rester le temps du drain avant retrait manuel.
+    ``federation``: signature des entity statements et des chaînes de
+                 confiance (OpenID Federation 1.1 §2.1, §3) — jamais
+                 publiée au JWKS OIDC, la spec recommandant que ces clés
+                 ne servent à aucun autre protocole.
     """
 
     SIG = "sig"
     SESSION = "session"
     RESET = "reset"
     VERIFY = "verify"
-    SECRET = "secret"  # ruff: ignore[hardcoded-password-string] — valeur de persistance de l'enum, pas un vrai mot de passe
+    SECRET = "secret"  # ruff: ignore[hardcoded-password-string] - valeur de persistance de l'enum, pas un vrai mot de passe
+    # `federation` : signature des entity statements et de la chaîne de
+    # confiance (OpenID Federation 1.1 §2.1, §3). Ces clés sont distinctes
+    # des clés de signature OIDC : la spec recommande qu'elles ne servent
+    # à aucun autre protocole.
+    FEDERATION = "federation"
 
 
 class JWTAlgorithm(str, Enum):
