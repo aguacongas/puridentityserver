@@ -206,6 +206,28 @@ class IdTokenContext:
 
 
 @dataclass(frozen=True, slots=True)
+class TokenDependencies:
+    """Dépendances optionnelles du token endpoint.
+
+    Regroupées dans un conteneur unique : le constructeur du cas d'usage
+    reste lisible et la complexité du signature sous le seuil du quality
+    gate (SonarCloud ``python:S107``). Toutes sont facultatives — sans
+    elles, le comportement du token endpoint est celui d'un OP OIDC
+    standard.
+    """
+
+    claims_provider: ClaimsProvider | None = None
+    revoked_tokens: RevokedTokenRepository | None = None
+    dpop: DpopGrantGuard | None = None
+    openid20_migration: OpenID20MigrationUseCase | None = None
+    identity_assurance: IdentityAssuranceUseCase | None = None
+
+
+#: Dépendances optionnelles par défaut : aucune feature activée.
+_NO_TOKEN_DEPENDENCIES = TokenDependencies()
+
+
+@dataclass(frozen=True, slots=True)
 class TokenError:
     """Erreur du token endpoint (RFC 6749 §5.2)."""
 
@@ -235,30 +257,29 @@ class TokenUseCase:
         backchannel_auth: BackchannelAuthenticationRepository | None = None,
         scope_registry: ScopeRegistry | None = None,
         client_assertions: ClientAssertionVerifier | None = None,
-        *,
-        claims_provider: ClaimsProvider | None = None,
-        revoked_tokens: RevokedTokenRepository | None = None,
-        dpop: DpopGrantGuard | None = None,
-        openid20_migration: OpenID20MigrationUseCase | None = None,
-        identity_assurance: IdentityAssuranceUseCase | None = None,
+        dependencies: TokenDependencies = _NO_TOKEN_DEPENDENCIES,
     ) -> None:
         """Injection de la configuration, des repositories et de l'émetteur de jetons.
 
-        ``claims_provider`` résout les valeurs du member ``id_token`` du
-        paramètre ``claims`` (OIDC Core 1.0 §5.5) pour compléter l'id_token
-        émis à l'échange du code ; sans injection, seul le payload standard
-        est signé. ``revoked_tokens`` est le denylist sur lequel un code
-        réutilisé place l'access token du premier échange (RFC 6749 §4.1.2) ;
-        sans injection, la révocation est simplement ignorée. ``dpop``
-        applique les règles DPoP (RFC 9449) : sans injection, aucun proof
-        n'est traité et ``require_dpop`` n'est honoré que pour le rejet de
-        la requête dépourvue d'en-tête ``DPoP``.
-        ``openid20_migration`` porte les associations OpenID 2.0 (spec «
-        OpenID 2.0 to OpenID Connect Migration 1.0 ») : sans injection —
-        ou lorsque le support est désactivé — aucun claim ``openid2_id``
-        n'est émis. ``identity_assurance`` résout les ``verified_claims``
-        (OpenID Identity Assurance 1.0) : sans injection, aucun membre
-        ``verified_claims`` n'est émis.
+        ``dependencies`` regroupe les dépendances optionnelles (claims du
+        profil, denylist, DPoP et extensions de spécification) : sans elles,
+        le comportement du token endpoint est celui d'un OP OIDC standard.
+        ``dependencies.claims_provider`` résout les valeurs du member
+        ``id_token`` du paramètre ``claims`` (OIDC Core 1.0 §5.5) pour
+        compléter l'id_token émis à l'échange du code ; sans injection, seul
+        le payload standard est signé. ``dependencies.revoked_tokens`` est le
+        denylist sur lequel un code réutilisé place l'access token du premier
+        échange (RFC 6749 §4.1.2) ; sans injection, la révocation est
+        simplement ignorée. ``dependencies.dpop`` applique les règles DPoP
+        (RFC 9449) : sans injection, aucun proof n'est traité et
+        ``require_dpop`` n'est honoré que pour le rejet de la requête
+        dépourvue d'en-tête ``DPoP``.
+        ``dependencies.openid20_migration`` porte les associations OpenID 2.0
+        (spec « OpenID 2.0 to OpenID Connect Migration 1.0 ») : sans
+        injection — ou lorsque le support est désactivé — aucun claim
+        ``openid2_id`` n'est émis. ``dependencies.identity_assurance`` résout
+        les ``verified_claims`` (OpenID Identity Assurance 1.0) : sans
+        injection, aucun membre ``verified_claims`` n'est émis.
         """
         self._config = config
         self._clients = client_repository
@@ -269,11 +290,32 @@ class TokenUseCase:
         self._backchannel_auth = backchannel_auth
         self._scope_registry = scope_registry
         self._client_assertions = client_assertions
-        self._claims_provider = claims_provider
-        self._revoked_tokens = revoked_tokens
-        self._dpop = dpop
-        self._openid20_migration = openid20_migration
-        self._identity_assurance = identity_assurance
+        self._dependencies = dependencies
+
+    @property
+    def _claims_provider(self) -> ClaimsProvider | None:
+        """Fournisseur de claims du profil (facultatif)."""
+        return self._dependencies.claims_provider
+
+    @property
+    def _revoked_tokens(self) -> RevokedTokenRepository | None:
+        """Denylist des jetons révoqués (facultatif)."""
+        return self._dependencies.revoked_tokens
+
+    @property
+    def _dpop(self) -> DpopGrantGuard | None:
+        """Garde DPoP appliqué aux preuves (facultatif)."""
+        return self._dependencies.dpop
+
+    @property
+    def _openid20_migration(self) -> OpenID20MigrationUseCase | None:
+        """Cas d'usage de la migration OpenID 2.0 (facultatif)."""
+        return self._dependencies.openid20_migration
+
+    @property
+    def _identity_assurance(self) -> IdentityAssuranceUseCase | None:
+        """Cas d'usage de l'identité assurance (facultatif)."""
+        return self._dependencies.identity_assurance
 
     async def execute(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Traite le grant type demandé et retourne les jetons ou une erreur."""

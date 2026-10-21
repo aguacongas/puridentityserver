@@ -40,6 +40,7 @@ from puridentityserver.application.claims_request import (
 )
 from puridentityserver.application.token import (
     TokenConfig,
+    TokenDependencies,
     TokenRequest,
     TokenResponse,
     TokenUseCase,
@@ -440,7 +441,7 @@ def _make_token_usecase() -> tuple[TokenUseCase, InMemoryAuthorizationCodeReposi
         codes,
         _token_manager(),
         InMemoryRefreshTokenRepository(),
-        claims_provider=_claims_provider(),
+        dependencies=TokenDependencies(claims_provider=_claims_provider()),
     )
     return usecase, codes
 

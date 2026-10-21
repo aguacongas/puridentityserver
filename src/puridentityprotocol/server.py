@@ -54,7 +54,7 @@ from puridentityserver.application.request_object import RequestObjectConfig, Re
 from puridentityserver.application.revocation import RevocationConfig, RevocationUseCase
 from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.application.session_management import SessionManagementUseCase
-from puridentityserver.application.token import TokenConfig, TokenUseCase
+from puridentityserver.application.token import TokenConfig, TokenDependencies, TokenUseCase
 from puridentityserver.application.userinfo import UserInfoConfig, UserInfoUseCase
 from puridentityserver.domain.authorization import Scope, TokenEndpointAuthMethod
 from puridentityserver.domain.jwks import SYMMETRIC_ALGORITHMS, JWTAlgorithm, KeyUse
@@ -340,11 +340,13 @@ class ProtocolDependencies:
             stores.backchannel,
             self.scope_registry,
             self.client_assertions,
-            claims_provider=self.claims_provider,
-            revoked_tokens=stores.revoked,
-            dpop=DpopGrantGuard(self.dpop_validator),
-            openid20_migration=self.openid20_migration,
-            identity_assurance=self.identity_assurance,
+            TokenDependencies(
+                claims_provider=self.claims_provider,
+                revoked_tokens=stores.revoked,
+                dpop=DpopGrantGuard(self.dpop_validator),
+                openid20_migration=self.openid20_migration,
+                identity_assurance=self.identity_assurance,
+            ),
         )
         self.device_usecase = DeviceAuthorizationUseCase(
             DeviceConfig(
