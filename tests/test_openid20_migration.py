@@ -278,6 +278,55 @@ def test_openid2_realm_must_match_a_registered_redirect_uri() -> None:
     assert query["error"] == ["invalid_request"]
 
 
+def test_openid2_realm_survives_the_par_flow() -> None:
+    """Le `openid2_realm` est porté par la requête poussée (RFC 9126)."""
+    with TestClient(_app(enabled=True)) as client:
+        _login(client)
+        claims = _id_token(client, _code(client))
+        subject = str(claims["sub"])
+        token = _admin_token(client)
+        linked = client.post(
+            "/openid20-identifiers",
+            json={
+                "subject": subject,
+                "identifier": "https://openid2.example.com/u",
+                "realm": _REALM,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert linked.status_code == 201, linked.text
+
+        pushed = client.post(
+            "/par",
+            data={
+                "response_type": "code",
+                "client_id": "web-app",
+                "client_secret": "super-secret",
+                "redirect_uri": "https://app.example/callback",
+                "scope": "openid openid2",
+                "state": "st-par",
+                "nonce": "n-0S6_WzA2Mj",
+                "code_challenge": _s256_challenge("verifier-verifier"),
+                "openid2_realm": _REALM,
+            },
+        )
+        assert pushed.status_code == 201, pushed.text
+
+        response = client.get(
+            "/authorize",
+            params={
+                "client_id": "web-app",
+                "request_uri": str(pushed.json()["request_uri"]),
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 302, response.text
+        code = parse_qs(urlparse(response.headers["location"]).query)["code"][0]
+        claims = _id_token(client, code)
+
+    assert claims[OPENID20_ID_CLAIM] == "https://openid2.example.com/u"
+
+
 def test_admin_routes_are_absent_when_the_support_is_disabled() -> None:
     """Drapeau OFF : aucune route d'administration n'est exposée (404)."""
     with TestClient(_app(enabled=False)) as client:
