@@ -8,7 +8,7 @@ sont publiés par les entités supérieures).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
 from puridentityserver.domain.authorization import Client
@@ -90,4 +90,16 @@ class FederatedClientResolver(Protocol):
 
     async def resolve(self, entity_identifier: str) -> Client | None:
         """Dérive le client d'un RP de son entity statement ; ``None`` sinon."""
+        ...
+
+
+class FederationSubordinateSource(Protocol):
+    """Subordonnés immédiats que l'OP atteste (spec §8.1, §8.2).
+
+    L'OP joue le supérieur de ses clients enregistrés qui sont des entités
+    fédérées : il leur émet un subordinate statement et les liste.
+    """
+
+    async def subordinates(self) -> Sequence[Client]:
+        """Retourne les clients enregistrés, éligibles comme subordonnés."""
         ...

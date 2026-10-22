@@ -1,13 +1,16 @@
 """Cas d'usage : Fédération (OpenID Federation 1.1).
 
-Trois opérations :
+Quatre opérations :
 
 - **publier** l'entity statement de l'OP (``/.well-known/openid-federation``) ;
 - **résoudre** la chaîne de confiance d'une entité (le RP fédéré) jusqu'à une
   ancre de confiance configurée, en vérifiant chaque statement au fil de
   l'eau (spec §10.1, §10.2) ;
 - **enregistrer** un RP par enregistrement explicite (§12.2) : l'entity
-  configuration reçue est validée, ancrée, et la réponse signée.
+  configuration reçue est validée, ancrée, et la réponse signée ;
+- **attester ses subordonnés** (fetch, §8.1 ; list, §8.2) et **résoudre une
+  chaîne à la demande** (resolve, §8.3) : l'OP joue le supérieur des entités
+  fédérées qu'il a enregistrées.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from puridentityserver.application.discovery import DiscoveryUseCase
 from puridentityserver.domain.authorization import Client, TokenEndpointAuthMethod
 from puridentityserver.domain.federation import (
     EXPLICIT_REGISTRATION_RESPONSE_TYP,
+    RESOLVE_RESPONSE_TYP,
     EntityStatement,
     FederationError,
     FederationRegistrationError,
@@ -33,11 +37,21 @@ from puridentityserver.interfaces.domain.federation import (
     FederationEntityFetcher,
     FederationKeyProvider,
     FederationMetadataProvider,
+    FederationSubordinateSource,
     FederationTokenManager,
 )
 
 #: Suffixe de découverte de l'entity configuration (spec §9.1).
 ENTITY_CONFIGURATION_PATH = "/.well-known/openid-federation"
+
+#: Chemin du endpoint de subordinate statement (spec §8.1).
+FETCH_PATH = "/federation/fetch"
+
+#: Chemin du endpoint de liste des subordonnés immédiats (spec §8.2).
+LIST_PATH = "/federation/list"
+
+#: Chemin du endpoint de résolution de chaîne (spec §8.3).
+RESOLVE_PATH = "/federation/resolve"
 
 #: Tolérance d'horloge sur ``iat``/``exp`` (spec §3.2, étapes 7 et 8).
 _CLOCK_SKEW_SECONDS = 300
@@ -64,17 +78,27 @@ class DiscoveryFederationMetadataProvider:
     """Metadata de l'OP publiées dans l'entity statement (spec §5.2).
 
     L'entity statement porte les metadata de l'OP sous le type d'entité
-    ``openid_provider`` : ce sont les metadata de discovery, telles que
-    publiées par l'OP (spec §5.1).
+    ``openid_provider`` — les metadata de discovery, telles que publiées par
+    l'OP (§5.1) — et les endpoints de la fédération sous ``federation_entity``
+    (§5.1.1) : publiés dans l'entity configuration, ils sont disponibles avant
+    toute résolution de chaîne (§8.1, §8.2, §8.3).
     """
 
-    def __init__(self, discovery: DiscoveryUseCase) -> None:
-        """Injection du cas d'usage de discovery."""
+    def __init__(self, discovery: DiscoveryUseCase, base_url: str) -> None:
+        """Injection du cas d'usage de discovery et de l'URL de base de l'OP."""
         self._discovery = discovery
+        self._base_url = base_url.rstrip("/")
 
     async def federation_metadata(self) -> Mapping[str, Any]:
         """Retourne les metadata de l'OP par type d'entité."""
-        return {"openid_provider": await self._discovery.execute()}
+        return {
+            "openid_provider": await self._discovery.execute(),
+            "federation_entity": {
+                "federation_fetch_endpoint": f"{self._base_url}{FETCH_PATH}",
+                "federation_list_endpoint": f"{self._base_url}{LIST_PATH}",
+                "federation_resolve_endpoint": f"{self._base_url}{RESOLVE_PATH}",
+            },
+        }
 
 
 @dataclass(slots=True)
@@ -86,6 +110,7 @@ class FederationUseCase:
     key_provider: FederationKeyProvider
     fetcher: FederationEntityFetcher
     metadata_provider: FederationMetadataProvider | None = None
+    subordinate_source: FederationSubordinateSource | None = None
 
     async def entity_statement(self) -> str:
         """Construit et signe l'entity statement de l'OP (spec §9.2).
@@ -98,7 +123,7 @@ class FederationUseCase:
         claims: dict[str, Any] = {
             "iss": self.config.entity_identifier,
             "sub": self.config.entity_identifier,
-            "iat": int(datetime.now(timezone.utc).timestamp()),
+            "iat": _now_timestamp(),
             "exp": int(
                 (
                     datetime.now(timezone.utc)
@@ -146,6 +171,7 @@ class FederationUseCase:
         """
         subject = statement.subject
         chain: list[EntityStatement] = [statement]
+        tokens: list[str] = [statement_token]
         current = statement
         seen = {subject}
         while not self._is_trust_anchor(current, trust_anchor):
@@ -155,7 +181,8 @@ class FederationUseCase:
             subordinate = await self._fetch_subordinate_statement(superior, subject)
             if subordinate is None:
                 return None
-            chain.append(subordinate)
+            chain.append(subordinate[0])
+            tokens.append(subordinate[1])
             current = superior
         # Sans ancre explicite, l'ancre est le supérieur atteint (spec §10.1) :
         # son entity configuration couronne déjà la chaîne. La liste
@@ -174,7 +201,8 @@ class FederationUseCase:
         if len(chain) >= 2 and not self._subject_attested_keys(statement_token, chain):
             return None
         chain.append(fetched[0])
-        return TrustChain(statements=tuple(chain))
+        tokens.append(fetched[1])
+        return TrustChain(statements=tuple(chain), tokens=tuple(tokens))
 
     def _subject_attested_keys(self, token: str, chain: list[EntityStatement]) -> bool:
         """Vérifie la liaison EC du sujet → subordinate statement (§10.2, étape 6).
@@ -297,7 +325,7 @@ class FederationUseCase:
         return {
             "iss": self.config.entity_identifier,
             "sub": statement.subject,
-            "iat": int(datetime.now(timezone.utc).timestamp()),
+            "iat": _now_timestamp(),
             "exp": _chain_expiration(chain),
             "aud": statement.subject,
             "trust_anchor": chain.trust_anchor.issuer,
@@ -306,6 +334,82 @@ class FederationUseCase:
             # Copie verbatim du `jwks` de l'EC reçu (§12.2.3).
             "jwks": dict(statement.jwks),
         }
+
+    async def subordinate_statement(self, sub: str) -> str | None:
+        """Émet le subordinate statement de l'entité ``sub`` (spec §8.1).
+
+        L'OP atteste ses clients enregistrés qui sont des entités fédérées
+        (``client_id`` = Entity Identifier, ``jwks`` inline) : le statement
+        porte leurs clés et les metadata ``openid_relying_party`` qu'il vaut
+        (redirect URI et clés). Retourne ``None`` si ``sub`` n'est pas un
+        subordonné immédiat.
+        """
+        if self.subordinate_source is None:
+            return None
+        for client in await self.subordinate_source.subordinates():
+            if client.client_id == sub and _is_federated_subordinate(client):
+                return await self._sign_subordinate(client)
+        return None
+
+    async def subordinate_identifiers(self) -> list[str]:
+        """Entity Identifier des subordonnés immédiats de l'OP (spec §8.2)."""
+        if self.subordinate_source is None:
+            return []
+        clients = await self.subordinate_source.subordinates()
+        return sorted(client.client_id for client in clients if _is_federated_subordinate(client))
+
+    async def resolve_entity(self, subject: str, trust_anchor: str) -> str | None:
+        """Signe la réponse de résolution de la chaîne de ``subject`` (§8.3).
+
+        La réponse porte les metadata résolues du sujet et les JWT de sa
+        chaîne de confiance (claim ``trust_chain``) ; ``exp`` ne dépasse
+        jamais l'expiration de la chaîne (§8.3.2). Retourne ``None`` si la
+        chaîne n'est pas résoluble ou si ``trust_anchor`` échappe au
+        périmètre configuré (``config.trust_anchors``).
+        """
+        chain = await self.resolve_trust_chain(subject, trust_anchor)
+        if chain is None or not chain.tokens:
+            return None
+        claims: dict[str, Any] = {
+            "iss": self.config.entity_identifier,
+            "sub": subject,
+            "iat": _now_timestamp(),
+            "exp": _chain_expiration(chain),
+            "metadata": chain.resolved_metadata(),
+            "trust_chain": list(chain.tokens),
+        }
+        return await self.token_manager.sign_entity_statement(
+            algorithm=self.config.algorithm,
+            claims=claims,
+            key_id="",
+            typ=RESOLVE_RESPONSE_TYP,
+        )
+
+    async def _sign_subordinate(self, client: Client) -> str:
+        """Signe le subordinate statement d'un client-entité (spec §3.1.2).
+
+        Le ``jwks`` porte les clés du sujet (attestées) et la metadata
+        ``openid_relying_party`` les répète pour les résolveurs ; le
+        statement n'a pas d'``authority_hints`` (§3.1.2).
+        """
+        issued_at = _now_timestamp()
+        jwks = {"keys": [dict(key) for key in client.jwks]}
+        claims: dict[str, Any] = {
+            "iss": self.config.entity_identifier,
+            "sub": client.client_id,
+            "iat": issued_at,
+            "exp": issued_at + self.config.statement_ttl_seconds,
+            "jwks": jwks,
+            "metadata": {
+                "openid_relying_party": {
+                    "redirect_uris": sorted(client.redirect_uris),
+                    "jwks": jwks,
+                }
+            },
+        }
+        return await self.token_manager.sign_entity_statement(
+            algorithm=self.config.algorithm, claims=claims, key_id=""
+        )
 
     async def _metadata(self) -> dict[str, Any]:
         """Metadata de l'OP publiées dans l'entity statement."""
@@ -381,12 +485,13 @@ class FederationUseCase:
 
     async def _fetch_subordinate_statement(
         self, superior: EntityStatement, subject: str
-    ) -> EntityStatement | None:
+    ) -> tuple[EntityStatement, str] | None:
         """Lit le subordinate statement émis par le supérieur (spec §8.1).
 
         Le supérieur publie un endpoint ``federation_fetch_endpoint`` : il
         renvoie le statement attestant l'entité subordonnée, signé par le
-        supérieur.
+        supérieur. Le JWT brut est retourné avec le statement (§10.2,
+        étape 6 — liaison du statement au token de l'EC du sujet).
         """
         endpoint = _federation_endpoint(superior, "federation_fetch_endpoint")
         if not endpoint:
@@ -404,7 +509,7 @@ class FederationUseCase:
         if claims is None:
             return None
         try:
-            return parse_entity_statement(claims)
+            return parse_entity_statement(claims), token
         except FederationError:
             return None
 
@@ -425,6 +530,26 @@ def _chain_expiration(chain: TrustChain) -> int:
     plus court de la chaîne.
     """
     return min(int(statement.expires_at.timestamp()) for statement in chain.statements)
+
+
+def _now_timestamp() -> int:
+    """Horodatage courant en secondes depuis l'époque (RFC 7519)."""
+    return int(datetime.now(timezone.utc).timestamp())
+
+
+def _is_federated_subordinate(client: Client) -> bool:
+    """Indique si un client enregistré est attestable comme entité fédérée.
+
+    Un client devient subordonné immédiat de l'OP (spec §8.1) s'il est
+    identifié par un Entity Identifier (URL ``https`` sans query ni fragment,
+    §1.2) et porte ses clés de fédération (``jwks`` inline).
+    """
+    return _is_entity_identifier(client.client_id) and bool(client.jwks)
+
+
+def _is_entity_identifier(value: str) -> bool:
+    """Indique si ``value`` est une URL https sans query ni fragment (§1.2)."""
+    return value.startswith("https://") and "?" not in value and "#" not in value
 
 
 def _immediate_superior(chain: TrustChain) -> str:

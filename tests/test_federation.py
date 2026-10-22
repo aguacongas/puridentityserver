@@ -1,7 +1,9 @@
 """Tests de la Fédération (OpenID Federation 1.1).
 
 Couvre l'entity statement (structure §3.2), la chaîne de confiance
-(§4, §10) et l'endpoint de configuration de l'OP (§9).
+(§4, §10), l'endpoint de configuration de l'OP (§9), les endpoints de
+supérieur — fetch, list, resolve (§8.1-§8.3) — et l'enregistrement
+(§12.1, §12.2).
 """
 
 from __future__ import annotations
@@ -36,6 +38,8 @@ from puridentityserver.domain.federation import (
     ENTITY_STATEMENT_TYP,
     EXPLICIT_REGISTRATION_RESPONSE_MEDIA_TYPE,
     EXPLICIT_REGISTRATION_RESPONSE_TYP,
+    RESOLVE_RESPONSE_MEDIA_TYPE,
+    RESOLVE_RESPONSE_TYP,
     TRUST_CHAIN_MEDIA_TYPE,
     EntityStatement,
     FederationError,
@@ -56,7 +60,10 @@ from puridentityserver.infrastructure.persistence.memory.keys import (
 )
 from puridentityserver.infrastructure.settings import Settings
 from puridentityserver.interfaces.api.federation import federation_router
-from puridentityserver.interfaces.domain.federation import FederationEntityFetcher
+from puridentityserver.interfaces.domain.federation import (
+    FederationEntityFetcher,
+    FederationSubordinateSource,
+)
 from puridentityserver.interfaces.repositories.readers import ClientReader
 from puridentityserver.server import create_app
 
@@ -87,6 +94,7 @@ def _usecase(
     entity_identifier: str = _ISSUER,
     trust_anchors: tuple[str, ...] = (),
     fetcher: FederationEntityFetcher | None = None,
+    subordinate_source: FederationSubordinateSource | None = None,
 ) -> FederationUseCase:
     """Cas d'usage de la fédération pour les tests."""
     key_manager = _key_manager()
@@ -100,6 +108,7 @@ def _usecase(
         token_manager=PyJWTFederationTokenManager(key_manager, JWTAlgorithm.ES256),
         key_provider=KeyManagerFederationKeyProvider(key_manager),
         fetcher=fetcher or HTTPFederationEntityFetcher(allow_local_targets=True),
+        subordinate_source=subordinate_source,
     )
 
 
@@ -336,17 +345,21 @@ def test_discovery_omits_the_federation_members_by_default() -> None:
 
 
 def test_metadata_provider_returns_the_op_metadata() -> None:
-    """Le provider de metadata expose les metadata de l'OP (spec §5.2)."""
+    """Le provider expose l'OP et les endpoints de la fédération (§5.2, §5.1.1)."""
     from puridentityserver.application.discovery import DiscoveryConfig, DiscoveryUseCase
 
     provider = DiscoveryFederationMetadataProvider(
-        DiscoveryUseCase(DiscoveryConfig(issuer=_ISSUER))
+        DiscoveryUseCase(DiscoveryConfig(issuer=_ISSUER)), _ISSUER
     )
 
     metadata = run(provider.federation_metadata())
 
     assert "openid_provider" in metadata
     assert metadata["openid_provider"]["issuer"] == _ISSUER
+    federation = metadata["federation_entity"]
+    assert federation["federation_fetch_endpoint"] == f"{_ISSUER}/federation/fetch"
+    assert federation["federation_list_endpoint"] == f"{_ISSUER}/federation/list"
+    assert federation["federation_resolve_endpoint"] == f"{_ISSUER}/federation/resolve"
 
 
 # --- Enregistrement automatique (OpenID Federation 1.1 §12.1) ---------------
@@ -966,3 +979,172 @@ def test_explicit_registration_route_is_absent_by_default() -> None:
         )
 
     assert response.status_code == 404
+
+
+# --- Endpoints de supérieur : fetch, list, resolve (OpenID Federation §8) ---
+
+
+class _SubordinateSource:
+    """Source de subordonnés factice (les clients enregistrés de l'OP)."""
+
+    def __init__(self, clients: tuple[Client, ...]) -> None:
+        self._clients = clients
+
+    async def subordinates(self) -> list[Client]:
+        return list(self._clients)
+
+
+def _federated_client(client_id: str = _RP) -> Client:
+    """Client enregistré identifié par un Entity Identifier, avec clés."""
+    return Client(
+        client_id=client_id,
+        redirect_uris=frozenset({f"{client_id}/cb"}),
+        jwks=(_RP_JWK,),
+    )
+
+
+def test_fetch_requires_a_sub_parameter() -> None:
+    """Sans `sub`, le fetch répond `invalid_request` (spec §8.1.2, §8.9)."""
+    with TestClient(_registration_app(_usecase())) as client:
+        response = client.get("/federation/fetch")
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_request"
+    assert response.json()["error_description"]
+
+
+def test_fetch_rejects_the_issuing_entity_as_sub() -> None:
+    """`sub` valant l'Entity Identifier de l'OP est un `invalid_request` (§8.1.2)."""
+    with TestClient(_registration_app(_usecase())) as client:
+        response = client.get("/federation/fetch", params={"sub": _ISSUER})
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_request"
+
+
+def test_fetch_returns_not_found_for_an_unknown_subordinate() -> None:
+    """Une entité qui n'est pas un subordonné immédiat répond `not_found` (§8.1.3)."""
+    usecase = _usecase(subordinate_source=_SubordinateSource((_federated_client(),)))
+
+    with TestClient(_registration_app(usecase)) as client:
+        response = client.get("/federation/fetch", params={"sub": "https://inconnu.example"})
+
+    assert response.status_code == 404
+    assert response.json()["error"] == "not_found"
+    assert response.json()["error_description"]
+
+
+def test_fetch_returns_the_subordinate_statement() -> None:
+    """Le fetch rend le statement attestant le subordonné (spec §8.1, §3.1.2)."""
+    usecase = _usecase(subordinate_source=_SubordinateSource((_federated_client(),)))
+
+    with TestClient(_registration_app(usecase)) as client:
+        response = client.get("/federation/fetch", params={"sub": _RP})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith(ENTITY_STATEMENT_MEDIA_TYPE)
+    assert pyjwt.get_unverified_header(response.text)["typ"] == ENTITY_STATEMENT_TYP
+    claims = pyjwt.decode(response.text, options={"verify_signature": False})
+    assert claims["iss"] == _ISSUER
+    assert claims["sub"] == _RP
+    assert claims["jwks"] == {"keys": [_RP_JWK]}
+    registered = claims["metadata"]["openid_relying_party"]
+    assert registered["redirect_uris"] == [f"{_RP}/cb"]
+    assert registered["jwks"] == {"keys": [_RP_JWK]}
+    assert "authority_hints" not in claims
+    verified = usecase.token_manager.verify_entity_statement(
+        token=response.text,
+        jwks=run(usecase.key_provider.public_jwks()),
+        issuer=_ISSUER,
+        subject=_RP,
+    )
+    assert verified is not None
+
+
+def test_fetch_ignores_clients_without_federation_keys() -> None:
+    """Un client sans clés ou sans Entity Identifier n'est pas un subordonné."""
+    without_keys = Client(client_id=_RP, redirect_uris=frozenset({f"{_RP}/cb"}))
+    not_an_entity = Client(client_id="web-app", jwks=(_RP_JWK,))
+    usecase = _usecase(subordinate_source=_SubordinateSource((without_keys, not_an_entity)))
+
+    with TestClient(_registration_app(usecase)) as client:
+        response = client.get("/federation/fetch", params={"sub": _RP})
+
+    assert response.status_code == 404
+    assert response.json()["error"] == "not_found"
+
+
+def test_list_returns_the_subordinate_identifiers() -> None:
+    """La liste rend triés les Entity Identifier des subordonnés (§8.2.2)."""
+    source = _SubordinateSource(
+        (
+            _federated_client("https://deuxieme.example"),
+            _federated_client(),
+            Client(client_id="web-app", jwks=(_RP_JWK,)),
+        )
+    )
+
+    with TestClient(_registration_app(_usecase(subordinate_source=source))) as client:
+        response = client.get("/federation/list")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json() == ["https://deuxieme.example", _RP]
+
+
+def test_list_rejects_unsupported_filter_parameters() -> None:
+    """Un filtre non supporté répond `unsupported_parameter` (§8.2.1)."""
+    with TestClient(_registration_app(_usecase())) as client:
+        response = client.get("/federation/list", params={"entity_type": "openid_relying_party"})
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "unsupported_parameter"
+
+
+def test_list_returns_an_empty_array_without_subordinates() -> None:
+    """Sans source de subordonnés, la liste est vide (§8.2.2)."""
+    with TestClient(_registration_app(_usecase())) as client:
+        response = client.get("/federation/list")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_resolve_requires_sub_and_trust_anchor() -> None:
+    """Sans paramètre obligatoire, le resolve répond `invalid_request` (§8.3)."""
+    with TestClient(_registration_app(_rp_usecase(_RP_METADATA))) as client:
+        response = client.get("/federation/resolve")
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_request"
+
+
+def test_resolve_returns_the_resolved_trust_chain() -> None:
+    """La résolution signée porte `trust_chain` et les metadata (§8.3.2)."""
+    usecase = _rp_usecase(_RP_METADATA)
+
+    with TestClient(_registration_app(usecase)) as client:
+        response = client.get("/federation/resolve", params={"sub": _RP, "trust_anchor": _ANCHOR})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith(RESOLVE_RESPONSE_MEDIA_TYPE)
+    assert pyjwt.get_unverified_header(response.text)["typ"] == RESOLVE_RESPONSE_TYP
+    claims = pyjwt.decode(response.text, options={"verify_signature": False})
+    assert claims["iss"] == _ISSUER
+    assert claims["sub"] == _RP
+    assert claims["metadata"]["openid_relying_party"] == _RP_METADATA
+    assert len(claims["trust_chain"]) == 3
+    first = pyjwt.decode(claims["trust_chain"][0], options={"verify_signature": False})
+    assert first["sub"] == _RP
+    assert claims["exp"] <= first["exp"]
+
+
+def test_resolve_returns_not_found_for_an_unconfigured_anchor() -> None:
+    """Une ancre hors `trust_anchors` configuré répond `not_found` (§10.1)."""
+    usecase = _rp_usecase(_RP_METADATA, trust_anchors=("https://autre.example",))
+
+    with TestClient(_registration_app(usecase)) as client:
+        response = client.get("/federation/resolve", params={"sub": _RP, "trust_anchor": _ANCHOR})
+
+    assert response.status_code == 404
+    assert response.json()["error"] == "not_found"

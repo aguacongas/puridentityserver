@@ -48,6 +48,10 @@ TRUST_CHAIN_MEDIA_TYPE = "application/trust-chain+json"
 #: Type MIME d'une réponse de résolution (spec §15.3).
 RESOLVE_RESPONSE_MEDIA_TYPE = "application/resolve-response+jwt"
 
+#: Valeur de l'en-tête ``typ`` d'une réponse de résolution (spec §8.3.2) —
+#: exigée pour empêcher la confusion entre JWT (RFC 8725 §3.11).
+RESOLVE_RESPONSE_TYP = "resolve-response+jwt"
+
 #: Type MIME d'un JWK Set signé (spec §15.6).
 JWK_SET_MEDIA_TYPE = "application/jwk-set+jwt"
 
@@ -199,9 +203,12 @@ class TrustChain:
 
     Les statements vont de l'entité feuille (auto-signé) à l'ancre de
     confiance (auto-signée) ; chaque statement est signé par le précédent.
+    ``tokens`` porte les JWT bruts correspondants, dans le même ordre : le
+    endpoint resolve les restitue tels quels dans ``trust_chain`` (§8.3.2).
     """
 
     statements: tuple[EntityStatement, ...]
+    tokens: tuple[str, ...] = ()
 
     @property
     def subject(self) -> EntityStatement:

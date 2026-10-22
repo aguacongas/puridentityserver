@@ -19,12 +19,14 @@ import jwt as pyjwt
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from jwt import PyJWK  # type: ignore[attr-defined]  # non exposé par types-PyJWT
 
+from puridentityserver.domain.authorization import Client
 from puridentityserver.domain.federation import (
     ENTITY_STATEMENT_MEDIA_TYPE,
     ENTITY_STATEMENT_TYP,
 )
 from puridentityserver.domain.jwks import JWTAlgorithm, KeyPair
 from puridentityserver.interfaces.domain.jwks import KeyManager
+from puridentityserver.interfaces.repositories.readers import ClientReader
 from puridentityserver.interfaces.schemas.jwks import JWKKeyResponse
 
 _ALLOWED_SCHEMES = frozenset({"https"})
@@ -176,6 +178,23 @@ class HTTPFederationEntityFetcher:
             return await asyncio.to_thread(_read_statement, target)
         except (OSError, ValueError):
             return None
+
+
+class ClientRegistrySubordinateSource:
+    """Expose les clients enregistrés comme subordonnés de la fédération.
+
+    L'OP est le supérieur des entités fédérées qu'il a enregistrées (spec
+    §8.1) : le registre de clients fournit la liste des subordonnés sur
+    lesquels il émet des subordinate statements.
+    """
+
+    def __init__(self, reader: ClientReader) -> None:
+        """Injection du lecteur de registre de clients."""
+        self._reader = reader
+
+    async def subordinates(self) -> list[Client]:
+        """Retourne tous les clients enregistrés du registre."""
+        return await self._reader.find_all()
 
 
 def _read_statement(url: str) -> str:

@@ -84,6 +84,7 @@ from puridentityserver.infrastructure.client_assertions import PyJWTClientAssert
 from puridentityserver.infrastructure.client_tls import ClientCertificateHeaderNames
 from puridentityserver.infrastructure.dpop import PyJWTDpopProofValidator
 from puridentityserver.infrastructure.federation import (
+    ClientRegistrySubordinateSource,
     HTTPFederationEntityFetcher,
     KeyManagerFederationKeyProvider,
     PyJWTFederationTokenManager,
@@ -341,7 +342,10 @@ class ProtocolDependencies:
                 fetcher=HTTPFederationEntityFetcher(
                     allow_local_targets=loopback_bind(settings.host)
                 ),
-                metadata_provider=DiscoveryFederationMetadataProvider(self.discovery_usecase),
+                metadata_provider=DiscoveryFederationMetadataProvider(
+                    self.discovery_usecase, (settings.base_url or settings.issuer)
+                ),
+                subordinate_source=ClientRegistrySubordinateSource(self.readers.client),
             )
         self.request_object_resolver = RequestObjectResolver(
             RequestObjectConfig(issuer=settings.issuer),
