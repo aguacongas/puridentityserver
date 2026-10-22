@@ -100,26 +100,28 @@ def test_entity_statement_serialises_its_claims() -> None:
     assert set(statement.to_claims_for_comparison()) == {"iss", "sub", "jwks", "metadata"}
 
 
-def test_parse_entity_statement_rejects_invalid_values() -> None:
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"iss": "http://pas-https.example"}, id="iss-non-https"),
+        pytest.param({"sub": ""}, id="sub-vide"),
+        pytest.param({"jwks": {"pas_une_cle": []}}, id="jwks-invalide"),
+        pytest.param({"metadata": "pas un objet"}, id="metadata-non-objet"),
+        pytest.param({"authority_hints": "pas une liste"}, id="authority-hints-non-liste"),
+        pytest.param(
+            {"authority_hints": ["http://pas-https.example"]}, id="authority-hints-non-https"
+        ),
+        pytest.param({"metadata_policy": "pas un objet"}, id="metadata-policy-non-objet"),
+        pytest.param({"constraints": "pas un objet"}, id="constraints-non-objet"),
+        pytest.param({"source_endpoint": 42}, id="source-endpoint-non-chaine"),
+    ],
+)
+def test_parse_entity_statement_rejects_invalid_values(overrides: dict[str, object]) -> None:
     """Les formes invalides sont rejetées (spec §3.2)."""
+    entity_configuration = _claims(**overrides)
+
     with pytest.raises(FederationError):
-        parse_entity_statement(_claims(iss="http://pas-https.example"))
-    with pytest.raises(FederationError):
-        parse_entity_statement(_claims(sub=""))
-    with pytest.raises(FederationError):
-        parse_entity_statement(_claims(jwks={"pas_une_cle": []}))
-    with pytest.raises(FederationError):
-        parse_entity_statement(_claims(metadata="pas un objet"))
-    with pytest.raises(FederationError):
-        parse_entity_statement(_claims(authority_hints="pas une liste"))
-    with pytest.raises(FederationError):
-        parse_entity_statement(_claims(authority_hints=["http://pas-https.example"]))
-    with pytest.raises(FederationError):
-        parse_entity_statement(_claims(metadata_policy="pas un objet"))
-    with pytest.raises(FederationError):
-        parse_entity_statement(_claims(constraints="pas un objet"))
-    with pytest.raises(FederationError):
-        parse_entity_statement(_claims(source_endpoint=42))
+        parse_entity_statement(entity_configuration)
 
 
 def test_validate_metadata_policy_rejects_unknown_operators() -> None:

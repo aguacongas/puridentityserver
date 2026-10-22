@@ -705,8 +705,10 @@ def test_explicit_registration_rejects_a_wrong_audience() -> None:
     usecase = _rp_usecase(_RP_METADATA)
     entity_configuration = _registration_ec(usecase, aud="https://autre.example")
 
+    registration = usecase.explicit_register(entity_configuration)
+
     with pytest.raises(FederationRegistrationError) as error:
-        run(usecase.explicit_register(entity_configuration))
+        run(registration)
 
     assert error.value.code == "invalid_client"
 
@@ -715,8 +717,10 @@ def test_explicit_registration_rejects_an_unreadable_statement() -> None:
     """Un corps qui n'est pas un JWT est refusé (invalid_client, §12.2.4)."""
     usecase = _rp_usecase(_RP_METADATA)
 
+    registration = usecase.explicit_register("pas-un-jwt")
+
     with pytest.raises(FederationRegistrationError) as error:
-        run(usecase.explicit_register("pas-un-jwt"))
+        run(registration)
 
     assert error.value.code == "invalid_client"
 
@@ -743,8 +747,10 @@ def test_explicit_registration_rejects_a_bad_signature() -> None:
         )
     )
 
+    registration = usecase.explicit_register(entity_configuration)
+
     with pytest.raises(FederationRegistrationError) as error:
-        run(usecase.explicit_register(entity_configuration))
+        run(registration)
 
     assert error.value.code == "invalid_client"
 
@@ -754,8 +760,10 @@ def test_explicit_registration_rejects_an_iss_sub_mismatch() -> None:
     usecase = _rp_usecase(_RP_METADATA)
     entity_configuration = _registration_ec(usecase, sub="https://autre.example")
 
+    registration = usecase.explicit_register(entity_configuration)
+
     with pytest.raises(FederationRegistrationError) as error:
-        run(usecase.explicit_register(entity_configuration))
+        run(registration)
 
     assert error.value.code == "invalid_client"
 
@@ -765,8 +773,10 @@ def test_explicit_registration_requires_authority_hints() -> None:
     usecase = _rp_usecase(_RP_METADATA)
     entity_configuration = _registration_ec(usecase, authority_hints=[])
 
+    registration = usecase.explicit_register(entity_configuration)
+
     with pytest.raises(FederationRegistrationError) as error:
-        run(usecase.explicit_register(entity_configuration))
+        run(registration)
 
     assert error.value.code == "invalid_trust_chain"
 
@@ -776,8 +786,10 @@ def test_explicit_registration_rejects_an_unresolvable_chain() -> None:
     usecase = _rp_usecase(_RP_METADATA)
     entity_configuration = _registration_ec(usecase, authority_hints=["https://inconnu.example"])
 
+    registration = usecase.explicit_register(entity_configuration)
+
     with pytest.raises(FederationRegistrationError) as error:
-        run(usecase.explicit_register(entity_configuration))
+        run(registration)
 
     assert error.value.code == "invalid_trust_chain"
 
@@ -787,8 +799,10 @@ def test_explicit_registration_rejects_an_unconfigured_anchor() -> None:
     usecase = _rp_usecase(_RP_METADATA, trust_anchors=("https://autre.example",))
     entity_configuration = _registration_ec(usecase)
 
+    registration = usecase.explicit_register(entity_configuration)
+
     with pytest.raises(FederationRegistrationError) as error:
-        run(usecase.explicit_register(entity_configuration))
+        run(registration)
 
     assert error.value.code == "invalid_trust_chain"
 
@@ -821,8 +835,10 @@ def test_explicit_registration_rejects_an_unattested_key() -> None:
         )
     )
 
+    registration = usecase.explicit_register(entity_configuration)
+
     with pytest.raises(FederationRegistrationError) as error:
-        run(usecase.explicit_register(entity_configuration))
+        run(registration)
 
     assert error.value.code == "invalid_trust_chain"
 
@@ -834,8 +850,10 @@ def test_explicit_registration_rejects_incomplete_rp_metadata() -> None:
         usecase, metadata={"openid_relying_party": {"redirect_uris": ["https://rp.example/cb"]}}
     )
 
+    registration = usecase.explicit_register(entity_configuration)
+
     with pytest.raises(FederationRegistrationError) as error:
-        run(usecase.explicit_register(entity_configuration))
+        run(registration)
 
     assert error.value.code == "invalid_client_metadata"
 
