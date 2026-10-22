@@ -227,9 +227,7 @@ def _is_private_172(ip: str) -> bool:
 def _statement_header(token: str) -> Mapping[str, Any] | None:
     """En-tête JWS d'un entity statement (``typ`` et ``kid`` obligatoires)."""
     try:
-        header = pyjwt.get_unverified_header(
-            token
-        )  # NOSONAR(S5659) - l'en-tete ne sert qu'a choisir la cle
+        header = pyjwt.get_unverified_header(token)  # NOSONAR(S5659) - sert a choisir la cle
     except pyjwt.PyJWTError:
         return None
     if header.get("typ") != ENTITY_STATEMENT_MEDIA_TYPE:

@@ -137,8 +137,9 @@ def test_entity_statement_declares_the_trust_anchors() -> None:
 
 def _parse_without(claims: dict[str, Any], missing: str) -> None:
     """Lève l'erreur attendue quand un claim obligatoire manque."""
+    incomplete = {key: value for key, value in claims.items() if key != missing}
     with pytest.raises(FederationError):
-        parse_entity_statement({key: value for key, value in claims.items() if key != missing})
+        parse_entity_statement(incomplete)
 
 
 def test_parse_entity_statement_requires_the_mandatory_claims() -> None:
@@ -158,17 +159,16 @@ def test_parse_entity_statement_requires_the_mandatory_claims() -> None:
 
 def test_parse_entity_statement_rejects_non_standard_entity_types() -> None:
     """Les types d'entité doivent être standard (spec §5.1)."""
+    claims = {
+        "iss": _ISSUER,
+        "sub": _ISSUER,
+        "iat": _now(),
+        "exp": _now() + 3600,
+        "jwks": {"keys": []},
+        "metadata": {"inconnu": {}},
+    }
     with pytest.raises(FederationError):
-        parse_entity_statement(
-            {
-                "iss": _ISSUER,
-                "sub": _ISSUER,
-                "iat": _now(),
-                "exp": _now() + 3600,
-                "jwks": {"keys": []},
-                "metadata": {"inconnu": {}},
-            }
-        )
+        parse_entity_statement(claims)
 
 
 def test_parse_entity_statement_rejects_an_inverted_expiration() -> None:
