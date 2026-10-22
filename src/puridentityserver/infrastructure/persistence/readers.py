@@ -19,6 +19,10 @@ from puridentityserver.domain.api_resource import ApiResource
 from puridentityserver.domain.authorization import Client
 from puridentityserver.domain.identity_resource import IdentityResource
 from puridentityserver.domain.userinfo import UserClaims
+from puridentityserver.infrastructure.federated_client import FederatedClientReader
+from puridentityserver.interfaces.domain.federation import (
+    FederatedClientResolver,
+)
 from puridentityserver.interfaces.repositories.api_resource_repository import (
     ApiResourceRepository,
 )
@@ -119,10 +123,19 @@ def build_readers_from_stores(
     user: UserRepository,
     identity_resource: IdentityResourceRepository,
     api_resource: ApiResourceRepository,
+    federated_resolver: FederatedClientResolver | None = None,
 ) -> Readers:
-    """Construit les lecteurs protocole sur des instances de stockage partagées."""
+    """Construit les lecteurs protocole sur des instances de stockage partagées.
+
+    ``federated_resolver`` active l'enregistrement automatique d'un client
+    fédéré (OpenID Federation 1.1 §12.1) : le lecteur interroge d'abord le
+    registre, puis la fédération pour un ``client_id`` inconnu.
+    """
+    client_reader: ClientReader = ClientReaderAdapter(client)
+    if federated_resolver is not None:
+        client_reader = FederatedClientReader(client_reader, federated_resolver)
     return Readers(
-        client=ClientReaderAdapter(client),
+        client=client_reader,
         user=UserReaderAdapter(user),
         identity_resource=IdentityResourceReaderAdapter(identity_resource),
         api_resource=ApiResourceReaderAdapter(api_resource),

@@ -10,6 +10,7 @@ import asyncio
 import json
 import time
 from collections.abc import Coroutine
+from datetime import UTC, datetime
 from typing import Any, TypeVar
 
 import jwt as pyjwt
@@ -17,17 +18,28 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from puridentityserver.application.federated_client import TrustChainClientResolver
 from puridentityserver.application.federation import (
+    ENTITY_CONFIGURATION_PATH,
     DiscoveryFederationMetadataProvider,
     FederationConfig,
     FederationUseCase,
 )
+from puridentityserver.domain.authorization import (
+    Client,
+    ClientType,
+    Scope,
+    TokenEndpointAuthMethod,
+)
 from puridentityserver.domain.federation import (
     ENTITY_STATEMENT_MEDIA_TYPE,
+    EntityStatement,
     FederationError,
+    TrustChain,
     parse_entity_statement,
 )
 from puridentityserver.domain.jwks import JWTAlgorithm, KeyUse
+from puridentityserver.infrastructure.federated_client import FederatedClientReader
 from puridentityserver.infrastructure.federation import (
     HTTPFederationEntityFetcher,
     KeyManagerFederationKeyProvider,
@@ -39,6 +51,7 @@ from puridentityserver.infrastructure.persistence.memory.keys import (
 )
 from puridentityserver.infrastructure.settings import Settings
 from puridentityserver.interfaces.domain.federation import FederationEntityFetcher
+from puridentityserver.interfaces.repositories.readers import ClientReader
 from puridentityserver.server import create_app
 
 _T = TypeVar("_T")
@@ -327,3 +340,257 @@ def test_metadata_provider_returns_the_op_metadata() -> None:
 
     assert "openid_provider" in metadata
     assert metadata["openid_provider"]["issuer"] == _ISSUER
+
+
+# --- Enregistrement automatique (OpenID Federation 1.1 §12.1) ---------------
+
+_RP = "https://rp.example"
+_RP_JWK = {"kty": "EC", "crv": "P-256", "x": "aq", "y": "AQ"}
+
+
+def _rp_usecase(rp_metadata: dict[str, Any]) -> FederationUseCase:
+    """Cas d'usage dont la fédération résout un RP avec ses metadata."""
+    key_manager = _key_manager()
+    token_manager = PyJWTFederationTokenManager(key_manager, JWTAlgorithm.ES256)
+    jwks = run(KeyManagerFederationKeyProvider(key_manager).public_jwks())
+    anchor = "https://ta.example"
+
+    anchor_claims = {
+        "iss": anchor,
+        "sub": anchor,
+        "iat": _now(),
+        "exp": _now() + 3600,
+        "jwks": jwks,
+        "metadata": {"federation_entity": {"federation_fetch_endpoint": f"{anchor}/fetch"}},
+    }
+    subject_claims = {
+        "iss": _RP,
+        "sub": _RP,
+        "iat": _now(),
+        "exp": _now() + 3600,
+        "jwks": jwks,
+        "metadata": {"openid_relying_party": rp_metadata},
+        "authority_hints": [anchor],
+    }
+    subordinate_claims = {
+        "iss": anchor,
+        "sub": _RP,
+        "iat": _now(),
+        "exp": _now() + 3600,
+        "jwks": jwks,
+    }
+    sign = lambda claims: run(  # ruff: ignore[lambda-assignment]
+        token_manager.sign_entity_statement(algorithm=JWTAlgorithm.ES256, claims=claims, key_id="")
+    )
+    fetcher = _StaticFetcher(
+        {
+            f"{_RP}{ENTITY_CONFIGURATION_PATH}": sign(subject_claims),
+            f"{anchor}{ENTITY_CONFIGURATION_PATH}": sign(anchor_claims),
+            f"{anchor}/fetch?sub={_RP}": sign(subordinate_claims),
+        }
+    )
+    return FederationUseCase(
+        config=FederationConfig(
+            entity_identifier=_ISSUER, trust_anchors=(anchor,), algorithm=JWTAlgorithm.ES256
+        ),
+        token_manager=token_manager,
+        key_provider=KeyManagerFederationKeyProvider(key_manager),
+        fetcher=fetcher,
+    )
+
+
+class _ChainUseCase:
+    """Cas d'usage factice renvoyant une chaîne de confiance pré-construite."""
+
+    def __init__(self, chain: TrustChain | None) -> None:
+        self._chain = chain
+
+    async def resolve_trust_chain(self, subject: str, trust_anchor: str) -> TrustChain | None:
+        return self._chain
+
+
+def _chain_with_metadata(metadata: dict[str, Any]) -> TrustChain:
+    """Chaîne d'un seul statement portant les metadata du RP."""
+    statement = EntityStatement(
+        issuer=_RP,
+        subject=_RP,
+        issued_at=datetime.now(UTC),
+        expires_at=datetime.now(UTC),
+        jwks={"keys": []},
+        metadata=metadata,
+    )
+    return TrustChain(statements=(statement,))
+
+
+def _client_reader(
+    client: Client | None = None,
+) -> tuple[ClientReader, list[str]]:
+    """Lecteur de registre factice retenant les appels reçus."""
+    calls: list[str] = []
+
+    class _Reader:
+        async def find_by_id(self, client_id: str) -> Client | None:
+            calls.append(f"find_by_id:{client_id}")
+            return client
+
+        async def find_all(self) -> list[Client]:
+            calls.append("find_all")
+            return [client] if client is not None else []
+
+        async def is_cors_origin_allowed(self, origin: str) -> bool:
+            calls.append(f"is_cors_origin_allowed:{origin}")
+            return origin == "https://app.example"
+
+    return _Reader(), calls  # type: ignore[return-value]
+
+
+def test_resolver_derives_the_client_from_the_rp_entity_statement() -> None:
+    """Le client dérive de l'entity statement du RP (spec §12.1, §5.1)."""
+    usecase = _rp_usecase({"redirect_uris": [_RP + "/callback"], "jwks": {"keys": [_RP_JWK]}})
+    resolver = TrustChainClientResolver(lambda: usecase)
+
+    client = run(resolver.resolve(_RP))
+
+    assert client is not None
+    assert client.client_id == _RP
+    assert client.redirect_uris == frozenset({_RP + "/callback"})
+    assert client.client_type == ClientType.PUBLIC
+    assert client.token_endpoint_auth_method == TokenEndpointAuthMethod.PRIVATE_KEY_JWT
+    assert client.scopes == frozenset({Scope.OPENID})
+    assert client.is_active
+    assert _RP_JWK in client.jwks
+
+
+def test_resolver_returns_none_without_a_use_case() -> None:
+    """Sans cas d'usage de la Fédération, aucun client n'est dérivé."""
+    resolver = TrustChainClientResolver(lambda: None)
+
+    assert run(resolver.resolve(_RP)) is None
+
+
+def test_resolver_returns_none_for_an_unknown_entity() -> None:
+    """Une entité hors chaîne de confiance ne dérive aucun client."""
+    resolver = TrustChainClientResolver(lambda: _ChainUseCase(None))  # type: ignore[arg-type]
+
+    assert run(resolver.resolve(_RP)) is None
+
+
+def test_resolver_rejects_metadata_without_relying_party() -> None:
+    """Un entity statement sans type `openid_relying_party` est refusé."""
+    resolver = TrustChainClientResolver(
+        lambda: _ChainUseCase(  # type: ignore[arg-type]
+            _chain_with_metadata({"openid_provider": {"issuer": _RP}})
+        )
+    )
+
+    assert run(resolver.resolve(_RP)) is None
+
+
+def test_resolver_rejects_missing_or_empty_redirect_uris() -> None:
+    """Sans `redirect_uris` exploitables, aucun client n'est dérivé."""
+    jwks = {"keys": [_RP_JWK]}
+    for metadata in ({"jwks": jwks}, {"redirect_uris": [], "jwks": jwks}, {"redirect_uris": "x"}):
+        resolver = TrustChainClientResolver(
+            lambda metadata=metadata: _ChainUseCase(  # type: ignore[arg-type]
+                _chain_with_metadata({"openid_relying_party": metadata})
+            )
+        )
+
+        assert run(resolver.resolve(_RP)) is None
+
+
+def test_resolver_rejects_an_invalid_jwks() -> None:
+    """Un `jwks` absent ou mal formé est refusé (spec §5.1)."""
+    uris = [_RP + "/callback"]
+    for jwks in ({}, {"keys": "x"}):
+        resolver = TrustChainClientResolver(
+            lambda jwks=jwks: _ChainUseCase(  # type: ignore[arg-type]
+                _chain_with_metadata(
+                    {"openid_relying_party": {"redirect_uris": uris, "jwks": jwks}}
+                )
+            )
+        )
+
+        assert run(resolver.resolve(_RP)) is None
+
+
+def test_resolver_normalizes_non_mapping_jwk_entries() -> None:
+    """Une entrée de `keys` qui n'est pas un objet devient une clé vide."""
+    resolver = TrustChainClientResolver(
+        lambda: _ChainUseCase(  # type: ignore[arg-type]
+            _chain_with_metadata(
+                {"openid_relying_party": {"redirect_uris": [_RP + "/c"], "jwks": {"keys": ["x"]}}}
+            )
+        )
+    )
+
+    client = run(resolver.resolve(_RP))
+
+    assert client is not None
+    assert client.jwks == ({},)
+
+
+def test_reader_prefers_the_registered_client() -> None:
+    """Le registre reste la source de vérité : la fédération n'est pas consultée."""
+    registered = Client(client_id="web-app")
+    registry, calls = _client_reader(registered)
+    called = False
+
+    def _should_not_resolve() -> None:
+        nonlocal called
+        called = True
+
+    reader = FederatedClientReader(
+        registry,  # type: ignore[arg-type]
+        TrustChainClientResolver(_should_not_resolve),  # type: ignore[arg-type]
+    )
+
+    assert run(reader.find_by_id("web-app")) is registered
+    assert calls == ["find_by_id:web-app"]
+    assert not called
+
+
+def test_reader_resolves_an_unknown_entity_identifier() -> None:
+    """Un `client_id` inconnu est résolu dans la fédération (spec §12.1)."""
+    derived = Client(client_id=_RP)
+    registry, calls = _client_reader()
+    resolver = TrustChainClientResolver(
+        lambda: _ChainUseCase(  # type: ignore[arg-type]
+            TrustChain(statements=())
+        )
+    )
+
+    async def _resolve(entity_identifier: str) -> Client | None:
+        calls.append(f"resolve:{entity_identifier}")
+        await asyncio.sleep(0)
+        return derived
+
+    resolver.resolve = _resolve  # type: ignore[method-assign]
+    reader = FederatedClientReader(registry, resolver)  # type: ignore[arg-type]
+
+    assert run(reader.find_by_id(_RP)) is derived
+    assert calls == [f"find_by_id:{_RP}", f"resolve:{_RP}"]
+
+
+def test_reader_returns_none_without_a_resolver() -> None:
+    """Sans résolveur (Fédération désactivée), un client inconnu est refusé."""
+    registry, _ = _client_reader()
+    reader = FederatedClientReader(registry)  # type: ignore[arg-type]
+
+    assert run(reader.find_by_id("inconnu")) is None
+
+
+def test_reader_delegates_find_all_and_cors() -> None:
+    """Les autres accès du registre sont délégués tels quels."""
+    registered = Client(client_id="web-app")
+    registry, calls = _client_reader(registered)
+    reader = FederatedClientReader(registry, None)  # type: ignore[arg-type]
+
+    assert run(reader.find_all()) == [registered]
+    assert run(reader.is_cors_origin_allowed("https://app.example"))
+    assert not run(reader.is_cors_origin_allowed("https://evil.example"))
+    assert calls == [
+        "find_all",
+        "is_cors_origin_allowed:https://app.example",
+        "is_cors_origin_allowed:https://evil.example",
+    ]

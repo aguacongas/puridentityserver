@@ -37,6 +37,7 @@ from puridentityserver.application.device_authorize import (
 )
 from puridentityserver.application.discovery import DiscoveryConfig, DiscoveryUseCase
 from puridentityserver.application.dpop import DpopGrantGuard
+from puridentityserver.application.federated_client import TrustChainClientResolver
 from puridentityserver.application.federation import (
     DiscoveryFederationMetadataProvider,
     FederationConfig,
@@ -282,6 +283,14 @@ class ProtocolDependencies:
             user=stores.user,
             identity_resource=stores.identity_resource,
             api_resource=stores.api_resource,
+            # Enregistrement automatique (OpenID Federation 1.1 §12.1) : le
+            # resolveur est résolu paresseusement, le cas d'usage de la
+            # Fédération n'étant construit qu'après le discovery.
+            federated_resolver=(
+                TrustChainClientResolver(lambda: self.federation_usecase)
+                if settings.federation_enabled
+                else None
+            ),
         )
         self.scope_registry = ScopeRegistry(
             self.readers.identity_resource,

@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Protocol
 
+from puridentityserver.domain.authorization import Client
 from puridentityserver.domain.jwks import JWTAlgorithm
 
 
@@ -79,4 +80,12 @@ class FederationMetadataProvider(Protocol):
 
     async def federation_metadata(self) -> Mapping[str, Any]:
         """Retourne les metadata par type d'entité (``openid_provider``…)."""
+        ...
+
+
+class FederatedClientResolver(Protocol):
+    """Résolution d'un client OIDC depuis l'Entity Identifier d'un RP (spec §12.1)."""
+
+    async def resolve(self, entity_identifier: str) -> Client | None:
+        """Dérive le client d'un RP de son entity statement ; ``None`` sinon."""
         ...

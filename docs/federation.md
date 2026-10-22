@@ -18,7 +18,7 @@ La feature est livrée **par tranches** (issue #170) :
 | Tranche | Contenu | État |
 | --- | --- | --- |
 | 1 | Entity statement de l'OP, résolution de chaîne de confiance, clés dédiées, metadata de discovery | **livrée** (PR #203) |
-| 2 | Enregistrement automatique (`client_id` = Entity Identifier du RP) | à venir |
+| 2 | Enregistrement automatique (`client_id` = Entity Identifier du RP) | **livrée** (PR #203) |
 | 3 | Enregistrement explicite (§12.2) | à venir |
 | 4 | Endpoints de l'OP comme supérieur (`fetch`, `list`, `resolve`), plan de certification, sample | à venir |
 
@@ -78,6 +78,29 @@ L'OP résout la chaîne d'une entité (un RP fédéré) :
 
 Une chaîne incomplète, expirée ou mal signée est **rejetée** (aucune chaîne
 retournée).
+
+## Enregistrement automatique (§12.1)
+
+Avec `federation_enabled`, un RP n'a **rien à enregistrer** auprès de l'OP
+(mode `automatic`, spec §12.1) : il s'identifie par son **Entity Identifier**
+en `client_id` et l'OP déduit son client de l'entity statement :
+
+1. un `client_id` inconnu du registre déclenche la résolution de chaîne de
+   confiance de cette entité (le registre reste la source de vérité : un
+   client enregistré l'emporte) ;
+2. les metadata `openid_relying_party` de l'entity configuration du RP
+   (spec §5.1) fournissent les `redirect_uris` et le `jwks` **inline**
+   (`jwks_uri` non résolu) ;
+3. le client dérivé est **public**, actif, limité au scope `openid`, et
+   s'authentifie en `private_key_jwt` avec ses clés de fédération — les
+   clés de la chaîne étant déjà validées, l'assertion client se vérifie
+   contre le `jwks` du RP ;
+4. le client n'est **pas persisté** : il est re-dérivé à chaque demande,
+   une rotation des clés ou des `redirect_uris` du RP est donc effective
+   immédiatement.
+
+Un RP hors de toute chaîne acceptée, sans `openid_relying_party`, sans
+`redirect_uris` ou sans `jwks` inline est refusé (`client_id` inconnu).
 
 ## Configuration
 

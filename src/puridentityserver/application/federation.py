@@ -135,7 +135,9 @@ class FederationUseCase:
                 return None
             chain.append(subordinate)
             current = superior
-        anchor = await self._fetch_configuration(trust_anchor)
+        # Sans ancre explicite, l'ancre est le supérieur atteint (spec §10.1) :
+        # son entity configuration couronne déjà la chaîne.
+        anchor = await self._fetch_configuration(trust_anchor or current.issuer)
         if anchor is None:
             return None
         chain.append(anchor)
