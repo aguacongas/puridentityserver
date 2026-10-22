@@ -115,13 +115,11 @@ def test_entity_statement_is_verifiable_with_its_own_jwks() -> None:
     statement = run(usecase.entity_statement())
 
     claims = pyjwt.decode(statement, options={"verify_signature": False})
-    verified = run(
-        usecase.token_manager.verify_entity_statement(
-            token=statement,
-            jwks=claims["jwks"],
-            issuer=_ISSUER,
-            subject=_ISSUER,
-        )
+    verified = usecase.token_manager.verify_entity_statement(
+        token=statement,
+        jwks=claims["jwks"],
+        issuer=_ISSUER,
+        subject=_ISSUER,
     )
 
     assert verified is not None
@@ -137,6 +135,12 @@ def test_entity_statement_declares_the_trust_anchors() -> None:
     assert claims["authority_hints"] == ["https://ta.example"]
 
 
+def _parse_without(claims: dict[str, Any], missing: str) -> None:
+    """Lève l'erreur attendue quand un claim obligatoire manque."""
+    with pytest.raises(FederationError):
+        parse_entity_statement({key: value for key, value in claims.items() if key != missing})
+
+
 def test_parse_entity_statement_requires_the_mandatory_claims() -> None:
     """`iss`, `sub`, `iat`, `exp` et `jwks` sont obligatoires (spec §3.1.1)."""
     base = {
@@ -147,9 +151,7 @@ def test_parse_entity_statement_requires_the_mandatory_claims() -> None:
         "jwks": {"keys": []},
     }
     for missing in ("iss", "sub", "iat", "exp", "jwks"):
-        claims = {key: value for key, value in base.items() if key != missing}
-        with pytest.raises(FederationError):
-            parse_entity_statement(claims)
+        _parse_without(base, missing)
 
     assert parse_entity_statement(base).issuer == _ISSUER
 

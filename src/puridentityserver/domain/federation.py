@@ -188,17 +188,26 @@ class TrustChain:
         """
         metadata = {name: dict(value) for name, value in self.subject.metadata.items()}
         for statement in self.statements[1:]:
-            policy = statement.metadata_policy or {}
-            for entity_type, operators in policy.items():
-                if entity_type not in metadata:
-                    continue
-                for parameter, constraint in operators.items():
-                    if not isinstance(constraint, Mapping):
-                        continue
-                    resolved = _apply_policy_operator(parameter, constraint, metadata[entity_type])
-                    if resolved is not None:
-                        metadata[entity_type][parameter] = resolved
+            _apply_metadata_policy(statement.metadata_policy or {}, metadata)
         return metadata
+
+
+def _apply_metadata_policy(policy: Mapping[str, Any], metadata: dict[str, dict[str, Any]]) -> None:
+    """Applique la metadata policy d'un supérieur (spec §6.1).
+
+    Seuls les types d'entité présents dans les metadata du sujet sont
+    concernés, et un paramètre sans contrainte exploitable est ignoré.
+    """
+    for entity_type, operators in policy.items():
+        values = metadata.get(entity_type)
+        if values is None or not isinstance(operators, Mapping):
+            continue
+        for parameter, constraint in operators.items():
+            if not isinstance(constraint, Mapping):
+                continue
+            resolved = _apply_policy_operator(parameter, constraint, values)
+            if resolved is not None:
+                values[parameter] = resolved
 
 
 def _apply_policy_operator(

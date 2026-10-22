@@ -32,7 +32,7 @@ class FederationTokenManager(Protocol):
         """
         ...
 
-    async def unverified_claims(self, token: str) -> dict[str, Any] | None:
+    def unverified_claims(self, token: str) -> dict[str, Any] | None:
         """Décode les claims d'un entity statement **sans** vérifier la signature.
 
         Permet de lire le claim ``jwks`` d'un statement auto-signé, clé
@@ -40,7 +40,7 @@ class FederationTokenManager(Protocol):
         """
         ...
 
-    async def verify_entity_statement(
+    def verify_entity_statement(
         self,
         *,
         token: str,

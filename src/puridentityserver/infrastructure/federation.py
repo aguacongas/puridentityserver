@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import socket
-import urllib.error
 import urllib.request
 from collections.abc import Mapping
 from typing import Any, cast
@@ -60,15 +59,18 @@ class PyJWTFederationTokenManager:
             )
         )
 
-    async def unverified_claims(self, token: str) -> dict[str, Any] | None:
+    def unverified_claims(self, token: str) -> dict[str, Any] | None:
         """Décode les claims d'un entity statement sans vérifier la signature."""
         try:
-            claims = pyjwt.decode(token, options={"verify_signature": False})
+            # Le claim `jwks` sert a verifier la signature du statement
+            # lui-meme (spec 3.2, etape 10) : la lecture non verifiee ne
+            # sert qu'a le localiser, la verification suit immediatement.
+            claims = pyjwt.decode(token, options={"verify_signature": False})  # NOSONAR(S5659)
         except pyjwt.PyJWTError:
             return None
         return dict(claims)
 
-    async def verify_entity_statement(
+    def verify_entity_statement(
         self,
         *,
         token: str,
@@ -160,7 +162,7 @@ class HTTPFederationEntityFetcher:
             return None
         try:
             return await asyncio.to_thread(_read_statement, target)
-        except (OSError, ValueError, urllib.error.URLError):
+        except (OSError, ValueError):
             return None
 
 
@@ -225,7 +227,9 @@ def _is_private_172(ip: str) -> bool:
 def _statement_header(token: str) -> Mapping[str, Any] | None:
     """En-tête JWS d'un entity statement (``typ`` et ``kid`` obligatoires)."""
     try:
-        header = pyjwt.get_unverified_header(token)
+        header = pyjwt.get_unverified_header(
+            token
+        )  # NOSONAR(S5659) - l'en-tete ne sert qu'a choisir la cle
     except pyjwt.PyJWTError:
         return None
     if header.get("typ") != ENTITY_STATEMENT_MEDIA_TYPE:

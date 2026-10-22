@@ -180,13 +180,13 @@ class FederationUseCase:
         )
         if token is None:
             return None
-        unverified = await self.token_manager.unverified_claims(token)
+        unverified = self.token_manager.unverified_claims(token)
         if unverified is None:
             return None
         jwks = unverified.get("jwks")
         if not isinstance(jwks, Mapping):
             return None
-        claims = await self.token_manager.verify_entity_statement(
+        claims = self.token_manager.verify_entity_statement(
             token=token,
             jwks=jwks,
             issuer=entity_identifier,
@@ -215,7 +215,7 @@ class FederationUseCase:
         token = await self.fetcher.fetch_entity_statement(f"{endpoint}{separator}sub={subject}")
         if token is None:
             return None
-        claims = await self.token_manager.verify_entity_statement(
+        claims = self.token_manager.verify_entity_statement(
             token=token,
             jwks=superior.jwks,
             issuer=superior.issuer,
