@@ -33,8 +33,13 @@ from puridentityserver.domain.authorization import (
 )
 from puridentityserver.domain.federation import (
     ENTITY_STATEMENT_MEDIA_TYPE,
+    ENTITY_STATEMENT_TYP,
+    EXPLICIT_REGISTRATION_RESPONSE_MEDIA_TYPE,
+    EXPLICIT_REGISTRATION_RESPONSE_TYP,
+    TRUST_CHAIN_MEDIA_TYPE,
     EntityStatement,
     FederationError,
+    FederationRegistrationError,
     TrustChain,
     parse_entity_statement,
 )
@@ -50,6 +55,7 @@ from puridentityserver.infrastructure.persistence.memory.keys import (
     InMemoryKeyPairRepository,
 )
 from puridentityserver.infrastructure.settings import Settings
+from puridentityserver.interfaces.api.federation import federation_router
 from puridentityserver.interfaces.domain.federation import FederationEntityFetcher
 from puridentityserver.interfaces.repositories.readers import ClientReader
 from puridentityserver.server import create_app
@@ -113,7 +119,7 @@ def test_entity_statement_is_self_signed_and_typed() -> None:
     statement = run(usecase.entity_statement())
 
     header = pyjwt.get_unverified_header(statement)
-    assert header["typ"] == ENTITY_STATEMENT_MEDIA_TYPE
+    assert header["typ"] == ENTITY_STATEMENT_TYP
     assert header["kid"]
     claims = pyjwt.decode(statement, options={"verify_signature": False})
     assert claims["iss"] == _ISSUER
@@ -317,6 +323,7 @@ def test_discovery_publishes_the_federation_registration_types() -> None:
         metadata = client.get("/.well-known/openid-configuration").json()
 
     assert "automatic" in metadata["client_registration_types_supported"]
+    assert metadata["federation_registration_endpoint"].endswith("/federation/register")
 
 
 def test_discovery_omits_the_federation_members_by_default() -> None:
@@ -345,15 +352,25 @@ def test_metadata_provider_returns_the_op_metadata() -> None:
 # --- Enregistrement automatique (OpenID Federation 1.1 §12.1) ---------------
 
 _RP = "https://rp.example"
+_ANCHOR = "https://ta.example"
 _RP_JWK = {"kty": "EC", "crv": "P-256", "x": "aq", "y": "AQ"}
+_RP_METADATA = {
+    "redirect_uris": ["https://rp.example/cb"],
+    "jwks": {"keys": [_RP_JWK]},
+}
 
 
-def _rp_usecase(rp_metadata: dict[str, Any]) -> FederationUseCase:
+def _rp_usecase(
+    rp_metadata: dict[str, Any],
+    *,
+    trust_anchors: tuple[str, ...] = (_ANCHOR,),
+    rp_authority_hints: tuple[str, ...] = (_ANCHOR,),
+) -> FederationUseCase:
     """Cas d'usage dont la fédération résout un RP avec ses metadata."""
     key_manager = _key_manager()
     token_manager = PyJWTFederationTokenManager(key_manager, JWTAlgorithm.ES256)
     jwks = run(KeyManagerFederationKeyProvider(key_manager).public_jwks())
-    anchor = "https://ta.example"
+    anchor = _ANCHOR
 
     anchor_claims = {
         "iss": anchor,
@@ -368,9 +385,10 @@ def _rp_usecase(rp_metadata: dict[str, Any]) -> FederationUseCase:
         "sub": _RP,
         "iat": _now(),
         "exp": _now() + 3600,
+        "aud": _ISSUER,
         "jwks": jwks,
         "metadata": {"openid_relying_party": rp_metadata},
-        "authority_hints": [anchor],
+        "authority_hints": list(rp_authority_hints),
     }
     subordinate_claims = {
         "iss": anchor,
@@ -391,12 +409,33 @@ def _rp_usecase(rp_metadata: dict[str, Any]) -> FederationUseCase:
     )
     return FederationUseCase(
         config=FederationConfig(
-            entity_identifier=_ISSUER, trust_anchors=(anchor,), algorithm=JWTAlgorithm.ES256
+            entity_identifier=_ISSUER, trust_anchors=trust_anchors, algorithm=JWTAlgorithm.ES256
         ),
         token_manager=token_manager,
         key_provider=KeyManagerFederationKeyProvider(key_manager),
         fetcher=fetcher,
     )
+
+
+# --- Ancres de confiance (périmètre `trust_anchors`) -----------------------
+
+
+def test_resolve_rejects_a_chain_anchored_outside_the_configured_anchors() -> None:
+    """Une ancre absente de `trust_anchors` n'inaugure aucune chaîne (§10)."""
+    usecase = _rp_usecase(_RP_METADATA, trust_anchors=("https://autre.example",))
+
+    chain = run(usecase.resolve_trust_chain(_RP, ""))
+
+    assert chain is None
+
+
+def test_resolve_rejects_a_self_rooted_entity_when_anchors_are_configured() -> None:
+    """Un RP sans `authority_hints` ne peut pas s'auto-déclarer ancre."""
+    usecase = _rp_usecase(_RP_METADATA, rp_authority_hints=())
+
+    chain = run(usecase.resolve_trust_chain(_RP, ""))
+
+    assert chain is None
 
 
 class _ChainUseCase:
@@ -594,3 +633,318 @@ def test_reader_delegates_find_all_and_cors() -> None:
         "is_cors_origin_allowed:https://app.example",
         "is_cors_origin_allowed:https://evil.example",
     ]
+
+
+# --- Enregistrement explicite (OpenID Federation 1.1 §12.2) ----------------
+
+
+def _registration_ec(
+    usecase: FederationUseCase,
+    *,
+    aud: str = _ISSUER,
+    sub: str = _RP,
+    authority_hints: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    """Entity configuration valide pour l'enregistrement explicite.
+
+    Signée par la clé du cas d'usage : sa signature est donc vérifiable avec
+    les clés que l'ancre lui a attestées dans le subordinate statement. Les
+    paramètres déforment la demande pour les chemins d'erreur.
+    """
+    claims: dict[str, Any] = {
+        "iss": _RP,
+        "sub": sub,
+        "iat": _now(),
+        "exp": _now() + 3600,
+        "aud": aud,
+        "jwks": run(usecase.key_provider.public_jwks()),
+        "authority_hints": authority_hints if authority_hints is not None else [_ANCHOR],
+        "metadata": metadata if metadata is not None else {"openid_relying_party": _RP_METADATA},
+    }
+    return run(
+        usecase.token_manager.sign_entity_statement(
+            algorithm=JWTAlgorithm.ES256, claims=claims, key_id=""
+        )
+    )
+
+
+def _registration_app(usecase: FederationUseCase) -> FastAPI:
+    """Application de test montant le routeur de la Fédération seul."""
+    app = FastAPI()
+    app.include_router(federation_router(usecase))
+    return app
+
+
+def test_explicit_registration_returns_a_signed_response() -> None:
+    """La réponse reprend le client provisionné (spec §12.2.3, §12.3)."""
+    usecase = _rp_usecase(_RP_METADATA)
+    entity_configuration = _registration_ec(usecase)
+
+    response = run(usecase.explicit_register(entity_configuration))
+
+    assert pyjwt.get_unverified_header(response)["typ"] == EXPLICIT_REGISTRATION_RESPONSE_TYP
+    claims = pyjwt.decode(response, options={"verify_signature": False})
+    assert claims["iss"] == _ISSUER
+    assert claims["sub"] == _RP
+    assert claims["aud"] == _RP
+    assert claims["trust_anchor"] == _ANCHOR
+    assert claims["authority_hints"] == [_ANCHOR]
+    registered = claims["metadata"]["openid_relying_party"]
+    assert registered["client_id"] == _RP
+    assert registered["token_endpoint_auth_method"] == "private_key_jwt"
+    assert registered["redirect_uris"] == ["https://rp.example/cb"]
+    assert registered["jwks"] == {"keys": [_RP_JWK]}
+    source = pyjwt.decode(entity_configuration, options={"verify_signature": False})
+    assert claims["jwks"] == source["jwks"]
+    assert claims["exp"] <= source["exp"]
+
+
+def test_explicit_registration_rejects_a_wrong_audience() -> None:
+    """L'audience doit nommer l'OP et lui seul (spec §12.2.1)."""
+    usecase = _rp_usecase(_RP_METADATA)
+    entity_configuration = _registration_ec(usecase, aud="https://autre.example")
+
+    with pytest.raises(FederationRegistrationError) as error:
+        run(usecase.explicit_register(entity_configuration))
+
+    assert error.value.code == "invalid_client"
+
+
+def test_explicit_registration_rejects_an_unreadable_statement() -> None:
+    """Un corps qui n'est pas un JWT est refusé (invalid_client, §12.2.4)."""
+    usecase = _rp_usecase(_RP_METADATA)
+
+    with pytest.raises(FederationRegistrationError) as error:
+        run(usecase.explicit_register("pas-un-jwt"))
+
+    assert error.value.code == "invalid_client"
+
+
+def test_explicit_registration_rejects_a_bad_signature() -> None:
+    """Un EC signé par une autre clé que celle du `jwks` est refusé (§3.2)."""
+    usecase = _rp_usecase(_RP_METADATA)
+    intruder = PyJWTFederationTokenManager(_key_manager(), JWTAlgorithm.ES256)
+    entity_configuration = run(
+        intruder.sign_entity_statement(
+            algorithm=JWTAlgorithm.ES256,
+            claims={
+                "iss": _RP,
+                "sub": _RP,
+                "iat": _now(),
+                "exp": _now() + 3600,
+                "aud": _ISSUER,
+                # Clés attestées du RP : la signature de l'intrus est fausse.
+                "jwks": run(usecase.key_provider.public_jwks()),
+                "authority_hints": [_ANCHOR],
+                "metadata": {"openid_relying_party": _RP_METADATA},
+            },
+            key_id="",
+        )
+    )
+
+    with pytest.raises(FederationRegistrationError) as error:
+        run(usecase.explicit_register(entity_configuration))
+
+    assert error.value.code == "invalid_client"
+
+
+def test_explicit_registration_rejects_an_iss_sub_mismatch() -> None:
+    """`iss` et `sub` doivent valoir l'Entity Identifier du RP (§12.2.1)."""
+    usecase = _rp_usecase(_RP_METADATA)
+    entity_configuration = _registration_ec(usecase, sub="https://autre.example")
+
+    with pytest.raises(FederationRegistrationError) as error:
+        run(usecase.explicit_register(entity_configuration))
+
+    assert error.value.code == "invalid_client"
+
+
+def test_explicit_registration_requires_authority_hints() -> None:
+    """Sans `authority_hints`, la chaîne n'est pas résoluble (§12.2.1)."""
+    usecase = _rp_usecase(_RP_METADATA)
+    entity_configuration = _registration_ec(usecase, authority_hints=[])
+
+    with pytest.raises(FederationRegistrationError) as error:
+        run(usecase.explicit_register(entity_configuration))
+
+    assert error.value.code == "invalid_trust_chain"
+
+
+def test_explicit_registration_rejects_an_unresolvable_chain() -> None:
+    """Un supérieur injoignable refuse la demande (invalid_trust_chain)."""
+    usecase = _rp_usecase(_RP_METADATA)
+    entity_configuration = _registration_ec(usecase, authority_hints=["https://inconnu.example"])
+
+    with pytest.raises(FederationRegistrationError) as error:
+        run(usecase.explicit_register(entity_configuration))
+
+    assert error.value.code == "invalid_trust_chain"
+
+
+def test_explicit_registration_rejects_an_unconfigured_anchor() -> None:
+    """Une chaîne aboutissant hors `trust_anchors` est refusée (§10.1)."""
+    usecase = _rp_usecase(_RP_METADATA, trust_anchors=("https://autre.example",))
+    entity_configuration = _registration_ec(usecase)
+
+    with pytest.raises(FederationRegistrationError) as error:
+        run(usecase.explicit_register(entity_configuration))
+
+    assert error.value.code == "invalid_trust_chain"
+
+
+def test_explicit_registration_rejects_an_unattested_key() -> None:
+    """Un EC auto-signé par une clé non attestée de l'ancre est refusé.
+
+    C'est la liaison `subordinate statement` → `jwks` de l'EC (§10.2, étape 6)
+    qui empêche un tiers de se substituer au RP légitime : l'intrus contrôle
+    sa propre clé, mais l'ancre n'a pas attesté celle-là.
+    """
+    usecase = _rp_usecase(_RP_METADATA)
+    intruder_keys = _key_manager()
+    intruder = PyJWTFederationTokenManager(intruder_keys, JWTAlgorithm.ES256)
+    entity_configuration = run(
+        intruder.sign_entity_statement(
+            algorithm=JWTAlgorithm.ES256,
+            claims={
+                "iss": _RP,
+                "sub": _RP,
+                "iat": _now(),
+                "exp": _now() + 3600,
+                "aud": _ISSUER,
+                # Clés de l'intrus : auto-cohérentes, donc auto-vérifiables.
+                "jwks": run(KeyManagerFederationKeyProvider(intruder_keys).public_jwks()),
+                "authority_hints": [_ANCHOR],
+                "metadata": {"openid_relying_party": _RP_METADATA},
+            },
+            key_id="",
+        )
+    )
+
+    with pytest.raises(FederationRegistrationError) as error:
+        run(usecase.explicit_register(entity_configuration))
+
+    assert error.value.code == "invalid_trust_chain"
+
+
+def test_explicit_registration_rejects_incomplete_rp_metadata() -> None:
+    """Des metadata sans `jwks` inline refusent la demande (§12.2.4)."""
+    usecase = _rp_usecase(_RP_METADATA)
+    entity_configuration = _registration_ec(
+        usecase, metadata={"openid_relying_party": {"redirect_uris": ["https://rp.example/cb"]}}
+    )
+
+    with pytest.raises(FederationRegistrationError) as error:
+        run(usecase.explicit_register(entity_configuration))
+
+    assert error.value.code == "invalid_client_metadata"
+
+
+def test_explicit_registration_route_returns_the_response() -> None:
+    """La route POST répond 200 avec le type MIME dédié (spec §15.8)."""
+    usecase = _rp_usecase(_RP_METADATA)
+    entity_configuration = _registration_ec(usecase)
+
+    with TestClient(_registration_app(usecase)) as client:
+        response = client.post(
+            "/federation/register",
+            content=entity_configuration,
+            headers={"content-type": ENTITY_STATEMENT_MEDIA_TYPE},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith(EXPLICIT_REGISTRATION_RESPONSE_MEDIA_TYPE)
+    claims = pyjwt.decode(response.text, options={"verify_signature": False})
+    assert claims["sub"] == _RP
+    assert claims["metadata"]["openid_relying_party"]["client_id"] == _RP
+
+
+def test_explicit_registration_route_accepts_a_trust_chain_body() -> None:
+    """Un corps `trust-chain+json` vaut : son premier statement est retenu (§12.2.2)."""
+    usecase = _rp_usecase(_RP_METADATA)
+    body = json.dumps([_registration_ec(usecase), "ignoré"])
+
+    with TestClient(_registration_app(usecase)) as client:
+        response = client.post(
+            "/federation/register",
+            content=body,
+            headers={"content-type": TRUST_CHAIN_MEDIA_TYPE},
+        )
+
+    assert response.status_code == 200
+    claims = pyjwt.decode(response.text, options={"verify_signature": False})
+    assert claims["sub"] == _RP
+
+
+def test_explicit_registration_route_rejects_an_unsupported_content_type() -> None:
+    """Un Content-Type inconnu est refusé : invalid_request (spec §12.2.4)."""
+    usecase = _rp_usecase(_RP_METADATA)
+
+    with TestClient(_registration_app(usecase)) as client:
+        response = client.post(
+            "/federation/register",
+            content="{}",
+            headers={"content-type": "application/json"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_request"
+    assert response.json()["error_description"]
+
+
+def test_explicit_registration_route_rejects_an_invalid_json_chain() -> None:
+    """Une chaîne JSON non déchiffrable est refusée : invalid_request."""
+    usecase = _rp_usecase(_RP_METADATA)
+
+    with TestClient(_registration_app(usecase)) as client:
+        response = client.post(
+            "/federation/register",
+            content="pas-du-json",
+            headers={"content-type": TRUST_CHAIN_MEDIA_TYPE},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_request"
+
+
+def test_explicit_registration_route_rejects_an_empty_chain() -> None:
+    """Une chaîne vide est refusée : invalid_request (§12.2.1)."""
+    usecase = _rp_usecase(_RP_METADATA)
+
+    with TestClient(_registration_app(usecase)) as client:
+        response = client.post(
+            "/federation/register",
+            content="[]",
+            headers={"content-type": TRUST_CHAIN_MEDIA_TYPE},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_request"
+
+
+def test_explicit_registration_route_maps_a_signature_rejection_to_401() -> None:
+    """Un client dont la demande est rejetée reçoit 401 + error_description (§8.9)."""
+    usecase = _rp_usecase(_RP_METADATA)
+
+    with TestClient(_registration_app(usecase)) as client:
+        response = client.post(
+            "/federation/register",
+            content="pas-un-jwt",
+            headers={"content-type": ENTITY_STATEMENT_MEDIA_TYPE},
+        )
+
+    assert response.status_code == 401
+    assert response.json()["error"] == "invalid_client"
+    assert response.json()["error_description"]
+
+
+def test_explicit_registration_route_is_absent_by_default() -> None:
+    """Sans le drapeau, aucune route d'enregistrement n'est exposée (404)."""
+    with TestClient(_app(enabled=False)) as client:
+        response = client.post(
+            "/federation/register",
+            content="x",
+            headers={"content-type": ENTITY_STATEMENT_MEDIA_TYPE},
+        )
+
+    assert response.status_code == 404

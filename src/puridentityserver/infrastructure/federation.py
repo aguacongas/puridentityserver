@@ -19,7 +19,10 @@ import jwt as pyjwt
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from jwt import PyJWK  # type: ignore[attr-defined]  # non exposé par types-PyJWT
 
-from puridentityserver.domain.federation import ENTITY_STATEMENT_MEDIA_TYPE
+from puridentityserver.domain.federation import (
+    ENTITY_STATEMENT_MEDIA_TYPE,
+    ENTITY_STATEMENT_TYP,
+)
 from puridentityserver.domain.jwks import JWTAlgorithm, KeyPair
 from puridentityserver.interfaces.domain.jwks import KeyManager
 from puridentityserver.interfaces.schemas.jwks import JWKKeyResponse
@@ -46,6 +49,7 @@ class PyJWTFederationTokenManager:
         algorithm: JWTAlgorithm,
         claims: Mapping[str, Any],
         key_id: str,
+        typ: str = ENTITY_STATEMENT_TYP,
     ) -> str:
         """Signe un entity statement (JWS compact, en-tête ``typ`` dédié)."""
         key = await self._active_key()
@@ -55,7 +59,7 @@ class PyJWTFederationTokenManager:
                 dict(claims),
                 private_key,
                 algorithm=algorithm.value,
-                headers={"kid": key_id or key.kid, "typ": ENTITY_STATEMENT_MEDIA_TYPE},
+                headers={"kid": key_id or key.kid, "typ": typ},
             )
         )
 
@@ -105,7 +109,15 @@ class PyJWTFederationTokenManager:
                 token,
                 cast(Any, public_key),
                 algorithms=[_algorithm_of(candidate)],
-                options={"require": ["iss", "sub", "iat", "exp"]},
+                options={
+                    "require": ["iss", "sub", "iat", "exp"],
+                    # `aud` n'est pas un claim général d'entity statement
+                    # (§3.1.1) : sa sémantique particulière (demande
+                    # d'enregistrement explicite, §12.2.1) est validée par
+                    # l'application, PyJWT refuserait sinon tout statement
+                    # porteur d'une audience.
+                    "verify_aud": False,
+                },
             )
         except pyjwt.PyJWTError:
             return None
@@ -230,7 +242,7 @@ def _statement_header(token: str) -> Mapping[str, Any] | None:
         header = pyjwt.get_unverified_header(token)  # NOSONAR(S5659) - sert a choisir la cle
     except pyjwt.PyJWTError:
         return None
-    if header.get("typ") != ENTITY_STATEMENT_MEDIA_TYPE:
+    if header.get("typ") != ENTITY_STATEMENT_TYP:
         return None
     key_id = header.get("kid")
     if not isinstance(key_id, str) or not key_id:

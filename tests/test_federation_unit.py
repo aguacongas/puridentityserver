@@ -197,7 +197,7 @@ def test_verifier_checks_the_typ_and_the_kid() -> None:
         {"iss": _ISSUER, "sub": _ISSUER, "iat": _now(), "exp": _now() + 60},
         "secret-de-test-32-octets-minimum-longueur",
         algorithm="HS256",
-        headers={"typ": "application/entity-statement+jwt"},
+        headers={"typ": "entity-statement+jwt"},
     )
     assert manager.verify_entity_statement(token=token, jwks=jwks) is None
 

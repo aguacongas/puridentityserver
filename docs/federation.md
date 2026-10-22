@@ -19,7 +19,7 @@ La feature est livrée **par tranches** (issue #170) :
 | --- | --- | --- |
 | 1 | Entity statement de l'OP, résolution de chaîne de confiance, clés dédiées, metadata de discovery | **livrée** (PR #203) |
 | 2 | Enregistrement automatique (`client_id` = Entity Identifier du RP) | **livrée** (PR #203) |
-| 3 | Enregistrement explicite (§12.2) | à venir |
+| 3 | Enregistrement explicite (§12.2) | **livrée** (PR #203) |
 | 4 | Endpoints de l'OP comme supérieur (`fetch`, `list`, `resolve`), plan de certification, sample | à venir |
 
 ## Le modèle
@@ -77,7 +77,14 @@ L'OP résout la chaîne d'une entité (un RP fédéré) :
 4. il s'arrête sur l'ancre de confiance configurée.
 
 Une chaîne incomplète, expirée ou mal signée est **rejetée** (aucune chaîne
-retournée).
+retournée). Deux contrôles supplémentaires s'appliquent (spec §10.2) :
+
+- la signature de l'entity configuration du sujet est re-vérifiée avec les
+  clés que le supérieur lui a attestées dans le *subordinate statement*
+  (étape 6) : un tiers ne peut pas substituer sa propre configuration à celle
+  du sujet ;
+- toute chaîne aboutissant hors des `trust_anchors` configurés est rejetée :
+  cette liste est le périmètre de confiance de l'OP.
 
 ## Enregistrement automatique (§12.1)
 
@@ -101,6 +108,75 @@ en `client_id` et l'OP déduit son client de l'entity statement :
 
 Un RP hors de toute chaîne acceptée, sans `openid_relying_party`, sans
 `redirect_uris` ou sans `jwks` inline est refusé (`client_id` inconnu).
+
+## Enregistrement explicite (§12.2)
+
+L'OP expose aussi `POST /federation/register` (publié en
+`federation_registration_endpoint` au discovery) pour le mode `explicit` :
+le RP soumet son **entity configuration** et reçoit une registration signée.
+
+### Demande (§12.2.1)
+
+Le corps est l'entity configuration du RP en
+`application/entity-statement+jwt`, ou une chaîne de confiance JSON
+(`application/trust-chain+json`, dont le premier statement est retenu).
+L'en-tête `trust_chain` n'est pas exploité : la demande est alors traitée à
+partir de l'entity configuration de son corps, ce que la spec autorise
+explicitement (§12.2.2, étape 5).
+
+L'entity configuration doit satisfaire toutes les règles d'un entity statement
+(§3.2) et porter :
+
+- `iss` = `sub` = l'Entity Identifier du RP ;
+- `aud` = l'Entity Identifier de l'OP, sans autre valeur ;
+- `jwks` — le RP s'authentifiera avec ces clés ;
+- `authority_hints` — l'ancre par laquelle la chaîne sera résolue.
+
+### Traitement (§12.2.2)
+
+1. la signature de l'entity configuration est vérifiée avec son propre
+   `jwks`, puis **avec les clés que l'ancre lui a attestées** dans le
+   *subordinate statement* (§10.2, étape 6) : c'est ce lien qui interdit à un
+   tiers de se faire passer pour le RP ;
+2. la chaîne de confiance est résolue à partir des `authority_hints` reçus,
+   selon les mêmes règles que la résolution standard ;
+3. le client est dérivé des metadata `openid_relying_party` de l'entity
+   configuration **reçue** (`derive_client`, cf. enregistrement automatique) :
+   `redirect_uris` et `jwks` inline y sont exigés.
+
+Aucune donnée n'est persistée (pas de `registration_access_token` — la spec
+déconseille d'en délivrer un, §12.2.2) : la registration est re-dérivée à
+chaque demande, sa durée de vie étant bornée par l'expiration de la chaîne
+(§12.3).
+
+### Réponse (§12.2.3)
+
+La réponse `200` est un JWT en `application/explicit-registration-response+jwt`
+(`typ: explicit-registration-response+jwt`) portant :
+
+- `iss` = l'Entity Identifier de l'OP, `sub` = celui du RP, `aud` = le RP ;
+- `trust_anchor` (l'ancre sélectionnée) et `authority_hints` (l'immédiat
+  supérieur du RP) ;
+- `exp` : le minimum des expirations des statements de la chaîne (§12.3) ;
+- `metadata.openid_relying_party` : les metadata du RP avec le `client_id`
+  provisionné (= l'Entity Identifier) et la méthode effective
+  (`private_key_jwt`) ;
+- `jwks` : copie verbatim du `jwks` de l'entity configuration reçue (§12.2.3).
+
+### Erreurs (§12.2.4, §8.9)
+
+Les refus répondent `{"error": …, "error_description": …}` :
+
+| Code | Statut | Cause |
+| --- | --- | --- |
+| `invalid_request` | 400 | Content-Type ou corps non exploitable |
+| `invalid_client` | 401 | Entity configuration illisible ou mal signée ; `iss`/`sub` ou `aud` incorrects |
+| `invalid_trust_chain` | 400 | `authority_hints` absents, chaîne non résoluble ou ancre hors `trust_anchors` |
+| `invalid_client_metadata` | 400 | `openid_relying_party` incomplet (`redirect_uris`, `jwks` inline) |
+
+> **Limite actuelle** : aucune substitution n'est appliquée aux metadata
+> reçues ni à leur `jwks` (§12.2.2, étapes 1 et 5) — les metadata sont celles
+> signées par le RP.
 
 ## Configuration
 

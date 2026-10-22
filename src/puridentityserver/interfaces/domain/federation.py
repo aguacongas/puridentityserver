@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from typing import Any, Protocol
 
 from puridentityserver.domain.authorization import Client
+from puridentityserver.domain.federation import ENTITY_STATEMENT_TYP
 from puridentityserver.domain.jwks import JWTAlgorithm
 
 
@@ -24,12 +25,13 @@ class FederationTokenManager(Protocol):
         algorithm: JWTAlgorithm,
         claims: Mapping[str, Any],
         key_id: str,
+        typ: str = ENTITY_STATEMENT_TYP,
     ) -> str:
         """Signe un entity statement (JWS compact, en-tête ``typ`` dédié).
 
-        L'en-tête ``typ`` vaut ``entity-statement+jwt`` (spec §3) et porte le
-        ``kid`` de la clé de signature (spec §3) : sans eux, le statement est
-        rejeté à la validation.
+        ``typ`` vaut ``entity-statement+jwt`` (spec §3) ; la réponse
+        d'enregistrement explicite utilise ``explicit-registration-response+jwt``
+        (spec §12.2.3).
         """
         ...
 

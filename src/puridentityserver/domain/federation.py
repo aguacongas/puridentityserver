@@ -19,8 +19,31 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, cast
 
+from puridentityserver.domain.authorization import (
+    Client,
+    ClientType,
+    Scope,
+    TokenEndpointAuthMethod,
+)
+
 #: Type MIME d'un entity statement (spec §15.1).
 ENTITY_STATEMENT_MEDIA_TYPE = "application/entity-statement+jwt"
+
+#: Valeur de l'en-tête ``typ`` d'un entity statement (spec §3) — sans le
+#: préfixe ``application/`` : c'est la valeur JOSE exigée pour empêcher la
+#: confusion entre JWT (RFC 8725 §3.1).
+ENTITY_STATEMENT_TYP = "entity-statement+jwt"
+
+#: Type MIME d'une réponse d'enregistrement explicite (spec §15.8).
+EXPLICIT_REGISTRATION_RESPONSE_MEDIA_TYPE = "application/explicit-registration-response+jwt"
+
+#: Valeur de l'en-tête ``typ`` d'une réponse d'enregistrement explicite
+#: (spec §12.2.3) — distincte de ``entity-statement+jwt`` par construction.
+EXPLICIT_REGISTRATION_RESPONSE_TYP = "explicit-registration-response+jwt"
+
+#: Type MIME d'une demande d'enregistrement explicite portant une chaîne de
+#: confiance (spec §15.4).
+TRUST_CHAIN_MEDIA_TYPE = "application/trust-chain+json"
 
 #: Type MIME d'une réponse de résolution (spec §15.3).
 RESOLVE_RESPONSE_MEDIA_TYPE = "application/resolve-response+jwt"
@@ -79,6 +102,21 @@ _ENTITY_IDENTIFIER = re.compile(r"^https://[^\s/?#]+(?:[/?][^\s?#]*)?$")
 
 class FederationError(ValueError):
     """Entity statement, chaîne de confiance ou résolution non conforme."""
+
+
+class FederationRegistrationError(FederationError):
+    """Erreur d'enregistrement explicite (spec §12.2.4, §8.9).
+
+    ``code`` est le code d'erreur OAuth renvoyé au RP (claim ``error``) et
+    ``description`` détaille la cause (claim ``error_description``, exigé
+    par §8.9) : le statut HTTP dérive du code.
+    """
+
+    def __init__(self, code: str, description: str) -> None:
+        """Initialise l'erreur avec son code normalisé et son libellé."""
+        super().__init__(description)
+        self.code = code
+        self.description = description
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +261,44 @@ def _apply_policy_operator(
     if "default" in constraint:
         return cast(object, values.get(parameter, constraint["default"]))
     return None
+
+
+def derive_client(entity_identifier: str, resolved_metadata: Mapping[str, Any]) -> Client | None:
+    """Dérive le client OIDC d'un RP de ses metadata résolues (spec §5.1).
+
+    Les metadata sont celles du type d'entité ``openid_relying_party`` après
+    application de la politique de la chaîne (spec §6.1) : ``redirect_uris``
+    et ``jwks`` **inline** sont exigés (``jwks_uri`` n'est pas résolu). Le
+    client dérivé est public, actif, limité au scope ``openid`` et
+    s'authentifie en ``private_key_jwt`` (spec §12.1.4).
+
+    Retourne ``None`` si les metadata ne permettent pas de dériver un client.
+    """
+    metadata = resolved_metadata.get("openid_relying_party")
+    if not isinstance(metadata, Mapping):
+        return None
+    redirect_uris = metadata.get("redirect_uris")
+    if not isinstance(redirect_uris, list) or not redirect_uris:
+        return None
+    jwks = metadata.get("jwks")
+    if not isinstance(jwks, Mapping) or not isinstance(jwks.get("keys"), list):
+        return None
+    return Client(
+        client_id=entity_identifier,
+        redirect_uris=frozenset(str(uri) for uri in redirect_uris),
+        scopes=frozenset({Scope.OPENID}),
+        client_type=ClientType.PUBLIC,
+        token_endpoint_auth_method=TokenEndpointAuthMethod.PRIVATE_KEY_JWT,
+        jwks=tuple(_client_key_of(item) for item in cast(list[Any], jwks["keys"])),
+        is_active=True,
+    )
+
+
+def _client_key_of(item: object) -> dict[str, Any]:
+    """Clé publique JWK d'un JWK Set ; une entrée non objet devient ``{}``."""
+    if not isinstance(item, Mapping):
+        return {}
+    return {str(name): value for name, value in item.items()}
 
 
 def parse_entity_statement(claims: Mapping[str, Any]) -> EntityStatement:
