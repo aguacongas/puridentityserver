@@ -15,7 +15,7 @@ from puridentityserver.application.identity_assurance import IdentityAssuranceUs
 from puridentityserver.application.request_object import (
     PUBLISHED_REQUEST_OBJECT_SIGNING_ALGORITHMS,
 )
-from puridentityserver.domain.authorization import TokenEndpointAuthMethod
+from puridentityserver.domain.authorization import SubjectType, TokenEndpointAuthMethod
 from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCES
 from puridentityserver.domain.jwe import (
     ALL_ENCRYPTION_ALGORITHMS,
@@ -90,6 +90,20 @@ class DiscoveryConfig:
     federation_registration_endpoint: str = ""
 
 
+#: Types de réponse publiés au discovery ET dans l'entity statement
+#: fédération (OIDC Discovery 1.0 §3 : ``response_types_supported`` est
+#: REQUIRED) : les combinaisons honorées par /authorize (Core §3.1.2.1).
+RESPONSE_TYPES_SUPPORTED: tuple[str, ...] = (
+    "code",
+    "id_token",
+    "token",
+    "id_token token",
+    "code id_token",
+    "code token",
+    "code id_token token",
+)
+
+
 class DiscoveryUseCase:
     """Produit les métadonnées de discovery depuis la configuration de l'émetteur."""
 
@@ -156,6 +170,13 @@ class DiscoveryUseCase:
             "grant_types_supported": list(self._config.grant_types_supported),
             "scopes_supported": scopes_supported,
             "claims_supported": claims_supported,
+            # OIDC Discovery 1.0 §3 : ``response_types_supported`` et
+            # ``subject_types_supported`` sont REQUIRED — émis par le cas
+            # d'usage pour que l'entity statement fédération (§5.1.1,
+            # ``metadata``/``openid_provider``) les porte aussi : le schéma
+            # du endpoint ne les complétait qu'en défaut.
+            "response_types_supported": list(RESPONSE_TYPES_SUPPORTED),
+            "subject_types_supported": [subject_type.value for subject_type in SubjectType],
             # Paramètre claims (OIDC Core 1.0 §5.5) : parsé, validé et honoré
             # sur /authorize — les members userinfo/id_token sont rendus.
             "claims_parameter_supported": True,

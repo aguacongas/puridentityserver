@@ -65,6 +65,7 @@ class SignedRequestObjectVerifier(Protocol):
         allowed_algorithms: Sequence[str],
         required_claims: Sequence[str] = ("iss", "aud", "exp", "iat", "nbf", "jti"),
         enforce_jti: bool = True,
+        jti_namespace: str = "ciba:",
     ) -> SignedRequestObjectResult:
         """Vérifie signature, claims temporels et, le cas échéant, anti-replay.
 
@@ -75,9 +76,12 @@ class SignedRequestObjectVerifier(Protocol):
         au discovery). ``required_claims`` liste les claims exigés — CIBA
         §7.1.1 pour le backchannel (``jti`` inclus), ``exp``/``nbf``/
         ``scope``/``nonce``/``redirect_uri`` pour un request object FAPI
-        (FAPI1-ADV-5.2.2-13 à -18). ``enforce_jti`` exige et mémorise le
-        ``jti`` (anti-replay) ; les request objects FAPI ne portent pas de
-        ``jti`` et désactivent ce contrôle. ``reason`` explique tout
+        (FAPI1-ADV-5.2.2-13 à -18), ``exp``/``jti`` pour un request object
+        fédéré (OpenID Federation 1.1 §12.1.1.1). ``enforce_jti`` exige et
+        mémorise le ``jti`` (anti-replay) ; les request objects FAPI et
+        standards ne portent pas de ``jti`` et désactivent ce contrôle.
+        ``jti_namespace`` sépare les empreintes ``jti`` de chaque famille
+        dans le store anti-replay partagé. ``reason`` explique tout
         refus : algorithme non admis, signature invalide, claim requis
         absent ou hors bornes (``exp``/``nbf``, 60 minutes), ``jti``
         réjoué…

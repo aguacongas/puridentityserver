@@ -269,11 +269,15 @@ export CERTIFICATION_ADMIN_CLIENT_SECRET="${CERTIFICATION_ADMIN_CLIENT_SECRET:-l
 # PURIDENTITYSERVER_REQUEST_URI_ALLOW_LOCAL_TARGETS : la suite sert le document
 # request_uri sur localhost.emobix.co.uk (→127.0.0.1), destination loopback
 # refusée par la garde anti-SSRF tant que l'OP bind 0.0.0.0 (issue #152).
+# PURIDENTITYSERVER_FEDERATION_ALLOW_LOCAL_TARGETS : même garde pour le fetch
+# des entity statements de la fédération — l'ancre de confiance de la suite
+# est sur localhost.emobix.co.uk (issue #170).
 # SSL_CERT_FILE : certificat SAN de la suite (étape 3.5) + bundle système.
 PURIDENTITYSERVER_SETTINGS_FILE="$(winpath "$LOCAL_DIR/op-config.toml")" \
 PURIDENTITYSERVER_HOST="$OP_HOST" \
 PURIDENTITYSERVER_PORT="$OP_PORT" \
 PURIDENTITYSERVER_REQUEST_URI_ALLOW_LOCAL_TARGETS=true \
+PURIDENTITYSERVER_FEDERATION_ALLOW_LOCAL_TARGETS=true \
 SSL_CERT_FILE="$(winpath "$SUITE_TRUST")" \
   nohup uv run python -m puridentityserver \
     >"$LOCAL_DIR/op.log" 2>&1 & echo $! > "$LOCAL_DIR/op.pid"

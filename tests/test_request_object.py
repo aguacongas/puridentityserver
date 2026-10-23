@@ -153,6 +153,18 @@ def _standard_client(jwks: tuple[dict[str, object], ...]) -> Client:
     )
 
 
+def _federated_client(jwks: tuple[dict[str, object], ...]) -> Client:
+    """Client fédéré de ``web-app`` (marque ``federated``, OpenID Federation §12.1)."""
+    return Client(
+        client_id="web-app",
+        redirect_uris=frozenset({"https://app.example/callback"}),
+        scopes=frozenset({Scope.OPENID, Scope.PROFILE}),
+        client_type=ClientType.CONFIDENTIAL,
+        jwks=jwks,
+        federated=True,
+    )
+
+
 def _jar_resolver(client: Client | None, *, configured: bool = True) -> RequestObjectResolver:
     """Resolver standard avec issuer, registre clients et vérification JWKS."""
     fetcher = _StubFetcher(None)
@@ -190,9 +202,9 @@ def _base_params(**extra: str) -> dict[str, str]:
     return params
 
 
-def run(resolver: RequestObjectResolver, **params: str) -> object:
-    """Exécute ``resolve`` sur des paramètres donnés."""
-    return asyncio.run(resolver.resolve(params))
+def run(resolver: RequestObjectResolver, *, session_scope: str = "", **params: str) -> object:
+    """Exécute ``resolve`` sur des paramètres donnés, ``session_scope`` cloisonnant le ``jti``."""
+    return asyncio.run(resolver.resolve(params, session_scope=session_scope))
 
 
 def _app() -> FastAPI:
@@ -253,6 +265,24 @@ def test_request_object_claims_take_precedence_over_query() -> None:
     assert resolved["state"] == "state-from-jwt"
     assert resolved["nonce"] == "nonce-from-jwt"
     assert "request" not in resolved
+
+
+def test_client_id_of_query_must_match_the_request_object() -> None:
+    """OIDC Core 1.0 §6.1 : ``client_id`` de la query et du jeton doivent coïncider.
+
+    Module federation ``invalid-client-id-in-query-parameters`` (OIDFED
+    §12.1.1.1) : un ``client_id`` de transport altéré est ``invalid_request``.
+    """
+    resolver, _fetcher = _resolver(None)
+
+    resolved = run(
+        resolver,
+        **_base_params(client_id="web-appINVALID"),
+        request=_request_object(_base_params()),
+    )
+
+    assert isinstance(resolved, RequestObjectError)
+    assert resolved.error == "invalid_request"
 
 
 def test_request_and_request_uri_are_exclusive() -> None:
@@ -426,6 +456,135 @@ class TestSignedRequestObjectStandard:
         assert isinstance(resolved, RequestObjectError)
         assert resolved.error == "invalid_request_object"
         assert "non admis" in resolved.error_description
+
+
+class TestFederatedRequestObject:
+    """Request objects de clients fédérés (OpenID Federation 1.1 §12.1.1.1)."""
+
+    def test_valid_request_object_with_jti_and_exp_is_accepted(self) -> None:
+        """§12.1.1.1 : le profil n'ajoute rien à un request object conforme."""
+        key, jwks = _jar_key()
+        resolver = _jar_resolver(_federated_client(jwks))
+        future = int(datetime.now(timezone.utc).timestamp()) + 300
+
+        resolved = run(
+            resolver,
+            **_base_params(),
+            request=_signed_jar(
+                key, claims={"jti": "jti-1", "exp": future, "nonce": "nonce-federation"}
+            ),
+        )
+
+        assert isinstance(resolved, dict)
+        assert resolved["nonce"] == "nonce-federation"
+
+    def test_missing_jti_is_refused(self) -> None:
+        """§12.1.1.1 : ``jti`` obligatoire (module invalid-missing-request-object-jti)."""
+        key, jwks = _jar_key()
+        resolver = _jar_resolver(_federated_client(jwks))
+        future = int(datetime.now(timezone.utc).timestamp()) + 300
+
+        resolved = run(
+            resolver,
+            **_base_params(),
+            request=_signed_jar(key, claims={"exp": future}),
+        )
+
+        assert isinstance(resolved, RequestObjectError)
+        assert resolved.error == "invalid_request_object"
+        assert "jti" in resolved.error_description
+
+    def test_missing_exp_is_refused(self) -> None:
+        """§12.1.1.1 : ``exp`` obligatoire (module invalid-missing-request-object-exp)."""
+        key, jwks = _jar_key()
+        resolver = _jar_resolver(_federated_client(jwks))
+
+        resolved = run(
+            resolver,
+            **_base_params(),
+            request=_signed_jar(key, claims={"jti": "jti-1"}),
+        )
+
+        assert isinstance(resolved, RequestObjectError)
+        assert resolved.error == "invalid_request_object"
+        assert "exp" in resolved.error_description
+
+    def test_sub_is_refused(self) -> None:
+        """§12.1.1.1 : ``sub`` interdit (module invalid-request-object-sub)."""
+        key, jwks = _jar_key()
+        resolver = _jar_resolver(_federated_client(jwks))
+        future = int(datetime.now(timezone.utc).timestamp()) + 300
+
+        resolved = run(
+            resolver,
+            **_base_params(),
+            request=_signed_jar(key, claims={"jti": "jti-1", "exp": future, "sub": "alice"}),
+        )
+
+        assert isinstance(resolved, RequestObjectError)
+        assert resolved.error == "invalid_request_object"
+        assert "sub" in resolved.error_description
+
+    def test_replayed_jti_is_refused(self) -> None:
+        """§12.1.1.1 : ``jti`` anti-replay (module invalid-duplicate-request-object-jti)."""
+        key, jwks = _jar_key()
+        resolver = _jar_resolver(_federated_client(jwks))
+        future = int(datetime.now(timezone.utc).timestamp()) + 300
+        document = _signed_jar(key, claims={"jti": "jti-replay", "exp": future})
+
+        first = run(resolver, **_base_params(), request=document)
+        second = run(resolver, **_base_params(), request=document)
+
+        assert isinstance(first, dict)
+        assert isinstance(second, RequestObjectError)
+        assert second.error == "invalid_request_object"
+        assert "déjà présenté" in second.error_description
+
+    def test_same_jti_after_login_in_another_session_is_accepted(self) -> None:
+        """Retour de ``/login`` : la re-présentation sous la session créée passe.
+
+        Parcours normal d'un OP : ``/authorize`` → 302 ``/login`` → POST →
+        302 vers ``/authorize`` avec le même request object — le ``jti``
+        s'inscrit alors sous le namespace de la session créée (§12.1.1.1).
+        """
+        key, jwks = _jar_key()
+        resolver = _jar_resolver(_federated_client(jwks))
+        future = int(datetime.now(timezone.utc).timestamp()) + 300
+        document = _signed_jar(key, claims={"jti": "jti-login", "exp": future})
+
+        before = run(resolver, **_base_params(), request=document)
+        after_login = run(resolver, session_scope="sid-1", **_base_params(), request=document)
+
+        assert isinstance(before, dict)
+        assert isinstance(after_login, dict)
+
+    def test_same_jti_replayed_under_the_same_session_is_refused(self) -> None:
+        """Le replay reste refusé quand la session navigateur est inchangée."""
+        key, jwks = _jar_key()
+        resolver = _jar_resolver(_federated_client(jwks))
+        future = int(datetime.now(timezone.utc).timestamp()) + 300
+        document = _signed_jar(key, claims={"jti": "jti-same-sid", "exp": future})
+
+        first = run(resolver, session_scope="sid-1", **_base_params(), request=document)
+        second = run(resolver, session_scope="sid-1", **_base_params(), request=document)
+
+        assert isinstance(first, dict)
+        assert isinstance(second, RequestObjectError)
+        assert second.error == "invalid_request_object"
+
+    def test_standard_client_keeps_accepting_a_jar_without_jti(self) -> None:
+        """Le profil fédéré ne s'applique qu'aux clients ``federated`` (issue #170)."""
+        key, jwks = _jar_key()
+        resolver = _jar_resolver(_standard_client(jwks))
+
+        resolved = run(
+            resolver,
+            **_base_params(nonce="nonce-standard"),
+            request=_signed_jar(key, claims={"nonce": "nonce-from-jar"}),
+        )
+
+        assert isinstance(resolved, dict)
+        assert resolved["nonce"] == "nonce-from-jar"
 
 
 @pytest.mark.parametrize(
@@ -740,7 +899,9 @@ def test_authorize_refuses_rs256_request_object_signed_by_a_foreign_key() -> Non
                 "client_id": "signed-app",
                 "redirect_uri": "https://app.example/callback",
                 "scope": "openid profile",
-                "request": _signed_jar(foreign, claims={"iss": "signed-app"}),
+                "request": _signed_jar(
+                    foreign, claims={"iss": "signed-app", "client_id": "signed-app"}
+                ),
             },
             follow_redirects=False,
         )

@@ -419,6 +419,13 @@ class Settings(BaseSettings):
     # `federation_signing_alg` : algorithme de signature des entity statements
     # (ES256 par defaut ; la suite accepte RSA >= 2048 et EC >= 256).
     federation_signing_alg: str = "ES256"
+    # `federation_allow_local_targets` ouvre explicitement les destinations
+    # loopback/privées au fetch des entity statements (garde anti-SSRF, même
+    # mécanisme que `request_uri_allow_local_targets`) : requis par le harness
+    # de certification local, où la suite héberge son ancre de confiance sur
+    # `localhost.emobix.co.uk` (alias → 127.0.0.1). Ne jamais activer sur un
+    # déploiement exposé (issue #170).
+    federation_allow_local_targets: bool = False
     ciba_ttl_seconds: int = 600
     ciba_min_ttl_seconds: int = 60
     ciba_interval_seconds: int = 5

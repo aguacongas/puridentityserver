@@ -247,7 +247,8 @@ class FederationUseCase:
         if client is None:
             raise FederationRegistrationError(
                 "invalid_client_metadata",
-                "metadata openid_relying_party incomplètes (redirect_uris, jwks inline requis)",
+                "metadata openid_relying_party incomplètes (redirect_uris et clés "
+                "requises : jwks inline ou jwks_uri)",
             )
         claims = self._registration_claims(statement, chain, resolved, client)
         return await self.token_manager.sign_entity_statement(

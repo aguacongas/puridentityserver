@@ -341,6 +341,7 @@ class ProtocolDependencies:
                 key_provider=KeyManagerFederationKeyProvider(self.federation_key_manager),
                 fetcher=HTTPFederationEntityFetcher(
                     allow_local_targets=loopback_bind(settings.host)
+                    or settings.federation_allow_local_targets
                 ),
                 metadata_provider=DiscoveryFederationMetadataProvider(
                     self.discovery_usecase, (settings.base_url or settings.issuer)

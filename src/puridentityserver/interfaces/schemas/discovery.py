@@ -3,6 +3,7 @@
 from pydantic import BaseModel, ConfigDict, Field
 
 from puridentityserver.application.authorize import SUPPORTED_ACR_VALUES
+from puridentityserver.application.discovery import RESPONSE_TYPES_SUPPORTED
 from puridentityserver.domain.authorization import SubjectType
 from puridentityserver.domain.jwe import (
     ALL_ENCRYPTION_ALGORITHMS,
@@ -69,16 +70,10 @@ class DiscoveryDocument(BaseModel):
             "offline_access",
         ]
     )
+    # Même source que l'entity statement fédération : la liste canonique vit
+    # dans le cas d'usage (OIDC Discovery 1.0 §3, REQUIRED).
     response_types_supported: list[str] = Field(
-        default_factory=lambda: [
-            "code",
-            "id_token",
-            "token",
-            "id_token token",
-            "code id_token",
-            "code token",
-            "code id_token token",
-        ]
+        default_factory=lambda: list(RESPONSE_TYPES_SUPPORTED)
     )
     # RFC 6749 §3.1.2.1 + ``form_post`` (Form Post Response Mode 1.0 §2) +
     # ``jwt`` (JARM Final 1.0 §3) : la suite exige la présence exacte de

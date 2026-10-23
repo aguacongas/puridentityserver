@@ -275,9 +275,15 @@ def derive_client(entity_identifier: str, resolved_metadata: Mapping[str, Any]) 
 
     Les metadata sont celles du type d'entité ``openid_relying_party`` après
     application de la politique de la chaîne (spec §6.1) : ``redirect_uris``
-    et ``jwks`` **inline** sont exigés (``jwks_uri`` n'est pas résolu). Le
-    client dérivé est public, actif, limité au scope ``openid`` et
-    s'authentifie en ``private_key_jwt`` (spec §12.1.4).
+    sont exigés et les clés du RP sont lues dans ``jwks`` (inline, prioritaire)
+    ou, à défaut, dans ``jwks_uri`` — la référence est résolue à la demande
+    lors de la vérification des signatures (comme pour tout client à clés
+    distantes). Le client dérivé est confidentiel (il s'authentifie par
+    assertion au token endpoint, donc il n'est pas « public » au sens
+    OIDC — même règle que l'enregistrement dynamique), actif, limité au
+    scope ``openid`` et s'authentifie en ``private_key_jwt`` (spec §12.1.4).
+    Le client dérivé porte la marque ``federated`` : son request object est
+    alors soumis aux exigences du profil fédéré (§12.1.1.1).
 
     Retourne ``None`` si les metadata ne permettent pas de dériver un client.
     """
@@ -287,18 +293,34 @@ def derive_client(entity_identifier: str, resolved_metadata: Mapping[str, Any]) 
     redirect_uris = metadata.get("redirect_uris")
     if not isinstance(redirect_uris, list) or not redirect_uris:
         return None
-    jwks = metadata.get("jwks")
-    if not isinstance(jwks, Mapping) or not isinstance(jwks.get("keys"), list):
+    keys, jwks_uri = _client_keys(metadata)
+    if not keys and not jwks_uri:
         return None
     return Client(
         client_id=entity_identifier,
         redirect_uris=frozenset(str(uri) for uri in redirect_uris),
         scopes=frozenset({Scope.OPENID}),
-        client_type=ClientType.PUBLIC,
+        client_type=ClientType.CONFIDENTIAL,
         token_endpoint_auth_method=TokenEndpointAuthMethod.PRIVATE_KEY_JWT,
-        jwks=tuple(_client_key_of(item) for item in cast(list[Any], jwks["keys"])),
+        jwks=keys,
+        jwks_uri=jwks_uri,
         is_active=True,
+        federated=True,
     )
+
+
+def _client_keys(metadata: Mapping[str, Any]) -> tuple[tuple[dict[str, Any], ...], str]:
+    """Clés du RP : ``jwks`` inline (prioritaire) ou ``jwks_uri`` (référence)."""
+    jwks = metadata.get("jwks")
+    if isinstance(jwks, Mapping) and isinstance(jwks.get("keys"), list):
+        return (
+            tuple(_client_key_of(item) for item in cast(list[Any], jwks["keys"])),
+            "",
+        )
+    reference = metadata.get("jwks_uri")
+    if isinstance(reference, str):
+        return (), reference
+    return (), ""
 
 
 def _client_key_of(item: object) -> dict[str, Any]:

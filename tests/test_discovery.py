@@ -57,6 +57,16 @@ def test_discovery_usecase_builds_document_from_base_url() -> None:
     assert document["backchannel_logout_session_supported"] is True
     assert document["device_authorization_endpoint"] == f"{_BASE_URL}/device_authorization"
     assert document["id_token_signing_alg_values_supported"] == _ALL_ALGOS
+    assert document["response_types_supported"] == [
+        "code",
+        "id_token",
+        "token",
+        "id_token token",
+        "code id_token",
+        "code token",
+        "code id_token token",
+    ]
+    assert document["subject_types_supported"] == ["public", "pairwise", "ephemeral"]
 
 
 def test_discovery_usecase_falls_back_to_issuer_as_base_url() -> None:

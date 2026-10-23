@@ -100,6 +100,23 @@ FAPI_REQUIRED_CLAIMS: tuple[str, ...] = (
     "redirect_uri",
 )
 
+#: Claims exigés d'un request object présenté par un client fédéré
+#: (OpenID Federation 1.1 §12.1.1.1) : ``exp`` et ``jti`` y sont
+#: **obligatoires** — contrairement aux clients standards, dont le module
+#: ``oidcc-request-uri-signed-rs256`` n'émet ni l'un ni l'autre. Le claim
+#: ``sub`` est interdit dans le même § (il nommerait l'utilisateur, que le
+#: RP ne connaît pas à ce stade).
+FEDERATED_SIGNED_REQUIRED_CLAIMS: tuple[str, ...] = ("iss", "aud", "exp", "jti")
+
+#: Namespace anti-replay des request objects fédérés (§12.1.1.1) : distinct
+#: du namespace CIBA pour que les deux familles ne se croisent pas dans le
+#: store d'empreintes partagé. L'empreinte de session navigateur s'y
+#: ajoute (``-`` si anonyme) : la re-présentation du même request object
+#: après ``/login`` — parcours normal d'un OP — porte alors le namespace
+#: de la session créée, tandis qu'une re-présentation anonyme reste un
+#: replay refusé.
+FEDERATED_JTI_NAMESPACE = "federation:"
+
 #: Paramètres du transport : ils n'existent que dans la query/form, jamais dans le jeton.
 _EMBEDDED = frozenset(("request", "request_uri"))
 
@@ -167,17 +184,30 @@ class RequestObjectResolver:
         self._clients = clients
         self._signed = signed
 
-    async def resolve(self, params: Mapping[str, str]) -> dict[str, str] | RequestObjectError:
+    async def resolve(
+        self, params: Mapping[str, str], *, session_scope: str = ""
+    ) -> dict[str, str] | RequestObjectError:
         """Retourne les paramètres complétés par le request object, ou son refus.
 
         Sans ``request`` ni ``request_uri``, les paramètres sont renvoyés
         tels quels — sauf pour un client FAPI, dont le request object est
         obligatoire (FAPI1-ADV-5.2.2-1). L'appel peut donc être placé en
         tête du traitement d'une demande non poussée comme d'un push PAR.
+        ``session_scope`` (empreinte de la session navigateur, ``""`` si
+        anonyme) cloisonne l'anti-replay ``jti`` du profil fédéré par
+        session : la re-présentation du même request object après
+        authentification — retour de ``/login`` vers ``/authorize``, parcours
+        normal de n'importe quel OP — s'inscrit alors dans le namespace de
+        la session créée, tandis qu'une re-présentation anonyme reste un
+        replay refusé (§12.1.1.1).
         """
         document, error = await self._document(params)
         if error is not None:
             return _with_state(error, document or params.get("request", ""))
+        if document:
+            mismatch = _client_id_mismatch(params, document)
+            if mismatch is not None:
+                return _with_state(mismatch, document)
         client = await self._find_client(params.get("client_id", ""))
         if not document:
             if client is not None and client.fapi_enabled:
@@ -197,22 +227,27 @@ class RequestObjectResolver:
             if isinstance(resolved, RequestObjectError):
                 return _with_state(resolved, document)
             return resolved
-        claims, error = await self._resolve_standard(document, client)
+        claims, error = await self._resolve_standard(document, client, session_scope)
         if error is not None:
             return _with_state(error, document)
         return _merge(params, claims)
 
     async def _resolve_standard(
-        self, document: str, client: Client | None
+        self, document: str, client: Client | None, session_scope: str = ""
     ) -> tuple[dict[str, str], RequestObjectError | None]:
         """Traite le request object d'un client standard : non signé ou RS256.
 
         ``alg=none`` est lu sans vérification (port configuré) ; un JAR
         ``RS256`` est vérifié contre le JWKS du client (embarqué ou
         ``jwks_uri``), avec les claims ``iss``/``aud`` exigés (OIDC Core
-        1.0 §10.1/§10.3). Refus (``invalid_request_object``) si le client
-        est inconnu, si la vérification n'est pas configurée, ou si la
-        signature et les claims échouent.
+        1.0 §10.1/§10.3). Pour un client fédéré (``Client.federated``), le
+        profil OpenID Federation 1.1 §12.1.1.1 s'ajoute : ``exp`` et
+        ``jti`` sont exigés avec anti-replay, ``sub`` est interdit — le
+        ``jti`` est scopé par ``session_scope`` (reprise post-login acceptée,
+        replay anonyme refusé, cf. :meth:`resolve`). Refus
+        (``invalid_request_object``) si le client est inconnu, si la
+        vérification n'est pas configurée, ou si la signature et les
+        claims échouent.
         """
         algorithm = _header_algorithm(document)
         if algorithm == "" or algorithm in self._config.signing_algorithms:
@@ -231,18 +266,30 @@ class RequestObjectResolver:
                 error="invalid_request",
                 error_description="vérification du request object signé non configurée",
             )
+        federated = client.federated
         result = await self._signed.verify(
             token=document,
             client=client,
             issuer=self._config.issuer,
             allowed_algorithms=STANDARD_SIGNED_REQUEST_OBJECT_ALGORITHMS,
-            required_claims=STANDARD_SIGNED_REQUIRED_CLAIMS,
-            enforce_jti=False,
+            required_claims=(
+                FEDERATED_SIGNED_REQUIRED_CLAIMS if federated else STANDARD_SIGNED_REQUIRED_CLAIMS
+            ),
+            enforce_jti=federated,
+            jti_namespace=FEDERATED_JTI_NAMESPACE + (session_scope or "-"),
         )
         if result.claims is None:
             return {}, RequestObjectError(
                 error="invalid_request_object",
                 error_description=result.reason,
+            )
+        if federated and "sub" in result.claims:
+            return {}, RequestObjectError(
+                error="invalid_request_object",
+                error_description=(
+                    "claim 'sub' interdit dans un request object de client fédéré "
+                    "(OpenID Federation 1.1 §12.1.1.1)"
+                ),
             )
         return {name: _stringify(value) for name, value in result.claims.items()}, None
 
@@ -393,6 +440,30 @@ def _merge_fapi(params: Mapping[str, str], claims: dict[str, object]) -> dict[st
         {name: _stringify(value) for name, value in claims.items() if name not in _EMBEDDED}
     )
     return merged
+
+
+def _client_id_mismatch(params: Mapping[str, str], document: str) -> RequestObjectError | None:
+    """Refuse un ``client_id`` de transport différent de celui du request object.
+
+    OIDC Core 1.0 §6.1 : ``client_id`` (et ``response_type``) de la query
+    doivent correspondre aux valeurs du request object quand il en porte —
+    sans quoi la demande est ``invalid_request``. Le contrôle porte sur le
+    payload non vérifié (lecture seule) : un document illisible emprunte le
+    refus dédié ``invalid_request_object``. Module federation
+    ``invalid-client-id-in-query-parameters`` (OIDFED §12.1.1.1).
+    """
+    transport = params.get("client_id", "")
+    if not transport:
+        return None
+    embedded = _unverified_claim(document, "client_id") or _unverified_iss(document)
+    if not embedded or embedded == transport:
+        return None
+    return RequestObjectError(
+        error="invalid_request",
+        error_description=(
+            "client_id de la requête différent de celui du request object (OIDC Core 1.0 §6.1)"
+        ),
+    )
 
 
 def _unverified_iss(document: str) -> str:

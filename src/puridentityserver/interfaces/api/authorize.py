@@ -197,6 +197,7 @@ def authorize_router(
             request_object_resolver=request_object_resolver,
             client_repository=client_repository,
             par_required=par_required,
+            session_scope=await session_sid(request),
             jarm_signer=jarm_signer,
             issuer=issuer,
         )
@@ -256,6 +257,7 @@ async def _direct_authorize_request(
     client_repository: ClientReader | None,
     par_required: bool = False,
     *,
+    session_scope: str = "",
     jarm_signer: JarmSigner | None = None,
     issuer: str = "",
 ) -> AuthorizeRequest | RedirectResponse | HTMLResponse:
@@ -279,9 +281,11 @@ async def _direct_authorize_request(
     (issue #160), page HTML sinon. ``jarm_signer`` signe ces refus
     redirigeables quand la demande porte ``response_mode=jwt`` et que le
     client est signable ; ``issuer`` porte la valeur ``iss`` des erreurs
-    ``form_post`` (RFC 9207 §2).
+    ``form_post`` (RFC 9207 §2). ``session_scope`` (empreinte de session
+    navigateur, ``""`` si anonyme) est reporté au resolver pour cloisonner
+    l'anti-replay ``jti`` du request object fédéré par session.
     """
-    resolved = await request_object_resolver.resolve(params)
+    resolved = await request_object_resolver.resolve(params, session_scope=session_scope)
     if isinstance(resolved, RequestObjectError):
         return await _request_object_error_response(
             resolved, params, client_repository, jarm_signer, issuer=issuer
@@ -945,6 +949,7 @@ async def _authorize_entry(
     request_object_resolver: RequestObjectResolver,
     client_repository: ClientReader | None,
     par_required: bool,
+    session_scope: str = "",
     jarm_signer: JarmSigner | None = None,
     issuer: str = "",
 ) -> tuple[AuthorizeRequest | Response, str]:
@@ -954,7 +959,10 @@ async def _authorize_entry(
     tient la place de la demande quand la résolution échoue (page HTML,
     cf. :func:`_pushed_param_response`, issue #160) ; ``pushed_reference``
     (vide hors PAR) accompagne le reste du parcours pour consommer la
-    demande poussée à l'émission.
+    demande poussée à l'émission. ``session_scope`` (empreinte de session
+    navigateur) cloisonne l'anti-replay ``jti`` du request object fédéré
+    par session (reprise post-login acceptée, cf.
+    :meth:`RequestObjectResolver.resolve`).
     """
     request_uri = params.get("request_uri", "")
     if request_uri and is_pushed_request_uri(request_uri):
@@ -967,6 +975,7 @@ async def _authorize_entry(
         request_object_resolver,
         client_repository,
         par_required,
+        session_scope=session_scope,
         jarm_signer=jarm_signer,
         issuer=issuer,
     )

@@ -20,7 +20,7 @@ La feature est livrée **par tranches** (issue #170) :
 | 1 | Entity statement de l'OP, résolution de chaîne de confiance, clés dédiées, metadata de discovery | **livrée** (PR #203) |
 | 2 | Enregistrement automatique (`client_id` = Entity Identifier du RP) | **livrée** (PR #203) |
 | 3 | Enregistrement explicite (§12.2) | **livrée** (PR #203) |
-| 4 | Endpoints de l'OP comme supérieur (`fetch`, `list`, `resolve`), plan de certification, sample | à venir |
+| 4 | Endpoints de l'OP comme supérieur (`fetch`, `list`, `resolve`), plan de certification, sample | **livrée** (PR #203) |
 
 ## Le modèle
 
@@ -96,18 +96,33 @@ en `client_id` et l'OP déduit son client de l'entity statement :
    confiance de cette entité (le registre reste la source de vérité : un
    client enregistré l'emporte) ;
 2. les metadata `openid_relying_party` de l'entity configuration du RP
-   (spec §5.1) fournissent les `redirect_uris` et le `jwks` **inline**
-   (`jwks_uri` non résolu) ;
-3. le client dérivé est **public**, actif, limité au scope `openid`, et
-   s'authentifie en `private_key_jwt` avec ses clés de fédération — les
-   clés de la chaîne étant déjà validées, l'assertion client se vérifie
-   contre le `jwks` du RP ;
+   (spec §5.1) fournissent les `redirect_uris` et les clés, en `jwks`
+   inline (prioritaire) ou en `jwks_uri` (résolution à la demande) ;
+3. le client dérivé est **confidentiel** (authentification par
+   assertion, donc pas « public » au sens OIDC), actif, limité au
+   scope `openid`, et s'authentifie en `private_key_jwt` avec ses clés
+   de fédération — les clés de la chaîne étant déjà validées,
+   l'assertion client se vérifie contre les clés du RP ;
 4. le client n'est **pas persisté** : il est re-dérivé à chaque demande,
    une rotation des clés ou des `redirect_uris` du RP est donc effective
-   immédiatement.
+   immédiatement ;
+5. son request object est soumis aux exigences du profil fédéré
+   (§12.1.1.1) : `exp` et `jti` y sont **obligatoires**, le `jti` est
+   mémorisé (anti-replay, namespace `federation:` dédié) et le claim `sub`
+   y est **interdit** — contrairement aux clients standards, dont le
+   request object n'est tenu ni à `exp` ni à `jti` (OIDC Core 1.0 §6.1
+   ne les recommande que). L'anti-replay est **cloisonné par session
+   navigateur** : la re-présentation du même request object après
+   `/login` — retour vers `/authorize`, parcours normal de n'importe quel
+   OP — porte le namespace de la session créée et est acceptée, tandis
+   qu'une re-présentation anonyme (ou sous une autre session) reste un
+   replay refusé. Un `client_id` de transport différent de celui
+   du request object est enfin refusé `invalid_request` (Core §6.1,
+   §12.1.3).
 
 Un RP hors de toute chaîne acceptée, sans `openid_relying_party`, sans
-`redirect_uris` ou sans `jwks` inline est refusé (`client_id` inconnu).
+`redirect_uris` ou sans aucune clé (`jwks` ni `jwks_uri`) est refusé
+(`client_id` inconnu).
 
 ## Enregistrement explicite (§12.2)
 
@@ -178,6 +193,23 @@ Les refus répondent `{"error": …, "error_description": …}` :
 > reçues ni à leur `jwks` (§12.2.2, étapes 1 et 5) — les metadata sont celles
 > signées par le RP.
 
+## Endpoints de supérieur : fetch, list, resolve (§8)
+
+L'OP joue le **supérieur** des entités fédérées qu'il a enregistrées : ses
+subordonnés immédiats sont les clients enregistrés dont le `client_id` est un
+Entity Identifier `https` et qui portent des `jwks` inline (seedés via
+`clients_seed` ou enregistrés via §12.1/§12.2). Les trois endpoints sont
+publiés dans `metadata.federation_entity` de l'entity statement (§5.1.1).
+
+| Endpoint | Réponse | Contrats d'erreur (§8.9) |
+| --- | --- | --- |
+| `GET /federation/fetch?sub=…` | subordinate statement signé (`application/entity-statement+jwt`) : `iss` = l'OP, `sub` = le subordonné, `jwks` attestés du sujet et metadata `openid_relying_party` copiées du registre (§8.1) | `sub` manquant ou valant l'identité de l'OP → 400 `invalid_request` ; entité inconnue → 404 `not_found` |
+| `GET /federation/list` | tableau JSON **trié** des Entity Identifier des subordonnés (§8.2.2) | paramètre de filtre non supporté → 400 `unsupported_parameter` (§8.2.1) |
+| `GET /federation/resolve?sub=…&trust_anchor=…` | résolution signée `application/resolve-response+jwt` (`typ: resolve-response+jwt`) portant les metadata résolues et `trust_chain` (JWT bruts de la chaîne), `exp` borné à l'expiration de la chaîne (§8.3.2) | `sub`/`trust_anchor` manquants → 400 `invalid_request` ; chaîne non résoluble ou ancre hors `federation_trust_anchors` → 404 `not_found` (§10.1) |
+
+La démonstration pas-à-pas vit dans `samples/federation-client/` (voir son
+README).
+
 ## Configuration
 
 | Variable | Défaut | Description |
@@ -187,14 +219,24 @@ Les refus répondent `{"error": …, "error_description": …}` :
 | `PURIDENTITYSERVER_FEDERATION_TRUST_ANCHORS` | *(vide)* | Ancres de confiance acceptées pour la résolution ; vide = n'importe quelle ancre (développement). |
 | `PURIDENTITYSERVER_FEDERATION_STATEMENT_TTL_SECONDS` | `3600` | Durée de vie de l'entity statement. |
 | `PURIDENTITYSERVER_FEDERATION_SIGNING_ALG` | `ES256` | Algorithme de signature des entity statements. |
+| `PURIDENTITYSERVER_FEDERATION_ALLOW_LOCAL_TARGETS` | `false` | Ouvre les destinations locales/privées au fetch des entity statements (garde anti-SSRF) — harnais de certification local uniquement, jamais sur un déploiement exposé. |
 
 ## Certification
 
 La suite publie deux plans federation ; celui qui correspond au rôle de notre
 OP — l'OP **rejoint** une fédération — est
 `openid-federation-entity-joined-to-test-federation-op-test-plan` : la suite
-héberge le trust anchor et joue le RP, ce qui le rend rejouable dans le
-harnais local. Le plan « deployed »
+héberge le trust anchor et joue le RP. Ce plan est rejoué par le harnais de
+certification (**local et hébergé**, nom `federation`) :
+`certification/plans/federation.json` porte la configuration du plan
+(`federation.entity_identifier` = l'issuer de l'OP, clés de test du RP et de
+l'ancre hébergées par la suite) et l'OP accepte l'ancre de la suite via
+`federation_trust_anchors` (rendu depuis `certification/config.render.toml`,
+l'URL `certification.openid.net` étant substituée en local). Dans le harnais
+local, `PURIDENTITYSERVER_FEDERATION_ALLOW_LOCAL_TARGETS=true` ouvre le fetch
+vers `localhost.emobix.co.uk` (destination loopback).
+
+Le plan « deployed »
 (`openid-federation-deployed-entity-test-plan`) suppose un trust anchor
 déployé externe, connu de l'OP : il reste jouable **par paramétrage** (la
 configuration du plan porte `federation.entity_identifier`,

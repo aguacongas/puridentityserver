@@ -362,6 +362,41 @@ def test_metadata_provider_returns_the_op_metadata() -> None:
     assert federation["federation_resolve_endpoint"] == f"{_ISSUER}/federation/resolve"
 
 
+def test_metadata_provider_publishes_the_required_discovery_fields() -> None:
+    """OIDC Discovery 1.0 §3 : les deux champs REQUIRED figurent dans l'EC (§5.1.1).
+
+    La suite de certification les valide dans ``metadata.openid_provider``
+    de l'entity statement (``OIDCCCheckDiscEndpointResponseTypesSupported-
+    Dynamic``, ``CheckDiscEndpointSubjectTypesSupported``).
+    """
+    from puridentityserver.application.discovery import DiscoveryConfig, DiscoveryUseCase
+
+    provider = DiscoveryFederationMetadataProvider(
+        DiscoveryUseCase(DiscoveryConfig(issuer=_ISSUER)), _ISSUER
+    )
+
+    metadata = run(provider.federation_metadata())["openid_provider"]
+
+    assert metadata["response_types_supported"] == [
+        "code",
+        "id_token",
+        "token",
+        "id_token token",
+        "code id_token",
+        "code token",
+        "code id_token token",
+    ]
+    assert metadata["subject_types_supported"] == ["public", "pairwise", "ephemeral"]
+
+
+def test_federation_allow_local_targets_env_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`PURIDENTITYSERVER_FEDERATION_ALLOW_LOCAL_TARGETS` ouvre les cibles locales."""
+    assert Settings(_env_file=None).federation_allow_local_targets is False
+
+    monkeypatch.setenv("PURIDENTITYSERVER_FEDERATION_ALLOW_LOCAL_TARGETS", "true")
+    assert Settings(_env_file=None).federation_allow_local_targets is True
+
+
 # --- Enregistrement automatique (OpenID Federation 1.1 §12.1) ---------------
 
 _RP = "https://rp.example"
@@ -506,11 +541,45 @@ def test_resolver_derives_the_client_from_the_rp_entity_statement() -> None:
     assert client is not None
     assert client.client_id == _RP
     assert client.redirect_uris == frozenset({_RP + "/callback"})
-    assert client.client_type == ClientType.PUBLIC
+    assert client.client_type == ClientType.CONFIDENTIAL
     assert client.token_endpoint_auth_method == TokenEndpointAuthMethod.PRIVATE_KEY_JWT
     assert client.scopes == frozenset({Scope.OPENID})
     assert client.is_active
+    assert client.federated is True
     assert _RP_JWK in client.jwks
+
+
+def test_resolver_derives_the_client_when_keys_are_referenced_by_jwks_uri() -> None:
+    """Le client dérive aussi avec les clés publiées à `jwks_uri` (spec §6.1).
+
+    Le RP peut publier ses clés par référence (comme le fait la suite de
+    certification) : le client dérivé porte alors ``jwks_uri`` et sa clé est
+    résolue à la demande lors de la vérification des signatures.
+    """
+    usecase = _rp_usecase({"redirect_uris": [_RP + "/callback"], "jwks_uri": _RP + "/jwks"})
+    resolver = TrustChainClientResolver(lambda: usecase)
+
+    client = run(resolver.resolve(_RP))
+
+    assert client is not None
+    assert client.client_id == _RP
+    assert client.redirect_uris == frozenset({_RP + "/callback"})
+    assert client.jwks == ()
+    assert client.jwks_uri == _RP + "/jwks"
+
+
+def test_resolver_prefers_inline_jwks_over_jwks_uri() -> None:
+    """Le ``jwks`` inline prime sur la référence ``jwks_uri`` (pas de fetch)."""
+    usecase = _rp_usecase(
+        {**_RP_METADATA, "jwks_uri": _RP + "/jwks"},
+    )
+    resolver = TrustChainClientResolver(lambda: usecase)
+
+    client = run(resolver.resolve(_RP))
+
+    assert client is not None
+    assert _RP_JWK in client.jwks
+    assert client.jwks_uri == ""
 
 
 def test_resolver_returns_none_without_a_use_case() -> None:
@@ -552,7 +621,7 @@ def test_resolver_rejects_missing_or_empty_redirect_uris() -> None:
 
 
 def test_resolver_rejects_an_invalid_jwks() -> None:
-    """Un `jwks` absent ou mal formé est refusé (spec §5.1)."""
+    """Un `jwks` absent ou mal formé, sans `jwks_uri`, est refusé (spec §5.1)."""
     uris = [_RP + "/callback"]
     for jwks in ({}, {"keys": "x"}):
         resolver = TrustChainClientResolver(
@@ -564,6 +633,17 @@ def test_resolver_rejects_an_invalid_jwks() -> None:
         )
 
         assert run(resolver.resolve(_RP)) is None
+
+
+def test_resolver_rejects_metadata_without_any_keys() -> None:
+    """Sans clés ni inline ni référencées, aucun client n'est dérivé."""
+    resolver = TrustChainClientResolver(
+        lambda: _ChainUseCase(  # type: ignore[arg-type]
+            _chain_with_metadata({"openid_relying_party": {"redirect_uris": [_RP + "/c"]}})
+        )
+    )
+
+    assert run(resolver.resolve(_RP)) is None
 
 
 def test_resolver_normalizes_non_mapping_jwk_entries() -> None:

@@ -388,7 +388,7 @@ def test_non_fapi_client_keeps_unsigned_request_object() -> None:
         client_id="web-app",
         redirect_uri=_REDIRECT_URI,
         scope="openid profile",
-        request=_unsigned(_jar_claims(iss="web-app", response_type="code")),
+        request=_unsigned(_jar_claims(iss="web-app", client_id="web-app", response_type="code")),
     )
 
     assert isinstance(resolved, dict)
