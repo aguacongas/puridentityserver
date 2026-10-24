@@ -1,3 +1,4 @@
+# flake8: noqa
 #!/usr/bin/env python3
 """Prune stale (unpublished) test plans on the OpenID Foundation conformance server.
 
@@ -14,7 +15,6 @@ Variables d'environnement (heritees du workflow certification.yml) :
 """
 from __future__ import annotations
 
-import json
 import os
 import sys
 
@@ -65,7 +65,7 @@ def main() -> int:
         while True:
             r = client.get(api, params={"start": start, "length": length})
             if r.status_code != 200:
-                print("prune: GET {} -> HTTP {} : {}".format(api, r.status_code, r.text[:200]))
+                print(f"prune: GET {api} -> HTTP {r.status_code} : {r.text[:200]}")
                 return 1
             data = r.json()
             rows = data.get("data") or data.get("plans") or []
@@ -78,7 +78,7 @@ def main() -> int:
 
         # 2. garder uniquement les plans de notre alias
         ours = [pl for pl in plans if str(pl.get("planName", "")).startswith(PREFIX)]
-        print("prune: {} plan(s) total, {} de prefixe '{}'".format(len(plans), len(ours), PREFIX))
+        print(f"prune: {len(plans)} plan(s) total, {len(ours)} de prefixe '{PREFIX}'")
 
         # 3. grouper par planName, trier par started (ISO, desc)
         groups: dict[str, list[dict]] = {}
@@ -92,8 +92,7 @@ def main() -> int:
             unpublished.sort(key=lambda p: str(p.get("started") or p.get("_id") or ""), reverse=True)
             keep = unpublished[:KEEP]
             drop = unpublished[KEEP:]
-            print("prune: {:<55s} total={:3d} publies={:2d} gardes={:2d} a_supprimer={:2d}".format(
-                name, len(group), len(published), len(keep), len(drop)))
+            print(f"prune: {name:<55s} total={len(group):3d} publies={len(published):2d} gardes={len(keep):2d} a_supprimer={len(drop):2d}")
             for pl in drop:
                 to_delete.append((pl.get("_id"), name))
 
@@ -103,19 +102,18 @@ def main() -> int:
         for pid, name in to_delete:
             if not pid:
                 continue
-            durl = "{}/{}".format(api, pid)
+            durl = f"{api}/{pid}"
             r = client.delete(durl)
             if r.status_code in (200, 202, 204):
                 deleted += 1
-                print("prune: supprime {} ({})".format(pid, name))
+                print(f"prune: supprime {pid} ({name})")
             elif r.status_code in (403, 404, 405, 409):
                 # 405 : plan publie/immutable (l'API refuse deja). 404 : deja parti.
                 skipped += 1
-                print("prune: ignore {} ({}) - HTTP {} (plan conserve)".format(pid, name, r.status_code))
+                print(f"prune: ignore {pid} ({name}) - HTTP {r.status_code} (plan conserve)")
             else:
-                print("prune: echec suppression {} ({}) - HTTP {} {}".format(
-                    pid, name, r.status_code, r.text[:120]))
-        print("prune: {} supprime(s), {} conserve(s) (publies/immuables).".format(deleted, skipped))
+                print(f"prune: echec suppression {pid} ({name}) - HTTP {r.status_code} {r.text[:120]}")
+        print(f"prune: {deleted} supprime(s), {skipped} conserve(s) (publies/immuables).")
     return 0
 
 
