@@ -200,27 +200,7 @@ print("\n[info] AD choisi :", ad_name)
 display_name = _p("DISPLAY_NAME", INSTANCE_NAME_DEFAULT)
 
 print("== [7/9] Recherche de l'image Oracle Linux 9 (A1.Flex) ==")
-images = compute.list_images(
-    compartment_id=compartment, operating_system="Oracle Linux",
-    operating_system_version="9", shape="VM.Standard.A1.Flex",
-    sort_by="TIMECREATED", sort_order="DESC", limit=1,
-).data
-if not images:
-    print("ERREUR : aucune image Oracle Linux 9 pour A1.Flex")
-    sys.exit(1)
-IMAGE_OCID = images[0].id
-print("  image :", IMAGE_OCID)
-
-# Instance existante ?
-existing_instances = compute.list_instances(compartment_id=compartment, display_name=display_name).data
-instance = None
-for inst in existing_instances:
-    if inst.lifecycle_state not in ("TERMINATED", "TERMINATING"):
-        instance = inst
-        break
-
-if instance is None:
-    print("== [8/9] Lancement de l'instance ==")
+def _launch_instance(shape, ocpus, memory, image_ocid):
     cloud_init = """#cloud-config
 packages:
   - nginx
@@ -235,20 +215,67 @@ runcmd:
   - systemctl enable nginx
   - systemctl start nginx
 """
-    launch = compute.launch_instance(oci.core.models.LaunchInstanceDetails(
+    return compute.launch_instance(oci.core.models.LaunchInstanceDetails(
         compartment_id=compartment, display_name=display_name,
-        shape="VM.Standard.A1.Flex",
-        shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(ocpus=1.0, memory_in_gbs=6.0),
+        shape=shape,
+        shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(ocpus=ocpus, memory_in_gbs=memory),
         availability_domain=ad_name,
         source_details=oci.core.models.InstanceSourceViaImageDetails(
-            source_type="image", image_id=IMAGE_OCID, boot_volume_size_in_gbs=50,
+            source_type="image", image_id=image_ocid, boot_volume_size_in_gbs=50,
         ),
         create_vnic_details=oci.core.models.CreateVnicDetails(
             subnet_id=SUBNET_OCID, assign_public_ip=False, display_name="puridentity-proxy-vnic",
         ),
         metadata={"ssh_authorized_keys": pub_key, "user_data": base64.b64encode(cloud_init.encode()).decode()},
     )).data
-    instance = launch
+
+
+display_name = _p("DISPLAY_NAME", INSTANCE_NAME_DEFAULT)
+
+existing_instances = compute.list_instances(compartment_id=compartment, display_name=display_name).data
+instance = None
+for inst in existing_instances:
+    if inst.lifecycle_state not in ("TERMINATED", "TERMINATING"):
+        instance = inst
+        break
+
+if instance is None:
+    # Essai A1.Flex (Ampere, Always Free) ; fallback E2.1.Micro si capacite epuisee.
+    shapes_to_try = [
+        ("VM.Standard.A1.Flex", 1.0, 6.0, "Oracle Linux", "9"),
+        ("VM.Standard.E2.1.Micro", 1.0, 1.0, "Oracle Linux", "8"),
+    ]
+    launched = False
+    for shape, ocpus, memory, os_name, os_ver in shapes_to_try:
+        print("== [8/9] Recherche d'image + lancement (%s) ==" % shape)
+        images = compute.list_images(
+            compartment_id=compartment, operating_system=os_name,
+            operating_system_version=os_ver, shape=shape,
+            sort_by="TIMECREATED", sort_order="DESC", limit=1,
+        ).data
+        if not images:
+            print("  pas d'image pour", shape, "- shape suivante")
+            continue
+        image_ocid = images[0].id
+        try:
+            launch = _launch_instance(shape, ocpus, memory, image_ocid)
+            instance = launch
+            print("  instance OK :", instance.id, "(", shape, ")")
+            launched = True
+            break
+        except oci.exceptions.ServiceError as e:
+            msg = getattr(e, "message", str(e))
+            print("  echec", shape, ":", msg[:120])
+            if "Out of host capacity" in msg or "OutOfCapacity" in msg or "LimitExceeded" in msg:
+                print("  -> capacite epuisee sur ce shape, essai suivant")
+                continue
+            # autre erreur : arret
+            print("ERREUR fatale :", msg)
+            sys.exit(1)
+    if not launched or instance is None:
+        print("ERREUR : aucun shape Always Free disponible dans cette region/AD.")
+        print("Essayez une autre region (REGION=us-ashburn-1) ou attendez la liberation de capacite.")
+        sys.exit(1)
     print("  lancee :", instance.id)
     for _ in range(120):
         st = compute.get_instance(instance.id).data.lifecycle_state
