@@ -150,9 +150,12 @@ jobs:
         run: bash certification/local/setup.sh
 
       - name: Captures d'écran réelles des modules de relecture (Playwright)
-        # Rejoue les 30 scénarios REVIEW contre l'OP local (cert auto-signé :
+        # Rejoue les 43 scénarios REVIEW contre l'OP local (cert auto-signé :
         # ignore_https_errors ; issuer lu au discovery, redirect_uris de la
-        # suite locale via --suite-url). Une seule exécution par run : les 9
+        # suite locale via --suite-url). Les 13 scénarios fédérés passent par
+        # le stub local (ancre servie sur localhost:9444, seconde trust
+        # anchor injectée par setup.sh) : la suite ne sert la trust chain
+        # que pendant un run de plan. Une seule exécution par run : les 11
         # jobs plan téléversent le résultat en artefact.
         run: |
           mkdir -p screenshots
@@ -161,6 +164,7 @@ jobs:
           python3 certification/capture_screenshots.py \
             --base-url https://localhost:9443 \
             --suite-url "$SUITE_URL" \
+            --federation \
             --out screenshots
           ls -l screenshots
 

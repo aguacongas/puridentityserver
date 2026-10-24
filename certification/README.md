@@ -447,7 +447,8 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
 | `plans/basic|implicit|hybrid|formpost|dynamic|ciba|fapi1|fapi2|fapi2-message-signing|ekyc|federation.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; fapi1/fapi2/fapi2-message-signing portent aussi `client`/`client2` en clé privée et `resource` ; `ekyc` porte la configuration eKYC `ekyc.verified_claims_request_list` ; `federation` porte l'Entity Identifier de l'OP, l'ancre de confiance `{SUITEURL}test/a/puridentityserver-federation/trust-anchor` et les clés de test RP/ancre du template officiel) |
 | `conformance-reuse-plan.patch` | patch du driver : `create_test_plan` idempotent (réutilise le plan existant quand sa config n'a pas changé) |
 | `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) — avec `SCREENSHOTS_DIR` défini (CI), un fichier absent/vide/trop lourd lève une erreur fatale (captures obligatoires, issue #161) ; sans variable (exécution manuelle), le PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode hébergé) |
-| `capture_screenshots.py` | rejoue les 30 scénarios de relecture (4 Core, 6 dynamic, 16 FAPI1, 4 FAPI2) contre l'OP (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver — `--base-url` = OP, `--suite-url` = base des callbacks de la suite (hébergée par défaut, `https://localhost.emobix.co.uk:8443` en local) |
+| `capture_screenshots.py` | rejoue les scénarios de relecture (4 Core, 6 dynamic, 16 FAPI1, 4 FAPI2, et avec `--federation` — mode local — les 13 modules fédérés) contre l'OP (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver — `--base-url` = OP, `--suite-url` = base des callbacks de la suite (hébergée par défaut, `https://localhost.emobix.co.uk:8443` en local) |
+| `federation_capture_stub.py` | mini-fédération locale (ancre + RP de capture, statements signés à la volée) hébergée en HTTPS sur `localhost:9444` pendant les captures fédérées (`--federation`) : l'OP y résout la trust chain que la suite ne sert que pendant un run de plan (voir « Captures fédérées ») — ancre ajoutée à `federation_trust_anchors` par `local/setup.sh`, joignable en local seulement |
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |
 | `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
 | `conformance-stale-plan-recovery.patch` | patch du driver : n'est jamais réessaie le 500 déterministe « test module not found » (1 tentative au lieu de 28) et valide la membership du plan réutilisé contre le catalogue avant le run — recréation automatique du plan stale (membership fraîche dès le premier run), plan le plus récent privilégié à la réutilisation |
@@ -478,12 +479,14 @@ du même ressort : leurs placeholders REVIEW attendent la page d'erreur réellem
 servie par l'OP. Deux étapes couvrent ce besoin :
 
 1. **`capture_screenshots.py`** (étape « Captures d'écran réelles des modules de
-   relecture ») : enregistre un client via RFC 7591, rejoue les **30 scénarios de
+   relecture ») : enregistre un client via RFC 7591, rejoue les **scénarios de
    relecture** (les 4 modules Core du tableau, les 6 modules du plan dynamic —
    arbitrages de `redirect_uri` absente/supplémentaire/non concordante et pages
    de connexion des clients DCR porteurs d'un `logo_uri`/`policy_uri`/`tos_uri`,
    issue #168 —, les 16 modules FAPI1, les 4 modules
-   FAPI2) avec chromium headless contre l'OP (`--base-url`), **contrôle chaque page
+   FAPI2 et, en mode local avec `--federation`, les 13 modules fédérés — voir
+   « Captures fédérées ») avec chromium headless contre l'OP (`--base-url`),
+   **contrôle chaque page
    avant export** (statut 400 + marqueur `<code>` du motif — ou extrait « manquants
    : redirect_uri » pour la page sans code de motif, ou titre et
    `form[action="/login"]` ; les erreurs FAPI2, elles, doivent arriver par une
@@ -496,14 +499,16 @@ servie par l'OP. Deux étapes couvrent ce besoin :
    hébergé `https://www.certification.openid.net`, local
    `https://localhost.emobix.co.uk:8443`) et l'`aud` des assertions est lu au
    discovery de l'OP (issuer local `https://op:9443`). L'étape est
-   **bloquante** (issue #161) : le script exige les 30 captures et un échec
+   **bloquante** (issue #161) : le script exige les captures attendues et un échec
    (installation du navigateur, OP indisponible, scène invalide…) fait échouer
    le run — plus aucun repli silencieux en CI. Les deux workflows l'exécutent :
    - **mode hébergé** : dans le job `prepare` contre l'instance Render, résultat
-     publié en artefact `certification-screenshots` ;
+     publié en artefact `certification-screenshots` (30 captures, sans
+     `--federation` — le stub n'est pas joignable depuis Render) ;
    - **mode local** (#158) : job `capture` de `certification-local.yml` contre
      l'OP local (`https://localhost:9443`, cert auto-signé), **une seule fois par
-     run**, artefact `certification-local-screenshots` que les jobs `plan`
+     run**, `--federation` inclus (43 captures), artefact
+     `certification-local-screenshots` que les jobs `plan`
      téléchargent (env `SCREENSHOTS_DIR`, substitution du PNG de secours) et que
      le job `report` intègre au rapport.
 2. **`conformance-screenshots.patch`** couple deux points du driver :
@@ -531,6 +536,38 @@ la **page GitHub Pages** (`report.py --screenshots` recopie les PNG dans
 Le PNG de secours ne survit qu'à une exécution manuelle sans `SCREENSHOTS_DIR` :
 en CI, la capture réelle de chaque module de relecture est exigée et son absence
 fait échouer le run (issue #161).
+
+### Captures fédérées (plan `federation`, mode local uniquement)
+
+Les 13 modules `openid-federation-automatic-client-registration-invalid-*` du plan
+`federation` attendent, eux aussi, la page d'erreur réellement servie par l'OP —
+mais leur `client_id` est l'**Entity Identifier** d'un RP dont l'OP doit résoudre la
+trust chain par fetch HTTP, et la suite n'héberge cette chaîne (entity configuration
+du RP, entity configuration de l'ancre, subordinate statement du fetch endpoint)
+**que pendant l'exécution d'un module du plan** : le job de captures tourne hors
+plan, tous les fetchs retomberaient en 404.
+
+`federation_capture_stub.py` lève ce verrou : avec `--federation`,
+`capture_screenshots.py` héberge lui-même une mini-fédération locale
+(`https://localhost:9444/federation-capture-anchor` + RP de capture, statements
+signés à la volée, HTTPS sur le certificat du harness déjà accepté par l'OP via
+`SSL_CERT_FILE`) et rejoue les 13 requêtes d'autorisation de la suite
+(`response_type=code`, request object par valeur signé RS256 avec la clé du RP de
+capture, sans `redirect_uri` dans la query) — chaque défaut du profil fédéré
+(§12.1.1.1 : `client_id` invalide, signature altérée ou signée par d'autres clés,
+`exp` expiré, `iss`/`aud` invalides, `sub` interdit, claims manquants, rejeu de
+`jti`) fait servir à l'OP sa **vraie** page 400, capturée comme ailleurs.
+
+L'ancre du stub est la **seconde trust anchor** de l'OP de certification :
+`certification/local/setup.sh` l'ajoute à `federation_trust_anchors` (l'ancre de la
+suite reste en tête de liste ; la suite ne contrôle que la non-vacuité des
+`authority_hints` publiés par l'OP). Contraintes : le stub n'existe que pendant le
+run de captures et n'est joignable qu'en local — **l'instance hébergée ne peut pas
+l'atteindre** : son plan `federation` joue ses 13 modules en witness
+(`SCREENSHOTS_DIR` non renseigné pour ce plan dans `certification.yml`, PNG de
+secours), les captures réelles restant l'affaire du mode local. Port et URL sont
+partagés entre `setup.sh` (`FEDERATION_STUB_ANCHOR`) et `federation_capture_stub.py`
+(`STUB_PORT`).
 
 Le remplissage **immédiat** est interdit : le watcher de placeholders
 d'`AbstractTestModule` conclut le test dès que la liste est vide pendant que le

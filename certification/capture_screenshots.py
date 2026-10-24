@@ -8,7 +8,7 @@ La suite officielle attend une capture d'écran pour 4 modules Core
 sans image, le mode witness remplit ces placeholders avec un PNG 1x1 de
 secours — le verdict tombe juste, mais la preuve est un artifice.
 
-Ce script rejoue les 30 scénarios contre l'OP réellement déployé avec un
+Ce script rejoue les scénarios contre l'OP réellement déployé avec un
 navigateur headless (Playwright/chromium) et produit, pour chaque module,
 une capture authentique de la page servie par l'OP :
 
@@ -27,7 +27,15 @@ une capture authentique de la page servie par l'OP :
    fragment de la callback (RFC 6749 §4.2.2.1, issue #178), sauf pour les
    deux scénarios servis en page HTML (scénarios « page ») ;
 4. les 4 scénarios FAPI2 : requête signée sans PAR, réutilisation d'un
-   ``request_uri``, ``request_uri`` expiré, ``request_uri`` d'un autre client.
+   ``request_uri``, ``request_uri`` expiré, ``request_uri`` d'un autre client ;
+5. avec ``--federation`` (harness local uniquement), les 13 scénarios
+   fédérés : un request object défectueux du profil OpenID Federation
+   §12.1.1.1 par module, rejeté par l'OP après résolution de la trust chain
+   du RP de capture hébergée par :mod:`federation_capture_stub` — la suite
+   ne sert cette chaîne que pendant un run de plan, le job de captures tourne
+   hors plan. Les 13 refus sont des pages 400 (la query ne porte aucune
+   ``redirect_uri``, RFC 6749 §4.1.2.1) ; le module « duplicate jti » joue
+   une demande valide puis son rejeu.
 
 Chaque capture est validée (statut, marqueurs de la page) avant export : un
 échec logue l'erreur et le scénario suivant est tenté ; si un fichier attendu
@@ -43,7 +51,8 @@ Harness local (certification-local.yml, OP derrière le nginx mTLS auto-signé) 
 
     python3 certification/capture_screenshots.py \
         --base-url https://localhost:9443 \
-        --suite-url https://localhost.emobix.co.uk:8443
+        --suite-url https://localhost.emobix.co.uk:8443 \
+        --federation
 
 Dans les deux cas, le claim ``aud`` des jetons signés porte l'issuer lu dans
 le discovery (``_resolve_issuer``), pas l'URL de navigation.
@@ -67,6 +76,7 @@ from urllib.parse import urlencode
 
 import jwt as pyjwt
 from cryptography.hazmat.primitives.asymmetric import rsa
+from federation_capture_stub import FederationCaptureStub
 from jwt import PyJWK
 from playwright.sync_api import (
     APIRequestContext,
@@ -233,6 +243,87 @@ _FAPI2_TEST_NAMES = (
     "fapi2-security-profile-final-par-attempt-reuse-request_uri",
     "fapi2-security-profile-final-par-attempt-to-use-expired-request_uri",
     "fapi2-security-profile-final-par-attempt-to-use-request_uri-for-different-client",
+)
+
+#: Modules fédérés du plan federation laissés en REVIEW : un request object
+#: défectueux par module (OpenID Federation 1.1 §12.1.1.1, OIDC Core 1.0
+#: §6.1). Le scénario rejoue le flux de la suite (``client_id`` = Entity
+#: Identifier résolu par la trust chain hébergée par le stub local,
+#: ``response_type=code``, request object par valeur, sans ``redirect_uri``
+#: dans la query) : le refus est servi en page 400 (RFC 6749 §4.1.2.1
+#: interdit la redirection sans URI de transport enregistrée). Le troisième
+#: élément est le ``<code>`` attendu dans la page : l'écart client_id de
+#: transport porte ``invalid_request`` (OIDC Core 1.0 §6.1) et le client_id
+#: invalide dans le request object aussi (la suite accepte ``invalid_request``,
+#: ``invalid_request_object`` ou ``invalid_client`` — OIDFED §12.1.3).
+_FEDERATION_JAR_SCENARIOS: tuple[tuple[str, str, str], ...] = (
+    (
+        "openid-federation-automatic-client-registration-invalid-client-id-in-request-object",
+        "client-id-in-request-object",
+        "invalid_request",
+    ),
+    (
+        "openid-federation-automatic-client-registration-invalid-client-id-in-query-parameters",
+        "client-id-in-query-parameters",
+        "invalid_request",
+    ),
+    (
+        "openid-federation-automatic-client-registration-invalid-signature-on-request-object",
+        "tampered",
+        "invalid_request_object",
+    ),
+    (
+        "openid-federation-automatic-client-registration-invalid-signature-with-other-keys-on-request-object",
+        "foreign-key",
+        "invalid_request_object",
+    ),
+    (
+        "openid-federation-automatic-client-registration-invalid-request-object-exp",
+        "exp-past",
+        "invalid_request_object",
+    ),
+    (
+        "openid-federation-automatic-client-registration-invalid-request-object-iss",
+        "bad-iss",
+        "invalid_request_object",
+    ),
+    (
+        "openid-federation-automatic-client-registration-invalid-request-object-aud",
+        "bad-aud",
+        "invalid_request_object",
+    ),
+    (
+        "openid-federation-automatic-client-registration-invalid-request-object-sub",
+        "sub-present",
+        "invalid_request_object",
+    ),
+    (
+        "openid-federation-automatic-client-registration-invalid-missing-request-object-jti",
+        "no-jti",
+        "invalid_request_object",
+    ),
+    (
+        "openid-federation-automatic-client-registration-invalid-missing-request-object-exp",
+        "no-exp",
+        "invalid_request_object",
+    ),
+    (
+        "openid-federation-automatic-client-registration-invalid-missing-request-object-iss",
+        "no-iss",
+        "invalid_request_object",
+    ),
+    (
+        "openid-federation-automatic-client-registration-invalid-missing-request-object-aud",
+        "no-aud",
+        "invalid_request_object",
+    ),
+)
+
+#: Module fédéré en deux tours : le tour 1 rejoue une demande valide (le
+#: ``jti`` est mémorisé à la résolution du request object, avant la page de
+#: connexion), le tour 2 rejoue le même jeton — anti-replay (§12.1.1.1).
+_FEDERATION_DUPLICATE_TEST_NAME = (
+    "openid-federation-automatic-client-registration-invalid-duplicate-request-object-jti"
 )
 
 
@@ -464,6 +555,137 @@ def _fapi1_request_url(
     if jar is not None:
         params["request"] = jar
     return f"{base_url.rstrip('/')}/authorize?{urlencode(params)}"
+
+
+def _federation_claims(stub: FederationCaptureStub, issuer: str, mode: str) -> dict[str, object]:
+    """Claims du request object fédéré, ajustés pour le défaut du scénario.
+
+    La base reprend ``CreateRequestObjectClaims`` de la suite : ``client_id``
+    et ``iss`` = Entity Identifier du RP, ``aud`` = issuer OP, ``exp`` à
+    +5 minutes, ``jti`` aléatoire, ``scope=openid``, ``response_type=code``,
+    ``redirect_uri`` = callback du stub ; ``mode`` applique le défaut module
+    (claim retiré, valeur hors borne, ``client_id`` invalide…). Les valeurs
+    ``None`` retirent le claim du jeton.
+    """
+    now = _now()
+    claims: dict[str, object | None] = {
+        "client_id": stub.rp_entity_id,
+        "scope": "openid",
+        "response_type": "code",
+        "redirect_uri": stub.callback_uri,
+        "iss": stub.rp_entity_id,
+        "aud": issuer.rstrip("/"),
+        "jti": f"capture-{secrets.token_hex(8)}",
+        "exp": now + 300,
+    }
+    overrides: dict[str, object | None] = {
+        "client-id-in-request-object": {"client_id": f"{stub.rp_entity_id}/INVALID"},
+        "bad-iss": {"iss": f"{stub.rp_entity_id}/1"},
+        "bad-aud": {"aud": f"{issuer.rstrip('/')}/1"},
+        "sub-present": {"sub": stub.rp_entity_id},
+        "no-jti": {"jti": None},
+        "no-exp": {"exp": None},
+        "no-iss": {"iss": None},
+        "no-aud": {"aud": None},
+        "exp-past": {"exp": now - 300},
+    }.get(mode, {})
+    claims.update(overrides)
+    return {name: value for name, value in claims.items() if value is not None}
+
+
+def _federation_jar(stub: FederationCaptureStub, issuer: str, mode: str) -> str:
+    """Signe le request object du scénario fédéré (RS256, clé du RP du stub).
+
+    ``tampered`` altère la signature après coup (module « signature
+    invalide »), ``foreign-key`` signe avec une clé absente du JWKS publié
+    du RP (module « signé par d'autres clés »).
+    """
+    claims = _federation_claims(stub, issuer, mode)
+    if mode == "foreign-key":
+        return _sign(claims, stub.foreign_private_key, "capture-foreign-key", "RS256")
+    jar = _sign(claims, stub.rp_private_key, stub.rp_kid, "RS256")
+    return _tamper(jar) if mode == "tampered" else jar
+
+
+def _federation_request_url(
+    stub: FederationCaptureStub, base_url: str, issuer: str, mode: str
+) -> str:
+    """URL ``/authorize`` d'un scénario fédéré (flux de la suite, §12.1).
+
+    L'endpoint d'autorisation est celui de l'OP (``base_url``) : le stub
+    n'héberge que la trust chain du RP, jamais l'OP lui-même. La query ne
+    porte que ``client_id``, ``scope``, ``response_type`` et le request
+    object par valeur — comme l'envoie la suite ; pour le défaut
+    ``client-id-in-query-parameters``, le ``client_id`` de transport porte le
+    suffixe ``INVALID`` que le JAR contredit (OIDC Core 1.0 §6.1).
+    """
+    transport = (
+        f"{stub.rp_entity_id}INVALID"
+        if mode == "client-id-in-query-parameters"
+        else stub.rp_entity_id
+    )
+    params = {
+        "client_id": transport,
+        "scope": "openid",
+        "response_type": "code",
+        "request": _federation_jar(stub, issuer, mode),
+    }
+    return f"{base_url.rstrip('/')}/authorize?{urlencode(params)}"
+
+
+def _capture_federation_error_page(page: Page, url: str, error_code: str, path: Path) -> None:
+    """Capture la page 400 servie pour un request object fédéré refusé.
+
+    La query de transport ne porte aucune ``redirect_uri`` : la RFC 6749
+    §4.1.2.1 interdit alors de renvoyer l'erreur par redirection — l'OP sert
+    sa page d'erreur (400, ``<code>`` du motif), comme pour les scénarios
+    FAPI1 en mode « page ».
+    """
+    _assert_status(page, url, 400)
+    if f"<code>{error_code}</code>" not in page.content():
+        raise RuntimeError(f"motif {error_code!r} absent de la page d'erreur {url}")
+    _screenshot(page, path)
+
+
+def _capture_federation_scenarios(
+    page: Page,
+    base_url: str,
+    issuer: str,
+    out: Path,
+    cert_path: Path,
+    key_path: Path,
+) -> None:
+    """Rejoue les 13 modules REVIEW fédérés via la mini-fédération du stub.
+
+    La suite n'héberge la trust chain du RP que pendant un run de plan : le
+    stub la sert lui-même (certificat du harness, déjà accepté par l'OP) et
+    l'ancre du stub est la seconde trust anchor de l'OP de certification.
+    L'OP résout alors le ``client_id`` = Entity Identifier du RP de capture
+    et sert ses vraies pages de refus pour chaque défaut du profil fédéré
+    (§12.1.1.1). Les captures sont exigées (issue #161) : le moindre refus
+    inattendu lève et fait échouer le script.
+    """
+    with FederationCaptureStub(cert_path=cert_path, key_path=key_path) as stub:
+        for name, mode, error_code in _FEDERATION_JAR_SCENARIOS:
+            url = _federation_request_url(stub, base_url, issuer, mode)
+            _capture_federation_error_page(page, url, error_code, out / f"{name}.png")
+        _LOGGER.info(
+            "capture %s : demande valide, puis rejeu du même jti", _FEDERATION_DUPLICATE_TEST_NAME
+        )
+        url = _federation_request_url(stub, base_url, issuer, "valid")
+        _goto(page, url)
+        # Tour 1 accepté : page de connexion (session vierge) ou redirection
+        # vers le callback avec un code (session déjà connectée par les
+        # scénarios core) — les deux signent une demande validée ; c'est le
+        # rejeu du même jti, seul, qui doit être refusé (anti-replay).
+        if "/login" not in page.url and "code=" not in page.url:
+            raise RuntimeError(f"tour 1 du rejeu : demande validée attendue, page {page.url}")
+        _capture_federation_error_page(
+            page,
+            url,
+            "invalid_request_object",
+            out / f"{_FEDERATION_DUPLICATE_TEST_NAME}.png",
+        )
 
 
 def _pkce_pair() -> tuple[str, str]:
@@ -1054,12 +1276,17 @@ def capture_all(
     par_ttl_seconds: int,
     fapi1_redirect: str,
     fapi2_redirect: str,
+    federation_stub_cert: Path | None = None,
+    federation_stub_key: Path | None = None,
 ) -> list[Path]:
-    """Rejoue les 30 scénarios et écrit les PNG nommés ``<testName>.png``.
+    """Rejoue les scénarios et écrit les PNG nommés ``<testName>.png``.
 
-    Les familles FAPI et dynamic sont indépendantes : l'échec d'une famille
-    est logué sans interrompre les autres (la certification retombe sur le
-    PNG de secours pour les fichiers manquants).
+    Les familles FAPI, fédérée et dynamic sont indépendantes : l'échec
+    d'une famille est logué sans interrompre les autres (la certification
+    retombe sur le PNG de secours pour les fichiers manquants). La famille
+    fédérée n'est jouée que si le certificat et la clé TLS du stub sont
+    fournis (harness local uniquement, cf.
+    :mod:`federation_capture_stub`).
     """
     out.mkdir(parents=True, exist_ok=True)
     browser = playwright.chromium.launch()
@@ -1094,6 +1321,18 @@ def capture_all(
             )
         except Exception as error:
             _LOGGER.error("Captures fapi2 impossibles : %s", error)
+        if federation_stub_cert is not None and federation_stub_key is not None:
+            try:
+                _capture_federation_scenarios(
+                    page,
+                    base_url,
+                    issuer,
+                    out,
+                    federation_stub_cert,
+                    federation_stub_key,
+                )
+            except Exception as error:
+                _LOGGER.error("Captures federation impossibles : %s", error)
         # En dernier : les scénarios login vident les cookies du contexte,
         # sans effet sur les familles déjà jouées.
         try:
@@ -1106,7 +1345,7 @@ def capture_all(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Capture les pages ; renvoie 0 si les 30 fichiers sont produits."""
+    """Capture les pages ; renvoie 0 si tous les fichiers attendus sont produits."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--base-url",
@@ -1135,6 +1374,25 @@ def main(argv: list[str] | None = None) -> int:
         default=30,
         help="TTL PAR de l'OP, aligné sur par_ttl_seconds (scénario request_uri expiré)",
     )
+    parser.add_argument(
+        "--federation",
+        action="store_true",
+        help=(
+            "rejoue aussi les 13 modules REVIEW fédérés via le stub local "
+            "(harness uniquement : l'OP doit porter l'ancre du stub, cf. "
+            "certification/local/setup.sh)"
+        ),
+    )
+    parser.add_argument(
+        "--federation-stub-cert",
+        default=".harness-local/suite-tls.crt",
+        help="certificat TLS du stub fédéré (certificat du harness local)",
+    )
+    parser.add_argument(
+        "--federation-stub-key",
+        default=".harness-local/suite-tls.key",
+        help="clé privée TLS du stub fédéré (clé du harness local)",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -1146,6 +1404,9 @@ def main(argv: list[str] | None = None) -> int:
     expected |= {f"{name}.png" for name in _DYNAMIC_TEST_NAMES}
     expected |= {f"{name}.png" for name, _mode, _error in _FAPI1_JAR_SCENARIOS}
     expected |= {f"{name}.png" for name in _FAPI2_TEST_NAMES}
+    if args.federation:
+        expected |= {f"{name}.png" for name, _mode, _code in _FEDERATION_JAR_SCENARIOS}
+        expected |= {f"{_FEDERATION_DUPLICATE_TEST_NAME}.png"}
     try:
         with sync_playwright() as playwright:
             produced = capture_all(
@@ -1158,6 +1419,8 @@ def main(argv: list[str] | None = None) -> int:
                 par_ttl_seconds=args.par_ttl_seconds,
                 fapi1_redirect=fapi1_redirect,
                 fapi2_redirect=fapi2_redirect,
+                federation_stub_cert=Path(args.federation_stub_cert) if args.federation else None,
+                federation_stub_key=Path(args.federation_stub_key) if args.federation else None,
             )
     except Exception as error:
         _LOGGER.error("Capture impossible : %s", error)
