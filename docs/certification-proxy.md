@@ -2,6 +2,8 @@
 
 > Procédure de mise en place du proxy **nginx** avec `ssl_verify_client optional_no_ca` devant l'instance Render de certification (`puridentityserver-certification`), pour terminer la liaison mTLS (#127) sans casser les flux navigateur (`/authorize` sans cert) et sans toucher au pipeline de déploiement Render. Cible : **Oracle Cloud Infrastructure (OCI) — palier Always Free**.
 
+**Automatisation** : `certification/proxy/provision-oci.ps1` (+ `provision_oci.py`) crée VCN, IGW, subnet, IP réservée, instance A1.Flex et injecte la clé SSH via l'API OCI (SDK Python, bypass du bug `oci.exe`). À lancer une fois la session OCI renouvelée (`oci session authenticate`).
+
 ## Pourquoi Oracle Cloud Always Free
 
 OCI Always Free offre un palier gratuit pérenne (VMs Ampere A1, IP publique réservée, stockage) suffisant pour héberger un reverse proxy nginx de terminaison mTLS devant Render. Compte à créer sur <https://cloud.oracle.com>.
