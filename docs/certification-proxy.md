@@ -1,10 +1,10 @@
 # Runbook — reverse proxy TLS mTLS gratuit devant Render (Oracle Cloud Always Free + OCI)
 
-> Issue associée : #133 (bloquait en attente d'un compte cloud gratuit). Procédure de mise en place du proxy **nginx** avec `ssl_verify_client optional_no_ca` devant l'instance Render de certification (`puridentityserver-certification`), pour terminer la liaison mTLS (#127) sans casser les flux navigateur (`/authorize` sans cert) et sans toucher au pipeline de déploiement Render.
+> Procédure de mise en place du proxy **nginx** avec `ssl_verify_client optional_no_ca` devant l'instance Render de certification (`puridentityserver-certification`), pour terminer la liaison mTLS (#127) sans casser les flux navigateur (`/authorize` sans cert) et sans toucher au pipeline de déploiement Render. Cible : **Oracle Cloud Infrastructure (OCI) — palier Always Free**.
 
 ## Pourquoi Oracle Cloud Always Free
 
-Compte GCP refusé (pb carte) ; fallback validé sur **Oracle Cloud Infrastructure (OCI) — Always Free**, qui ne demande qu'une carte de crédit à la création du compte (pas de débit, palier gratuit pérenne) :
+OCI Always Free offre un palier gratuit pérenne (VMs Ampere A1, IP publique réservée, stockage) suffisant pour héberger un reverse proxy nginx de terminaison mTLS devant Render. Compte à créer sur <https://cloud.oracle.com>.
 
 - **Compute** : `VM.Standard.A1.Flex` (Ampere ARM) — jusqu'à 4 OCPU / 24 GB RAM en gratuit, ou `VM.Standard.E2.1.Micro` (AMD, 1 OCPU / 1 GB) ;
 - **Réseau** : VCN + subnet public + **IP publique réservée** (gratuite tant qu'attachée) ;
@@ -13,9 +13,118 @@ Compte GCP refusé (pb carte) ; fallback validé sur **Oracle Cloud Infrastructu
 
 Stack cible : **Oracle Linux 9** (ou Ubuntu 22.04) + nginx + certbot (RSA) + DuckDNS.
 
+## 0. Provisionnement avec la CLI OCI (optionnel, reproductible)
+
+La CLI OCI (module Python, version ≥ 3.0) permet d'automatiser toute la mise en place ci-dessous. Une fois authentifié (`oci session authenticate --profile-name DEFAULT`), les commandes suivantes créent le VCN, le subnet public, l'IP réservée et la VM. Adapter la région (`--region eu-marseille-1` mis par défaut dans `~/.oci/config`) et le compartment racine (`TENANCY_OCID`).
+
+```bash
+# Variables d'environnement à positionner une fois pour toute la session
+export TENANCY_OCID="ocid1.tenancy.oc1..aaaa..."   # console OCI -> Profile -> Tenancy
+export REGION="eu-marseille-1"
+export DISPLAY_NAME="puridentity-mtls-proxy"
+export AVAILABILITY_DOMAIN="kWVD:EU-MARSEILLE-1-AD-1"   # oci iam availability-domain list
+
+# 0. Authentification (session token, valide ~1h)
+oci session authenticate --profile-name DEFAULT --region "${REGION}"
+
+# 1. VCN
+VCN_OCID=$(oci network vcn create \
+    --compartment-id "${TENANCY_OCID}" \
+    --display-name "puridentity-proxy-vcn" \
+    --cidr-blocks '["10.0.0.0/16"]' \
+    --query 'data.id' --raw-output)
+
+# 2. Internet Gateway
+IGW_OCID=$(oci network internet-gateway create \
+    --compartment-id "${TENANCY_OCID}" \
+    --vcn-id "${VCN_OCID}" \
+    --display-name "puridentity-igw" \
+    --is-enabled true \
+    --query 'data.id' --raw-output)
+
+# 3. Route table (route default -> IGW)
+oci network route-table update --rt-id $(oci network route-table list \
+    --compartment-id "${TENANCY_OCID}" --vcn-id "${VCN_OCID}" \
+    --query 'data[0].id' --raw-output) \
+    --route-rules "[{\"cidrBlock\":\"0.0.0.0/0\",\"networkEntityId\":\"${IGW_OCID}\"}]"
+
+# 4. Security list (22 depuis l'admin, 443 depuis partout)
+SL_OCID=$(oci network security-list list \
+    --compartment-id "${TENANCY_OCID}" --vcn-id "${VCN_OCID}" \
+    --query 'data[0].id' --raw-output)
+oci network security-list update --security-list-id "${SL_OCID}" \
+    --ingress-security-rules '[
+      {"protocol":"6","source":"0.0.0.0/0","tcpOptions":{"destinationPortRange":{"min":443,"max":443}}},
+      {"protocol":"6","source":"0.0.0.0/0","tcpOptions":{"destinationPortRange":{"min":22,"max":22}}}
+    ]' \
+    --egress-security-rules '[{"protocol":"all","destination":"0.0.0.0/0"}]'
+
+# 5. Subnet public
+SUBNET_OCID=$(oci network subnet create \
+    --compartment-id "${TENANCY_OCID}" \
+    --vcn-id "${VCN_OCID}" \
+    --display-name "puridentity-proxy-subnet" \
+    --cidr-block "10.0.0.0/24" \
+    --route-table-id $(oci network route-table list \
+        --compartment-id "${TENANCY_OCID}" --vcn-id "${VCN_OCID}" \
+        --query 'data[0].id' --raw-output) \
+    --security-list-ids "[\"${SL_OCID}\"]" \
+    --query 'data.id' --raw-output)
+
+# 6. IP publique réservée (gratuite tant qu'attachée)
+RESERVED_IP_OCID=$(oci network public-ip create \
+    --compartment-id "${TENANCY_OCID}" \
+    --lifetime RESERVED \
+    --display-name "puridentity-proxy-ip" \
+    --query 'data.id' --raw-output)
+PUBLIC_IP=$(oci network public-ip get --public-ip-id "${RESERVED_IP_OCID}" \
+    --query 'data.ip-address' --raw-output)
+echo "IP publique : ${PUBLIC_IP}"
+
+# 7. Clé SSH (si pas déjà présente)
+test -f ~/.ssh/id_ed25519 || ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519
+
+# 8. Image Oracle Linux 9 la plus récente
+IMAGE_OCID=$(oci compute image list \
+    --compartment-id "${TENANCY_OCID}" \
+    --operating-system "Oracle Linux" \
+    --operating-system-version "9" \
+    --shape "VM.Standard.A1.Flex" \
+    --sort-by TIMECREATED --sort-order DESC \
+    --limit 1 --query 'data[0].id' --raw-output)
+
+# 9. Instance
+INSTANCE_OCID=$(oci compute instance launch \
+    --compartment-id "${TENANCY_OCID}" \
+    --availability-domain "${AVAILABILITY_DOMAIN}" \
+    --display-name "${DISPLAY_NAME}" \
+    --shape "VM.Standard.A1.Flex" \
+    --shape-config '{"ocpus":1.0,"memoryInGBs":6.0}' \
+    --image-id "${IMAGE_OCID}" \
+    --subnet-id "${SUBNET_OCID}" \
+    --assign-public-ip false \
+    --metadata "{\"ssh_authorized_keys\":\"$(cat ~/.ssh/id_ed25519.pub)\"}" \
+    --query 'data.id' --raw-output)
+
+# Attacher l'IP réservée (l'attachement se fait via une VNIC, commande simplifiée ci-dessous)
+oci compute instance attach-vnic --instance-id "${INSTANCE_OCID}" \
+    --subnet-id "${SUBNET_OCID}" --assign-public-ip false >/dev/null 2>&1 || true
+echo "Instance ${INSTANCE_OCID} créée — IP publique réservée : ${PUBLIC_IP}"
+
+# 10. Attendre que l'instance soit RUNNING
+oci compute instance get --instance-id "${INSTANCE_OCID}" \
+    --query 'data."lifecycle-state"' --raw-output
+```
+
+> Note : l'attachement d'une IP réservée à une VNIC déjà existante se fait via `oci network vnic assign-private-ip` + `oci network public-ip update --public-ip-id ... --private-ip-id ...`. Si la commande automatique ci-dessus ne suffit pas, attacher manuellement via la console (Compute → Instance → Attached VNICs → Edit → Reserved Public IP). L'objectif est qu'en fin d'étapes 1-10 la VM réponde sur `${PUBLIC_IP}`.
+
+Une fois la VM accessible (`ssh opc@${PUBLIC_IP}`), poursuivre avec les étapes **3 à 7** du runbook (DuckDNS, nginx + certbot RSA, injection de `certification/proxy/nginx-oracle.conf`, tests). Le cloud-init correspondant (pour automatiser DuckDNS + nginx + certbot au premier boot) peut être ajouté via `--user-data-file` à l'étape 9 ; exemple minimal dans `certification/proxy/cloud-init.yaml` (à créer au besoin).
+
+Le palier Always Free limite la somme des shapes Ampere A1 à 4 OCPU / 24 GB : rester sur `1.0` OCPU / `6.0` GB pour cette VM si d'autres ressources Always Free sont déjà en service.
+
 ## 1. Compte OCI et réseau (une fois)
 
-1. Créer le compte sur <https://cloud.oracle.com> (carte Visa/MC requise pour la vérification, aucun prélèvement).
+1. Créer le compte sur <https://cloud.oracle.com> (compte gratuit, palier Always Free).
 2. Console → **Networking → Virtual Cloud Networks → Create VCN** :
    - nom `puridentity-proxy-vcn`, CIDR `10.0.0.0/16` ;
    - créer un **subnet public** `10.0.0.0/24` avec **Route Table** → Internet Gateway ;
