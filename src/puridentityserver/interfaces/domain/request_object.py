@@ -45,6 +45,45 @@ class SignedRequestObjectResult:
     reason: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class RequestObjectDecryptionResult:
+    """Issu du déchiffrement d'un ``request`` chiffré (OIDC Core 1.0 §10.1).
+
+    ``plaintext`` porte le JWT obtenu (JWE compact déchiffré), prêt à
+    rejoindre la chaîne de traitement habituelle — signature, claims,
+    exigences fédérées. Il est ``None`` si le document est refusé :
+    ``reason`` porte alors la raison du refus, rendue en
+    ``invalid_request_object`` par le cas d'utilisation.
+    """
+
+    plaintext: str | None = None
+    reason: str = ""
+
+
+class RequestObjectDecrypter(Protocol):
+    """Déchiffre le ``request`` présenté en JWE compact (OIDC Core 1.0 §10.1)."""
+
+    async def decrypt(
+        self,
+        *,
+        document: str,
+        algorithm: str,
+        method: str,
+        key_id: str = "",
+    ) -> RequestObjectDecryptionResult:
+        """Déchiffre ``document`` (JWE compact) avec la clé de l'OP.
+
+        ``algorithm``/``method`` sont les en-têtes ``alg``/``enc`` du
+        document, déjà contrôlés par le cas d'utilisation contre la
+        configuration publiée au discovery ; ``key_id`` l'en-tête ``kid``
+        (``""`` si absent : la clé unique de chiffrement est alors
+        utilisée). ``reason`` explique tout refus : clé introuvable,
+        matériel RSA absent, algorithme convertible inexistant, violation
+        d'intégrité (tag CBC-HMAC ou GCM)…
+        """
+        ...
+
+
 class SignedRequestObjectVerifier(Protocol):
     """Vérifie le ``request`` signé d'une demande (OIDC CIBA 1.0 §7.1.1, FAPI 1.0)."""
 

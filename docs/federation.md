@@ -65,6 +65,42 @@ spec §2.1 recommande que les clés de fédération ne servent à aucun autre
 protocole. L'algorithme est configurable (`federation_signing_alg`, ES256 par
 défaut — la suite de certification accepte RSA ≥ 2048 et EC ≥ 256).
 
+## Request objects chiffrés (OIDC Core 1.0 §10.1)
+
+L'OP accepte un `request` présenté en **JWE compact** (cinq segments) : le
+document est déchiffré avec sa clé RSA `KeyUse.ENC`, puis le JWT obtenu suit
+la chaîne de traitement habituelle — `alg=none`, signature standard RS256 ou
+profil fédéré (§12.1.1.1), exigences `iss`/`aud`/`exp`/`jti` non contournées.
+
+- **Matérial** : la clé RSA de chiffrement est générée au démarrage (taille
+  `jwks_key_size`), publiée **sans `use`** et avec `alg: RSA-OAEP` (une
+  même clé sert RSA-OAEP et RSA-OAEP-256, RFC 7517 §4.3) à la fois au
+  `/.well-known/jwks.json` et dans le `jwks` de l'entity statement fédéré —
+  c'est dans ce claim que la suite de certification lit le matériel
+  (condition `EncryptRequestObject`, sélection par `kty` + `use ∈ {enc, null}`).
+  L'absence de `use` reste compatible avec les validations JWKS de la suite
+  (OIDFED-3 / OIDCD-3, qui n'acceptent que `use: sig` ou absent) et avec
+  les consommateurs OIDC (Nimbus sélectionne par `kty` + `use`). La clé
+  privée ne quitte jamais le serveur ; contrairement aux clés de signature,
+  elle n'est ni pivotée ni purgée automatiquement, aucun jeton longue durée
+  n'en dépendant.
+- **Algorithmes publiés** : `request_object_encryption_alg_values_supported`
+  (`RSA-OAEP`, `RSA-OAEP-256`) et `request_object_encryption_enc_values_supported`
+  (`A128CBC-HS256`, `A256CBC-HS512`, `A128GCM`, `A256GCM`) au discovery **et**
+  dans l'entity statement fédéré (`metadata.openid_provider`). Deux listes
+  vides en configuration ferment la porte : les metadata ne sont pas
+  publiées et tout document JWE est refusé `invalid_request_object`.
+- **Refus** : en-tête illisible, `alg`/`enc` non publiés, clé de
+  déchiffrement introuvable (`kid` étranger ou clé absente), violation
+  d'intégrité (tag CBC-HMAC ou GCM) — toujours `invalid_request_object`
+  (§10.1).
+
+La certification : le plan `federation` joue le module
+`openid-federation-automatic-client-registration-with-jar-and-encrypted-request-object`
+(chiffrement `RSA-OAEP` + `A256GCM`, codé en dur dans la suite), qui exige
+ces metadata dans l'**entity statement** et sélectionne la clé `use=enc` du
+claim `jwks`. Voir `samples/request-object-client/` pour un parcours local.
+
 ## Résolution de chaîne de confiance
 
 L'OP résout la chaîne d'une entité (un RP fédéré) :

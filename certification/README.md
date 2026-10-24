@@ -256,13 +256,13 @@ mécanisme, sans churn du JWKS sur les plans qui ne portent pas le module.
 (`--expected-failures-file`, cf. `conformance-suite/scripts/run-test-plan.py`),
 les conditions de modules connues et non résolues. Son pendant
 `certification/expected-failures/<plan>-skips.json` (`--expected-skips-file`,
-même format) déclare les modules que l'OP **saute** faute de capacité : le
-plan `federation` y déclare `with-jar-and-encrypted-request-object`, le
-chiffrement des request objects (OIDC Core 1.0 §10.1) n'étant pas encore
-supporté (issue #204 — purger l'entrée à la livraison). Les dix autres
-plans locaux sont sans écart (la rotation des clés de signature de l'OP est
-livrée — issue #189, le module `oidcc-server-rotate-keys` passe ; le rejeu
-local affiche 17 PASSED / 6 REVIEW / 0 FAILED sur le plan `dynamic`).
+même format) déclare les modules que l'OP **saute** faute de capacité. Aucun
+fichier n'est actuellement déclaré : les onze plans locaux sont sans saut ni
+écart (la rotation des clés de signature de l'OP est livrée — issue #189, le
+module `oidcc-server-rotate-keys` passe ; le chiffrement des request objects
+est livré — issue #204, le module
+`openid-federation-automatic-client-registration-with-jar-and-encrypted-request-object`
+du plan `federation` y est joué en conditions réelles).
 
 Le driver classe ces conditions en « expected failure » : le plan ne sort en
 code non nul que pour les écarts **inattendus** — la strictude #130 est

@@ -1,9 +1,10 @@
 """Tests des request objects (RFC 9101) et de l'id_token non signé (JWA §6).
 
-Couvre le resolver (priorité des claims, refus, ``request_uri`` poussé),
-le fetcher du document (destinations filtrées, type MIME, redirections) et
-l'observabilité HTTP de ``/authorize`` : pages d'erreur 400 et émission d'un
-code pour une demande portée par un request object.
+Couvre le resolver (priorité des claims, refus, ``request_uri`` poussé,
+déchiffrement JWE — OIDC Core 1.0 §10.1, issue #204), le fetcher du
+document (destinations filtrées, type MIME, redirections) et
+l'observabilité HTTP de ``/authorize`` : pages d'erreur 400 et émission
+d'un code pour une demande portée par un request object.
 """
 
 from __future__ import annotations
@@ -22,7 +23,8 @@ from urllib.parse import parse_qs, urlparse
 import jwt as pyjwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -33,12 +35,17 @@ from puridentityserver.application.request_object import (
     is_pushed_request_uri,
 )
 from puridentityserver.domain.authorization import Client, ClientType, Scope
+from puridentityserver.domain.jwe import JWEEncryptionMethod, JWEKeyManagementAlgorithm
+from puridentityserver.domain.jwks import JWTAlgorithm, KeyUse
+from puridentityserver.infrastructure.jwe import JWERequestObjectDecrypter, encrypt_compact
+from puridentityserver.infrastructure.jwks import DefaultKeyManager
 from puridentityserver.infrastructure.persistence.memory.clients import (
     InMemoryClientRepository,
 )
 from puridentityserver.infrastructure.persistence.memory.dpop_replays import (
     InMemoryDpopReplayRepository,
 )
+from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKeyPairRepository
 from puridentityserver.infrastructure.request_object import (
     HTTPRequestObjectFetcher,
     loopback_bind,
@@ -684,6 +691,170 @@ def test_pushed_request_uri_is_left_to_par() -> None:
 )
 def test_is_pushed_request_uri(reference: str, expected: bool) -> None:
     assert is_pushed_request_uri(reference) is expected
+
+
+def _op_encryption_key() -> tuple[JWERequestObjectDecrypter, RSAPublicKey]:
+    """Déchiffreur de test monté sur une clé ``KeyUse.ENC`` et sa publique."""
+    manager = DefaultKeyManager(InMemoryKeyPairRepository(), use=KeyUse.ENC)
+    asyncio.run(manager.ensure_active_key(2048, JWTAlgorithm.RS256))
+    key_pair = asyncio.run(manager.get_active_keys())[0]
+    public = load_pem_public_key(key_pair.public_key_pem.encode("ascii"))
+    assert isinstance(public, RSAPublicKey)
+    return JWERequestObjectDecrypter(manager), public
+
+
+def _jwe(plaintext: str, public_key: RSAPublicKey) -> str:
+    """Chiffre ``plaintext`` en JWE compact (RSA-OAEP + A256GCM, idem suite)."""
+    return encrypt_compact(
+        algorithm=JWEKeyManagementAlgorithm.RSA_OAEP,
+        method=JWEEncryptionMethod.A256GCM,
+        plaintext=plaintext.encode("utf-8"),
+        rsa_public_key=public_key,
+    )
+
+
+def _encrypted_resolver(
+    client: Client | None, decrypter: JWERequestObjectDecrypter | None
+) -> RequestObjectResolver:
+    """Resolver standard ouvert au chiffrement (port de déchiffrement optionnel)."""
+    clients = InMemoryClientRepository()
+    if client is not None:
+        asyncio.run(clients.save(client))
+    return RequestObjectResolver(
+        RequestObjectConfig(issuer=_ISSUER),
+        _StubFetcher(None),
+        clients=clients,
+        signed=PyJWTSignedRequestObjectVerifier(InMemoryDpopReplayRepository()),
+        decryption=decrypter,
+    )
+
+
+def _jwe_envelope(header: dict[str, str]) -> str:
+    """Enveloppe JWE à cinq segments portant ``header`` (refusée avant déchiffrement)."""
+    return f"{_segment(header)}.e2k.iv.cipher.tag"
+
+
+class TestEncryptedRequestObject:
+    """Request objects chiffrés (OIDC Core 1.0 §10.1, issue #204)."""
+
+    def test_encrypted_signed_jar_is_decrypted_and_merged(self) -> None:
+        """Un JAR RS256 chiffré (RSA-OAEP + A256GCM) est déchiffré puis traité."""
+        decrypter, public_key = _op_encryption_key()
+        key, jwks = _jar_key()
+        resolver = _encrypted_resolver(_standard_client(jwks), decrypter)
+
+        resolved = run(
+            resolver,
+            **_base_params(nonce="nonce-transport"),
+            request=_jwe(_signed_jar(key, claims={"nonce": "nonce-from-jar"}), public_key),
+        )
+
+        assert isinstance(resolved, dict)
+        assert resolved["nonce"] == "nonce-from-jar"
+        assert "request" not in resolved
+
+    def test_encrypted_document_with_foreign_key_is_refused(self) -> None:
+        """Le déchiffrement à une clé étrangère échoue (integrite ou OAEP)."""
+        decrypter, _public_key = _op_encryption_key()
+        foreign = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        resolver = _encrypted_resolver(None, decrypter)
+
+        resolved = run(
+            resolver,
+            **_base_params(),
+            request=_jwe(_request_object(_base_params()), foreign.public_key()),
+        )
+
+        assert isinstance(resolved, RequestObjectError)
+        assert resolved.error == "invalid_request_object"
+        assert "déchiffrement impossible" in resolved.error_description
+
+    @pytest.mark.parametrize(
+        ("header", "expected"),
+        [
+            ({"alg": "RSA1_5", "enc": "A256GCM"}, "algorithme de chiffrement non publié"),
+            ({"alg": "RSA-OAEP", "enc": "A192CBC-HS384"}, "méthode de chiffrement non publiée"),
+        ],
+    )
+    def test_unpublished_jwe_algorithms_are_refused(
+        self, header: dict[str, str], expected: str
+    ) -> None:
+        """Seuls les ``alg``/``enc`` publiés au discovery sont admis."""
+        decrypter, _public_key = _op_encryption_key()
+        resolver = _encrypted_resolver(None, decrypter)
+
+        resolved = run(resolver, **_base_params(), request=_jwe_envelope(header))
+
+        assert isinstance(resolved, RequestObjectError)
+        assert resolved.error == "invalid_request_object"
+        assert expected in resolved.error_description
+
+    def test_encrypted_document_without_decryption_port_is_refused(self) -> None:
+        """Sans port de déchiffrement, tout document JWE est refusé."""
+        _key, jwks = _jar_key()
+        resolver = _encrypted_resolver(_standard_client(jwks), None)
+
+        resolved = run(
+            resolver, **_base_params(), request=_jwe_envelope({"alg": "RSA-OAEP", "enc": "A256GCM"})
+        )
+
+        assert isinstance(resolved, RequestObjectError)
+        assert resolved.error == "invalid_request_object"
+        assert "non supporté" in resolved.error_description
+
+    def test_encrypted_document_with_closed_configuration_is_refused(self) -> None:
+        """Deux listes vides ferment la porte, même port injecté (issue #204)."""
+        decrypter, public_key = _op_encryption_key()
+        clients = InMemoryClientRepository()
+        resolver = RequestObjectResolver(
+            RequestObjectConfig(issuer=_ISSUER, encryption_algorithms=(), encryption_methods=()),
+            _StubFetcher(None),
+            clients=clients,
+            decryption=decrypter,
+        )
+
+        resolved = run(
+            resolver, **_base_params(), request=_jwe(_request_object(_base_params()), public_key)
+        )
+
+        assert isinstance(resolved, RequestObjectError)
+        assert resolved.error == "invalid_request_object"
+        assert "non supporté" in resolved.error_description
+
+    def test_encrypted_federated_jar_keeps_section_12_requirements(self) -> None:
+        """Le déchiffrement ne contourne pas le profil fédéré (§12.1.1.1)."""
+        decrypter, public_key = _op_encryption_key()
+        key, jwks = _jar_key()
+        resolver = _encrypted_resolver(_federated_client(jwks), decrypter)
+
+        resolved = run(
+            resolver,
+            **_base_params(),
+            request=_jwe(_signed_jar(key, claims={"exp": _future()}), public_key),
+        )
+
+        assert isinstance(resolved, RequestObjectError)
+        assert resolved.error == "invalid_request_object"
+        assert "jti" in resolved.error_description
+
+    def test_unknown_kid_selects_no_key(self) -> None:
+        """Un ``kid`` étranger ne trouve aucune clé de déchiffrement."""
+        decrypter, public_key = _op_encryption_key()
+        document = _jwe(_request_object(_base_params()), public_key)
+
+        result = asyncio.run(
+            decrypter.decrypt(
+                document=document, algorithm="RSA-OAEP", method="A256GCM", key_id="unknown"
+            )
+        )
+
+        assert result.plaintext is None
+        assert "introuvable" in result.reason
+
+
+def _future() -> int:
+    """Horodatage ``exp`` de demain (profil fédéré : ``exp`` exigé, §12.1.1.1)."""
+    return int(datetime.now(timezone.utc).timestamp()) + 3600
 
 
 # --------------------------------------------------------------------------- #

@@ -368,6 +368,26 @@ class Settings(BaseSettings):
         method.value for method in ALL_ENCRYPTION_METHODS
     )
 
+    # Chiffrement des request objects en entrée (OIDC Core 1.0 §10.1,
+    # issue #204) : algorithmes ``alg``/``enc`` admis sur /authorize et
+    # /par, publiés au discovery (``request_object_encryption_alg_values_
+    # supported`` / ``request_object_encryption_enc_values_supported``) et
+    # dans l'entity statement fédéré. Le matériel — clé RSA `enc` de
+    # l'OP — est généré et publié automatiquement. Deux listes vides
+    # ferment la porte : tout request object chiffré est refusé.
+    # Surchargeables via `PURIDENTITYSERVER_REQUEST_OBJECT_ENCRYPTION_ALGORITHMS`
+    # / `..._METHODS` (listes séparées par des virgules).
+    request_object_encryption_algorithms: Annotated[tuple[str, ...], NoDecode] = (
+        JWEKeyManagementAlgorithm.RSA_OAEP.value,
+        JWEKeyManagementAlgorithm.RSA_OAEP_256.value,
+    )
+    request_object_encryption_methods: Annotated[tuple[str, ...], NoDecode] = (
+        JWEEncryptionMethod.A128CBC_HS256.value,
+        JWEEncryptionMethod.A256CBC_HS512.value,
+        JWEEncryptionMethod.A128GCM.value,
+        JWEEncryptionMethod.A256GCM.value,
+    )
+
     # OAuth 2.0 / OIDC (RFC 6749, RFC 7636) — durées de vie par défaut du
     # serveur. Un client peut les surcharger via `access_token_lifetime_seconds`
     # et/ou `authorization_code_lifetime_seconds` dans `clients_seed`.
@@ -844,6 +864,20 @@ class Settings(BaseSettings):
         if unknown:
             raise ValueError(f"Méthodes de chiffrement non supportées : {', '.join(unknown)}")
         return value
+
+    @field_validator("request_object_encryption_algorithms")
+    @classmethod
+    def _validate_request_object_encryption_algorithms(
+        cls, value: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """Garantit que chaque algorithme de request object configuré est supporté."""
+        return cls._validate_encryption_algorithms(value)
+
+    @field_validator("request_object_encryption_methods")
+    @classmethod
+    def _validate_request_object_encryption_methods(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Garantit que chaque méthode de request object configurée est supportée."""
+        return cls._validate_encryption_methods(value)
 
     @cached_property
     def jwks_signing_algorithms(self) -> tuple[JWTAlgorithm, ...]:

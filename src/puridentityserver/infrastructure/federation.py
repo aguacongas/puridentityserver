@@ -142,17 +142,34 @@ class PyJWTFederationTokenManager:
 
 
 class KeyManagerFederationKeyProvider:
-    """Clés publiques de l'entité pour le claim ``jwks`` (spec §3.1.1)."""
+    """Clés publiques de l'entité pour le claim ``jwks`` (spec §3.1.1).
 
-    def __init__(self, key_manager: KeyManager) -> None:
-        """Injection du gestionnaire de clés de la fédération."""
+    ``encryption_key_manager`` ajoute les clés ``KeyUse.ENC`` de l'OP à la
+    publication (OIDC Core 1.0 §10.1, issue #204) : c'est dans ce claim
+    — et non dans le ``jwks_uri`` — que la suite de certification lit le
+    matériel de chiffrement d'un request object (module
+    ``…-with-jar-and-encrypted-request-object``, condition
+    ``EncryptRequestObject``).
+    """
+
+    def __init__(
+        self,
+        key_manager: KeyManager,
+        *,
+        encryption_key_manager: KeyManager | None = None,
+    ) -> None:
+        """Injection des gestionnaires de clés (fédération et chiffrement)."""
         self._key_manager = key_manager
+        self._encryption_keys = encryption_key_manager
 
     async def public_jwks(self) -> dict[str, Any]:
-        """Retourne le JWK Set des clés de signature de l'entité."""
+        """Retourne le JWK Set des clés de l'entité (signature et chiffrement)."""
+        pairs = list(await self._key_manager.get_active_keys())
+        if self._encryption_keys is not None:
+            pairs.extend(await self._encryption_keys.get_active_keys())
         keys = [
             JWKKeyResponse.from_key_pair(key_pair).model_dump(mode="json", exclude_none=True)
-            for key_pair in await self._key_manager.get_active_keys()
+            for key_pair in pairs
         ]
         return {"keys": keys}
 

@@ -90,7 +90,7 @@ from puridentityserver.infrastructure.federation import (
     PyJWTFederationTokenManager,
 )
 from puridentityserver.infrastructure.jarm import PyJarmEnvelopeSigner
-from puridentityserver.infrastructure.jwe import JWEIdTokenEncrypter
+from puridentityserver.infrastructure.jwe import JWEIdTokenEncrypter, JWERequestObjectDecrypter
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
 from puridentityserver.infrastructure.persistence.readers import build_readers_from_stores
 from puridentityserver.infrastructure.persistence.stores import (
@@ -171,6 +171,8 @@ def _discovery_config(
         signing_algorithms=settings.jwks_algorithms,
         encryption_algorithms=settings.jwks_encryption_algorithms,
         encryption_methods=settings.jwks_encryption_methods,
+        request_object_encryption_algorithms=settings.request_object_encryption_algorithms,
+        request_object_encryption_methods=settings.request_object_encryption_methods,
         token_endpoint_auth_methods=token_endpoint_auth_methods,
         client_registration_types_supported=(
             ("automatic", "explicit") if settings.federation_enabled else ()
@@ -187,15 +189,19 @@ def _federation_usecase(
     settings: Settings,
     *,
     key_manager: DefaultKeyManager,
+    encryption_key_manager: DefaultKeyManager,
     discovery_usecase: DiscoveryUseCase,
     client_reader: ClientReader,
 ) -> FederationUseCase | None:
     """Cas d'usage ``Federation`` (OpenID Federation 1.1 §12), ou ``None`` si inactif.
 
     ``key_manager`` est le ``DefaultKeyManager`` dédié aux ``entity_statement``
-    (``KeyUse.FEDERATION``) ; le fetcher accepte les cibles loopback si la
-    liaison ``host`` est locale ou si ``federation_allow_local_targets``
-    l'autorise explicitement.
+    (``KeyUse.FEDERATION``) ; ``encryption_key_manager`` porte la clé RSA
+    ``KeyUse.ENC`` publiée dans le ``jwks`` de l'entity statement (OIDC
+    Core 1.0 §10.1, issue #204) — le matériel de chiffrement d'un request
+    object lus par la suite de certification. Le fetcher accepte les
+    cibles loopback si la liaison ``host`` est locale ou si
+    ``federation_allow_local_targets`` l'autorise explicitement.
     """
     if not settings.federation_enabled:
         return None
@@ -211,7 +217,9 @@ def _federation_usecase(
             registration_types=("automatic", "explicit"),
         ),
         token_manager=PyJWTFederationTokenManager(key_manager, algorithm),
-        key_provider=KeyManagerFederationKeyProvider(key_manager),
+        key_provider=KeyManagerFederationKeyProvider(
+            key_manager, encryption_key_manager=encryption_key_manager
+        ),
         fetcher=HTTPFederationEntityFetcher(
             allow_local_targets=loopback_bind(settings.host)
             or settings.federation_allow_local_targets
@@ -291,6 +299,10 @@ class ProtocolDependencies:
         self.reset_key_manager = DefaultKeyManager(stores.key_pair, use=KeyUse.RESET)
         self.verify_key_manager = DefaultKeyManager(stores.key_pair, use=KeyUse.VERIFY)
         self.secret_key_manager = DefaultKeyManager(stores.key_pair, use=KeyUse.SECRET)
+        # Clé RSA de déchiffrement des request objects (OIDC Core 1.0
+        # §10.1, issue #204) : publiée au JWKS et dans l'entity statement
+        # fédéré, la clé privée ne quitte jamais le serveur.
+        self.encryption_key_manager = DefaultKeyManager(stores.key_pair, use=KeyUse.ENC)
         configure_identity(
             session_key_manager=self.session_key_manager,
             reset_token_key_manager=self.reset_key_manager,
@@ -312,6 +324,7 @@ class ProtocolDependencies:
                 retained_keys=settings.jwks_retained_keys,
             ),
             self.key_manager,
+            encryption_key_manager=self.encryption_key_manager,
         )
         self.token_manager = PyJWTTokenManager(self.key_manager)
         self.secret_cipher = AsymmetricSecretCipher(self.secret_key_manager)
@@ -378,17 +391,23 @@ class ProtocolDependencies:
         self.federation_usecase: FederationUseCase | None = _federation_usecase(
             settings,
             key_manager=self.federation_key_manager,
+            encryption_key_manager=self.encryption_key_manager,
             discovery_usecase=self.discovery_usecase,
             client_reader=self.readers.client,
         )
         self.request_object_resolver = RequestObjectResolver(
-            RequestObjectConfig(issuer=settings.issuer),
+            RequestObjectConfig(
+                issuer=settings.issuer,
+                encryption_algorithms=settings.request_object_encryption_algorithms,
+                encryption_methods=settings.request_object_encryption_methods,
+            ),
             HTTPRequestObjectFetcher(
                 allow_local_targets=loopback_bind(settings.host)
                 or settings.request_uri_allow_local_targets
             ),
             clients=self.readers.client,
             signed=self.signed_request_objects,
+            decryption=JWERequestObjectDecrypter(self.encryption_key_manager),
         )
 
         self.jarm_signer = JarmSigner(

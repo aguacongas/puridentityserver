@@ -14,6 +14,8 @@ from puridentityserver.application.authorize import SUPPORTED_ACR_VALUES
 from puridentityserver.application.identity_assurance import IdentityAssuranceUseCase
 from puridentityserver.application.request_object import (
     PUBLISHED_REQUEST_OBJECT_SIGNING_ALGORITHMS,
+    REQUEST_OBJECT_ENCRYPTION_ALGORITHMS,
+    REQUEST_OBJECT_ENCRYPTION_METHODS,
 )
 from puridentityserver.domain.authorization import SubjectType, TokenEndpointAuthMethod
 from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCES
@@ -67,6 +69,12 @@ class DiscoveryConfig:
         "urn:ietf:params:oauth:grant-type:jwt-bearer",
     )
     request_object_signing_algorithms: tuple[str, ...] = PUBLISHED_REQUEST_OBJECT_SIGNING_ALGORITHMS
+    # Chiffrement des request objects (OIDC Core 1.0 §10.1, issue #204) :
+    # publiés seulement si les deux listes sont renseignées — un OP qui
+    # ferme la porte n'en annonce rien, et la suite de certification saute
+    # alors son module ``…-with-jar-and-encrypted-request-object``.
+    request_object_encryption_algorithms: tuple[str, ...] = REQUEST_OBJECT_ENCRYPTION_ALGORITHMS
+    request_object_encryption_methods: tuple[str, ...] = REQUEST_OBJECT_ENCRYPTION_METHODS
     dpop_signing_algorithms: tuple[str, ...] = DPOP_SIGNING_ALGORITHMS
     # RFC 6749 §3.1.2.1 + ``form_post`` (Form Post Response Mode 1.0 §2) +
     # ``jwt`` (JARM Final 1.0 §3, ``CheckDiscEndpointResponseModesSupportedContainsJwt``).
@@ -249,6 +257,21 @@ class DiscoveryUseCase:
         metadata["request_uri_parameter_supported"] = bool(
             self._config.request_object_signing_algorithms
         )
+        # Chiffrement des request objects (OIDC Core 1.0 §10.1, issue #204) :
+        # les deux metadata ne sont publiées que si l'OP y est ouvert — la
+        # suite de certification lit celles de l'entity statement fédéré
+        # (``metadata.openid_provider``) pour décider de jouer ou de sauter
+        # son module ``…-with-jar-and-encrypted-request-object``.
+        if (
+            self._config.request_object_encryption_algorithms
+            and self._config.request_object_encryption_methods
+        ):
+            metadata["request_object_encryption_alg_values_supported"] = list(
+                self._config.request_object_encryption_algorithms
+            )
+            metadata["request_object_encryption_enc_values_supported"] = list(
+                self._config.request_object_encryption_methods
+            )
         # DPoP (RFC 9449 §5.1) : algorithmes asymétriques acceptés pour
         # signer une preuve — ``none`` et les familles symétriques HS*
         # y sont exclus (le RS partage leur secret : preuve forgeable).

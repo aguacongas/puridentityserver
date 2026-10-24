@@ -154,6 +154,38 @@ def test_entity_statement_is_verifiable_with_its_own_jwks() -> None:
     assert verified["sub"] == _ISSUER
 
 
+def test_entity_statement_publishes_the_encryption_key() -> None:
+    """OIDC Core 1.0 §10.1 (issue #204) : la clé ``enc`` figure au ``jwks``.
+
+    La suite de certification chiffre le request object avec le matériel
+    lu dans ce claim (condition ``EncryptRequestObject``, ``kty`` + ``use``
+    seulement) : une clé ``use=enc`` y est donc exigée.
+    """
+    key_manager = _key_manager()
+    encryption = DefaultKeyManager(InMemoryKeyPairRepository(), use=KeyUse.ENC)
+    run(encryption.ensure_active_key(2048, JWTAlgorithm.RS256))
+    usecase = FederationUseCase(
+        config=FederationConfig(
+            entity_identifier=_ISSUER,
+            statement_ttl_seconds=3600,
+            algorithm=JWTAlgorithm.ES256,
+        ),
+        token_manager=PyJWTFederationTokenManager(key_manager, JWTAlgorithm.ES256),
+        key_provider=KeyManagerFederationKeyProvider(
+            key_manager, encryption_key_manager=encryption
+        ),
+        fetcher=HTTPFederationEntityFetcher(allow_local_targets=True),
+    )
+
+    claims = pyjwt.decode(run(usecase.entity_statement()), options={"verify_signature": False})
+
+    # La clé de chiffrement est publiée sans ``use`` (cf. note) : elle se
+    # reconnaît donc à l'absence du membre.
+    encryption_keys = [key for key in claims["jwks"]["keys"] if "use" not in key]
+    assert len(encryption_keys) == 1
+    assert encryption_keys[0]["alg"] == "RSA-OAEP"
+
+
 def test_entity_statement_declares_the_trust_anchors() -> None:
     """Les ancres de confiance configurées sont annoncées en `authority_hints`."""
     usecase = _usecase(trust_anchors=("https://ta.example",))

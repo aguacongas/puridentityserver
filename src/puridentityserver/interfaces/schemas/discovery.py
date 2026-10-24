@@ -53,6 +53,11 @@ class DiscoveryDocument(BaseModel):
     request_object_signing_alg_values_supported: list[str] = Field(default_factory=list)
     request_parameter_supported: bool = False
     request_uri_parameter_supported: bool = False
+    # Chiffrement des request objects (OIDC Core 1.0 §10.1, issue #204) :
+    # absentes du document tant que l'OP n'ouvre pas cette porte — le
+    # routeur les exclut de la réponse (``exclude_none``).
+    request_object_encryption_alg_values_supported: list[str] | None = None
+    request_object_encryption_enc_values_supported: list[str] | None = None
     dpop_signing_alg_values_supported: list[str] = Field(
         default_factory=lambda: list(DPOP_SIGNING_ALGORITHMS)
     )
