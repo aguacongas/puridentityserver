@@ -48,6 +48,7 @@ target-version = "py310"
 line-length = 100
 src = ["src"]
 fix = true
+extend-exclude = ["certification/proxy/**"]
 
 [tool.ruff.lint]
 preview = true
@@ -86,6 +87,7 @@ max-complexity = 10
 "samples/**/smoke_test.py" = ["assert", "print", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "try-except-in-loop", "hardcoded-password-string", "hardcoded-password-func-arg", "weak-cryptographic-key"]  # smoke test : print + assert + subprocess + polling retries + valeurs de référence (token/secret client démo) + clé RSA 1024 bits volontaire pour prouver la défense du serveur (RFC 7518 §4.3)
 "samples/oidc_harness/**" = ["assert", "undocumented-public-module", "undocumented-public-class", "undocumented-public-method", "undocumented-public-function", "hardcoded-password-string", "hardcoded-password-func-arg", "weak-cryptographic-key"]  # mini-RP de démonstration repris du rejeu conformance : asserts de flux, seeds client/user de référence, clé RSA 1024 bits volontaire (rejet prouvé côté OP)
 "samples/smoke_common.py" = ["print", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "try-except-in-loop"]  # helper des smoke tests : affiche l'état, lance le serveur en sous-processus (liste d'arguments, pas de shell), sonde le port
+"certification/proxy/**" = ["print", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "try-except-in-loop", "suspicious-url-open-usage", "hardcoded-password-string", "hardcoded-password-func-arg"]  # scripts d'outillage de provisioning OCI (CLI) : affichage, subprocess, polling, valeurs de référence
 "samples/**/client.py" = ["print", "weak-cryptographic-key"]  # démo CLI : affichage de résultats ; clé RSA 1024 bits volontaire pour prouver le rejet d'une clé courte
 
 [tool.ruff.format]

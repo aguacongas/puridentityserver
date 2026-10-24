@@ -28,10 +28,16 @@ services:
     healthCheckPath: /.well-known/openid-configuration
     autoDeploy: false
     envVars:
+      # Derrière le reverse proxy mTLS (issue #133), l'URL publique de l'OP
+      # est le proxy — la suite et les clients voient l'issuer du proxy. La
+      # variable GitHub `CERTIFICATION_OP_URL` doit pointer sur cette même URL.
+      # Sans ce réglage, l'issuer annoncé (Render) ne correspond pas à l'URL
+      # publique et l'étape "Attente de l'OP" du workflow `certification.yml`
+      # (contrôle `issuer == OP_URL`) n'aboutit jamais.
       - key: PURIDENTITYSERVER_ISSUER
-        value: https://puridentityserver-certification.onrender.com
+        value: https://puridentity-op-cert.duckdns.org
       - key: PURIDENTITYSERVER_BASE_URL
-        value: ""
+        value: https://puridentity-op-cert.duckdns.org
       - key: PURIDENTITYSERVER_HOST
         value: 0.0.0.0
       - key: PURIDENTITYSERVER_SETTINGS_FILE

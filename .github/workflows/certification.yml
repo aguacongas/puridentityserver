@@ -76,6 +76,9 @@ permissions:
   contents: read
 
 env:
+  # Cible du déploiement Render (back-end interne, sans condition issuer).
+  RENDER_OP_URL: ${{ vars.RENDER_OP_URL || 'https://puridentityserver-certification.onrender.com' }}
+  # URL publique de l'OP (ou proxy mTLS #133) - celle que la suite utilise comme issuer.
   OP_URL: ${{ vars.CERTIFICATION_OP_URL || 'https://puridentityserver-certification.onrender.com' }}
   # Mode witness sur l'instance HÉBERGÉE officielle (OpenID Foundation) : le
   # driver constructeur (run-test-plan.py) ne fait que des appels API REST
@@ -131,24 +134,20 @@ jobs:
           echo "matrix={\"include\":[$(IFS=,; echo "${entries[*]}")]}" >> "$GITHUB_OUTPUT"
           echo "Plans du run : ${plans[*]}" | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Attente de l'OP sur $OP_URL (discovery opérationnel)
-        # Placé AVANT le deploy hook : le hook répond immédiatement mais le
-        # build Docker de Render est asynchrone — attendre après le hook
-        # laissait la suite démarrer contre l'ancienne instance, remplacée en
-        # plein run (disque éphémère recréé : clients dynamiquement enregistrés
-        # et clés de signature perdus → unregister RFC 7592 en 404, warning
-        # `response-type-missing`). Cet appel réveille aussi un service
-        # endormi et garantit que le relevé de `kid` du hook suivant aboutit.
+      - name: Réveil Render (sans condition issuer)
+        # Le déploiement Render est asynchrone : ce premier appel réveille
+        # un service endormi et garantit que `jwks_kids` du hook suivant aboutit.
+        # On ne teste PAS encore `issuer == OP_URL` ici : l'instance live peut
+        # encore porter l'ancien issuer (changement d'URL publique #133).
         run: |
-          deadline=$((SECONDS + 900))
+          deadline=$((SECONDS + 300))
           until [ $SECONDS -ge $deadline ]; do
-            issuer=$(curl -fsS --max-time 15 "$OP_URL/.well-known/openid-configuration" \
-              | python3 -c 'import json,sys;print(json.load(sys.stdin)["issuer"])' 2>/dev/null) \
-              && [ "$issuer" = "$OP_URL" ] && { echo "OP prêt : $issuer"; exit 0; }
-            echo "OP pas encore prêt (en attente du cold start Render)…"
+            curl -fsS --max-time 15 "$RENDER_OP_URL/.well-known/openid-configuration" >/dev/null 2>&1 \
+              && { echo "Render réveillé : $RENDER_OP_URL"; exit 0; }
+            echo "Render pas encore prêt (cold start)..."
             sleep 15
           done
-          echo "::error::L'OP $OP_URL n'a pas répondu sous 15 minutes" && exit 1
+          echo "::error::Render $RENDER_OP_URL n'a pas répondu sous 5 minutes" && exit 1
 
       - name: Redéploiement de l'OP sur Render (deploy hook)
         # ÉTAPE CRITIQUE DU JOB UNIQUE : le remplacement de l'instance n'est
@@ -201,7 +200,21 @@ jobs:
           exit 1
         env:
           RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
-
+      - name: Attente de l'OP public ($OP_URL - issuer conforme)
+        # Exécuté APRÈS le redéploiement : l'instance Render est maintenant
+        # celle du commit $GITHUB_SHA, qui déclare PURIDENTITYSERVER_ISSUER =
+        # $OP_URL (reverse proxy #133). On attend que le proxy réponde avec
+        # `issuer == OP_URL` (validation de bout en bout du câblage).
+        run: |
+          deadline=$((SECONDS + 900))
+          until [ $SECONDS -ge $deadline ]; do
+            issuer=$(curl -fsS --max-time 15 "$OP_URL/.well-known/openid-configuration" \
+              | python3 -c 'import json,sys;print(json.load(sys.stdin)["issuer"])' 2>/dev/null) \
+              && [ "$issuer" = "$OP_URL" ] && { echo "OP public prêt : $issuer"; exit 0; }
+            echo "OP public pas encore prêt (issuer: ${issuer:-?} - attendu $OP_URL)."
+            sleep 15
+          done
+          echo "::error::L'OP public $OP_URL n'a pas annoncé l'issuer attendu sous 15 minutes" && exit 1
       - name: Vérification de la validité des fichiers de plans
         run: python3 -c "import json,glob; [json.load(open(p)) for p in glob.glob('certification/plans/*.json')]"
 

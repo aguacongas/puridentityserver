@@ -261,16 +261,7 @@ class RequestObjectResolver:
                 return _with_state(error, document or params.get("request", ""))
         client = await self._find_client(params.get("client_id", ""))
         if not document:
-            if client is not None and client.fapi_enabled:
-                return _with_state(
-                    RequestObjectError(
-                        error="invalid_request",
-                        error_description="request object obligatoire pour un client "
-                        "FAPI1 (FAPI1-ADV-5.2.2-1)",
-                    ),
-                    "",
-                )
-            return dict(params)
+            return self._without_request_object(params, client)
         if client is None:
             client = await self._find_client(_unverified_iss(document))
         if client is not None and client.fapi_enabled:
@@ -409,6 +400,25 @@ class RequestObjectResolver:
             error="invalid_request_uri",
             error_description="request_uri injoignable ou refusée (RFC 9101 §5.2)",
         )
+
+    def _without_request_object(
+        self, params: Mapping[str, str], client: Client | None
+    ) -> dict[str, str] | RequestObjectError:
+        """Réponse d'une demande sans request object (Core §6.1, FAPI1-ADV-5.2.2-1).
+
+        Un client FAPI exige un request object signé : on refuse alors
+        ``invalid_request``. Sinon les paramètres sont renvoyés tels quels.
+        """
+        if client is not None and client.fapi_enabled:
+            return _with_state(
+                RequestObjectError(
+                    error="invalid_request",
+                    error_description="request object obligatoire pour un client "
+                    "FAPI1 (FAPI1-ADV-5.2.2-1)",
+                ),
+                "",
+            )
+        return dict(params)
 
     async def _prepare(
         self, params: Mapping[str, str], document: str
