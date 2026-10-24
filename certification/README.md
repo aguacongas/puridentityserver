@@ -355,7 +355,6 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
 - **Conflit d'alias entre plans** : deux plans qui partagent le même `alias`
   s'entre-stoppent sur l'instance hébergée (ou échouent en `409 ... alias ... in
   use`). Chaque plan doit porter un alias distinct ; le workflow applique le patch
-  `conformance-reuse-plan.patch`, qui réutilise le plan existant (même config) au
   lieu de le recréer à chaque run. C'est aussi cette garantie qui rend la
   **parallélisation intra-run** sûre (issue #122) : les 4 jobs matrix ne
   partagent aucun alias et `release_alias` ne stoppe que le sien.
@@ -378,7 +377,6 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
   test alors que le plan réutilisé référence encore l'ancien id : chaque
   création de module échoue alors de façon déterministe (jusqu'à 28 réessais ×
   `CONFORMANCE_RETRY_TIMEOUT` par module). Le patch
-  `conformance-stale-plan-recovery.patch` valide la membership du plan
   réutilisé contre le catalogue (`api/runner/available`) **avant** le run et
   recrée le plan si un module n'existe plus : la membership fraîche prend effet
   dès ce run (les tests renommés y repassent, les tests supprimés en
@@ -445,13 +443,12 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
 | `render.yaml` / `Dockerfile` / `.dockerignore` | déploiement de l'OP sur Render (SQLite, disque éphémère) |
 | `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`, `subject_pairwise_seed` pour les modules sector du plan dynamic, 4 clients statiques FAPI `private_key_jwt` + JWKS public pour les plans fapi1/fapi2) |
 | `plans/basic|implicit|hybrid|formpost|dynamic|ciba|fapi1|fapi2|fapi2-message-signing|ekyc|federation.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; fapi1/fapi2/fapi2-message-signing portent aussi `client`/`client2` en clé privée et `resource` ; `ekyc` porte la configuration eKYC `ekyc.verified_claims_request_list` ; `federation` porte l'Entity Identifier de l'OP, l'ancre de confiance `{SUITEURL}test/a/puridentityserver-federation/trust-anchor` et les clés de test RP/ancre du template officiel) |
-| `conformance-reuse-plan.patch` | patch du driver : `create_test_plan` idempotent (réutilise le plan existant quand sa config n'a pas changé) |
 | `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) — avec `SCREENSHOTS_DIR` défini (CI), un fichier absent/vide/trop lourd lève une erreur fatale (captures obligatoires, issue #161) ; sans variable (exécution manuelle), le PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode hébergé) |
 | `capture_screenshots.py` | rejoue les scénarios de relecture (4 Core, 6 dynamic, 16 FAPI1, 4 FAPI2, et avec `--federation` — mode local — les 13 modules fédérés) contre l'OP (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver — `--base-url` = OP, `--suite-url` = base des callbacks de la suite (hébergée par défaut, `https://localhost.emobix.co.uk:8443` en local) |
 | `federation_capture_stub.py` | mini-fédération locale (ancre + RP de capture, statements signés à la volée) hébergée en HTTPS sur `localhost:9444` pendant les captures fédérées (`--federation`) : l'OP y résout la trust chain que la suite ne sert que pendant un run de plan (voir « Captures fédérées ») — ancre ajoutée à `federation_trust_anchors` par `local/setup.sh`, joignable en local seulement |
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |
 | `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
-| `conformance-stale-plan-recovery.patch` | patch du driver : n'est jamais réessaie le 500 déterministe « test module not found » (1 tentative au lieu de 28) et valide la membership du plan réutilisé contre le catalogue avant le run — recréation automatique du plan stale (membership fraîche dès le premier run), plan le plus récent privilégié à la réutilisation |
+| `prune_stale_plans.py` | purge en fin de run : `DELETE /api/plan/{id}` sur les plans non publies les plus anciens, par alias (garde les N derniers, jamais les plans publies - l'API refuse en 405) ; issue #132 |
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés ; recopie les captures réelles dans `_site/screenshots/` (`--screenshots`) et les affiche dans la section du module correspondant |
 | `local/setup.sh` | bootstrap du harness **auto-hébergé** : alias réseau, clone + déploiement docker de la suite, cert auto-signé + nginx mTLS `op`, config OP locale (issuer `https://op:9443`), OP uvicorn, attente de disponibilité |
 | `local/nginx-mtls.conf` | nginx de terminaison mTLS devant l'OP local : certificat client optionnel (`optional_no_ca`), extraction `$ssl_client_escaped_cert` → `X-SSL-Client-Cert` (pas de newline brute), proxy vers l'OP uvicorn de l'hôte |
@@ -580,23 +577,32 @@ scripté est encore actif — les modules qui passent ensuite par le callback
 qu'en cas de dépassement de ce délai ; seul ce dépassement de délai est
 rattrapé silencieusement, les autres erreurs sont propagées.
 
-## Alias des plans : création unique puis ré-exécution
+## Alias des plans : un plan par run (issue #132)
 
 Chaque plan porte un **alias stable et distinct** : `puridentityserver-basic`,
 `puridentityserver-implicit`, `puridentityserver-hybrid`. Sur l'instance hébergée
 de la Fondation, cet alias est l'identité du test : tous les modules créés depuis
 un plan l'héritent, et la suite **stoppe (ou rejette en 409)** tout nouveau module
-qui réclame un alias déjà en cours d'utilisation. D'où la règle : les trois plans
-ne doivent jamais partager le même alias, et un plan ne doit pas être recréé à
-chaque run.
+qui réclame un alias déjà en cours d'utilisation. D'où la règle : les plans
+ne doivent jamais partager le même alias, et un plan ne doit pas être recréé
+en cours de run.
 
-Le patch `conformance-reuse-plan.patch` rend la création idempotente côté driver :
-avant de POSTER `api/plan`, il liste les plans du user courant (`GET api/plan`) et
-réutilise celui dont `planName` + config (alias, serveur, règles navigateur) **et**
-variante sont strictement identiques. Un plan n'est donc créé **qu'une seule fois**,
-puis ré-exécuté à chaque run ; il n'est recréé que si sa config a changé (ex. l'URL
-de l'OP `CERTIFICATION_OP_URL` a bougé, ou les sélecteurs navigateur du plan ont
-été modifiés), ce qui est le moyen voulu de déployer le changement.
+ses propres plans** (`POST /api/plan`, 1 run = 1 plan). Avantage : le lien
+`plan-detail` est honnête (pas de mélange des modules des runs passés) et un
+plan vert devient un candidat de publication (`POST /api/plan/{id}/publish`)
+sans devoir nettoyer la membership stale.
+
+**Purge en fin de run** : `certification/prune_stale_plans.py` liste les plans
+du user (`GET /api/plan`), groupe par `planName`, conserve les **N plus
+récents** (défaut 3, réglable via `KEEP_PLANS`) et `DELETE` les autres par
+alias - **jamais un plan publié** (l'API répond 405/403, traité en no-op).
+Appelé par le job `report` de `.github/workflows/certification.yml`
+(après la publication des artefacts). Le compte `CONFORMANCE_TOKEN` est requis ;
+sans lui, la purge est ignorée silencieusement.
+
+`conformance-alias-release.patch` reste appliqué : il libère l'alias avant
+chaque création de module (`release_alias`), condition nécessaire même avec
+des plans frais (cf. « Libération de l'alias »).
 
 ## Libération de l'alias : plus de « Stopping test due to alias conflict »
 

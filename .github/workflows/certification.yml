@@ -133,7 +133,6 @@ jobs:
           done
           echo "matrix={\"include\":[$(IFS=,; echo "${entries[*]}")]}" >> "$GITHUB_OUTPUT"
           echo "Plans du run : ${plans[*]}" | tee -a "$GITHUB_STEP_SUMMARY"
-
       - name: Réveil Render (sans condition issuer)
         # Le déploiement Render est asynchrone : ce premier appel réveille
         # un service endormi et garantit que `jwks_kids` du hook suivant aboutit.
@@ -148,7 +147,6 @@ jobs:
             sleep 15
           done
           echo "::error::Render $RENDER_OP_URL n'a pas répondu sous 5 minutes" && exit 1
-
       - name: Redéploiement de l'OP sur Render (deploy hook)
         # ÉTAPE CRITIQUE DU JOB UNIQUE : le remplacement de l'instance n'est
         # pas observable via le discovery (ancienne et nouvelle répondent
@@ -208,13 +206,13 @@ jobs:
         run: |
           deadline=$((SECONDS + 900))
           until [ $SECONDS -ge $deadline ]; do
-            issuer=$(curl -fsS --max-time 15 "$OP_URL/.well-known/openid-configuration" \
-              | python3 -c 'import json,sys;print(json.load(sys.stdin)["issuer"])' 2>/dev/null) \
-              && [ "$issuer" = "$OP_URL" ] && { echo "OP public prêt : $issuer"; exit 0; }
+            issuer=$(curl -fsS --max-time 15 "$OP_URL/.well-known/openid-configuration" | python3 -c 'import json,sys;print(json.load(sys.stdin)["issuer"])')
+            if [ "$issuer" = "$OP_URL" ]; then echo "OP public prêt : $issuer"; exit 0; fi
             echo "OP public pas encore prêt (issuer: ${issuer:-?} - attendu $OP_URL)."
             sleep 15
           done
           echo "::error::L'OP public $OP_URL n'a pas annoncé l'issuer attendu sous 15 minutes" && exit 1
+
       - name: Vérification de la validité des fichiers de plans
         run: python3 -c "import json,glob; [json.load(open(p)) for p in glob.glob('certification/plans/*.json')]"
 
@@ -231,7 +229,6 @@ jobs:
             exit 1
           fi
           echo "Token CONFORMANCE présent (36 caractères attendus)" | tee -a "$GITHUB_STEP_SUMMARY"
-
       - name: Attente de l'API de certification.openid.net (Bearer $CONFORMANCE_TOKEN)
         # L'automation navigateur (WebRunner/Selenium) tourne dans l'infra stable
         # de l'OpenID Foundation qui atteint notre OP Render public : plus aucune
@@ -249,7 +246,6 @@ jobs:
             sleep 10
           done
           echo "::error::L'API de certification.openid.net n'a pas répondu (token invalide ou réseau) en 10 min" && exit 1
-
       - name: Captures d'écran réelles des modules de relecture (Playwright)
         # Les modules laissés en REVIEW par la suite (4 modules Core + 6 dynamic
         # + 16 FAPI1 + 4 FAPI2, issue #138 / #168) exigent une capture
@@ -272,7 +268,6 @@ jobs:
             --base-url "$OP_URL" \
             --out "$GITHUB_WORKSPACE/screenshots"
           ls -l "$GITHUB_WORKSPACE/screenshots"
-
       - name: Upload des captures d'écran réelles
         # Les PNG téléversés aux modules de relecture (ImageAPI) sont gardés
         # sous la main pour contrôle humain : c'est la preuve visible des
@@ -325,12 +320,10 @@ jobs:
           fi
           echo "SUITE_VERSION=$latest" >> "$GITHUB_ENV"
           echo "Suite de certification : $latest" | tee -a "$GITHUB_STEP_SUMMARY"
-
       - name: Clone de la suite de certification (version résolue)
         run: |
           git clone --depth 1 --branch "$SUITE_VERSION" \
             https://gitlab.com/openid/conformance-suite.git
-
       - name: Substitution des URLs dans les plans
         # {OPURL} : point d'entrée de l'OP (Render) ; {SUITEURL} : base de
         # l'instance de la suite (les tâches « attente de l'envoi implicite »
@@ -343,7 +336,6 @@ jobs:
             sed -i "s#{SUITEURL}#${CONFORMANCE_SERVER}#g" "$f"
           done
           grep -h '"match"' certification/plans/*.json | sort -u
-
       - name: Attente de l'API de certification.openid.net (Bearer $CONFORMANCE_TOKEN)
         # Reprise du garde-fou de `prepare` (le secret a été validé là-bas) :
         # sortie immédiate si l'API répond, 10 min max sinon — un plan qui
@@ -361,48 +353,21 @@ jobs:
             sleep 10
           done
           echo "::error::L'API de certification.openid.net n'a pas répondu (token invalide ou réseau) en 10 min" && exit 1
-
       - name: Dépendances Python du driver officiel (httpx)
         run: python3 -m pip install --disable-pip-version-check --quiet httpx
 
-      - name: Patch du driver (plans par alias + captures de relecture + libération d'alias + diagnostic d'interruption + plan stale)
-        # 1) au lieu de recréer un plan à chaque lancement (POST /api/plan), ce
-        #    qui accumule les plans et re-claime l'alias d'un run précédent, on
-        #    réutilise le plan existant du user quand sa config est inchangée.
-        # 2) certains modules Core (ex. oidcc-response-type-missing) se bloquent
-        #    sur un événement REVIEW « upload une capture d'écran » ; on remplit
-        #    ces placeholders automatiquement côté driver pour que la suite
-        #    puisse se terminer sans intervention humaine (mode witness).
-        # 3) la suite réserve l'alias à la création de chaque module : un module
-        #    encore actif (timeout dépassé, run annulé…) serait interrompu par le
-        #    module suivant (« Stopping test due to alias conflict »). Le driver
-        #    libère donc l'alias lui-même avant chaque création de module — et
-        #    comme chaque plan a UN alias distinct, les 9 jobs parallèles ne
-        #    peuvent pas s'interrompre mutuellement.
-        # 4) un module qui passe en INTERRUPTED ne donne dans la CI qu'un
-        #    « has moved to INTERRUPTED » : on y ajoute la cause réelle (statut,
-        #    résultat + 10 dernières entrées de son journal) pour distinguer un
-        #    conflit d'alias d'une erreur de configuration du test.
-        # 5) la suite hébergée peut renommer ou supprimer un test : le plan
-        #    réutilisé garde alors l'ancien id et chaque création de module
-        #    échoue en 500 « test module not found ». On valide la membership
-        #    du plan réutilisé contre le catalogue et on le recrée si besoin
-        #    (membership fraîche dès le premier run), et ce 500 déterministe
-        #    n'est jamais réessayé (1 tentative au lieu de 28).
+      - name: Patch du driver (captures de relecture + libération d'alias + diagnostic d'interruption + rotation des clés)
+        # Issue #132 : conformance-reuse-plan et conformance-stale-plan-recovery
+        # retires -> chaque run cree ses plans frais (POST /api/plan).
         run: |
-          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-reuse-plan.patch"
-          grep -n "def _plan_matching_configuration" conformance-suite/scripts/conformance.py
           git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-screenshots.patch"
           grep -n "fill_required_screenshots" conformance-suite/scripts/conformance.py conformance-suite/scripts/run-test-plan.py
           git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-alias-release.patch"
           grep -n "release_alias" conformance-suite/scripts/conformance.py conformance-suite/scripts/run-test-plan.py
           git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-interrupted-diagnostics.patch"
           grep -n "describe_interruption" conformance-suite/scripts/conformance.py
-          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-stale-plan-recovery.patch"
-          grep -n "test module not found" conformance-suite/scripts/conformance.py
           git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-key-rotation.patch"
           grep -n "rotate_op_signing_keys" conformance-suite/scripts/run-test-plan.py
-
       - name: Timeout par module piloté par CONFORMANCE_MODULE_TIMEOUT
         # Le driver upstream hardcode timeout=240 dans wait_for_state : on rend
         # cette valeur réglable sans dévier du script officiel (patch sémantique).
@@ -410,7 +375,6 @@ jobs:
         run: |
           sed -i 's/def wait_for_state(self, module_id, required_states, timeout=240):/def wait_for_state(self, module_id, required_states, timeout=int(os.getenv("CONFORMANCE_MODULE_TIMEOUT", "240"))):/' scripts/conformance.py
           grep -n "CONFORMANCE_MODULE_TIMEOUT" scripts/conformance.py
-
       - name: Jeton d'administration (rotation des clés de signature)
         # Le patch `conformance-key-rotation` du driver appelle
         # `POST /signing-keys/rotate` sur l'OP juste avant de démarrer le
@@ -427,7 +391,6 @@ jobs:
           echo "KEY_ROTATION_ENDPOINT=$OP_URL/signing-keys/rotate" >> "$GITHUB_ENV"
           echo "KEY_ROTATION_TOKEN=$token" >> "$GITHUB_ENV"
           echo "rotation des clés de signature armée"
-
       - name: Récupération des captures d'écran réelles (artefact prepare)
         # Capture obligatoire (issue #161) : le job `prepare` vert garantit la
         # présence de l'artefact ; un téléchargement impossible est un échec à
@@ -449,7 +412,6 @@ jobs:
           fi
           find screenshots -mindepth 2 -type f -name '*.png' -exec mv -t screenshots/ {} + 2>/dev/null || true
           ls -l screenshots
-
       - name: Lancement du plan ${{ matrix.plan }} (witness)
         # Un seul plan par job (matrice) : chaque plan exporte ses .zip dans
         # certification-results-<plan>. Toute la boucle séquentielle d'origine
@@ -485,7 +447,6 @@ jobs:
           code=${PIPESTATUS[0]}
           echo "- exit code : $code (les gaps sont acceptés en mode witness)" | tee -a "$GITHUB_STEP_SUMMARY"
           [ "$code" -eq 0 ] || echo "plan ${{ matrix.plan }} en échec partiel (witness)" | tee -a "$GITHUB_STEP_SUMMARY"
-
       - name: "Garde-fou : captures REVIEW fournies (issue #161)"
         # Le step Lancement reste witness (gaps de modules acceptés) : ce
         # garde-fou y repère l'erreur fatale du driver sur une capture
@@ -496,7 +457,6 @@ jobs:
             exit 1
           fi
           echo "Aucune capture REVIEW manquante pendant le plan ${{ matrix.plan }} : OK"
-
       - name: Upload des exports du plan
         # Un artefact par plan → le job `report` les fusionne. Aucun export
         # (plan mort avant le premier module) = pas d'artefact : toléré ici,
@@ -521,7 +481,6 @@ jobs:
             exit 1
           fi
           echo "Export du plan ${{ matrix.plan }} présent : OK"
-
   report:
     name: Rapport statique (artefact, sans Pages)
     needs: [prepare, plan]
@@ -557,7 +516,6 @@ jobs:
           find . -type f -name '*.zip' -not -path './results/*' -not -path './.git/*' \
             -exec mv -t results/ {} + 2>/dev/null || true
           ls -lh results | tee -a "$GITHUB_STEP_SUMMARY"
-
       - name: Téléversement des captures d'écran réelles
         # Rapport seul à tolérer l'absence (l'étape Playwright du job
         # `prepare` a déjà fait échouer le run, issue #161) : ici on ne
@@ -568,12 +526,22 @@ jobs:
           name: certification-screenshots
           path: screenshots
 
+      - name: Purge des plans stale (issue #132, garde les 3 derniers par alias)
+        # Supprime les plans non publies des runs precedents pour chaque alias,
+        # sans jamais toucher un plan publie (l'API refuse en 405/403).
+        if: always()
+        env:
+          CONFORMANCE_SERVER: ${{ env.CONFORMANCE_SERVER }}
+          CONFORMANCE_TOKEN: ${{ secrets.CONFORMANCE_TOKEN }}
+          KEEP_PLANS: '3'
+        run: |
+          python3 -m pip install --disable-pip-version-check --quiet httpx >/dev/null
+          python3 certification/prune_stale_plans.py
       - name: Emplacement des captures d'écran
         run: |
           if [ -d screenshots ]; then
             find screenshots -mindepth 2 -type f -name '*.png' -exec mv -t screenshots/ {} + 2>/dev/null || true
           fi
-
       - name: Génération du rapport statique
         # --screenshots : les captures réelles des modules de relecture sont
         # copiées dans _site/screenshots/ et affichées dans la section du
@@ -585,7 +553,6 @@ jobs:
             --results results \
             --site _site \
             --screenshots "$GITHUB_WORKSPACE/screenshots"
-
       - name: Upload des artefacts (rapports bruts consolidés)
         if: always()
         uses: actions/upload-artifact@v7
