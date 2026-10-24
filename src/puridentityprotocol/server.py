@@ -152,6 +152,77 @@ def _primary_algorithm(settings: Settings) -> JWTAlgorithm:
     return JWTAlgorithm.RS256
 
 
+def _discovery_config(
+    settings: Settings, token_endpoint_auth_methods: tuple[str, ...]
+) -> DiscoveryConfig:
+    """Manifeste ``/.well-known/openid-configuration`` (OpenID Connect Discovery 1.0).
+
+    Les champs ``client_registration_types_supported`` et
+    ``federation_registration_endpoint`` ne sont renseignés que si le support
+    OpenID Federation est activé (§12.1.2).
+    """
+    return DiscoveryConfig(
+        issuer=settings.issuer,
+        base_url=settings.base_url,
+        registration_enabled=settings.registration_enabled,
+        par_enabled=settings.par_enabled,
+        par_required=settings.par_required,
+        ciba_enabled=settings.ciba_enabled,
+        signing_algorithms=settings.jwks_algorithms,
+        encryption_algorithms=settings.jwks_encryption_algorithms,
+        encryption_methods=settings.jwks_encryption_methods,
+        token_endpoint_auth_methods=token_endpoint_auth_methods,
+        client_registration_types_supported=(
+            ("automatic", "explicit") if settings.federation_enabled else ()
+        ),
+        federation_registration_endpoint=(
+            f"{(settings.base_url or settings.issuer).rstrip('/')}/federation/register"
+            if settings.federation_enabled
+            else ""
+        ),
+    )
+
+
+def _federation_usecase(
+    settings: Settings,
+    *,
+    key_manager: DefaultKeyManager,
+    discovery_usecase: DiscoveryUseCase,
+    client_reader: ClientReader,
+) -> FederationUseCase | None:
+    """Cas d'usage ``Federation`` (OpenID Federation 1.1 §12), ou ``None`` si inactif.
+
+    ``key_manager`` est le ``DefaultKeyManager`` dédié aux ``entity_statement``
+    (``KeyUse.FEDERATION``) ; le fetcher accepte les cibles loopback si la
+    liaison ``host`` est locale ou si ``federation_allow_local_targets``
+    l'autorise explicitement.
+    """
+    if not settings.federation_enabled:
+        return None
+    algorithm = JWTAlgorithm(settings.federation_signing_alg)
+    return FederationUseCase(
+        config=FederationConfig(
+            entity_identifier=(settings.federation_entity_identifier or settings.issuer).rstrip(
+                "/"
+            ),
+            trust_anchors=settings.federation_trust_anchors,
+            statement_ttl_seconds=settings.federation_statement_ttl_seconds,
+            algorithm=algorithm,
+            registration_types=("automatic", "explicit"),
+        ),
+        token_manager=PyJWTFederationTokenManager(key_manager, algorithm),
+        key_provider=KeyManagerFederationKeyProvider(key_manager),
+        fetcher=HTTPFederationEntityFetcher(
+            allow_local_targets=loopback_bind(settings.host)
+            or settings.federation_allow_local_targets
+        ),
+        metadata_provider=DiscoveryFederationMetadataProvider(
+            discovery_usecase, (settings.base_url or settings.issuer)
+        ),
+        subordinate_source=ClientRegistrySubordinateSource(client_reader),
+    )
+
+
 def _mount_authorization_routers(
     app: FastAPI,
     *,
@@ -229,26 +300,7 @@ class ProtocolDependencies:
             session_grace_period_days=settings.jwks_grace_period_days,
             password_policy=settings.password_policy,
         )
-        self.config = DiscoveryConfig(
-            issuer=settings.issuer,
-            base_url=settings.base_url,
-            registration_enabled=settings.registration_enabled,
-            par_enabled=settings.par_enabled,
-            par_required=settings.par_required,
-            ciba_enabled=settings.ciba_enabled,
-            signing_algorithms=settings.jwks_algorithms,
-            encryption_algorithms=settings.jwks_encryption_algorithms,
-            encryption_methods=settings.jwks_encryption_methods,
-            token_endpoint_auth_methods=self._token_endpoint_auth_methods(),
-            client_registration_types_supported=(
-                ("automatic", "explicit") if settings.federation_enabled else ()
-            ),
-            federation_registration_endpoint=(
-                f"{(settings.base_url or settings.issuer).rstrip('/')}/federation/register"
-                if settings.federation_enabled
-                else ""
-            ),
-        )
+        self.config = _discovery_config(settings, self._token_endpoint_auth_methods())
         self.jwks_usecase = JWKSetUseCase(
             JWKSetConfig(
                 key_size=settings.jwks_key_size,
@@ -323,31 +375,12 @@ class ProtocolDependencies:
         )
 
         self.federation_key_manager = DefaultKeyManager(stores.key_pair, use=KeyUse.FEDERATION)
-        self.federation_usecase: FederationUseCase | None = None
-        if settings.federation_enabled:
-            self.federation_usecase = FederationUseCase(
-                config=FederationConfig(
-                    entity_identifier=(
-                        settings.federation_entity_identifier or settings.issuer
-                    ).rstrip("/"),
-                    trust_anchors=settings.federation_trust_anchors,
-                    statement_ttl_seconds=settings.federation_statement_ttl_seconds,
-                    algorithm=JWTAlgorithm(settings.federation_signing_alg),
-                    registration_types=("automatic", "explicit"),
-                ),
-                token_manager=PyJWTFederationTokenManager(
-                    self.federation_key_manager, JWTAlgorithm(settings.federation_signing_alg)
-                ),
-                key_provider=KeyManagerFederationKeyProvider(self.federation_key_manager),
-                fetcher=HTTPFederationEntityFetcher(
-                    allow_local_targets=loopback_bind(settings.host)
-                    or settings.federation_allow_local_targets
-                ),
-                metadata_provider=DiscoveryFederationMetadataProvider(
-                    self.discovery_usecase, (settings.base_url or settings.issuer)
-                ),
-                subordinate_source=ClientRegistrySubordinateSource(self.readers.client),
-            )
+        self.federation_usecase: FederationUseCase | None = _federation_usecase(
+            settings,
+            key_manager=self.federation_key_manager,
+            discovery_usecase=self.discovery_usecase,
+            client_reader=self.readers.client,
+        )
         self.request_object_resolver = RequestObjectResolver(
             RequestObjectConfig(issuer=settings.issuer),
             HTTPRequestObjectFetcher(

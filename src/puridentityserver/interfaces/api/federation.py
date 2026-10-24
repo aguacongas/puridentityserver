@@ -156,9 +156,7 @@ async def _list_subordinates_response(usecase: FederationUseCase, request: Reque
     """
     unsupported = _LIST_PARAMETERS & request.query_params.keys()
     if unsupported:
-        return _json_error(
-            "unsupported_parameter", f"Unsupported parameter: {sorted(unsupported)[0]}"
-        )
+        return _json_error("unsupported_parameter", f"Unsupported parameter: {min(unsupported)}")
     identifiers = await usecase.subordinate_identifiers()
     return JSONResponse(content=identifiers)
 
