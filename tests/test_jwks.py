@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import time
 from collections.abc import Awaitable
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -602,15 +603,19 @@ class TestSigningKeyRotation:
 
     def test_jwks_endpoint_rotates_and_keeps_the_previous_key(self) -> None:
         """Au niveau HTTP : une nouvelle clé apparaît, l'ancienne reste publiée."""
+        # rotation_seconds volontairement large (et attente explicite entre
+        # les deux relevés) : rotation paresseuse par âge -> sinon la flakiness
+        # selon la résolution d'horloge (cf. issue #217).
         settings = Settings(
             issuer=_ISSUER,
             base_url=_ISSUER,
             jwks_key_size=_KEY_SIZE,
             jwks_algorithms=("RS256",),
-            jwks_rotation_seconds=0.001,
+            jwks_rotation_seconds=0.05,
         )
         with TestClient(create_app(settings)) as client:
             first = client.get("/.well-known/jwks.json").json()["keys"]
+            time.sleep(0.15)
             second = client.get("/.well-known/jwks.json").json()["keys"]
 
         first_kids = {key["kid"] for key in first if key.get("use") == "sig"}
