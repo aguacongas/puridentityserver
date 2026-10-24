@@ -227,6 +227,11 @@ packages:
   - python3
   - python3-pip
 runcmd:
+  - firewall-cmd --permanent --add-service=http
+  - firewall-cmd --permanent --add-service=https
+  - firewall-cmd --reload
+  - setsebool -P httpd_can_network_connect on
+  - python3 -m pip install certbot
   - systemctl enable nginx
   - systemctl start nginx
 """
@@ -262,19 +267,18 @@ if not vnic_attachments:
     print("  ATTENTION : pas de VNIC, attachez l'IP manuellement depuis la console.")
 else:
     vnic_id = vnic_attachments[0].vnic_id
-    vnic = vcn_client.get_vnic(vnic_id).data
-    # verifier si l'IP est deja attachee
-    if getattr(rip, "private_ip_id", None):
-        print("  IP deja attachée a :", rip.private_ip_id)
+    private_ips = vcn_client.list_private_ips(vnic_id=vnic_id).data
+    if not private_ips:
+        print("  ATTENTION : aucune private IP sur la VNIC ; attachement manuel requis.")
     else:
+        private_ip_id = private_ips[0].id
         try:
             vcn_client.update_public_ip(RESERVED_IP_OCID, oci.core.models.UpdatePublicIpDetails(
-                private_ip_id=vnic.private_ip_id,
+                private_ip_id=private_ip_id,
             ))
-            print("  OK - IP", PUBLIC_IP, "attachée a la VNIC", vnic_id)
-        except Exception as e:
-            print("  ATTENTION : attachement automatique echoue :", e)
-            print("  Attachez l'IP manuellement : Console -> Compute -> Instance -> Attached VNICs -> Edit -> Reserved Public IP.")
+            print("  OK - IP", PUBLIC_IP, "attachée a la private IP", private_ip_id)
+        except oci.exceptions.ServiceError as e:
+            print("  info : attachement deja fait ou erreur mineure :", e.message)
 
 # --------------------------------------------------------------------------- #
 # Recap

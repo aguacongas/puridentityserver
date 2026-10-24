@@ -193,6 +193,19 @@ sudo sed -i 's/{HOSTNAME}/puridentity-op-cert.duckdns.org/g' /etc/nginx/conf.d/p
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
+## 5bis. Notes Oracle Linux 9 (SELinux / firewalld)
+
+Le provisionnement automatique (`provision_oci.py`) ouvre les ports 80/443/22 dans la Security List OCI **et** dans `firewalld`, et pose le booléen SELinux `httpd_can_network_connect=on`. Si vous installez à la main, exécuter ces commandes supplémentaires — **sinon nginx ne peut pas joindre le backend Render** (SELinux bloque `connect()` → `502 Permission denied`) :
+
+```bash
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --reload
+sudo setsebool -P httpd_can_network_connect on
+```
+
+Vérification : `sudo getsebool httpd_can_network_connect` doit afficher `--> on`, et `sudo ss -tlnp | grep :443` doit montrer `nginx`.
+
 ## 6. Tests de bout en bout
 
 ```bash
