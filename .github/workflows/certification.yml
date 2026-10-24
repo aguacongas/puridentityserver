@@ -1,597 +1,584 @@
-name: Certification OIDC
-
-# Suite de certification officielle OpenID Foundation (openid/conformance-suite),
-# jouée contre l'instance Render publique seedee (certification/config.render.toml).
-#
-# Déclenchement À LA DEMANDE UNIQUEMENT (workflow_dispatch) pour l'instant ;
-# le déclenchement automatique reviendra à la publication d'une release
-# (release: types: [published], cf. issue #150). Jobs WITNESS : les gaps Core
-# (modules ne passant pas encore) NE font pas échouer le workflow — la sortie
-# stricte (#130) s'applique au workflow local (certification-local.yml), seul
-# propriétaire de GitHub Pages. En revanche les captures REVIEW sont
-# OBLIGATOIRES (issue #161) : capture, téléchargement et remplissage sont
-# stricteurs et un pilier manquant fait échouer le run. Ce workflow ne publie
-# PLUS sur Pages : ses
-# résultats seront soumis directement à l'OpenID Foundation (à venir, #150).
-# Chaque run produit ses rapports en artefacts.
-#
-# La version de la suite est résolue À L'EXÉCUTION : dernier tag
-# `release-vX.Y.Z` listé par `git ls-remote` sur
-# gitlab.com/openid/conformance-suite (échec = run en erreur) — cf. issue #150.
-#
-# Issue #122 : les 10 s'exécutent EN PARALLÈLE (matrix de jobs, même
-# patron que certification-local.yml ; fapi2-message-signing ajouté par
-# l'issue #164, formpost par l'issue #165, dynamic par l'issue #168) : ~3 h
-# séquentielles deviennent la durée
-# du plan le plus long (~40 min) :
-# - job `prepare` UNIQUE : matrice depuis l'input `plan`, deploy hook Render
-#   (UNE SEULE fois — un redejob par plan remplacerait l'OP en plein run) et
-#   captures Playwright (artefact partagé) ;
-# - job `plan` ×9 (`fail-fast: false`) : clone + patches de la suite, un seul
-#   plan joué en mode witness, export → artefact `certification-results-<plan>`.
-#   Parallélisation sûre : chaque plan porte un alias distinct
-#   (`puridentityserver-<plan>`) et `release_alias` ne stoppe que son propre
-#   alias — voir certification/README.md (« Conflits d'alias ») ;
-# - job `report` : fusion des exports, `certification/report.py`, téléversement
-#   du rapport consolidé en artefact (Pages désormais gérée par le workflow
-#   local).
-#
-# Pré-requis :
-# - service Render libre (render.yaml) : https://puridentityserver-certification.onrender.com
-# - secret GitHub `RENDER_DEPLOY_HOOK_URL` (Render -> Service -> Settings -> Deploy Hook)
-# - variable optionnelle `CERTIFICATION_OP_URL` (URL publique de l'OP)
-
-on:
-  workflow_dispatch:
-    inputs:
-      plan:
-        # Permet un cycle de diagnostic rapide : ne lancer qu'un seul plan au
-        # lieu des dix (~30 min, même en parallèle le gain nul).
-        # `ekyc` (identité assurance) est HORS programme officiel de
-        # certification mais est joué dans le run `all` comme les autres.
-        # ⚠ Le plan `ekyc-test-plan-oidccore` n'existe que depuis le tag
-        # `release-v5.3.3` de la suite (14/10/2026) : si la suite déployée par
-        # l'OIDF est antérieure, ce job échoue (plan inconnu). Repli : retirer
-        # `ekyc` de `CERTIFICATION_PLANS` (certification/selectors.sh) — le
-        # workflow local, lui, épingle la dernière release et n'est pas
-        # concerné.
-        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + Dynamic + CIBA + FAPI1 + FAPI2 + FAPI2 Message Signing + ekyc ; ekyc = identité assurance, hors programme officiel)"
-        type: choice
-        required: false
-        default: all
-        options:
-          - all
-          - basic
-          - implicit
-          - hybrid
-          - formpost
-          - dynamic
-          - ciba
-          - fapi1
-          - fapi2
-          - fapi2-message-signing
-          - ekyc
-
-permissions:
-  contents: read
-
-env:
-  # Cible du déploiement Render (back-end interne, sans condition issuer).
-  RENDER_OP_URL: ${{ vars.RENDER_OP_URL || 'https://puridentityserver-certification.onrender.com' }}
-  # URL publique de l'OP (ou proxy mTLS #133) - celle que la suite utilise comme issuer.
-  OP_URL: ${{ vars.CERTIFICATION_OP_URL || 'https://puridentityserver-certification.onrender.com' }}
-  # Mode witness sur l'instance HÉBERGÉE officielle (OpenID Foundation) : le
-  # driver constructeur (run-test-plan.py) ne fait que des appels API REST
-  # authenticate Bearer (CONFORMANCE_TOKEN). L'automation navigateur
-  # (WebRunner/HtmlUnit/Selenium) tourne dans l'infra stable de la Fondation,
-  # qui atteint notre OP public (Render) — aucune dépendance docker quebrada
-  # sur le runner éphémère (plus de modules bloqués en WAITING).
-  CONFORMANCE_SERVER: https://www.certification.openid.net/
-  CONFORMANCE_TOKEN: ${{ secrets.CONFORMANCE_TOKEN }}
-  CONFORMANCE_MODULE_TIMEOUT: '600'
-
-concurrency:
-  group: certification
-  # Les runs se SERIALISENT (au lieu d'en annuler un en cours de route) : annuler un
-  # run laissait ses tests actifs sur l'instance hébergée de la Fondation, et le run
-  # suivant les interrompait alors avec « Stopping test due to alias conflict ».
-  # Intra-run, les plans parallèles sont sûrs : alias distincts + release_alias
-  # ne stoppe que le sien.
-  cancel-in-progress: false
-
-jobs:
-  prepare:
-    name: Préparation (OP, déploiement, captures)
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
-    steps:
-      - name: Checkout du dépôt
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Matrice des plans à jouer
-        # Produit un JSON `{"include":[{"plan":…,"selector":…},…]}` consommé
-        # par le job matrix `plan`. Échoue SEC sur un input inconnu, avant
-        # toute consommation d'infra (deploy hook, Playwright, clone).
-        id: matrix
-        env:
-          # Vide sur push/schedule : les dix sont joués.
-          PLAN_FILTER: ${{ inputs.plan || 'all' }}
-        run: |
-          set -euo pipefail
-          # Selecteurs des plans : source unique partagee avec le workflow
-          # local et le lancement local (certification/local/run-plan.sh).
-          source certification/selectors.sh
-          plans=("${CERTIFICATION_PLANS[@]}")
-          if [ "$PLAN_FILTER" != "all" ]; then
-            selector_for "$PLAN_FILTER" > /dev/null || { echo "::error::Plan inconnu : $PLAN_FILTER"; exit 1; }
-            plans=("$PLAN_FILTER")
-          fi
-          entries=()
-          for p in "${plans[@]}"; do
-            entries+=("{\"plan\":\"$p\",\"selector\":\"$(selector_for "$p")\"}")
-          done
-          echo "matrix={\"include\":[$(IFS=,; echo "${entries[*]}")]}" >> "$GITHUB_OUTPUT"
-          echo "Plans du run : ${plans[*]}" | tee -a "$GITHUB_STEP_SUMMARY"
-
-      - name: Réveil Render (sans condition issuer)
-        # Le déploiement Render est asynchrone : ce premier appel réveille
-        # un service endormi et garantit que `jwks_kids` du hook suivant aboutit.
-        # On ne teste PAS encore `issuer == OP_URL` ici : l'instance live peut
-        # encore porter l'ancien issuer (changement d'URL publique #133).
-        run: |
-          deadline=$((SECONDS + 300))
-          until [ $SECONDS -ge $deadline ]; do
-            curl -fsS --max-time 15 "$RENDER_OP_URL/.well-known/openid-configuration" >/dev/null 2>&1 \
-              && { echo "Render réveillé : $RENDER_OP_URL"; exit 0; }
-            echo "Render pas encore prêt (cold start)..."
-            sleep 15
-          done
-          echo "::error::Render $RENDER_OP_URL n'a pas répondu sous 5 minutes" && exit 1
-
-      - name: Redéploiement de l'OP sur Render (deploy hook)
-        # ÉTAPE CRITIQUE DU JOB UNIQUE : le remplacement de l'instance n'est
-        # pas observable via le discovery (ancienne et nouvelle répondent
-        # pareil) : on compare les `kid` relevés avant le hook. Le disque
-        # éphémère de Render est recréé à chaque déploiement, la nouvelle
-        # instance publie donc d'autres clés — c'est le seul signal fiable du
-        # swap. Sans lui la suite courrait le risque d'enregistrer un client
-        # sur l'instance qui s'apprête à partir. Le deploy doit être déclenché
-        # UNE SEULE fois avant la matrice : 4 appels parallèles remplaceraient
-        # l'OP pendant que les plans jouent.
-        run: |
-          jwks_kids() {
-            curl -fsS --max-time 15 "$OP_URL/.well-known/jwks.json" \
-              | python3 -c 'import json,sys;print(",".join(sorted(str(k.get("kid","")) for k in json.load(sys.stdin)["keys"])))' 2>/dev/null || true
-          }
-          # `ref=$GITHUB_SHA` : deploy du commit EXACT du run. `render.yaml`
-          # verrouille `branch: main` : sans ce paramètre, une validation sur
-          # branche de PR déploierait main et l'OP ne recevrait jamais la
-          # config de la branche (ex. clients_seed FAPI, issue #113). Sur
-          # main, le SHA est la tête de branche : comportement identique.
-          hook="$RENDER_DEPLOY_HOOK_URL"
-          case "$hook" in
-            *\?*) hook="${hook}&ref=${GITHUB_SHA}" ;;
-            *) hook="${hook}?ref=${GITHUB_SHA}" ;;
-          esac
-          before="$(jwks_kids)"
-          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
-            echo "Secret RENDER_DEPLOY_HOOK_URL absent : redéploiement manuel requis."
-            exit 0
-          fi
-          if [ -z "$before" ]; then
-            echo "::warning::JWKS injoignable avant le hook : le remplacement de l'instance ne sera pas confirmé."
-            curl -sSf -X POST "$hook"
-            exit 0
-          fi
-          curl -sSf -X POST "$hook"
-          echo "Déploiement déclenché (ref $GITHUB_SHA) — kid avant : $before"
-          deadline=$((SECONDS + 900))
-          while [ $SECONDS -lt $deadline ]; do
-            after="$(jwks_kids)"
-            if [ -n "$after" ] && [ "$after" != "$before" ]; then
-              echo "Nouvelle instance en service — kid après : $after"
-              exit 0
-            fi
-            echo "Build Render en cours (l'ancienne instance sert encore)…"
-            sleep 15
-          done
-          echo "::error::L'instance n'a pas été remplacée sous 15 minutes (swap ou disque non renouvelés)"
-          exit 1
-        env:
-          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
-      - name: Attente de l'OP public ($OP_URL - issuer conforme)
-        # Exécuté APRÈS le redéploiement : l'instance Render est maintenant
-        # celle du commit $GITHUB_SHA, qui déclare PURIDENTITYSERVER_ISSUER =
-        # $OP_URL (reverse proxy #133). On attend que le proxy réponde avec
-        # `issuer == OP_URL` (validation de bout en bout du câblage).
-        run: |
-          deadline=$((SECONDS + 900))
-          until [ $SECONDS -ge $deadline ]; do
-            issuer=$(curl -fsS --max-time 15 "$OP_URL/.well-known/openid-configuration" \
-              | python3 -c 'import json,sys;print(json.load(sys.stdin)["issuer"])' 2>/dev/null) \
-              && [ "$issuer" = "$OP_URL" ] && { echo "OP public prêt : $issuer"; exit 0; }
-            echo "OP public pas encore prêt (issuer: ${issuer:-?} - attendu $OP_URL)."
-            sleep 15
-          done
-          echo "::error::L'OP public $OP_URL n'a pas annoncé l'issuer attendu sous 15 minutes" && exit 1
-      - name: Vérification de la validité des fichiers de plans
-        run: python3 -c "import json,glob; [json.load(open(p)) for p in glob.glob('certification/plans/*.json')]"
-
-      - name: Vérification de la présence du secret CONFORMANCE_TOKEN
-        # Mode witness hébergé : l'accès à l'API de certification.openid.net
-        # passe par un Bearer token délivré par l'OpenID Foundation. Un secret
-        # manquant doit échouer SEC maintenant (message clair), pas via un
-        # KeyError/traceback du driver en plein milieu du run — et surtout pas
-        # dans chacun des 9 jobs matrix (9 clones + 9 attentes avant d'échouer).
-        run: |
-          if [ -z "$CONFORMANCE_TOKEN" ]; then
-            echo "::error::Secret CONFORMANCE_TOKEN absent. Le créer ainsi :"
-            echo "::error::  gh secret set CONFORMANCE_TOKEN -R \${{ github.repository }} --body '<token OIDF>'"
-            exit 1
-          fi
-          echo "Token CONFORMANCE présent (36 caractères attendus)" | tee -a "$GITHUB_STEP_SUMMARY"
-
-      - name: Attente de l'API de certification.openid.net (Bearer $CONFORMANCE_TOKEN)
-        # L'automation navigateur (WebRunner/Selenium) tourne dans l'infra stable
-        # de l'OpenID Foundation qui atteint notre OP Render public : plus aucune
-        # suite/driver docker à démarrer sur le runner éphémère.
-        run: |
-          deadline=$((SECONDS + 600))
-          until [ $SECONDS -ge $deadline ]; do
-            if [ $(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' \
-                -H "Authorization: Bearer $CONFORMANCE_TOKEN" \
-                "$CONFORMANCE_SERVER"api/runner/available) = 200 ]; then
-              echo "API de certification accessible (instance hébergée) : OK"
-              exit 0
-            fi
-            echo "API de certification pas encore joignable…"
-            sleep 10
-          done
-          echo "::error::L'API de certification.openid.net n'a pas répondu (token invalide ou réseau) en 10 min" && exit 1
-
-      - name: Captures d'écran réelles des modules de relecture (Playwright)
-        # Les modules laissés en REVIEW par la suite (4 modules Core + 6 dynamic
-        # + 16 FAPI1 + 4 FAPI2, issue #138 / #168) exigent une capture
-        # téléversée via l'ImageAPI
-        # de la suite : ce script rejoue ces 30 scénarios contre l'OP déposé
-        # avec chromium headless et dépose <testName>.png dans screenshots/.
-        # PyJWT + cryptography signent les request objects des scénarios FAPI
-        # avec les clés des clients statiques (certification/plans/).
-        # Blocant (issue #161) : le script exige les 30 captures et sort en
-        # code non nul dès qu'une scène échoue — sans elles, aucun job plan ne
-        # pourrait alimenter les placeholders REVIEW.
-        # Une seule exécution par run : les 9 jobs matrix téléchargent le
-        # résultat en artefact (lancer Playwright ×6 ferait ×6 le temps de
-        # build navigateur et 4 relevés concurrents du même OP).
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/screenshots"
-          python3 -m pip install --disable-pip-version-check --quiet playwright "pyjwt[cryptography]"
-          python3 -m playwright install --with-deps chromium
-          python3 certification/capture_screenshots.py \
-            --base-url "$OP_URL" \
-            --out "$GITHUB_WORKSPACE/screenshots"
-          ls -l "$GITHUB_WORKSPACE/screenshots"
-
-      - name: Upload des captures d'écran réelles
-        # Les PNG téléversés aux modules de relecture (ImageAPI) sont gardés
-        # sous la main pour contrôle humain : c'est la preuve visible des
-        # verdicts REVIEW, au même titre que le rapport sur GitHub Pages.
-        # Sans échec de l'étape précédente (sinon le job est déjà rouge,
-        # issue #161), le répertoire contient les 30 PNG.
-        uses: actions/upload-artifact@v7
-        with:
-          name: certification-screenshots
-          path: screenshots/
-          if-no-files-found: ignore
-
-  plan:
-    name: Plan ${{ matrix.plan }} (witness)
-    needs: prepare
-    runs-on: ubuntu-latest
-    env:
-      # Secret du client d'administration de la certification (instance
-      # hebergee) : meme valeur que la variable
-      # `CERTIFICATION_ADMIN_CLIENT_SECRET` du tableau de bord Render, jamais
-      # commitee. Sans elle, le job ne peut pas appeler
-      # `POST /signing-keys/rotate` (le module oidcc-server-rotate-keys
-      # reproduit alors son ecart attendu).
-      CERTIFICATION_ADMIN_CLIENT_SECRET: ${{ secrets.CERTIFICATION_ADMIN_CLIENT_SECRET }}
-    strategy:
-      # Chaque plan continue même si un autre échoue : le rapport consolidé
-      # doit montrer l'état complet du run, pas s'arrêter au premier plan
-      # rouge (mode witness : les gaps de modules ne bloquent pas — les
-      # captures REVIEW, elles, restent bloquantes, cf. garde-fou issue #161).
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
-
-    steps:
-      - name: Checkout du dépôt
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Résolution de la dernière release publiée de la suite
-        # Dernier tag `release-vX.Y.Z` listé par `git ls-remote` sur
-        # gitlab.com/openid/conformance-suite (cf. issue #150) : la suite est
-        # toujours jouée dans sa dernière version publiée, par le même
-        # transport que le clone (pas d'API REST annexe). Échec = run en
-        # erreur : sans tag fiable, le run ne pourrait pas certifier la
-        # « dernière » version.
-        run: |
-          latest=$(git ls-remote --tags https://gitlab.com/openid/conformance-suite.git "refs/tags/release-v*" \
-            | python3 -c 'import re,sys; tags=[l.split("refs/tags/")[1].strip() for l in sys.stdin if "refs/tags/" in l]; tags=[t for t in tags if re.fullmatch(r"release-v\d+\.\d+\.\d+", t)]; tags.sort(key=lambda v: tuple(map(int, v.split("-v")[1].split(".")))); print(tags[-1] if tags else "")') || latest=""
-          if [ -z "$latest" ]; then
-            echo "::error::Dernière release de la suite injoignable (git ls-remote) — impossible de résoudre SUITE_VERSION"
-            exit 1
-          fi
-          echo "SUITE_VERSION=$latest" >> "$GITHUB_ENV"
-          echo "Suite de certification : $latest" | tee -a "$GITHUB_STEP_SUMMARY"
-
-      - name: Clone de la suite de certification (version résolue)
-        run: |
-          git clone --depth 1 --branch "$SUITE_VERSION" \
-            https://gitlab.com/openid/conformance-suite.git
-
-      - name: Substitution des URLs dans les plans
-        # {OPURL} : point d'entrée de l'OP (Render) ; {SUITEURL} : base de
-        # l'instance de la suite (les tâches « attente de l'envoi implicite »
-        # ne doivent matcher QUE le callback de la suite, jamais l'URL
-        # /authorize de l'OP qui contient elle aussi « callback » dans son
-        # paramètre redirect_uri).
-        run: |
-          for f in certification/plans/*.json; do
-            sed -i "s#{OPURL}#${OP_URL}#g" "$f"
-            sed -i "s#{SUITEURL}#${CONFORMANCE_SERVER}#g" "$f"
-          done
-          grep -h '"match"' certification/plans/*.json | sort -u
-
-      - name: Attente de l'API de certification.openid.net (Bearer $CONFORMANCE_TOKEN)
-        # Reprise du garde-fou de `prepare` (le secret a été validé là-bas) :
-        # sortie immédiate si l'API répond, 10 min max sinon — un plan qui
-        # partirait contre une API morte perdrait son tour de 600 s par module.
-        run: |
-          deadline=$((SECONDS + 600))
-          until [ $SECONDS -ge $deadline ]; do
-            if [ $(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' \
-                -H "Authorization: Bearer $CONFORMANCE_TOKEN" \
-                "$CONFORMANCE_SERVER"api/runner/available) = 200 ]; then
-              echo "API de certification accessible (instance hébergée) : OK"
-              exit 0
-            fi
-            echo "API de certification pas encore joignable…"
-            sleep 10
-          done
-          echo "::error::L'API de certification.openid.net n'a pas répondu (token invalide ou réseau) en 10 min" && exit 1
-
-      - name: Dépendances Python du driver officiel (httpx)
-        run: python3 -m pip install --disable-pip-version-check --quiet httpx
-
-      - name: Patch du driver (plans par alias + captures de relecture + libération d'alias + diagnostic d'interruption + plan stale)
-        # 1) au lieu de recréer un plan à chaque lancement (POST /api/plan), ce
-        #    qui accumule les plans et re-claime l'alias d'un run précédent, on
-        #    réutilise le plan existant du user quand sa config est inchangée.
-        # 2) certains modules Core (ex. oidcc-response-type-missing) se bloquent
-        #    sur un événement REVIEW « upload une capture d'écran » ; on remplit
-        #    ces placeholders automatiquement côté driver pour que la suite
-        #    puisse se terminer sans intervention humaine (mode witness).
-        # 3) la suite réserve l'alias à la création de chaque module : un module
-        #    encore actif (timeout dépassé, run annulé…) serait interrompu par le
-        #    module suivant (« Stopping test due to alias conflict »). Le driver
-        #    libère donc l'alias lui-même avant chaque création de module — et
-        #    comme chaque plan a UN alias distinct, les 9 jobs parallèles ne
-        #    peuvent pas s'interrompre mutuellement.
-        # 4) un module qui passe en INTERRUPTED ne donne dans la CI qu'un
-        #    « has moved to INTERRUPTED » : on y ajoute la cause réelle (statut,
-        #    résultat + 10 dernières entrées de son journal) pour distinguer un
-        #    conflit d'alias d'une erreur de configuration du test.
-        # 5) la suite hébergée peut renommer ou supprimer un test : le plan
-        #    réutilisé garde alors l'ancien id et chaque création de module
-        #    échoue en 500 « test module not found ». On valide la membership
-        #    du plan réutilisé contre le catalogue et on le recrée si besoin
-        #    (membership fraîche dès le premier run), et ce 500 déterministe
-        #    n'est jamais réessayé (1 tentative au lieu de 28).
-        run: |
-          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-reuse-plan.patch"
-          grep -n "def _plan_matching_configuration" conformance-suite/scripts/conformance.py
-          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-screenshots.patch"
-          grep -n "fill_required_screenshots" conformance-suite/scripts/conformance.py conformance-suite/scripts/run-test-plan.py
-          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-alias-release.patch"
-          grep -n "release_alias" conformance-suite/scripts/conformance.py conformance-suite/scripts/run-test-plan.py
-          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-interrupted-diagnostics.patch"
-          grep -n "describe_interruption" conformance-suite/scripts/conformance.py
-          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-stale-plan-recovery.patch"
-          grep -n "test module not found" conformance-suite/scripts/conformance.py
-          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-key-rotation.patch"
-          grep -n "rotate_op_signing_keys" conformance-suite/scripts/run-test-plan.py
-
-      - name: Timeout par module piloté par CONFORMANCE_MODULE_TIMEOUT
-        # Le driver upstream hardcode timeout=240 dans wait_for_state : on rend
-        # cette valeur réglable sans dévier du script officiel (patch sémantique).
-        working-directory: conformance-suite
-        run: |
-          sed -i 's/def wait_for_state(self, module_id, required_states, timeout=240):/def wait_for_state(self, module_id, required_states, timeout=int(os.getenv("CONFORMANCE_MODULE_TIMEOUT", "240"))):/' scripts/conformance.py
-          grep -n "CONFORMANCE_MODULE_TIMEOUT" scripts/conformance.py
-
-      - name: Jeton d'administration (rotation des clés de signature)
-        # Le patch `conformance-key-rotation` du driver appelle
-        # `POST /signing-keys/rotate` sur l'OP juste avant de démarrer le
-        # module `oidcc-server-rotate-keys` : la rotation des clés de
-        # signature doit tomber ENTRE les deux relevés du JWKS comparés par
-        # le module. Le jeton est obtenu par le grant client_credentials
-        # (client seed `certification-admin`).
-        run: |
-          token="$(bash certification/local/admin-token.sh "$OP_URL" certification/config.render.toml)"
-          if [ -z "$token" ]; then
-            echo "::error::jeton d'administration indisponible (client certification-admin)"
-            exit 1
-          fi
-          echo "KEY_ROTATION_ENDPOINT=$OP_URL/signing-keys/rotate" >> "$GITHUB_ENV"
-          echo "KEY_ROTATION_TOKEN=$token" >> "$GITHUB_ENV"
-          echo "rotation des clés de signature armée"
-
-      - name: Récupération des captures d'écran réelles (artefact prepare)
-        # Capture obligatoire (issue #161) : le job `prepare` vert garantit la
-        # présence de l'artefact ; un téléchargement impossible est un échec à
-        # proprement parler (le driver exigerait de toute façon chaque PNG).
-        uses: actions/download-artifact@v8
-        with:
-          name: certification-screenshots
-          path: screenshots
-
-      - name: Emplacement des captures d'écran
-        # L'artefact peut être déposé à plat (screenshots/*.png) ou avec son
-        # répertoire (screenshots/screenshots/*.png) : le driver ne lit que
-        # le premier niveau, on aplatit donc au besoin. Aucun PNG = échec
-        # explicite (captures REVIEW obligatoires, issue #161).
-        run: |
-          if [ ! -d screenshots ] || ! find screenshots -maxdepth 1 -name '*.png' -print -quit | grep -q .; then
-            echo "::error::Aucune capture REVIEW disponible (artefact prepare absent ou vide) — issue #161"
-            exit 1
-          fi
-          find screenshots -mindepth 2 -type f -name '*.png' -exec mv -t screenshots/ {} + 2>/dev/null || true
-          ls -l screenshots
-
-      - name: Lancement du plan ${{ matrix.plan }} (witness)
-        # Un seul plan par job (matrice) : chaque plan exporte ses .zip dans
-        # certification-results-<plan>. Toute la boucle séquentielle d'origine
-        # (PLAN_FILTER + for) disparaît — `fail-fast: false` + step non
-        # bloquant gardent le contrat witness (gaps acceptés).
-        continue-on-error: true
-        working-directory: conformance-suite
-        env:
-          # Captures réelles obligatoires produites par le job `prepare`
-          # (issue #161) : une capture absente ou invalide lève une erreur
-          # fatale dans le driver (détectée par le garde-fou ci-dessous, le
-          # step restant witness pour les gaps de modules). Exception plan
-          # federation : la mini-fédération qui héberge la trust chain des
-          # captures fédérées n'est joignable qu'en local (localhost:9444,
-          # certification/federation_capture_stub.py) — l'OP hébergé ne
-          # résout donc pas la chaîne du RP de capture : SCREENSHOTS_DIR
-          # reste vide pour ce plan (witness, PNG de secours pour ses 13
-          # modules REVIEW ; le local les couvre en captures réelles).
-          # Suivi : stub public joignable depuis Render, ou exemption
-          # déclarée dans certification/expected-failures/.
-          SCREENSHOTS_DIR: ${{ matrix.plan != 'federation' && format('{0}/screenshots', github.workspace) || '' }}
-        run: |
-          set +e
-          # Le driver écrit les exports (.zip) dans --export-dir : le créer
-          # sinon chaque téléchargement échoue en FileNotFoundError.
-          mkdir -p "$GITHUB_WORKSPACE/results"
-          echo "### Plan ${{ matrix.plan }} : ${{ matrix.selector }}" | tee -a "$GITHUB_STEP_SUMMARY"
-          python3 scripts/run-test-plan.py \
-            --export-dir "$GITHUB_WORKSPACE/results" \
-            "${{ matrix.selector }}" \
-            "$GITHUB_WORKSPACE/certification/plans/${{ matrix.plan }}.json" 2>&1 \
-            | tee "$GITHUB_WORKSPACE/driver-${{ matrix.plan }}.log" | tee -a "$GITHUB_STEP_SUMMARY"
-          code=${PIPESTATUS[0]}
-          echo "- exit code : $code (les gaps sont acceptés en mode witness)" | tee -a "$GITHUB_STEP_SUMMARY"
-          [ "$code" -eq 0 ] || echo "plan ${{ matrix.plan }} en échec partiel (witness)" | tee -a "$GITHUB_STEP_SUMMARY"
-
-      - name: "Garde-fou : captures REVIEW fournies (issue #161)"
-        # Le step Lancement reste witness (gaps de modules acceptés) : ce
-        # garde-fou y repère l'erreur fatale du driver sur une capture
-        # manquante/invalide et fait échouer le job malgré le contrat witness.
-        run: |
-          if grep -qE 'capture REVIEW (absente|invalide)' "$GITHUB_WORKSPACE/driver-${{ matrix.plan }}.log"; then
-            echo "::error::Capture REVIEW manquante ou invalide pendant le plan ${{ matrix.plan }} (captures obligatoires, issue #161)"
-            exit 1
-          fi
-          echo "Aucune capture REVIEW manquante pendant le plan ${{ matrix.plan }} : OK"
-
-      - name: Upload des exports du plan
-        # Un artefact par plan → le job `report` les fusionne. Aucun export
-        # (plan mort avant le premier module) = pas d'artefact : toléré ici,
-        # le garde-fou suivant transforme ce silence en échec visible.
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: certification-results-${{ matrix.plan }}
-          path: results/
-          if-no-files-found: ignore
-
-      - name: "Garde-fou : export du plan présent"
-        # Un plan crashé (config invalide, variante refusée…) ne produit
-        # AUCUN export alors que le reste du job reste vert (mode witness) :
-        # sans ce garde-fou, la config fapi1/fapi2 de l'issue #113 était partie
-        # en crash silencieux et le job affichait « success ». Seule
-        # l'absence TOTALE d'export échoue — les gaps (modules FAILED/REVIEW)
-        # produisent des exports et restent tolérés.
-        run: |
-          if [ -z "$(find results -mindepth 1 -print -quit 2>/dev/null)" ]; then
-            echo "::error::Aucun export pour le plan ${{ matrix.plan }} : exécution crashée avant tout module terminé (voir l'étape « Lancement »)"
-            exit 1
-          fi
-          echo "Export du plan ${{ matrix.plan }} présent : OK"
-
-  report:
-    name: Rapport statique (artefact, sans Pages)
-    needs: [prepare, plan]
-    # Publie même si un plan échoue — le contrat witness. Un
-    # `prepare` rouge (OP hors ligne, secret absent…) bloque la publication :
-    # rien n'a été joué, le rapport serait vide et masquerait la cause réelle.
-    # GitHub Pages n'est PLUS publiée ici (cf. issue #150) : le workflow local
-    # (certification-local.yml) en est seul propriétaire ; les résultats de ce
-    # run hébergé seront soumis à l'OpenID Foundation (à venir).
-    if: ${{ always() && needs.prepare.result == 'success' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout du dépôt
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Téléversement des exports de tous les plans
-        # `merge-multiple` : les artefacts certification-results-<plan> sont
-        # fusionnés dans le répertoire de travail (patron éprouvé par
-        # certification-local.yml), quel que soit le chemin interne
-        # retenu par upload-artifact.
-        uses: actions/download-artifact@v8
-        with:
-          pattern: certification-results-*
-          merge-multiple: true
-
-      - name: Fusion des exports dans results/
-        # report.py lit un répertoire plat (results/*.zip) : on y déplace les
-        # .zip livrés par chaque job matrix, qu'ils arrivent à la racine ou
-        # sous results/. Les .zip des plans sont nommés par plan (preuve du
-        # run séquentiel historique) : pas de collision.
-        run: |
-          mkdir -p results
-          find . -type f -name '*.zip' -not -path './results/*' -not -path './.git/*' \
-            -exec mv -t results/ {} + 2>/dev/null || true
-          ls -lh results | tee -a "$GITHUB_STEP_SUMMARY"
-
-      - name: Téléversement des captures d'écran réelles
-        # Rapport seul à tolérer l'absence (l'étape Playwright du job
-        # `prepare` a déjà fait échouer le run, issue #161) : ici on ne
-        # fait que présenter les images — jamais de second échec redondant.
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          name: certification-screenshots
-          path: screenshots
-
-      - name: Emplacement des captures d'écran
-        run: |
-          if [ -d screenshots ]; then
-            find screenshots -mindepth 2 -type f -name '*.png' -exec mv -t screenshots/ {} + 2>/dev/null || true
-          fi
-
-      - name: Génération du rapport statique
-        # --screenshots : les captures réelles des modules de relecture sont
-        # copiées dans _site/screenshots/ et affichées dans la section du
-        # module correspondant (répertoire absent = rapport sans image).
-        # Téléversé en artefact uniquement : la publication GitHub Pages est
-        # assurée par certification-local.yml (issue #150).
-        run: |
-          python3 certification/report.py \
-            --results results \
-            --site _site \
-            --screenshots "$GITHUB_WORKSPACE/screenshots"
-
-      - name: Upload des artefacts (rapports bruts consolidés)
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: certification-results
-          path: |
-            results/
-            _site/
-          if-no-files-found: ignore
+name: Certification OIDC
+
+# Suite de certification officielle OpenID Foundation (openid/conformance-suite),
+# jouée contre l'instance Render publique seedee (certification/config.render.toml).
+#
+# Déclenchement À LA DEMANDE UNIQUEMENT (workflow_dispatch) pour l'instant ;
+# le déclenchement automatique reviendra à la publication d'une release
+# (release: types: [published], cf. issue #150). Jobs WITNESS : les gaps Core
+# (modules ne passant pas encore) NE font pas échouer le workflow — la sortie
+# stricte (#130) s'applique au workflow local (certification-local.yml), seul
+# propriétaire de GitHub Pages. En revanche les captures REVIEW sont
+# OBLIGATOIRES (issue #161) : capture, téléchargement et remplissage sont
+# stricteurs et un pilier manquant fait échouer le run. Ce workflow ne publie
+# PLUS sur Pages : ses
+# résultats seront soumis directement à l'OpenID Foundation (à venir, #150).
+# Chaque run produit ses rapports en artefacts.
+#
+# La version de la suite est résolue À L'EXÉCUTION : dernier tag
+# `release-vX.Y.Z` listé par `git ls-remote` sur
+# gitlab.com/openid/conformance-suite (échec = run en erreur) — cf. issue #150.
+#
+# Issue #122 : les 10 s'exécutent EN PARALLÈLE (matrix de jobs, même
+# patron que certification-local.yml ; fapi2-message-signing ajouté par
+# l'issue #164, formpost par l'issue #165, dynamic par l'issue #168) : ~3 h
+# séquentielles deviennent la durée
+# du plan le plus long (~40 min) :
+# - job `prepare` UNIQUE : matrice depuis l'input `plan`, deploy hook Render
+#   (UNE SEULE fois — un redejob par plan remplacerait l'OP en plein run) et
+#   captures Playwright (artefact partagé) ;
+# - job `plan` ×9 (`fail-fast: false`) : clone + patches de la suite, un seul
+#   plan joué en mode witness, export → artefact `certification-results-<plan>`.
+#   Parallélisation sûre : chaque plan porte un alias distinct
+#   (`puridentityserver-<plan>`) et `release_alias` ne stoppe que son propre
+#   alias — voir certification/README.md (« Conflits d'alias ») ;
+# - job `report` : fusion des exports, `certification/report.py`, téléversement
+#   du rapport consolidé en artefact (Pages désormais gérée par le workflow
+#   local).
+#
+# Pré-requis :
+# - service Render libre (render.yaml) : https://puridentityserver-certification.onrender.com
+# - secret GitHub `RENDER_DEPLOY_HOOK_URL` (Render -> Service -> Settings -> Deploy Hook)
+# - variable optionnelle `CERTIFICATION_OP_URL` (URL publique de l'OP)
+
+on:
+  workflow_dispatch:
+    inputs:
+      plan:
+        # Permet un cycle de diagnostic rapide : ne lancer qu'un seul plan au
+        # lieu des dix (~30 min, même en parallèle le gain nul).
+        # `ekyc` (identité assurance) est HORS programme officiel de
+        # certification mais est joué dans le run `all` comme les autres.
+        # ⚠ Le plan `ekyc-test-plan-oidccore` n'existe que depuis le tag
+        # `release-v5.3.3` de la suite (14/10/2026) : si la suite déployée par
+        # l'OIDF est antérieure, ce job échoue (plan inconnu). Repli : retirer
+        # `ekyc` de `CERTIFICATION_PLANS` (certification/selectors.sh) — le
+        # workflow local, lui, épingle la dernière release et n'est pas
+        # concerné.
+        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + Dynamic + CIBA + FAPI1 + FAPI2 + FAPI2 Message Signing + ekyc ; ekyc = identité assurance, hors programme officiel)"
+        type: choice
+        required: false
+        default: all
+        options:
+          - all
+          - basic
+          - implicit
+          - hybrid
+          - formpost
+          - dynamic
+          - ciba
+          - fapi1
+          - fapi2
+          - fapi2-message-signing
+          - ekyc
+
+permissions:
+  contents: read
+
+env:
+  # Cible du déploiement Render (back-end interne, sans condition issuer).
+  RENDER_OP_URL: ${{ vars.RENDER_OP_URL || 'https://puridentityserver-certification.onrender.com' }}
+  # URL publique de l'OP (ou proxy mTLS #133) - celle que la suite utilise comme issuer.
+  OP_URL: ${{ vars.CERTIFICATION_OP_URL || 'https://puridentityserver-certification.onrender.com' }}
+  # Mode witness sur l'instance HÉBERGÉE officielle (OpenID Foundation) : le
+  # driver constructeur (run-test-plan.py) ne fait que des appels API REST
+  # authenticate Bearer (CONFORMANCE_TOKEN). L'automation navigateur
+  # (WebRunner/HtmlUnit/Selenium) tourne dans l'infra stable de la Fondation,
+  # qui atteint notre OP public (Render) — aucune dépendance docker quebrada
+  # sur le runner éphémère (plus de modules bloqués en WAITING).
+  CONFORMANCE_SERVER: https://www.certification.openid.net/
+  CONFORMANCE_TOKEN: ${{ secrets.CONFORMANCE_TOKEN }}
+  CONFORMANCE_MODULE_TIMEOUT: '600'
+
+concurrency:
+  group: certification
+  # Les runs se SERIALISENT (au lieu d'en annuler un en cours de route) : annuler un
+  # run laissait ses tests actifs sur l'instance hébergée de la Fondation, et le run
+  # suivant les interrompait alors avec « Stopping test due to alias conflict ».
+  # Intra-run, les plans parallèles sont sûrs : alias distincts + release_alias
+  # ne stoppe que le sien.
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Préparation (OP, déploiement, captures)
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Checkout du dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Matrice des plans à jouer
+        # Produit un JSON `{"include":[{"plan":…,"selector":…},…]}` consommé
+        # par le job matrix `plan`. Échoue SEC sur un input inconnu, avant
+        # toute consommation d'infra (deploy hook, Playwright, clone).
+        id: matrix
+        env:
+          # Vide sur push/schedule : les dix sont joués.
+          PLAN_FILTER: ${{ inputs.plan || 'all' }}
+        run: |
+          set -euo pipefail
+          # Selecteurs des plans : source unique partagee avec le workflow
+          # local et le lancement local (certification/local/run-plan.sh).
+          source certification/selectors.sh
+          plans=("${CERTIFICATION_PLANS[@]}")
+          if [ "$PLAN_FILTER" != "all" ]; then
+            selector_for "$PLAN_FILTER" > /dev/null || { echo "::error::Plan inconnu : $PLAN_FILTER"; exit 1; }
+            plans=("$PLAN_FILTER")
+          fi
+          entries=()
+          for p in "${plans[@]}"; do
+            entries+=("{\"plan\":\"$p\",\"selector\":\"$(selector_for "$p")\"}")
+          done
+          echo "matrix={\"include\":[$(IFS=,; echo "${entries[*]}")]}" >> "$GITHUB_OUTPUT"
+          echo "Plans du run : ${plans[*]}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Réveil Render (sans condition issuer)
+        # Le déploiement Render est asynchrone : ce premier appel réveille
+        # un service endormi et garantit que `jwks_kids` du hook suivant aboutit.
+        # On ne teste PAS encore `issuer == OP_URL` ici : l'instance live peut
+        # encore porter l'ancien issuer (changement d'URL publique #133).
+        run: |
+          deadline=$((SECONDS + 300))
+          until [ $SECONDS -ge $deadline ]; do
+            curl -fsS --max-time 15 "$RENDER_OP_URL/.well-known/openid-configuration" >/dev/null 2>&1 \
+              && { echo "Render réveillé : $RENDER_OP_URL"; exit 0; }
+            echo "Render pas encore prêt (cold start)..."
+            sleep 15
+          done
+          echo "::error::Render $RENDER_OP_URL n'a pas répondu sous 5 minutes" && exit 1
+
+      - name: Redéploiement de l'OP sur Render (deploy hook)
+        # ÉTAPE CRITIQUE DU JOB UNIQUE : le remplacement de l'instance n'est
+        # pas observable via le discovery (ancienne et nouvelle répondent
+        # pareil) : on compare les `kid` relevés avant le hook. Le disque
+        # éphémère de Render est recréé à chaque déploiement, la nouvelle
+        # instance publie donc d'autres clés — c'est le seul signal fiable du
+        # swap. Sans lui la suite courrait le risque d'enregistrer un client
+        # sur l'instance qui s'apprête à partir. Le deploy doit être déclenché
+        # UNE SEULE fois avant la matrice : 4 appels parallèles remplaceraient
+        # l'OP pendant que les plans jouent.
+        run: |
+          jwks_kids() {
+            curl -fsS --max-time 15 "$OP_URL/.well-known/jwks.json" \
+              | python3 -c 'import json,sys;print(",".join(sorted(str(k.get("kid","")) for k in json.load(sys.stdin)["keys"])))' 2>/dev/null || true
+          }
+          # `ref=$GITHUB_SHA` : deploy du commit EXACT du run. `render.yaml`
+          # verrouille `branch: main` : sans ce paramètre, une validation sur
+          # branche de PR déploierait main et l'OP ne recevrait jamais la
+          # config de la branche (ex. clients_seed FAPI, issue #113). Sur
+          # main, le SHA est la tête de branche : comportement identique.
+          hook="$RENDER_DEPLOY_HOOK_URL"
+          case "$hook" in
+            *\?*) hook="${hook}&ref=${GITHUB_SHA}" ;;
+            *) hook="${hook}?ref=${GITHUB_SHA}" ;;
+          esac
+          before="$(jwks_kids)"
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+            echo "Secret RENDER_DEPLOY_HOOK_URL absent : redéploiement manuel requis."
+            exit 0
+          fi
+          if [ -z "$before" ]; then
+            echo "::warning::JWKS injoignable avant le hook : le remplacement de l'instance ne sera pas confirmé."
+            curl -sSf -X POST "$hook"
+            exit 0
+          fi
+          curl -sSf -X POST "$hook"
+          echo "Déploiement déclenché (ref $GITHUB_SHA) — kid avant : $before"
+          deadline=$((SECONDS + 900))
+          while [ $SECONDS -lt $deadline ]; do
+            after="$(jwks_kids)"
+            if [ -n "$after" ] && [ "$after" != "$before" ]; then
+              echo "Nouvelle instance en service — kid après : $after"
+              exit 0
+            fi
+            echo "Build Render en cours (l'ancienne instance sert encore)…"
+            sleep 15
+          done
+          echo "::error::L'instance n'a pas été remplacée sous 15 minutes (swap ou disque non renouvelés)"
+          exit 1
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+      - name: Attente de l'OP public ($OP_URL - issuer conforme)
+        # Exécuté APRÈS le redéploiement : l'instance Render est maintenant
+        # celle du commit $GITHUB_SHA, qui déclare PURIDENTITYSERVER_ISSUER =
+        # $OP_URL (reverse proxy #133). On attend que le proxy réponde avec
+        # `issuer == OP_URL` (validation de bout en bout du câblage).
+        run: |
+          deadline=$((SECONDS + 900))
+          until [ $SECONDS -ge $deadline ]; do
+            issuer=$(curl -fsS --max-time 15 "$OP_URL/.well-known/openid-configuration" \
+              | python3 -c 'import json,sys;print(json.load(sys.stdin)["issuer"])' 2>/dev/null) \
+              && [ "$issuer" = "$OP_URL" ] && { echo "OP public prêt : $issuer"; exit 0; }
+            echo "OP public pas encore prêt (issuer: ${issuer:-?} - attendu $OP_URL)."
+            sleep 15
+          done
+          echo "::error::L'OP public $OP_URL n'a pas annoncé l'issuer attendu sous 15 minutes" && exit 1
+      - name: Vérification de la validité des fichiers de plans
+        run: python3 -c "import json,glob; [json.load(open(p)) for p in glob.glob('certification/plans/*.json')]"
+
+      - name: Vérification de la présence du secret CONFORMANCE_TOKEN
+        # Mode witness hébergé : l'accès à l'API de certification.openid.net
+        # passe par un Bearer token délivré par l'OpenID Foundation. Un secret
+        # manquant doit échouer SEC maintenant (message clair), pas via un
+        # KeyError/traceback du driver en plein milieu du run — et surtout pas
+        # dans chacun des 9 jobs matrix (9 clones + 9 attentes avant d'échouer).
+        run: |
+          if [ -z "$CONFORMANCE_TOKEN" ]; then
+            echo "::error::Secret CONFORMANCE_TOKEN absent. Le créer ainsi :"
+            echo "::error::  gh secret set CONFORMANCE_TOKEN -R \${{ github.repository }} --body '<token OIDF>'"
+            exit 1
+          fi
+          echo "Token CONFORMANCE présent (36 caractères attendus)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Attente de l'API de certification.openid.net (Bearer $CONFORMANCE_TOKEN)
+        # L'automation navigateur (WebRunner/Selenium) tourne dans l'infra stable
+        # de l'OpenID Foundation qui atteint notre OP Render public : plus aucune
+        # suite/driver docker à démarrer sur le runner éphémère.
+        run: |
+          deadline=$((SECONDS + 600))
+          until [ $SECONDS -ge $deadline ]; do
+            if [ $(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' \
+                -H "Authorization: Bearer $CONFORMANCE_TOKEN" \
+                "$CONFORMANCE_SERVER"api/runner/available) = 200 ]; then
+              echo "API de certification accessible (instance hébergée) : OK"
+              exit 0
+            fi
+            echo "API de certification pas encore joignable…"
+            sleep 10
+          done
+          echo "::error::L'API de certification.openid.net n'a pas répondu (token invalide ou réseau) en 10 min" && exit 1
+
+      - name: Captures d'écran réelles des modules de relecture (Playwright)
+        # Les modules laissés en REVIEW par la suite (4 modules Core + 6 dynamic
+        # + 16 FAPI1 + 4 FAPI2, issue #138 / #168) exigent une capture
+        # téléversée via l'ImageAPI
+        # de la suite : ce script rejoue ces 30 scénarios contre l'OP déposé
+        # avec chromium headless et dépose <testName>.png dans screenshots/.
+        # PyJWT + cryptography signent les request objects des scénarios FAPI
+        # avec les clés des clients statiques (certification/plans/).
+        # Blocant (issue #161) : le script exige les 30 captures et sort en
+        # code non nul dès qu'une scène échoue — sans elles, aucun job plan ne
+        # pourrait alimenter les placeholders REVIEW.
+        # Une seule exécution par run : les 9 jobs matrix téléchargent le
+        # résultat en artefact (lancer Playwright ×6 ferait ×6 le temps de
+        # build navigateur et 4 relevés concurrents du même OP).
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/screenshots"
+          python3 -m pip install --disable-pip-version-check --quiet playwright "pyjwt[cryptography]"
+          python3 -m playwright install --with-deps chromium
+          python3 certification/capture_screenshots.py \
+            --base-url "$OP_URL" \
+            --out "$GITHUB_WORKSPACE/screenshots"
+          ls -l "$GITHUB_WORKSPACE/screenshots"
+
+      - name: Upload des captures d'écran réelles
+        # Les PNG téléversés aux modules de relecture (ImageAPI) sont gardés
+        # sous la main pour contrôle humain : c'est la preuve visible des
+        # verdicts REVIEW, au même titre que le rapport sur GitHub Pages.
+        # Sans échec de l'étape précédente (sinon le job est déjà rouge,
+        # issue #161), le répertoire contient les 30 PNG.
+        uses: actions/upload-artifact@v7
+        with:
+          name: certification-screenshots
+          path: screenshots/
+          if-no-files-found: ignore
+
+  plan:
+    name: Plan ${{ matrix.plan }} (witness)
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      # Secret du client d'administration de la certification (instance
+      # hebergee) : meme valeur que la variable
+      # `CERTIFICATION_ADMIN_CLIENT_SECRET` du tableau de bord Render, jamais
+      # commitee. Sans elle, le job ne peut pas appeler
+      # `POST /signing-keys/rotate` (le module oidcc-server-rotate-keys
+      # reproduit alors son ecart attendu).
+      CERTIFICATION_ADMIN_CLIENT_SECRET: ${{ secrets.CERTIFICATION_ADMIN_CLIENT_SECRET }}
+    strategy:
+      # Chaque plan continue même si un autre échoue : le rapport consolidé
+      # doit montrer l'état complet du run, pas s'arrêter au premier plan
+      # rouge (mode witness : les gaps de modules ne bloquent pas — les
+      # captures REVIEW, elles, restent bloquantes, cf. garde-fou issue #161).
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+
+    steps:
+      - name: Checkout du dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Résolution de la dernière release publiée de la suite
+        # Dernier tag `release-vX.Y.Z` listé par `git ls-remote` sur
+        # gitlab.com/openid/conformance-suite (cf. issue #150) : la suite est
+        # toujours jouée dans sa dernière version publiée, par le même
+        # transport que le clone (pas d'API REST annexe). Échec = run en
+        # erreur : sans tag fiable, le run ne pourrait pas certifier la
+        # « dernière » version.
+        run: |
+          latest=$(git ls-remote --tags https://gitlab.com/openid/conformance-suite.git "refs/tags/release-v*" \
+            | python3 -c 'import re,sys; tags=[l.split("refs/tags/")[1].strip() for l in sys.stdin if "refs/tags/" in l]; tags=[t for t in tags if re.fullmatch(r"release-v\d+\.\d+\.\d+", t)]; tags.sort(key=lambda v: tuple(map(int, v.split("-v")[1].split(".")))); print(tags[-1] if tags else "")') || latest=""
+          if [ -z "$latest" ]; then
+            echo "::error::Dernière release de la suite injoignable (git ls-remote) — impossible de résoudre SUITE_VERSION"
+            exit 1
+          fi
+          echo "SUITE_VERSION=$latest" >> "$GITHUB_ENV"
+          echo "Suite de certification : $latest" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Clone de la suite de certification (version résolue)
+        run: |
+          git clone --depth 1 --branch "$SUITE_VERSION" \
+            https://gitlab.com/openid/conformance-suite.git
+
+      - name: Substitution des URLs dans les plans
+        # {OPURL} : point d'entrée de l'OP (Render) ; {SUITEURL} : base de
+        # l'instance de la suite (les tâches « attente de l'envoi implicite »
+        # ne doivent matcher QUE le callback de la suite, jamais l'URL
+        # /authorize de l'OP qui contient elle aussi « callback » dans son
+        # paramètre redirect_uri).
+        run: |
+          for f in certification/plans/*.json; do
+            sed -i "s#{OPURL}#${OP_URL}#g" "$f"
+            sed -i "s#{SUITEURL}#${CONFORMANCE_SERVER}#g" "$f"
+          done
+          grep -h '"match"' certification/plans/*.json | sort -u
+
+      - name: Attente de l'API de certification.openid.net (Bearer $CONFORMANCE_TOKEN)
+        # Reprise du garde-fou de `prepare` (le secret a été validé là-bas) :
+        # sortie immédiate si l'API répond, 10 min max sinon — un plan qui
+        # partirait contre une API morte perdrait son tour de 600 s par module.
+        run: |
+          deadline=$((SECONDS + 600))
+          until [ $SECONDS -ge $deadline ]; do
+            if [ $(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' \
+                -H "Authorization: Bearer $CONFORMANCE_TOKEN" \
+                "$CONFORMANCE_SERVER"api/runner/available) = 200 ]; then
+              echo "API de certification accessible (instance hébergée) : OK"
+              exit 0
+            fi
+            echo "API de certification pas encore joignable…"
+            sleep 10
+          done
+          echo "::error::L'API de certification.openid.net n'a pas répondu (token invalide ou réseau) en 10 min" && exit 1
+
+      - name: Dépendances Python du driver officiel (httpx)
+        run: python3 -m pip install --disable-pip-version-check --quiet httpx
+
+      - name: Patch du driver (captures de relecture + libération d'alias + diagnostic d'interruption + rotation des clés)
+        # Issue #132 : conformance-reuse-plan et conformance-stale-plan-recovery
+        # retires -> chaque run cree ses plans frais (POST /api/plan).
+        run: |
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-screenshots.patch"
+          grep -n "fill_required_screenshots" conformance-suite/scripts/conformance.py conformance-suite/scripts/run-test-plan.py
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-alias-release.patch"
+          grep -n "release_alias" conformance-suite/scripts/conformance.py conformance-suite/scripts/run-test-plan.py
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-interrupted-diagnostics.patch"
+          grep -n "describe_interruption" conformance-suite/scripts/conformance.py
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-key-rotation.patch"
+          grep -n "rotate_op_signing_keys" conformance-suite/scripts/run-test-plan.py
+
+      - name: Timeout par module piloté par CONFORMANCE_MODULE_TIMEOUT
+        # Le driver upstream hardcode timeout=240 dans wait_for_state : on rend
+        # cette valeur réglable sans dévier du script officiel (patch sémantique).
+        working-directory: conformance-suite
+        run: |
+          sed -i 's/def wait_for_state(self, module_id, required_states, timeout=240):/def wait_for_state(self, module_id, required_states, timeout=int(os.getenv("CONFORMANCE_MODULE_TIMEOUT", "240"))):/' scripts/conformance.py
+          grep -n "CONFORMANCE_MODULE_TIMEOUT" scripts/conformance.py
+
+      - name: Jeton d'administration (rotation des clés de signature)
+        # Le patch `conformance-key-rotation` du driver appelle
+        # `POST /signing-keys/rotate` sur l'OP juste avant de démarrer le
+        # module `oidcc-server-rotate-keys` : la rotation des clés de
+        # signature doit tomber ENTRE les deux relevés du JWKS comparés par
+        # le module. Le jeton est obtenu par le grant client_credentials
+        # (client seed `certification-admin`).
+        run: |
+          token="$(bash certification/local/admin-token.sh "$OP_URL" certification/config.render.toml)"
+          if [ -z "$token" ]; then
+            echo "::error::jeton d'administration indisponible (client certification-admin)"
+            exit 1
+          fi
+          echo "KEY_ROTATION_ENDPOINT=$OP_URL/signing-keys/rotate" >> "$GITHUB_ENV"
+          echo "KEY_ROTATION_TOKEN=$token" >> "$GITHUB_ENV"
+          echo "rotation des clés de signature armée"
+
+      - name: Récupération des captures d'écran réelles (artefact prepare)
+        # Capture obligatoire (issue #161) : le job `prepare` vert garantit la
+        # présence de l'artefact ; un téléchargement impossible est un échec à
+        # proprement parler (le driver exigerait de toute façon chaque PNG).
+        uses: actions/download-artifact@v8
+        with:
+          name: certification-screenshots
+          path: screenshots
+
+      - name: Emplacement des captures d'écran
+        # L'artefact peut être déposé à plat (screenshots/*.png) ou avec son
+        # répertoire (screenshots/screenshots/*.png) : le driver ne lit que
+        # le premier niveau, on aplatit donc au besoin. Aucun PNG = échec
+        # explicite (captures REVIEW obligatoires, issue #161).
+        run: |
+          if [ ! -d screenshots ] || ! find screenshots -maxdepth 1 -name '*.png' -print -quit | grep -q .; then
+            echo "::error::Aucune capture REVIEW disponible (artefact prepare absent ou vide) — issue #161"
+            exit 1
+          fi
+          find screenshots -mindepth 2 -type f -name '*.png' -exec mv -t screenshots/ {} + 2>/dev/null || true
+          ls -l screenshots
+
+      - name: Lancement du plan ${{ matrix.plan }} (witness)
+        # Un seul plan par job (matrice) : chaque plan exporte ses .zip dans
+        # certification-results-<plan>. Toute la boucle séquentielle d'origine
+        # (PLAN_FILTER + for) disparaît — `fail-fast: false` + step non
+        # bloquant gardent le contrat witness (gaps acceptés).
+        continue-on-error: true
+        working-directory: conformance-suite
+        env:
+          # Captures réelles obligatoires produites par le job `prepare`
+          # (issue #161) : une capture absente ou invalide lève une erreur
+          # fatale dans le driver (détectée par le garde-fou ci-dessous, le
+          # step restant witness pour les gaps de modules). Exception plan
+          # federation : la mini-fédération qui héberge la trust chain des
+          # captures fédérées n'est joignable qu'en local (localhost:9444,
+          # certification/federation_capture_stub.py) — l'OP hébergé ne
+          # résout donc pas la chaîne du RP de capture : SCREENSHOTS_DIR
+          # reste vide pour ce plan (witness, PNG de secours pour ses 13
+          # modules REVIEW ; le local les couvre en captures réelles).
+          # Suivi : stub public joignable depuis Render, ou exemption
+          # déclarée dans certification/expected-failures/.
+          SCREENSHOTS_DIR: ${{ matrix.plan != 'federation' && format('{0}/screenshots', github.workspace) || '' }}
+        run: |
+          set +e
+          # Le driver écrit les exports (.zip) dans --export-dir : le créer
+          # sinon chaque téléchargement échoue en FileNotFoundError.
+          mkdir -p "$GITHUB_WORKSPACE/results"
+          echo "### Plan ${{ matrix.plan }} : ${{ matrix.selector }}" | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 scripts/run-test-plan.py \
+            --export-dir "$GITHUB_WORKSPACE/results" \
+            "${{ matrix.selector }}" \
+            "$GITHUB_WORKSPACE/certification/plans/${{ matrix.plan }}.json" 2>&1 \
+            | tee "$GITHUB_WORKSPACE/driver-${{ matrix.plan }}.log" | tee -a "$GITHUB_STEP_SUMMARY"
+          code=${PIPESTATUS[0]}
+          echo "- exit code : $code (les gaps sont acceptés en mode witness)" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$code" -eq 0 ] || echo "plan ${{ matrix.plan }} en échec partiel (witness)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: "Garde-fou : captures REVIEW fournies (issue #161)"
+        # Le step Lancement reste witness (gaps de modules acceptés) : ce
+        # garde-fou y repère l'erreur fatale du driver sur une capture
+        # manquante/invalide et fait échouer le job malgré le contrat witness.
+        run: |
+          if grep -qE 'capture REVIEW (absente|invalide)' "$GITHUB_WORKSPACE/driver-${{ matrix.plan }}.log"; then
+            echo "::error::Capture REVIEW manquante ou invalide pendant le plan ${{ matrix.plan }} (captures obligatoires, issue #161)"
+            exit 1
+          fi
+          echo "Aucune capture REVIEW manquante pendant le plan ${{ matrix.plan }} : OK"
+
+      - name: Upload des exports du plan
+        # Un artefact par plan → le job `report` les fusionne. Aucun export
+        # (plan mort avant le premier module) = pas d'artefact : toléré ici,
+        # le garde-fou suivant transforme ce silence en échec visible.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: certification-results-${{ matrix.plan }}
+          path: results/
+          if-no-files-found: ignore
+
+      - name: "Garde-fou : export du plan présent"
+        # Un plan crashé (config invalide, variante refusée…) ne produit
+        # AUCUN export alors que le reste du job reste vert (mode witness) :
+        # sans ce garde-fou, la config fapi1/fapi2 de l'issue #113 était partie
+        # en crash silencieux et le job affichait « success ». Seule
+        # l'absence TOTALE d'export échoue — les gaps (modules FAILED/REVIEW)
+        # produisent des exports et restent tolérés.
+        run: |
+          if [ -z "$(find results -mindepth 1 -print -quit 2>/dev/null)" ]; then
+            echo "::error::Aucun export pour le plan ${{ matrix.plan }} : exécution crashée avant tout module terminé (voir l'étape « Lancement »)"
+            exit 1
+          fi
+          echo "Export du plan ${{ matrix.plan }} présent : OK"
+
+  report:
+    name: Rapport statique (artefact, sans Pages)
+    needs: [prepare, plan]
+    # Publie même si un plan échoue — le contrat witness. Un
+    # `prepare` rouge (OP hors ligne, secret absent…) bloque la publication :
+    # rien n'a été joué, le rapport serait vide et masquerait la cause réelle.
+    # GitHub Pages n'est PLUS publiée ici (cf. issue #150) : le workflow local
+    # (certification-local.yml) en est seul propriétaire ; les résultats de ce
+    # run hébergé seront soumis à l'OpenID Foundation (à venir).
+    if: ${{ always() && needs.prepare.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Téléversement des exports de tous les plans
+        # `merge-multiple` : les artefacts certification-results-<plan> sont
+        # fusionnés dans le répertoire de travail (patron éprouvé par
+        # certification-local.yml), quel que soit le chemin interne
+        # retenu par upload-artifact.
+        uses: actions/download-artifact@v8
+        with:
+          pattern: certification-results-*
+          merge-multiple: true
+
+      - name: Fusion des exports dans results/
+        # report.py lit un répertoire plat (results/*.zip) : on y déplace les
+        # .zip livrés par chaque job matrix, qu'ils arrivent à la racine ou
+        # sous results/. Les .zip des plans sont nommés par plan (preuve du
+        # run séquentiel historique) : pas de collision.
+        run: |
+          mkdir -p results
+          find . -type f -name '*.zip' -not -path './results/*' -not -path './.git/*' \
+            -exec mv -t results/ {} + 2>/dev/null || true
+          ls -lh results | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Téléversement des captures d'écran réelles
+        # Rapport seul à tolérer l'absence (l'étape Playwright du job
+        # `prepare` a déjà fait échouer le run, issue #161) : ici on ne
+        # fait que présenter les images — jamais de second échec redondant.
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: certification-screenshots
+          path: screenshots
+
+      - name: Purge des plans stale (issue #132, garde les 3 derniers par alias)
+        # Supprime les plans non publies des runs precedents pour chaque alias,
+        # sans jamais toucher un plan publie (l'API refuse en 405/403).
+        if: always()
+        env:
+          CONFORMANCE_SERVER: ${{ env.CONFORMANCE_SERVER }}
+          CONFORMANCE_TOKEN: ${{ secrets.CONFORMANCE_TOKEN }}
+          KEEP_PLANS: '3'
+        run: |
+          python3 -m pip install --disable-pip-version-check --quiet httpx >/dev/null
+          python3 certification/prune_stale_plans.py
+
+      - name: Emplacement des captures d'écran
+        run: |
+          if [ -d screenshots ]; then
+            find screenshots -mindepth 2 -type f -name '*.png' -exec mv -t screenshots/ {} + 2>/dev/null || true
+          fi
+
+      - name: Génération du rapport statique
+        # --screenshots : les captures réelles des modules de relecture sont
+        # copiées dans _site/screenshots/ et affichées dans la section du
+        # module correspondant (répertoire absent = rapport sans image).
+        # Téléversé en artefact uniquement : la publication GitHub Pages est
+        # assurée par certification-local.yml (issue #150).
+        run: |
+          python3 certification/report.py \
+            --results results \
+            --site _site \
+            --screenshots "$GITHUB_WORKSPACE/screenshots"
+
+      - name: Upload des artefacts (rapports bruts consolidés)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: certification-results
+          path: |
+            results/
+            _site/
+          if-no-files-found: ignore

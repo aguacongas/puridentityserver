@@ -2,7 +2,7 @@
 # Application idempotente des patches du driver de la suite de certification.
 #
 # Reproduit a l'identique le step « Patch du driver » du workflow CI
-# (certification-local.yml) : les 5 patches certification/*.patch dans l'ordre
+# (certification-local.yml) : 4 patches certification/*.patch dans l'ordre
 # de reference, puis le timeout de module rendu parametrable via
 # CONFORMANCE_MODULE_TIMEOUT. Rejouable sans dommage : chaque patch est detecte
 # par sa sentinelle (ligne ajoutee unique, testee par contenu — insensible a
@@ -30,11 +30,9 @@ fi
 # vierge de la suite (verifie release v5.3.3) et unique dans scripts/conformance.py.
 sentinel_of() {
   case "$1" in
-    conformance-reuse-plan) printf '%s' '# Reuse a plan we already created when its configuration is unchanged:' ;;
     conformance-screenshots) printf '%s' "# Donnees (data URI) d'une capture d'ecran de secours" ;;
     conformance-alias-release) printf '%s' 'async def release_alias(self, alias, timeout=180):' ;;
     conformance-interrupted-diagnostics) printf '%s' 'async def describe_interruption(self, module_id):' ;;
-    conformance-stale-plan-recovery) printf '%s' "'test module not found' in str(body.get" ;;
     conformance-key-rotation) printf '%s' 'async def rotate_op_signing_keys():' ;;
     *) return 1 ;;
   esac
@@ -48,12 +46,13 @@ target_of() {
   esac
 }
 
+# conformance-reuse-plan et conformance-stale-plan-recovery retires (issue #132) :
+# chaque run cree ses plans frais (POST /api/plan). Leur purge en fin de run est
+# geree par certification/prune_stale_plans.py (DELETE /api/plan/{id}).
 for patch in \
-  conformance-reuse-plan \
   conformance-screenshots \
   conformance-alias-release \
   conformance-interrupted-diagnostics \
-  conformance-stale-plan-recovery \
   conformance-key-rotation; do
   target="$SUITE_DIR/$(target_of "$patch")"
   file="$PATCH_DIR/$patch.patch"
