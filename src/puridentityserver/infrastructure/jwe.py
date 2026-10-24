@@ -261,7 +261,7 @@ class JWERequestObjectDecrypter:
                 rsa_private_key=private_key,
             )
             return RequestObjectDecryptionResult(plaintext=plaintext.decode("utf-8"))
-        except (TypeError, ValueError, UnicodeDecodeError) as exc:
+        except (TypeError, ValueError) as exc:
             return RequestObjectDecryptionResult(reason=f"déchiffrement impossible : {exc}")
 
     async def _encryption_key(self, key_id: str) -> KeyPair | None:
