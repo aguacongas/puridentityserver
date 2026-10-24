@@ -1,5 +1,5 @@
-# flake8: noqa
 #!/usr/bin/env python3
+# flake8: noqa
 """Prune stale (unpublished) test plans on the OpenID Foundation conformance server.
 
 Issue #132 : chaque run cree des plans frais (1 run = 1 plan). On garde les N
@@ -13,6 +13,7 @@ Variables d'environnement (heritees du workflow certification.yml) :
   KEEP_PLANS           nombre de plans recents a conserver par planName (defaut 3)
   PLAN_NAME_PREFIX     prefixe de nom a considerer (defaut puridentityserver-)
 """
+
 from __future__ import annotations
 
 import os
@@ -89,10 +90,14 @@ def main() -> int:
         for name, group in groups.items():
             published = [p for p in group if _is_published(p)]
             unpublished = [p for p in group if not _is_published(p)]
-            unpublished.sort(key=lambda p: str(p.get("started") or p.get("_id") or ""), reverse=True)
+            unpublished.sort(
+                key=lambda p: str(p.get("started") or p.get("_id") or ""), reverse=True
+            )
             keep = unpublished[:KEEP]
             drop = unpublished[KEEP:]
-            print(f"prune: {name:<55s} total={len(group):3d} publies={len(published):2d} gardes={len(keep):2d} a_supprimer={len(drop):2d}")
+            print(
+                f"prune: {name:<55s} total={len(group):3d} publies={len(published):2d} gardes={len(keep):2d} a_supprimer={len(drop):2d}"
+            )
             for pl in drop:
                 to_delete.append((pl.get("_id"), name))
 
@@ -112,7 +117,9 @@ def main() -> int:
                 skipped += 1
                 print(f"prune: ignore {pid} ({name}) - HTTP {r.status_code} (plan conserve)")
             else:
-                print(f"prune: echec suppression {pid} ({name}) - HTTP {r.status_code} {r.text[:120]}")
+                print(
+                    f"prune: echec suppression {pid} ({name}) - HTTP {r.status_code} {r.text[:120]}"
+                )
         print(f"prune: {deleted} supprime(s), {skipped} conserve(s) (publies/immuables).")
     return 0
 
