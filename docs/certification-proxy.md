@@ -17,14 +17,15 @@ Stack cible : **Oracle Linux 9** (ou Ubuntu 22.04) + nginx + certbot (RSA) + Duc
 
 ## 0. Provisionnement avec la CLI OCI (optionnel, reproductible)
 
-La CLI OCI (module Python, version ≥ 3.0) permet d'automatiser toute la mise en place ci-dessous. Une fois authentifié (`oci session authenticate --profile-name DEFAULT`), les commandes suivantes créent le VCN, le subnet public, l'IP réservée et la VM. Adapter la région (`--region eu-marseille-1` mis par défaut dans `~/.oci/config`) et le compartment racine (`TENANCY_OCID`).
+La CLI OCI (module Python, version ≥ 3.0) permet d'automatiser toute la mise en place ci-dessous. Une fois authentifié (`oci session authenticate --profile-name DEFAULT`), les commandes suivantes créent le VCN, le subnet public, l'IP réservée et la VM dans **la région du compte OCI connecté** (contenu de `~/.oci/config` — le script respecte la région active sans valeur par défaut hardcodée). Le compartment racine est lu depuis `TENANCY_OCID` (ou `~/.oci/config`).
 
 ```bash
 # Variables d'environnement à positionner une fois pour toute la session
 export TENANCY_OCID="ocid1.tenancy.oc1..aaaa..."   # console OCI -> Profile -> Tenancy
-export REGION="eu-marseille-1"
+# REGION non positionnee : le script utilise la region du compte connecte
+# (contenu de ~/.oci/config). Surcharger uniquement si besoin.
 export DISPLAY_NAME="puridentity-mtls-proxy"
-export AVAILABILITY_DOMAIN="kWVD:EU-MARSEILLE-1-AD-1"   # oci iam availability-domain list
+# AVAILABILITY_DOMAIN non positionne : premier AD de la region (auto)
 
 # 0. Authentification (session token, valide ~1h)
 oci session authenticate --profile-name DEFAULT --region "${REGION}"

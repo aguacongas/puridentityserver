@@ -12,7 +12,7 @@ depuis un shell ou la session OCI est valide :
 
 Variables d'environnement optionnelles :
     TENANCY_OCID            (defaut : lu depuis ~/.oci/config)
-    REGION                  (defaut : lu depuis ~/.oci/config, ex. eu-marseille-1)
+    REGION                  (defaut : lu depuis ~/.oci/config -- region du compte connecte)
     DISPLAY_NAME            (defaut : puridentity-mtls-proxy)
     AVAILABILITY_DOMAIN     (defaut : premier AD de la region)
     COMPARTMENT_OCID        (defaut : tenancy root)
@@ -58,7 +58,9 @@ def _find(items: list, name: str, key: str = "display_name"):
 # --------------------------------------------------------------------------- #
 print("== Chargement de la config OCI ==")
 config = oci.config.from_file(str(CONFIG_PATH), PROFILE)
-region = _p("REGION", config.get("region", "eu-marseille-1"))
+region = _p("REGION", config.get("region"))
+if not region:
+    raise SystemExit("Region introuvable : definissez REGION ou configurez 'region=' dans ~/.oci/config.")
 config["region"] = region
 tenancy = _p("TENANCY_OCID", config["tenancy"])
 compartment = _p("COMPARTMENT_OCID", tenancy)
