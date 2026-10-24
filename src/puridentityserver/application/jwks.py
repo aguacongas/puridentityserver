@@ -67,18 +67,37 @@ class JWKSetUseCase:
     propres clés, publiées en parallèle dans le JWKS.
     """
 
-    def __init__(self, config: JWKSetConfig, key_manager: KeyManager) -> None:
-        """Injection de la configuration et du gestionnaire de clés."""
+    def __init__(
+        self,
+        config: JWKSetConfig,
+        key_manager: KeyManager,
+        *,
+        encryption_key_manager: KeyManager | None = None,
+    ) -> None:
+        """Injection de la configuration et du gestionnaire de clés.
+
+        ``encryption_key_manager`` gère la famille ``KeyUse.ENC`` — la clé
+        RSA de déchiffrement des request objects (OIDC Core 1.0 §10.1,
+        issue #204), publiée au JWKS aux côtés des clés de signature.
+        Sans injection, le JWKS ne porte que les clés de signature.
+        """
         self._config = config
         self._key_manager = key_manager
+        self._encryption_keys = encryption_key_manager
 
     async def initialise(self) -> None:
         """Génère une clé initiale par algorithme si le magasin est vide.
 
-        Les algorithmes symétriques (HS*) ne produisent aucune clé.
+        Les algorithmes symétriques (HS*) ne produisent aucune clé. La
+        famille ``enc`` — une clé RSA de déchiffrement des request objects
+        (OIDC Core 1.0 §10.1, issue #204) — reçoit sa clé initiale ici ;
+        elle n'est ni pivotée ni purgée avec les clés de signature, aucun
+        jeton longue durée n'en dépendant.
         """
         for algorithm in _managed_algorithms(self._config.algorithms):
             await self._key_manager.ensure_active_key(self._config.key_size, algorithm)
+        if self._encryption_keys is not None:
+            await self._encryption_keys.ensure_active_key(self._config.key_size, JWTAlgorithm.RS256)
 
     async def get_active_keys(self) -> list[KeyPair]:
         """Retourne les clés actives prêtes à être exposées dans le JWKS."""
@@ -97,6 +116,7 @@ class JWKSetUseCase:
         await self._key_manager.prune_inactive_keys(self._config.retained_keys)
         keys = await self._key_manager.get_active_keys()
         keys.extend(await self._key_manager.get_retained_keys(self._config.retained_keys))
+        keys.extend(await self._encryption_keys_to_publish())
         return keys
 
     async def rotate_signing_keys(self) -> list[KeyPair]:
@@ -114,6 +134,21 @@ class JWKSetUseCase:
             await self._key_manager.rotate_key(self._config.key_size, algorithm)
             for algorithm in _managed_algorithms(self._config.algorithms)
         ]
+
+    async def _encryption_keys_to_publish(self) -> list[KeyPair]:
+        """Clés ``enc`` publiées aux côtés des clés de signature (issue #204).
+
+        Leur cycle de vie est distinct de la rotation journalière : sans
+        clé active, la publication régénère celle-ci comme pour les
+        familles ``session``/``reset``/``verify`` au démarrage.
+        """
+        if self._encryption_keys is None:
+            return []
+        active = await self._encryption_keys.get_active_keys()
+        if not active:
+            await self._encryption_keys.ensure_active_key(self._config.key_size, JWTAlgorithm.RS256)
+            active = await self._encryption_keys.get_active_keys()
+        return active
 
     async def _mark_expired_keys(self) -> None:
         """Applique la politique de rotation journalière (retrait puis purge)."""

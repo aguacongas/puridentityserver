@@ -8,7 +8,8 @@ from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from pydantic import BaseModel
 
-from puridentityserver.domain.jwks import KeyPair
+from puridentityserver.domain.jwe import JWEKeyManagementAlgorithm
+from puridentityserver.domain.jwks import KeyPair, KeyUse
 
 
 class JWKKeyResponse(BaseModel):
@@ -25,8 +26,8 @@ class JWKKeyResponse(BaseModel):
 
     kty: str
     kid: str
-    use: str = "sig"
-    alg: str
+    use: str | None = "sig"
+    alg: str | None = None
     crv: str | None = None
     n: str | None = None
     e: str | None = None
@@ -38,11 +39,22 @@ class JWKKeyResponse(BaseModel):
         """Convertit une paire de clés (PEM) en JWK public."""
         public_key = load_pem_public_key(key_pair.public_key_pem.encode("ascii"))
 
+        # Une clé de chiffrement sert plusieurs algorithmes de gestion de
+        # clé (RSA-OAEP et RSA-OAEP-256 pour une même clé RSA) : le membre
+        # ``use`` reste omis (RFC 7517 §4.2, optionnel) pour rester
+        # compatible avec les validations JWKS de la suite de certification
+        # (OIDFED-3 / OIDCD-3, qui n'acceptent que ``use: sig`` ou absent),
+        # tandis que ``alg`` porte ``RSA-OAEP`` (OIDC Core 1.0 §10.1,
+        # issue #204). La suite sélectionne la clé via ``kty`` + ``use``
+        # (``{enc, null}``, cf. ``JWEUtil.selectAsymmetricKeyForEncryption``).
+        encrypted = key_pair.use is KeyUse.ENC
         common = {
             "kty": key_pair.algorithm.key_type.value,
             "kid": key_pair.kid,
-            "use": "sig",
-            "alg": key_pair.algorithm.value,
+            "use": None if encrypted else "sig",
+            "alg": (
+                JWEKeyManagementAlgorithm.RSA_OAEP.value if encrypted else key_pair.algorithm.value
+            ),
         }
         if isinstance(public_key, rsa.RSAPublicKey):
             common.update(

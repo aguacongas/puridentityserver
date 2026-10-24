@@ -49,6 +49,17 @@ jwks_key_size = 2048
 registration_enabled = true
 registration_initial_access_token_mode = "disabled"
 
+# OpenID Federation 1.1 (issue #170) : support actif pour tous les plans (les
+# routes de federation n'interferent pas avec les autres flux). L'ancre de
+# confiance est celle hebergee par la suite de conformance, sous le chemin de
+# l'instance de test (alias du plan `federation`, plans/federation.json) :
+# {SUITEURL}test/a/puridentityserver-federation/trust-anchor. L'hote
+# certification.openid.net est substitue par l'URL locale du harness
+# (certification/local/setup.sh, etape 6), le chemin /test/a/<alias>/ restant
+# identique dans les deux harness.
+federation_enabled = true
+federation_trust_anchors = ["https://www.certification.openid.net/test/a/puridentityserver-federation/trust-anchor"]
+
 # API d'administration (issue #194) : l'autorisation est branchee sur le
 # claim `client_id` (porte par tout access token) plutot que sur le scope
 # `admin` - ce scope n'etant pas enregistre, il serait impossible a un

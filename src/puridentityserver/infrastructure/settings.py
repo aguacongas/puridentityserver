@@ -368,6 +368,26 @@ class Settings(BaseSettings):
         method.value for method in ALL_ENCRYPTION_METHODS
     )
 
+    # Chiffrement des request objects en entrée (OIDC Core 1.0 §10.1,
+    # issue #204) : algorithmes ``alg``/``enc`` admis sur /authorize et
+    # /par, publiés au discovery (``request_object_encryption_alg_values_
+    # supported`` / ``request_object_encryption_enc_values_supported``) et
+    # dans l'entity statement fédéré. Le matériel — clé RSA `enc` de
+    # l'OP — est généré et publié automatiquement. Deux listes vides
+    # ferment la porte : tout request object chiffré est refusé.
+    # Surchargeables via `PURIDENTITYSERVER_REQUEST_OBJECT_ENCRYPTION_ALGORITHMS`
+    # / `..._METHODS` (listes séparées par des virgules).
+    request_object_encryption_algorithms: Annotated[tuple[str, ...], NoDecode] = (
+        JWEKeyManagementAlgorithm.RSA_OAEP.value,
+        JWEKeyManagementAlgorithm.RSA_OAEP_256.value,
+    )
+    request_object_encryption_methods: Annotated[tuple[str, ...], NoDecode] = (
+        JWEEncryptionMethod.A128CBC_HS256.value,
+        JWEEncryptionMethod.A256CBC_HS512.value,
+        JWEEncryptionMethod.A128GCM.value,
+        JWEEncryptionMethod.A256GCM.value,
+    )
+
     # OAuth 2.0 / OIDC (RFC 6749, RFC 7636) — durées de vie par défaut du
     # serveur. Un client peut les surcharger via `access_token_lifetime_seconds`
     # et/ou `authorization_code_lifetime_seconds` dans `clients_seed`.
@@ -402,6 +422,30 @@ class Settings(BaseSettings):
     # Desactive par defaut : sans lui, le scope est refuse comme inconnu et
     # aucun claim `openid2_id` n'est emis.
     openid20_migration_enabled: bool = False
+    # `federation_enabled` active le support d'OpenID Federation 1.1 :
+    # l'OP publie alors son entity statement (/.well-known/openid-federation)
+    # et peut resoudre la chaine de confiance d'un RP federe. Desactive par
+    # defaut : sans lui, aucune route de federation n'est montee.
+    federation_enabled: bool = False
+    # `federation_entity_identifier` est l'Entity Identifier de l'OP (une URL
+    # https sans query ni fragment, spec 1.2) ; vide = l'issuer de l'OP.
+    federation_entity_identifier: str = ""
+    # `federation_trust_anchors` : les ancres de confiance acceptees pour la
+    # resolution de chaine ; vide = resolution vers n'importe quelle ancre
+    # (developpement uniquement).
+    federation_trust_anchors: Annotated[tuple[str, ...], NoDecode] = ()
+    # `federation_statement_ttl_seconds` : duree de vie de l'entity statement.
+    federation_statement_ttl_seconds: int = 3600
+    # `federation_signing_alg` : algorithme de signature des entity statements
+    # (ES256 par defaut ; la suite accepte RSA >= 2048 et EC >= 256).
+    federation_signing_alg: str = "ES256"
+    # `federation_allow_local_targets` ouvre explicitement les destinations
+    # loopback/privées au fetch des entity statements (garde anti-SSRF, même
+    # mécanisme que `request_uri_allow_local_targets`) : requis par le harness
+    # de certification local, où la suite héberge son ancre de confiance sur
+    # `localhost.emobix.co.uk` (alias → 127.0.0.1). Ne jamais activer sur un
+    # déploiement exposé (issue #170).
+    federation_allow_local_targets: bool = False
     ciba_ttl_seconds: int = 600
     ciba_min_ttl_seconds: int = 60
     ciba_interval_seconds: int = 5
@@ -820,6 +864,20 @@ class Settings(BaseSettings):
         if unknown:
             raise ValueError(f"Méthodes de chiffrement non supportées : {', '.join(unknown)}")
         return value
+
+    @field_validator("request_object_encryption_algorithms")
+    @classmethod
+    def _validate_request_object_encryption_algorithms(
+        cls, value: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """Garantit que chaque algorithme de request object configuré est supporté."""
+        return cls._validate_encryption_algorithms(value)
+
+    @field_validator("request_object_encryption_methods")
+    @classmethod
+    def _validate_request_object_encryption_methods(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Garantit que chaque méthode de request object configurée est supportée."""
+        return cls._validate_encryption_methods(value)
 
     @cached_property
     def jwks_signing_algorithms(self) -> tuple[JWTAlgorithm, ...]:

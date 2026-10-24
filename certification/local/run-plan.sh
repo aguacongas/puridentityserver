@@ -171,6 +171,14 @@ if [ -f "$expected_file" ]; then
   expected_args=(--expected-failures-file "$expected_file")
   log "ecarts attendus (witness) : $expected_file"
 fi
+# Modules sautes attendus (capacite OP absente ou hors perimetre) : meme
+# format, fichier dedie <plan>-skips.json — le driver les classe en
+# « skipped as expected » au lieu d'« unexpected skip ».
+skips_file="$REPO_ROOT/certification/expected-failures/$plan-skips.json"
+if [ -f "$skips_file" ]; then
+  expected_args+=(--expected-skips-file "$skips_file")
+  log "sauts attendus (witness) : $skips_file"
+fi
 code=0
 (
   cd "$SUITE_DIR"
@@ -232,6 +240,9 @@ if [ -f "$expected_file" ]; then
   # restent visibles en FAILED/INTERRUPTED la, ou le code retour du driver
   # (ci-dessus) les a classes en « expected ».
   log "ecarts attendus (witness) : certification/expected-failures/$plan.json"
+fi
+if [ -f "$skips_file" ]; then
+  log "sauts attendus (witness) : certification/expected-failures/$plan-skips.json"
 fi
 
 log "export : $export_dir"

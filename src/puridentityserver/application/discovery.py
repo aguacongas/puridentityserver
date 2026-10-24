@@ -14,8 +14,10 @@ from puridentityserver.application.authorize import SUPPORTED_ACR_VALUES
 from puridentityserver.application.identity_assurance import IdentityAssuranceUseCase
 from puridentityserver.application.request_object import (
     PUBLISHED_REQUEST_OBJECT_SIGNING_ALGORITHMS,
+    REQUEST_OBJECT_ENCRYPTION_ALGORITHMS,
+    REQUEST_OBJECT_ENCRYPTION_METHODS,
 )
-from puridentityserver.domain.authorization import TokenEndpointAuthMethod
+from puridentityserver.domain.authorization import SubjectType, TokenEndpointAuthMethod
 from puridentityserver.domain.identity_resource import DEFAULT_IDENTITY_RESOURCES
 from puridentityserver.domain.jwe import (
     ALL_ENCRYPTION_ALGORITHMS,
@@ -67,6 +69,12 @@ class DiscoveryConfig:
         "urn:ietf:params:oauth:grant-type:jwt-bearer",
     )
     request_object_signing_algorithms: tuple[str, ...] = PUBLISHED_REQUEST_OBJECT_SIGNING_ALGORITHMS
+    # Chiffrement des request objects (OIDC Core 1.0 §10.1, issue #204) :
+    # publiés seulement si les deux listes sont renseignées — un OP qui
+    # ferme la porte n'en annonce rien, et la suite de certification saute
+    # alors son module ``…-with-jar-and-encrypted-request-object``.
+    request_object_encryption_algorithms: tuple[str, ...] = REQUEST_OBJECT_ENCRYPTION_ALGORITHMS
+    request_object_encryption_methods: tuple[str, ...] = REQUEST_OBJECT_ENCRYPTION_METHODS
     dpop_signing_algorithms: tuple[str, ...] = DPOP_SIGNING_ALGORITHMS
     # RFC 6749 §3.1.2.1 + ``form_post`` (Form Post Response Mode 1.0 §2) +
     # ``jwt`` (JARM Final 1.0 §3, ``CheckDiscEndpointResponseModesSupportedContainsJwt``).
@@ -83,6 +91,25 @@ class DiscoveryConfig:
     # ACR atteignables (OIDC Discovery 1.0 §2) : base du contrôle
     # ``unmet_authentication_requirements`` (RFC 9470 §2, issue #167).
     acr_values_supported: tuple[str, ...] = SUPPORTED_ACR_VALUES
+    # Fédération (OpenID Federation 1.1 §12) : modes d'enregistrement des
+    # clients (``automatic`` / ``explicit``) et endpoint d'enregistrement
+    # par la fédération. Publiés seulement quand la Fédération est activée.
+    client_registration_types_supported: tuple[str, ...] = ()
+    federation_registration_endpoint: str = ""
+
+
+#: Types de réponse publiés au discovery ET dans l'entity statement
+#: fédération (OIDC Discovery 1.0 §3 : ``response_types_supported`` est
+#: REQUIRED) : les combinaisons honorées par /authorize (Core §3.1.2.1).
+RESPONSE_TYPES_SUPPORTED: tuple[str, ...] = (
+    "code",
+    "id_token",
+    "token",
+    "id_token token",
+    "code id_token",
+    "code token",
+    "code id_token token",
+)
 
 
 class DiscoveryUseCase:
@@ -151,6 +178,13 @@ class DiscoveryUseCase:
             "grant_types_supported": list(self._config.grant_types_supported),
             "scopes_supported": scopes_supported,
             "claims_supported": claims_supported,
+            # OIDC Discovery 1.0 §3 : ``response_types_supported`` et
+            # ``subject_types_supported`` sont REQUIRED — émis par le cas
+            # d'usage pour que l'entity statement fédération (§5.1.1,
+            # ``metadata``/``openid_provider``) les porte aussi : le schéma
+            # du endpoint ne les complétait qu'en défaut.
+            "response_types_supported": list(RESPONSE_TYPES_SUPPORTED),
+            "subject_types_supported": [subject_type.value for subject_type in SubjectType],
             # Paramètre claims (OIDC Core 1.0 §5.5) : parsé, validé et honoré
             # sur /authorize — les members userinfo/id_token sont rendus.
             "claims_parameter_supported": True,
@@ -223,6 +257,21 @@ class DiscoveryUseCase:
         metadata["request_uri_parameter_supported"] = bool(
             self._config.request_object_signing_algorithms
         )
+        # Chiffrement des request objects (OIDC Core 1.0 §10.1, issue #204) :
+        # les deux metadata ne sont publiées que si l'OP y est ouvert — la
+        # suite de certification lit celles de l'entity statement fédéré
+        # (``metadata.openid_provider``) pour décider de jouer ou de sauter
+        # son module ``…-with-jar-and-encrypted-request-object``.
+        if (
+            self._config.request_object_encryption_algorithms
+            and self._config.request_object_encryption_methods
+        ):
+            metadata["request_object_encryption_alg_values_supported"] = list(
+                self._config.request_object_encryption_algorithms
+            )
+            metadata["request_object_encryption_enc_values_supported"] = list(
+                self._config.request_object_encryption_methods
+            )
         # DPoP (RFC 9449 §5.1) : algorithmes asymétriques acceptés pour
         # signer une preuve — ``none`` et les familles symétriques HS*
         # y sont exclus (le RS partage leur secret : preuve forgeable).
@@ -233,6 +282,17 @@ class DiscoveryUseCase:
         ekyc = await self._identity_assurance_metadata()
         if ekyc:
             metadata.update(ekyc)
+        # Fédération (OpenID Federation 1.1 §12) : modes d'enregistrement
+        # acceptés et endpoint d'enregistrement par la fédération. Publiés
+        # seulement quand la Fédération est activée.
+        if self._config.client_registration_types_supported:
+            metadata["client_registration_types_supported"] = list(
+                self._config.client_registration_types_supported
+            )
+        if self._config.federation_registration_endpoint:
+            metadata["federation_registration_endpoint"] = (
+                self._config.federation_registration_endpoint
+            )
         return metadata
 
     async def _identity_assurance_metadata(self) -> dict[str, list[str]]:

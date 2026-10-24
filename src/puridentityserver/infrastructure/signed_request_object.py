@@ -72,9 +72,10 @@ class PyJWTSignedRequestObjectVerifier:
     """Implémentation PyJWT du port : signature JWKS + bornes + anti-replay.
 
     Le ``jti`` validé est mémorisé par son empreinte SHA-256 namespacée
-    (``ciba:``) dans le store anti-replay partagé avec les preuves DPoP :
-    un ``jti`` déjà présenté est refusé et les deux familles de jetons ne
-    se croisent jamais (le store n'est qu'un magasin d'empreintes vues).
+    (``ciba:`` par défaut, ``federation:`` pour les clients fédérés) dans
+    le store anti-replay partagé avec les preuves DPoP : un ``jti`` déjà
+    présenté est refusé et les familles de jetons ne se croisent jamais
+    (le store n'est qu'un magasin d'empreintes vues).
     """
 
     def __init__(self, replays: DpopReplayRepository) -> None:
@@ -112,6 +113,7 @@ class PyJWTSignedRequestObjectVerifier:
         allowed_algorithms: Sequence[str],
         required_claims: Sequence[str] = _REQUIRED_CLAIMS,
         enforce_jti: bool = True,
+        jti_namespace: str = _JTI_NAMESPACE,
     ) -> SignedRequestObjectResult:
         """Vérifie signature, claims temporels et, le cas échéant, anti-replay.
 
@@ -119,11 +121,13 @@ class PyJWTSignedRequestObjectVerifier:
         servent à vérifier la signature), ``issuer`` la valeur d'``aud``
         attendue et ``allowed_algorithms`` les en-têtes ``alg`` admis.
         ``required_claims`` liste les claims exigés (CIBA §7.1.1, FAPI
-        1.0 Advanced ou client standard selon l'appelant) ; ``enforce_jti``
-        exige et mémorise le ``jti`` (anti-replay) — désactivé pour les
-        request objects FAPI et standards, qui n'en portent pas. Les
-        fenêtres 60 minutes CIBA/FAPI ne s'appliquent que si ``nbf`` fait
-        partie des claims exigés.
+        1.0 Advanced, fédération §12.1.1.1 ou client standard selon
+        l'appelant) ; ``enforce_jti`` exige et mémorise le ``jti``
+        (anti-replay) — désactivé pour les request objects FAPI et
+        standards, qui n'en portent pas — sous le namespace
+        ``jti_namespace`` (empreintes cloisonnées par famille de jetons).
+        Les fenêtres 60 minutes CIBA/FAPI ne s'appliquent que si ``nbf``
+        fait partie des claims exigés.
         """
         try:
             header = pyjwt.get_unverified_header(token)  # NOSONAR(S5659)
@@ -145,7 +149,7 @@ class PyJWTSignedRequestObjectVerifier:
             return bounded
         if not enforce_jti:
             return bounded
-        return await self._remember_jti(claims)
+        return await self._remember_jti(claims, jti_namespace)
 
     @staticmethod
     def _temporal_bounds(
@@ -180,12 +184,14 @@ class PyJWTSignedRequestObjectVerifier:
         except (pyjwt.PyJWTError, KeyError, OSError, ValueError):
             return None
 
-    async def _remember_jti(self, claims: dict[str, object]) -> SignedRequestObjectResult:
+    async def _remember_jti(
+        self, claims: dict[str, object], namespace: str
+    ) -> SignedRequestObjectResult:
         """Mémorise le ``jti`` du jeton validé ; refuse un ``jti`` déjà présenté."""
         jti = claims.get("jti")
         if not isinstance(jti, str) or not jti:
             return _refus("claim jti absent ou vide")
-        digest = jti_hash(f"{_JTI_NAMESPACE}{jti}")
+        digest = jti_hash(f"{namespace}{jti}")
         if await self._replays.is_used(digest):
             return _refus("claim jti déjà présenté (anti-replay)")
         exp = datetime.fromtimestamp(_timestamp(claims, "exp"), tz=timezone.utc)

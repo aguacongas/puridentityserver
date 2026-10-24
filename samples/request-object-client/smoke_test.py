@@ -1,4 +1,4 @@
-r"""Test manuel du request object signé RS256 d'un client standard (issue #188).
+r"""Test manuel des request objects d'un client standard (issues #188 et #204).
 
 Smoke test du sample ``request-object-client``.
 
@@ -8,7 +8,8 @@ client seed **non-FAPI** portant des ``jwks`` RSA embarqués) puis joue le
 scénario :
 
 1. le discovery publie ``request_object_signing_alg_values_supported``
-   avec ``RS256`` ;
+   avec ``RS256`` et les ``request_object_encryption_*`` (OIDC Core 1.0
+   §10.1) ;
 2. ``/authorize`` avec ``request`` = JAR RS256 signé (``iss``/``aud`` +
    paramètres de demande) → ``302`` code d'autorisation (le client est
    résolu par le ``iss`` du jeton, sans ``client_id`` en query) ;
@@ -17,7 +18,13 @@ scénario :
    ``error=invalid_request_object`` redirigé au client (OIDC Core 1.0
    §10.3) ;
 5. ``/authorize`` avec un JAR ``alg=none`` → ``302`` code : le request
-   object non signé reste admis pour les clients standards.
+   object non signé reste admis pour les clients standards ;
+6. le même JAR RS256 **chiffré** en JWE (RSA-OAEP-256 + A256GCM) avec la
+   clé publique ``use=enc`` de l'OP lue au ``jwks_uri`` → ``302`` code,
+   puis échange du code (PKCE) : l'OP déchiffre puis suit la chaîne
+   habituelle (OIDC Core 1.0 §10.1, issue #204) ;
+7. JAR chiffré à une clé publique **étrangère** → ``302``
+   ``error=invalid_request_object`` (le déchiffrement échoue).
 
 Le sous-processus est terminé dans tous les cas (``finally``) et un
 garde-fou borne la durée totale.
@@ -32,6 +39,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -39,7 +47,9 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import jwt as pyjwt
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -124,6 +134,63 @@ def _unsigned_jar(verifier: str) -> str:
     return f"{segment({'alg': 'none'})}.{segment(_claims(verifier))}."
 
 
+def _b64u(raw: bytes) -> str:
+    """Encode en base64url non padding (RFC 7515 §2)."""
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64u_decode(value: str) -> bytes:
+    """Décode du base64url non padding (RFC 7515 §2)."""
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def _op_encryption_key(http: httpx.Client) -> rsa.RSAPublicKey:
+    """Clé publique RSA ``use=enc`` de l'OP, lue au ``jwks_uri`` (Core §10.1)."""
+    keys = http.get(f"{SERVER_URL}/.well-known/jwks.json").json()["keys"]
+    # La clé de chiffrement est publiée sans ``use`` (compatibilité avec
+    # les validations JWKS de la suite) : on la reconnaît à l'absence du
+    # membre, aux côtés de la présence d'un ``alg`` RSA-OAEP.
+    jwk = next(
+        key
+        for key in keys
+        if key.get("kty") == "RSA"
+        and "use" not in key
+        and str(key.get("alg", "")).startswith("RSA-OAEP")
+    )
+    numbers = rsa.RSAPublicNumbers(
+        e=int.from_bytes(_b64u_decode(str(jwk["e"])), "big"),
+        n=int.from_bytes(_b64u_decode(str(jwk["n"])), "big"),
+    )
+    return numbers.public_key()
+
+
+def _encrypt_jwe(plaintext: str, public_key: rsa.RSAPublicKey) -> str:
+    """Chiffre un JWT en JWE compact (RFC 7516 §7.1), RSA-OAEP-256 + A256GCM.
+
+    RSA-OAEP-256 (JWA RFC 7518 §4.3 : OAEP-SHA256) plutôt que ``RSA-OAEP``
+    (OAEP-SHA1, usage de la suite de certification) : les deux familles sont
+    publiées au discovery et servies par la même clé ``use=enc``.
+    """
+    header = _b64u(
+        json.dumps(
+            {"alg": "RSA-OAEP-256", "enc": "A256GCM", "cty": "JWT"},
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    aad = header.encode("ascii")
+    cek = AESGCM.generate_key(bit_length=256)
+    encrypted_key = public_key.encrypt(
+        cek,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()), algorithm=hashes.SHA256(), label=None
+        ),
+    )
+    iv = os.urandom(12)
+    sealed = AESGCM(cek).encrypt(iv, plaintext.encode("utf-8"), aad)
+    ciphertext, tag = sealed[:-16], sealed[-16:]
+    return f"{header}.{_b64u(encrypted_key)}.{_b64u(iv)}.{_b64u(ciphertext)}.{_b64u(tag)}"
+
+
 def _code_of(response: httpx.Response) -> str:
     """Extrait le code d'autorisation du ``302`` attendu."""
     assert response.status_code == 302, response.text
@@ -133,19 +200,23 @@ def _code_of(response: httpx.Response) -> str:
 
 
 def _run_scenario() -> None:
-    """Joue le scénario request object RS256 de bout en bout."""
+    """Joue le scénario request object (signé, non signé, chiffré) de bout en bout."""
     verifier = "jar-verifier-0123456789"
     with httpx.Client(follow_redirects=False, timeout=_HTTP_TIMEOUT) as http:
         metadata = http.get(f"{SERVER_URL}/.well-known/openid-configuration").json()
         algs = metadata["request_object_signing_alg_values_supported"]
         assert "RS256" in algs, algs
-        print(f"  [1/5] discovery OK (request_object_signing_alg_values_supported={algs})")
+        enc_algs = metadata["request_object_encryption_alg_values_supported"]
+        enc_methods = metadata["request_object_encryption_enc_values_supported"]
+        assert "RSA-OAEP-256" in enc_algs, enc_algs
+        assert "A256GCM" in enc_methods, enc_methods
+        print(f"  [1/7] discovery OK (signing={algs}, encryption alg={enc_algs} enc={enc_methods})")
 
         code = _code_of(
             http.get(f"{SERVER_URL}/authorize", params={"request": _signed_jar(_PRIVATE, verifier)})
         )
         print(
-            "  [2/5] /authorize?request=JAR RS256 -> 302 (code émis, "
+            "  [2/7] /authorize?request=JAR RS256 -> 302 (code émis, "
             "client résolu par le claim iss) OK"
         )
 
@@ -161,7 +232,7 @@ def _run_scenario() -> None:
         )
         assert response.status_code == 200, response.text
         assert response.json()["id_token"]
-        print("  [3/5] échange du code (PKCE) -> 200 access_token + id_token OK")
+        print("  [3/7] échange du code (PKCE) -> 200 access_token + id_token OK")
 
         foreign, _foreign_jwk = _client_key()
         response = http.get(
@@ -176,11 +247,48 @@ def _run_scenario() -> None:
         query = parse_qs(urlparse(response.headers["location"]).query)
         assert query["error"] == ["invalid_request_object"], query
         assert query["state"] == ["st-jar"], query
-        print("  [4/5] JAR signé par une clé étrangère -> 302 error=invalid_request_object OK")
+        print("  [4/7] JAR signé par une clé étrangère -> 302 error=invalid_request_object OK")
 
         response = http.get(f"{SERVER_URL}/authorize", params={"request": _unsigned_jar(verifier)})
         _code_of(response)
-        print("  [5/5] JAR alg=none -> 302 (request object non signé toujours admis) OK")
+        print("  [5/7] JAR alg=none -> 302 (request object non signé toujours admis) OK")
+
+        op_key = _op_encryption_key(http)
+        encrypted_verifier = "jar-verifier-encrypted-01234"
+        encrypted = _encrypt_jwe(_signed_jar(_PRIVATE, encrypted_verifier), op_key)
+        code = _code_of(http.get(f"{SERVER_URL}/authorize", params={"request": encrypted}))
+        response = http.post(
+            f"{SERVER_URL}/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": REDIRECT_URI,
+                "client_id": CLIENT_ID,
+                "code_verifier": encrypted_verifier,
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["id_token"]
+        print(
+            "  [6/7] JAR RS256 chiffré (RSA-OAEP-256 + A256GCM, clé use=enc de l'OP) "
+            "-> 302 code + échange PKCE OK"
+        )
+
+        response = http.get(
+            f"{SERVER_URL}/authorize",
+            params={
+                "request": _encrypt_jwe(
+                    _signed_jar(_PRIVATE, verifier),
+                    rsa.generate_private_key(public_exponent=65537, key_size=2048).public_key(),
+                )
+            },
+        )
+        assert response.status_code == 400, response.text
+        assert "invalid_request_object" in response.text
+        print(
+            "  [7/7] JAR chiffré à une clé étrangère -> 400 error=invalid_request_object "
+            "(déchiffrement impossible) OK"
+        )
     print()
 
 
@@ -192,7 +300,8 @@ def main() -> None:
         run_server(port=SERVER_PORT, clients=(_CLIENT,)),
     ):
         print(
-            f"\nScénario request object RS256 - client standard non-FAPI (deadline={_DEADLINE}s)..."
+            f"\nScénario request object (signé / non signé / chiffré) - client standard "
+            f"non-FAPI (deadline={_DEADLINE}s)..."
         )
         _run_scenario()
         print(f"=== SCÉNARIO OK en {time.monotonic() - started_at:.1f}s ===")

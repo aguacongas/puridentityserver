@@ -185,7 +185,11 @@ class Client:
     exclusifs. ``require_consent`` (OAuth 2.0
     Consent, OIDC Core 1.0 §3.1.2.2) exige la confirmation de
     l'utilisateur connecté — mémorisée dans le store ``consents`` — avant
-    d'émettre le moindre code ou jeton.
+    d'émettre le moindre code ou jeton. ``federated`` (OpenID Federation
+    1.1 §12.1) marque un client dérivé d'une fédération par
+    ``derive_client`` : jamais persisté, il est résolu à la demande et son
+    request object est soumis aux exigences du profil fédéré — ``exp`` et
+    ``jti`` obligatoires avec anti-replay, ``sub`` interdit (§12.1.1.1).
 
     ``web_origins`` déclare explicitement des origines internet autorisées
     à appeler les endpoints du serveur depuis le navigateur (CORS) au-delà
@@ -286,6 +290,7 @@ class Client:
     par_required: bool = False
     fapi_enabled: bool = False
     fapi2_enabled: bool = False
+    federated: bool = False
     require_consent: bool = False
     require_dpop: bool = False
     token_endpoint_auth_method: TokenEndpointAuthMethod | None = None

@@ -142,6 +142,20 @@ jwks_grace_period_days = 7
 jwks_encryption_algorithms = ["RSA-OAEP", "RSA-OAEP-256", "A128KW", "A256KW", "dir"]
 jwks_encryption_methods = ["A128CBC-HS256", "A192CBC-HS384", "A256CBC-HS512", "A128GCM", "A192GCM", "A256GCM"]
 
+# Chiffrement des request objects en entrée (OIDC Core 1.0 §10.1) : familles
+# `alg`/`enc` admises sur /authorize et /par, publiées au discovery
+# (`request_object_encryption_alg_values_supported` /
+# `request_object_encryption_enc_values_supported`) et dans l'entity
+# statement fédéré. Le matériel — clé RSA `enc` de l'OP, générée au
+# démarrage (taille `jwks_key_size`) — est publié au JWKS et dans le `jwks`
+# de l'entity statement. Deux listes vides ferment la porte : tout request
+# object chiffré est refusé `invalid_request_object`. Surchargeables via
+# `PURIDENTITYSERVER_REQUEST_OBJECT_ENCRYPTION_ALGORITHMS` /
+# `PURIDENTITYSERVER_REQUEST_OBJECT_ENCRYPTION_METHODS` (listes séparées
+# par des virgules).
+request_object_encryption_algorithms = ["RSA-OAEP", "RSA-OAEP-256"]
+request_object_encryption_methods = ["A128CBC-HS256", "A256CBC-HS512", "A128GCM", "A256GCM"]
+
 # OAuth 2.0 / OIDC : durées de vie par défaut du serveur, appliquées quand le
 # client ne précise pas les siennes (`access_token_lifetime_seconds` /
 # `authorization_code_lifetime_seconds` / `refresh_token_lifetime_seconds`

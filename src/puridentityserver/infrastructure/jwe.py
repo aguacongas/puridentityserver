@@ -39,6 +39,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.padding import PKCS7
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
 from puridentityserver.domain.authorization import Client
 from puridentityserver.domain.jwe import (
@@ -48,7 +49,10 @@ from puridentityserver.domain.jwe import (
     JWEEncryptionMethod,
     JWEKeyManagementAlgorithm,
 )
+from puridentityserver.domain.jwks import KeyPair
 from puridentityserver.domain.key_validation import _MIN_RSA_MODULUS_BITS
+from puridentityserver.interfaces.domain.jwks import KeyManager
+from puridentityserver.interfaces.domain.request_object import RequestObjectDecryptionResult
 from puridentityserver.interfaces.domain.tokens import JWEUnavailableError
 
 # Vecteurs d'initialisation : 16 octets pour AES-CBC, 96 bits pour AES-GCM
@@ -216,6 +220,65 @@ class JWEIdTokenEncrypter:
         return await asyncio.to_thread(
             _seal_id_token, id_token, client.jwks, algorithm, method, shared_secret
         )
+
+
+class JWERequestObjectDecrypter:
+    """Déchiffre un request object présenté en JWE compact (OIDC Core 1.0 §10.1).
+
+    Le matériel de déchiffrement est la clé RSA ``KeyUse.ENC`` de l'OP —
+    publiée au JWKS et dans le ``jwks`` de l'entity statement fédéré
+    (issue #204) : le ``kid`` de l'en-tête JWE, quand le RP l'a copié du
+    JWKS publié, sélectionne la paire ; à défaut, la seule clé active
+    ``enc`` sert. ``algorithm``/``method`` sont les en-têtes ``alg``/``enc``
+    du document, déjà contrôlés par le cas d'utilisation contre la
+    configuration publiée au discovery. Le déchiffrement est exécuté hors
+    de la boucle d'événements (``asyncio.to_thread``), comme le
+    chiffrement d'``id_token``.
+    """
+
+    def __init__(self, key_manager: KeyManager) -> None:
+        """Injection du gestionnaire de clés de la famille ``enc``."""
+        self._key_manager = key_manager
+
+    async def decrypt(
+        self, *, document: str, algorithm: str, method: str, key_id: str = ""
+    ) -> RequestObjectDecryptionResult:
+        """Déchiffre le JWE ``document`` ; ``reason`` porte tout refus."""
+        key_pair = await self._encryption_key(key_id)
+        if key_pair is None:
+            return RequestObjectDecryptionResult(reason=_missing_key_reason(key_id))
+        try:
+            jwe_algorithm = JWEKeyManagementAlgorithm(algorithm)
+            jwe_method = JWEEncryptionMethod(method)
+            private_key = load_pem_private_key(key_pair.private_key_pem.encode("ascii"), None)
+            if not isinstance(private_key, RSAPrivateKey):
+                raise ValueError("clé de chiffrement non RSA")
+            plaintext = await asyncio.to_thread(
+                decrypt_compact,
+                document,
+                algorithm=jwe_algorithm,
+                method=jwe_method,
+                rsa_private_key=private_key,
+            )
+            return RequestObjectDecryptionResult(plaintext=plaintext.decode("utf-8"))
+        except (TypeError, ValueError, UnicodeDecodeError) as exc:
+            return RequestObjectDecryptionResult(reason=f"déchiffrement impossible : {exc}")
+
+    async def _encryption_key(self, key_id: str) -> KeyPair | None:
+        """Clé ``enc`` active portant ``kid`` ; la seule active si ``kid`` vide."""
+        active = await self._key_manager.get_active_keys()
+        if key_id:
+            return next((key for key in active if key.kid == key_id), None)
+        if len(active) == 1:
+            return active[0]
+        return None
+
+
+def _missing_key_reason(key_id: str) -> str:
+    """Raison du refus quand aucune clé ``enc`` ne correspond au document."""
+    if key_id:
+        return f"clé de chiffrement de l'OP introuvable (kid={key_id})"
+    return "aucune clé de chiffrement de l'OP disponible"
 
 
 def _seal_id_token(

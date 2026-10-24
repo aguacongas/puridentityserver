@@ -97,8 +97,9 @@ def test_jwks_endpoint_returns_keys_for_each_configured_algorithm() -> None:
 
     assert response.status_code == 200
     keys = response.json()["keys"]
-    assert len(keys) == 2
-    by_alg = {key["alg"]: key for key in keys}
+    signing = [key for key in keys if key.get("use") == "sig"]
+    assert len(signing) == 2
+    by_alg = {key["alg"]: key for key in signing}
     assert set(by_alg) == {"RS256", "ES256"}
     assert by_alg["RS256"]["kty"] == "RSA"
     assert _is_valid_base64url(by_alg["RS256"]["n"])
@@ -107,6 +108,27 @@ def test_jwks_endpoint_returns_keys_for_each_configured_algorithm() -> None:
     assert by_alg["ES256"]["crv"] == "P-256"
     assert _is_valid_base64url(by_alg["ES256"]["x"])
     assert _is_valid_base64url(by_alg["ES256"]["y"])
+
+
+def test_jwks_endpoint_publishes_the_request_object_encryption_key() -> None:
+    """OIDC Core 1.0 §10.1 (issue #204) : clé ``use=enc`` sans ``alg``.
+
+    La suite de certification sélectionne ce matériel dans le ``jwks`` de
+    l'entity statement (``JWEUtil.selectAsymmetricKeyForEncryption`` :
+    ``kty`` + ``use`` seulement) ; l'absence d'``alg`` admet la même clé
+    RSA-OAEP et RSA-OAEP-256 (RFC 7517 §4.3, membre optionnel).
+    """
+    settings = Settings(issuer=_ISSUER, base_url=_ISSUER, jwks_key_size=_KEY_SIZE)
+    with TestClient(create_app(settings)) as client:
+        keys = client.get("/.well-known/jwks.json").json()["keys"]
+
+    # La clé de chiffrement est publiée sans ``use`` (cf. note ci-dessous) :
+    # elle se reconnaît donc à l'absence du membre.
+    encryption = [key for key in keys if "use" not in key]
+    assert len(encryption) == 1
+    assert encryption[0]["kty"] == "RSA"
+    assert encryption[0]["alg"] == "RSA-OAEP"
+    assert _is_valid_base64url(encryption[0]["n"])
 
 
 def test_jwks_endpoint_keys_are_verifiable_with_pyjwt() -> None:
@@ -591,8 +613,8 @@ class TestSigningKeyRotation:
             first = client.get("/.well-known/jwks.json").json()["keys"]
             second = client.get("/.well-known/jwks.json").json()["keys"]
 
-        first_kids = {key["kid"] for key in first}
-        second_kids = {key["kid"] for key in second}
+        first_kids = {key["kid"] for key in first if key.get("use") == "sig"}
+        second_kids = {key["kid"] for key in second if key.get("use") == "sig"}
         assert len(first_kids) == 2
         assert len(second_kids) == 2
         assert first_kids != second_kids

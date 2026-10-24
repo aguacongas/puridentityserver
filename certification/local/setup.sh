@@ -36,6 +36,11 @@ SUITE_HOSTNAME="localhost.emobix.co.uk"
 SUITE_PORT="8443"
 MTLS_PORT="9443"
 OP_ALIAS="op"
+# Ancre du stub de captures fédérées (certification/federation_capture_stub.py) :
+# seconde trust anchor de l'OP local, hébergée par le script de captures sur le
+# même port — inatteignable depuis l'instance hébergée (issue de suivi).
+FEDERATION_STUB_PORT="9444"
+FEDERATION_STUB_ANCHOR="https://localhost:$FEDERATION_STUB_PORT/federation-capture-anchor"
 
 mkdir -p "$LOCAL_DIR"
 cd "$REPO_ROOT"
@@ -226,10 +231,16 @@ docker run -d --name "$OP_ALIAS-mtls" \
 
 # ---6) Config OP locale (issuer op:9443, callbacks suite locale, SQLite) ------
 log "génération de la config OP locale"
+# La seconde trust anchor est l'ancre du stub de captures fédérées : elle
+# complète l'ancre de la suite (inchangée, toujours en tête de liste) —
+# l'OP peut alors résoudre la chaîne du RP de capture du script
+# certification/capture_screenshots.py --federation. Idempotent : la config
+# est régénérée depuis le template à chaque run.
 sed \
   -e "s|issuer = \"http://127.0.0.1:8000\"|issuer = \"https://$OP_ALIAS:$MTLS_PORT\"|" \
   -e "s|https://www.certification.openid.net|https://$SUITE_HOSTNAME:$SUITE_PORT|g" \
   -e "s|storage_dsn = \"sqlite:///puridentityserver.db\"|storage_dsn = \"sqlite:///$(winpath "$LOCAL_DIR/op.db")\"|" \
+  -e "s|^federation_trust_anchors = \(.*trust-anchor\"\)\]$|federation_trust_anchors = \1, \"$FEDERATION_STUB_ANCHOR\"]|" \
   "$REPO_ROOT/certification/config.render.toml" > "$LOCAL_DIR/op-config.toml"
 
 # ---7) OP uvicorn (hôte) ------------------------------------------------------
@@ -269,11 +280,15 @@ export CERTIFICATION_ADMIN_CLIENT_SECRET="${CERTIFICATION_ADMIN_CLIENT_SECRET:-l
 # PURIDENTITYSERVER_REQUEST_URI_ALLOW_LOCAL_TARGETS : la suite sert le document
 # request_uri sur localhost.emobix.co.uk (→127.0.0.1), destination loopback
 # refusée par la garde anti-SSRF tant que l'OP bind 0.0.0.0 (issue #152).
+# PURIDENTITYSERVER_FEDERATION_ALLOW_LOCAL_TARGETS : même garde pour le fetch
+# des entity statements de la fédération — l'ancre de confiance de la suite
+# est sur localhost.emobix.co.uk (issue #170).
 # SSL_CERT_FILE : certificat SAN de la suite (étape 3.5) + bundle système.
 PURIDENTITYSERVER_SETTINGS_FILE="$(winpath "$LOCAL_DIR/op-config.toml")" \
 PURIDENTITYSERVER_HOST="$OP_HOST" \
 PURIDENTITYSERVER_PORT="$OP_PORT" \
 PURIDENTITYSERVER_REQUEST_URI_ALLOW_LOCAL_TARGETS=true \
+PURIDENTITYSERVER_FEDERATION_ALLOW_LOCAL_TARGETS=true \
 SSL_CERT_FILE="$(winpath "$SUITE_TRUST")" \
   nohup uv run python -m puridentityserver \
     >"$LOCAL_DIR/op.log" 2>&1 & echo $! > "$LOCAL_DIR/op.pid"

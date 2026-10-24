@@ -6,10 +6,11 @@
 # shellcheck shell=bash
 
 # Les plans joues par defaut (filtre `all` des workflows) : les neuf plans du
-# programme officiel de certification, plus `ekyc` (identite assurance) -
-# HORS programme officiel, mais joue dans les deux workflows a la demande du
-# maintainer (le plan est publie par la suite dans les deux cas).
-CERTIFICATION_PLANS=(basic implicit hybrid formpost dynamic ciba fapi1 fapi2 fapi2-message-signing ekyc)
+# programme officiel de certification, plus `ekyc` (identite assurance) et
+# `federation` (OpenID Federation 1.1) - HORS programme officiel, mais joues
+# dans les deux workflows a la demande du maintainer (les plans sont publies
+# par la suite dans les deux cas).
+CERTIFICATION_PLANS=(basic implicit hybrid formpost dynamic ciba fapi1 fapi2 fapi2-message-signing ekyc federation)
 
 # Retourne le selecteur de variante d'un plan sur stdout ; code retour 1 si le
 # plan est inconnu (appelant : message d'erreur + sortie securisee).
@@ -60,6 +61,14 @@ selector_for() {
     # inattendu. `ekyc_profile=plain_ekyc` = sous-profil simple (select_id
     # ajouterait un parametre `transaction_id` a la demande d'autorisation).
     ekyc) echo 'ekyc-test-plan-oidccore[security_profile=none][server_metadata=discovery][client_registration=dynamic_client][response_type=code][auth_request_method=http_query][auth_request_non_repudiation_method=unsigned][client_auth_type=client_secret_basic][ekyc_profile=plain_ekyc][ekyc_verified_claims_response_support=id_token_userinfo][fapi_response_mode=plain_response][response_mode=default][sender_constrain=none]' ;;
+    # Federation (issue #170) : plan "entity joined to test federation OP" -
+    # HORS programme officiel (plan ALPHA de la suite), 20 modules. L'OP est
+    # le superieur de ses clients federes (enregistrement automatique + fetch
+    # / list / resolve) ; la suite heberge l'ancre de confiance a laquelle le
+    # RP test est rattache. Variante server_metadata=discovery par defaut du
+    # plan ; client_registration=automatic impose (seule combinaison valide
+    # avec la variante FederationEntityMetadata du plan).
+    federation) echo 'openid-federation-entity-joined-to-test-federation-op-test-plan[server_metadata=discovery][client_registration=automatic]' ;;
     *) return 1 ;;
   esac
 }

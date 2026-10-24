@@ -150,9 +150,12 @@ jobs:
         run: bash certification/local/setup.sh
 
       - name: Captures d'écran réelles des modules de relecture (Playwright)
-        # Rejoue les 30 scénarios REVIEW contre l'OP local (cert auto-signé :
+        # Rejoue les 43 scénarios REVIEW contre l'OP local (cert auto-signé :
         # ignore_https_errors ; issuer lu au discovery, redirect_uris de la
-        # suite locale via --suite-url). Une seule exécution par run : les 9
+        # suite locale via --suite-url). Les 13 scénarios fédérés passent par
+        # le stub local (ancre servie sur localhost:9444, seconde trust
+        # anchor injectée par setup.sh) : la suite ne sert la trust chain
+        # que pendant un run de plan. Une seule exécution par run : les 11
         # jobs plan téléversent le résultat en artefact.
         run: |
           mkdir -p screenshots
@@ -161,6 +164,7 @@ jobs:
           python3 certification/capture_screenshots.py \
             --base-url https://localhost:9443 \
             --suite-url "$SUITE_URL" \
+            --federation \
             --out screenshots
           ls -l screenshots
 
@@ -304,13 +308,19 @@ jobs:
           cd conformance-suite
           # Temoignage (mode witness) : les ecarts connus declares dans
           # certification/expected-failures/<plan>.json sont classes
-          # « expected » par le driver — la sortie stricte ne porte que sur
-          # les ecarts INATTENDUS (idem lancement local, run-plan.sh).
+          # « expected » par le driver, et <plan>-skips.json declare les
+          # modules sautes faute de capacite OP — la sortie stricte ne porte
+          # que sur les ecarts INATTENDUS (idem lancement local, run-plan.sh).
           expected_args=()
           expected_file="$GITHUB_WORKSPACE/certification/expected-failures/${{ matrix.plan }}.json"
           if [ -f "$expected_file" ]; then
             expected_args=(--expected-failures-file "$expected_file")
             echo "- ecarts attendus (witness) : certification/expected-failures/${{ matrix.plan }}.json" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          skips_file="$GITHUB_WORKSPACE/certification/expected-failures/${{ matrix.plan }}-skips.json"
+          if [ -f "$skips_file" ]; then
+            expected_args+=(--expected-skips-file "$skips_file")
+            echo "- sauts attendus (witness) : certification/expected-failures/${{ matrix.plan }}-skips.json" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
           python3 scripts/run-test-plan.py \
             --export-dir "$GITHUB_WORKSPACE/results" \

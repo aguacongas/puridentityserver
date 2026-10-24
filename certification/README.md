@@ -38,7 +38,8 @@ retenue :
   (`oidcc-basic-`, `oidcc-implicit-`, `oidcc-hybrid-`, `oidcc-formpost-basic-`,
   `oidcc-dynamic-certification-test-plan`, `fapi-ciba-id1-test-plan`,
   `fapi1-advanced-final-test-plan`, `fapi2-security-profile-final-test-plan`,
-  `fapi2-message-signing-final-test-plan`),
+  `fapi2-message-signing-final-test-plan`, `ekyc-test-plan-oidccore`,
+  `openid-federation-entity-joined-to-test-federation-op-test-plan`),
   le détail des modules testés et leur verdict (PASSED / FAILED / WARNING /
   REVIEW / SKIPPED) dans le résumé du run ;
 - les artefacts `certification-local-results-<plan>` (un par plan) contiennent
@@ -89,12 +90,12 @@ retenue :
   photographie les `kid` du JWKS, déclenche le deploy hook puis patiente
   (15 min max) jusqu'à ce que les `kid` changent — preuve que le build est
   terminé **et** que le disque éphémère (donc l'état) a été recréé avant le
-  premier enregistrement de client ; joue ensuite les **dix plans en
-  parallèle** (9 jobs matrix, `fail-fast: false` — ~40 min au lieu de ~3 h
+  premier enregistrement de client ; joue ensuite les **onze plans en
+  parallèle** (11 jobs matrix, `fail-fast: false` — ~40 min au lieu de ~3 h
   séquentielles, issue #122 ; les plans FAPI1 Advanced, FAPI2 Security
   Profile, FAPI2 Message Signing (JARM, issue #164), Form Post
-  (issue #165) et Dynamic (issue #168) ont été ajoutés par les issues #113,
-  #164, #165 et #168), chaque
+  (issue #165), Dynamic (issue #168) et Federation (issue #170) ont été
+  ajoutés par les issues #113, #164, #165, #168 et #170), chaque
   plan exportant son propre
   artefact, puis un job final fusionne les exports et téléverse le rapport
   consolidé en artefact.
@@ -182,7 +183,7 @@ redémarrage, les conteneurs sont réutilisés).
 bash certification/local/setup.sh
 
 # 2. rejouer un plan en une commande (même séquence stricte que la CI)
-bash certification/local/run-plan.sh fapi2   # basic | implicit | hybrid | formpost | dynamic | ciba | fapi1 | fapi2 | fapi2-message-signing | ekyc
+bash certification/local/run-plan.sh fapi2   # basic | implicit | hybrid | formpost | dynamic | ciba | fapi1 | fapi2 | fapi2-message-signing | ekyc | federation
 
 # 3. arrêter / nettoyer
 bash certification/local/down.sh             # OP + op-mtls + conteneurs de la suite
@@ -246,18 +247,22 @@ le module `oidcc-server-rotate-keys` reproduit alors son écart attendu
 (l'auto-attestation OIDF reste alors possible).
 
 Ainsi, **aucune rotation permanente** n'est configurée sur l'instance de
-certification : les plans locaux (10) et hébergés (9) partagent le même
+certification : les plans locaux (11) et hébergés (10) partagent le même
 mécanisme, sans churn du JWKS sur les plans qui ne portent pas le module.
 
 ### Écarts de modules attendus (mode witness)
 
 `certification/expected-failures/<plan>.json` déclare, au format du driver
 (`--expected-failures-file`, cf. `conformance-suite/scripts/run-test-plan.py`),
-les conditions de modules connues et non résolues. **Les dix plans locaux
-sont aujourd'hui sans écart** : le dossier ne contient plus de fichier (la
-rotation des clés de signature de l'OP est livrée — issue #189, le module
-`oidcc-server-rotate-keys` passe ; le rejeu local affiche 17 PASSED / 6 REVIEW
-/ 0 FAILED sur le plan `dynamic`).
+les conditions de modules connues et non résolues. Son pendant
+`certification/expected-failures/<plan>-skips.json` (`--expected-skips-file`,
+même format) déclare les modules que l'OP **saute** faute de capacité. Aucun
+fichier n'est actuellement déclaré : les onze plans locaux sont sans saut ni
+écart (la rotation des clés de signature de l'OP est livrée — issue #189, le
+module `oidcc-server-rotate-keys` passe ; le chiffrement des request objects
+est livré — issue #204, le module
+`openid-federation-automatic-client-registration-with-jar-and-encrypted-request-object`
+du plan `federation` y est joué en conditions réelles).
 
 Le driver classe ces conditions en « expected failure » : le plan ne sort en
 code non nul que pour les écarts **inattendus** — la strictude #130 est
@@ -265,8 +270,8 @@ préservée et les gaps documentés ne bloquent pas (mode witness). Chaque entr�
 non consommée (condition résolue entre-temps, ex. capacité implémentée) fait
 échec `EXPECTED_*_NOT_HAPPEN` : le fichier doit être purgé dès qu'une
 capacité est livrée. `run-plan.sh` et le job plan de
-`certification-local.yml` appliquent le fichier quand il existe (chemin et
-comportement identiques) ; le workflow hébergé reste witness pur
+`certification-local.yml` appliquent les deux fichiers quand ils existent
+(chemin et comportement identiques) ; le workflow hébergé reste witness pur
 (`continue-on-error` sur le lancement).
 
 En CI : le workflow `Certification OIDC (Local)`
@@ -439,18 +444,19 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
 | --- | --- |
 | `render.yaml` / `Dockerfile` / `.dockerignore` | déploiement de l'OP sur Render (SQLite, disque éphémère) |
 | `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`, `subject_pairwise_seed` pour les modules sector du plan dynamic, 4 clients statiques FAPI `private_key_jwt` + JWKS public pour les plans fapi1/fapi2) |
-| `plans/basic|implicit|hybrid|formpost|dynamic|ciba|fapi1|fapi2|fapi2-message-signing|ekyc.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; fapi1/fapi2/fapi2-message-signing portent aussi `client`/`client2` en clé privée et `resource` ; `ekyc` porte la configuration eKYC `ekyc.verified_claims_request_list`) |
+| `plans/basic|implicit|hybrid|formpost|dynamic|ciba|fapi1|fapi2|fapi2-message-signing|ekyc|federation.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; fapi1/fapi2/fapi2-message-signing portent aussi `client`/`client2` en clé privée et `resource` ; `ekyc` porte la configuration eKYC `ekyc.verified_claims_request_list` ; `federation` porte l'Entity Identifier de l'OP, l'ancre de confiance `{SUITEURL}test/a/puridentityserver-federation/trust-anchor` et les clés de test RP/ancre du template officiel) |
 | `conformance-reuse-plan.patch` | patch du driver : `create_test_plan` idempotent (réutilise le plan existant quand sa config n'a pas changé) |
 | `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) — avec `SCREENSHOTS_DIR` défini (CI), un fichier absent/vide/trop lourd lève une erreur fatale (captures obligatoires, issue #161) ; sans variable (exécution manuelle), le PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode hébergé) |
-| `capture_screenshots.py` | rejoue les 30 scénarios de relecture (4 Core, 6 dynamic, 16 FAPI1, 4 FAPI2) contre l'OP (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver — `--base-url` = OP, `--suite-url` = base des callbacks de la suite (hébergée par défaut, `https://localhost.emobix.co.uk:8443` en local) |
+| `capture_screenshots.py` | rejoue les scénarios de relecture (4 Core, 6 dynamic, 16 FAPI1, 4 FAPI2, et avec `--federation` — mode local — les 13 modules fédérés) contre l'OP (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver — `--base-url` = OP, `--suite-url` = base des callbacks de la suite (hébergée par défaut, `https://localhost.emobix.co.uk:8443` en local) |
+| `federation_capture_stub.py` | mini-fédération locale (ancre + RP de capture, statements signés à la volée) hébergée en HTTPS sur `localhost:9444` pendant les captures fédérées (`--federation`) : l'OP y résout la trust chain que la suite ne sert que pendant un run de plan (voir « Captures fédérées ») — ancre ajoutée à `federation_trust_anchors` par `local/setup.sh`, joignable en local seulement |
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |
 | `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
 | `conformance-stale-plan-recovery.patch` | patch du driver : n'est jamais réessaie le 500 déterministe « test module not found » (1 tentative au lieu de 28) et valide la membership du plan réutilisé contre le catalogue avant le run — recréation automatique du plan stale (membership fraîche dès le premier run), plan le plus récent privilégié à la réutilisation |
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés ; recopie les captures réelles dans `_site/screenshots/` (`--screenshots`) et les affiche dans la section du module correspondant |
 | `local/setup.sh` | bootstrap du harness **auto-hébergé** : alias réseau, clone + déploiement docker de la suite, cert auto-signé + nginx mTLS `op`, config OP locale (issuer `https://op:9443`), OP uvicorn, attente de disponibilité |
 | `local/nginx-mtls.conf` | nginx de terminaison mTLS devant l'OP local : certificat client optionnel (`optional_no_ca`), extraction `$ssl_client_escaped_cert` → `X-SSL-Client-Cert` (pas de newline brute), proxy vers l'OP uvicorn de l'hôte |
-| `../.github/workflows/certification.yml` | workflow hébergé à la demande (`workflow_dispatch` uniquement) : `prepare` (deploy + captures, une fois), `plan` (les 10 plans en parallèle — les 9 du programme officiel **plus** `ekyc` (identité assurance, hors programme officiel) — un job matrix chacun, mode witness), `report` (fusion des exports en artefact - publication OIDC des résultats à venir) |
-| `../.github/workflows/certification-local.yml` | workflow **auto-hébergé strict** : déclenché à chaque merge sur `main`, sur les PR (`certification/**`) et à la demande ; 10 plans en matrix (les 9 de l'hébergé + `ekyc`, hors programme officiel de certification), code non nul du driver = job en échec, job `capture` **bloquant** (Playwright, artefact `certification-local-screenshots`, #158/#161 : captures REVIEW obligatoires), **publication GitHub Pages** (sauf sur les PR) |
+| `../.github/workflows/certification.yml` | workflow hébergé à la demande (`workflow_dispatch` uniquement) : `prepare` (deploy + captures, une fois), `plan` (les 11 plans en parallèle — les 9 du programme officiel **plus** `ekyc` (identité assurance) et `federation` (OpenID Federation 1.1), hors programme officiel — un job matrix chacun, mode witness), `report` (fusion des exports en artefact - publication OIDC des résultats à venir) |
+| `../.github/workflows/certification-local.yml` | workflow **auto-hébergé strict** : déclenché à chaque merge sur `main`, sur les PR (`certification/**`) et à la demande ; 11 plans en matrix (les 10 de l'hébergé, `ekyc` et `federation` étant hors programme officiel de certification), code non nul du driver = job en échec, job `capture` **bloquant** (Playwright, artefact `certification-local-screenshots`, #158/#161 : captures REVIEW obligatoires), **publication GitHub Pages** (sauf sur les PR) |
 
 ## Captures d'écran des modules de relecture (modes hébergé et local)
 
@@ -473,12 +479,14 @@ du même ressort : leurs placeholders REVIEW attendent la page d'erreur réellem
 servie par l'OP. Deux étapes couvrent ce besoin :
 
 1. **`capture_screenshots.py`** (étape « Captures d'écran réelles des modules de
-   relecture ») : enregistre un client via RFC 7591, rejoue les **30 scénarios de
+   relecture ») : enregistre un client via RFC 7591, rejoue les **scénarios de
    relecture** (les 4 modules Core du tableau, les 6 modules du plan dynamic —
    arbitrages de `redirect_uri` absente/supplémentaire/non concordante et pages
    de connexion des clients DCR porteurs d'un `logo_uri`/`policy_uri`/`tos_uri`,
    issue #168 —, les 16 modules FAPI1, les 4 modules
-   FAPI2) avec chromium headless contre l'OP (`--base-url`), **contrôle chaque page
+   FAPI2 et, en mode local avec `--federation`, les 13 modules fédérés — voir
+   « Captures fédérées ») avec chromium headless contre l'OP (`--base-url`),
+   **contrôle chaque page
    avant export** (statut 400 + marqueur `<code>` du motif — ou extrait « manquants
    : redirect_uri » pour la page sans code de motif, ou titre et
    `form[action="/login"]` ; les erreurs FAPI2, elles, doivent arriver par une
@@ -491,14 +499,16 @@ servie par l'OP. Deux étapes couvrent ce besoin :
    hébergé `https://www.certification.openid.net`, local
    `https://localhost.emobix.co.uk:8443`) et l'`aud` des assertions est lu au
    discovery de l'OP (issuer local `https://op:9443`). L'étape est
-   **bloquante** (issue #161) : le script exige les 30 captures et un échec
+   **bloquante** (issue #161) : le script exige les captures attendues et un échec
    (installation du navigateur, OP indisponible, scène invalide…) fait échouer
    le run — plus aucun repli silencieux en CI. Les deux workflows l'exécutent :
    - **mode hébergé** : dans le job `prepare` contre l'instance Render, résultat
-     publié en artefact `certification-screenshots` ;
+     publié en artefact `certification-screenshots` (30 captures, sans
+     `--federation` — le stub n'est pas joignable depuis Render) ;
    - **mode local** (#158) : job `capture` de `certification-local.yml` contre
      l'OP local (`https://localhost:9443`, cert auto-signé), **une seule fois par
-     run**, artefact `certification-local-screenshots` que les jobs `plan`
+     run**, `--federation` inclus (43 captures), artefact
+     `certification-local-screenshots` que les jobs `plan`
      téléchargent (env `SCREENSHOTS_DIR`, substitution du PNG de secours) et que
      le job `report` intègre au rapport.
 2. **`conformance-screenshots.patch`** couple deux points du driver :
@@ -526,6 +536,38 @@ la **page GitHub Pages** (`report.py --screenshots` recopie les PNG dans
 Le PNG de secours ne survit qu'à une exécution manuelle sans `SCREENSHOTS_DIR` :
 en CI, la capture réelle de chaque module de relecture est exigée et son absence
 fait échouer le run (issue #161).
+
+### Captures fédérées (plan `federation`, mode local uniquement)
+
+Les 13 modules `openid-federation-automatic-client-registration-invalid-*` du plan
+`federation` attendent, eux aussi, la page d'erreur réellement servie par l'OP —
+mais leur `client_id` est l'**Entity Identifier** d'un RP dont l'OP doit résoudre la
+trust chain par fetch HTTP, et la suite n'héberge cette chaîne (entity configuration
+du RP, entity configuration de l'ancre, subordinate statement du fetch endpoint)
+**que pendant l'exécution d'un module du plan** : le job de captures tourne hors
+plan, tous les fetchs retomberaient en 404.
+
+`federation_capture_stub.py` lève ce verrou : avec `--federation`,
+`capture_screenshots.py` héberge lui-même une mini-fédération locale
+(`https://localhost:9444/federation-capture-anchor` + RP de capture, statements
+signés à la volée, HTTPS sur le certificat du harness déjà accepté par l'OP via
+`SSL_CERT_FILE`) et rejoue les 13 requêtes d'autorisation de la suite
+(`response_type=code`, request object par valeur signé RS256 avec la clé du RP de
+capture, sans `redirect_uri` dans la query) — chaque défaut du profil fédéré
+(§12.1.1.1 : `client_id` invalide, signature altérée ou signée par d'autres clés,
+`exp` expiré, `iss`/`aud` invalides, `sub` interdit, claims manquants, rejeu de
+`jti`) fait servir à l'OP sa **vraie** page 400, capturée comme ailleurs.
+
+L'ancre du stub est la **seconde trust anchor** de l'OP de certification :
+`certification/local/setup.sh` l'ajoute à `federation_trust_anchors` (l'ancre de la
+suite reste en tête de liste ; la suite ne contrôle que la non-vacuité des
+`authority_hints` publiés par l'OP). Contraintes : le stub n'existe que pendant le
+run de captures et n'est joignable qu'en local — **l'instance hébergée ne peut pas
+l'atteindre** : son plan `federation` joue ses 13 modules en witness
+(`SCREENSHOTS_DIR` non renseigné pour ce plan dans `certification.yml`, PNG de
+secours), les captures réelles restant l'affaire du mode local. Port et URL sont
+partagés entre `setup.sh` (`FEDERATION_STUB_ANCHOR`) et `federation_capture_stub.py`
+(`STUB_PORT`).
 
 Le remplissage **immédiat** est interdit : le watcher de placeholders
 d'`AbstractTestModule` conclut le test dès que la liste est vide pendant que le

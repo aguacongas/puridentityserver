@@ -30,6 +30,15 @@ ignoré).
 Une référence ``urn:ietf:params:oauth:request_uri:…`` est l'URN opaque d'une
 demande poussée (RFC 9126 §6.2) : elle reste du ressort de la résolution PAR
 et n'est jamais récupérée sur le réseau.
+
+Un request object peut enfin être **chiffré** (OIDC Core 1.0 §10.1, issue
+#204) : un document à cinq segments (JWE compact) est déchiffré avec la clé
+``KeyUse.ENC`` de l'OP avant d'entrer dans la chaîne habituelle — le JWT
+obtenu y est traité à l'identique (``alg=none``, signature standard ou
+fédérée). Les algorithmes ``alg``/``enc`` du document sont contrôlés contre
+ceux publiés au discovery ; un document refusé — algorithme non publié,
+clé de déchiffrement introuvable, violation d'intégrité — lève
+``invalid_request_object``.
 """
 
 from __future__ import annotations
@@ -40,8 +49,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from puridentityserver.domain.authorization import PUSHED_REQUEST_URI_PREFIX, Client
+from puridentityserver.domain.jwe import (
+    JWEEncryptionMethod,
+    JWEKeyManagementAlgorithm,
+)
 from puridentityserver.domain.jwks import JWTAlgorithm
 from puridentityserver.interfaces.domain.request_object import (
+    RequestObjectDecrypter,
     RequestObjectFetcher,
     SignedRequestObjectVerifier,
 )
@@ -80,6 +94,31 @@ PUBLISHED_REQUEST_OBJECT_SIGNING_ALGORITHMS: tuple[str, ...] = (
     JWTAlgorithm.ES256.value,
 )
 
+#: Algorithmes de gestion de clé admis pour un request object chiffré
+#: (OIDC Core 1.0 §10.1, issue #204) : les familles RSA-OAEP publiées au
+#: discovery (``request_object_encryption_alg_values_supported``). Le
+#: matériel — clé publique RSA ``KeyUse.ENC`` de l'OP — est publié au JWKS
+#: et dans le ``jwks`` de l'entity statement fédéré, seule source lue par
+#: la suite de certification (module
+#: ``…-with-jar-and-encrypted-request-object``, qui chiffre en ``RSA-OAEP``).
+REQUEST_OBJECT_ENCRYPTION_ALGORITHMS: tuple[str, ...] = (
+    JWEKeyManagementAlgorithm.RSA_OAEP.value,
+    JWEKeyManagementAlgorithm.RSA_OAEP_256.value,
+)
+
+#: Méthodes de chiffrement du contenu admises pour un request object
+#: chiffré (OIDC Core 1.0 §10.1, issue #204) : publiées au discovery sous
+#: ``request_object_encryption_enc_values_supported``. ``A256GCM`` est
+#: exigé par la suite de certification (elle chiffre en ``RSA-OAEP`` +
+#: ``A256GCM``, codé en dur dans sa condition ``EncryptRequestObject``) ;
+#: les familles CBC-HS sont celles recommandées par OIDC Core §16.
+REQUEST_OBJECT_ENCRYPTION_METHODS: tuple[str, ...] = (
+    JWEEncryptionMethod.A128CBC_HS256.value,
+    JWEEncryptionMethod.A256CBC_HS512.value,
+    JWEEncryptionMethod.A128GCM.value,
+    JWEEncryptionMethod.A256GCM.value,
+)
+
 #: Algorithmes de signature exigés pour un request object FAPI 1.0
 #: Advanced Final (FAPI1-ADV-5.2.2-1) : ``alg=none`` et ``RS256`` refusés.
 FAPI_REQUEST_OBJECT_SIGNING_ALGORITHMS: tuple[str, ...] = (
@@ -99,6 +138,23 @@ FAPI_REQUIRED_CLAIMS: tuple[str, ...] = (
     "nonce",
     "redirect_uri",
 )
+
+#: Claims exigés d'un request object présenté par un client fédéré
+#: (OpenID Federation 1.1 §12.1.1.1) : ``exp`` et ``jti`` y sont
+#: **obligatoires** — contrairement aux clients standards, dont le module
+#: ``oidcc-request-uri-signed-rs256`` n'émet ni l'un ni l'autre. Le claim
+#: ``sub`` est interdit dans le même § (il nommerait l'utilisateur, que le
+#: RP ne connaît pas à ce stade).
+FEDERATED_SIGNED_REQUIRED_CLAIMS: tuple[str, ...] = ("iss", "aud", "exp", "jti")
+
+#: Namespace anti-replay des request objects fédérés (§12.1.1.1) : distinct
+#: du namespace CIBA pour que les deux familles ne se croisent pas dans le
+#: store d'empreintes partagé. L'empreinte de session navigateur s'y
+#: ajoute (``-`` si anonyme) : la re-présentation du même request object
+#: après ``/login`` — parcours normal d'un OP — porte alors le namespace
+#: de la session créée, tandis qu'une re-présentation anonyme reste un
+#: replay refusé.
+FEDERATED_JTI_NAMESPACE = "federation:"
 
 #: Paramètres du transport : ils n'existent que dans la query/form, jamais dans le jeton.
 _EMBEDDED = frozenset(("request", "request_uri"))
@@ -132,11 +188,16 @@ class RequestObjectConfig:
     ``signing_algorithms`` borne la lecture des request objects non signés
     (``alg=none``) ; ``issuer`` est la valeur d'``aud`` exigée pour la
     signature FAPI (obligatoire dès qu'un client ``fapi_enabled`` est
-    servi — vérification inactive sans lui).
+    servi — vérification inactive sans lui). ``encryption_algorithms`` /
+    ``encryption_methods`` bornent le déchiffrement des request objects
+    chiffrés (OIDC Core 1.0 §10.1, issue #204) : deux listes vides
+    ferment la porte — tout document à cinq segments est refusé.
     """
 
     signing_algorithms: tuple[str, ...] = REQUEST_OBJECT_SIGNING_ALGORITHMS
     issuer: str = ""
+    encryption_algorithms: tuple[str, ...] = REQUEST_OBJECT_ENCRYPTION_ALGORITHMS
+    encryption_methods: tuple[str, ...] = REQUEST_OBJECT_ENCRYPTION_METHODS
 
 
 def is_pushed_request_uri(reference: str) -> bool:
@@ -154,6 +215,7 @@ class RequestObjectResolver:
         *,
         clients: ClientReader | None = None,
         signed: SignedRequestObjectVerifier | None = None,
+        decryption: RequestObjectDecrypter | None = None,
     ) -> None:
         """Injection de la configuration, du port de lecture et de la vérification.
 
@@ -161,23 +223,42 @@ class RequestObjectResolver:
         vérification d'un JAR RS256 standard — issue #188) ; ``signed``
         vérifie alors la signature contre ses JWKS. Sans ``issuer``, la
         vérification de signature est inactive (``aud`` non contrôlable).
+        ``decryption`` déchiffre les request objects chiffrés (OIDC Core
+        1.0 §10.1, issue #204) — sans injection, tout document JWE est
+        refusé ``invalid_request_object``.
         """
         self._config = config
         self._fetcher = fetcher
         self._clients = clients
         self._signed = signed
+        self._decryption = decryption
 
-    async def resolve(self, params: Mapping[str, str]) -> dict[str, str] | RequestObjectError:
+    async def resolve(
+        self, params: Mapping[str, str], *, session_scope: str = ""
+    ) -> dict[str, str] | RequestObjectError:
         """Retourne les paramètres complétés par le request object, ou son refus.
 
-        Sans ``request`` ni ``request_uri``, les paramètres sont renvoyés
-        tels quels — sauf pour un client FAPI, dont le request object est
-        obligatoire (FAPI1-ADV-5.2.2-1). L'appel peut donc être placé en
-        tête du traitement d'une demande non poussée comme d'un push PAR.
+        Un document chiffré (JWE compact, OIDC Core 1.0 §10.1, issue
+        #204) est déchiffré avant tout le reste, puis traité comme un
+        request object ordinaire. Sans ``request`` ni ``request_uri``, les
+        paramètres sont renvoyés tels quels — sauf pour un client FAPI,
+        dont le request object est obligatoire (FAPI1-ADV-5.2.2-1). L'appel
+        peut donc être placé en tête du traitement d'une demande non
+        poussée comme d'un push PAR. ``session_scope`` (empreinte de la
+        session navigateur, ``""`` si anonyme) cloisonne l'anti-replay
+        ``jti`` du profil fédéré par session : la re-présentation du même
+        request object après authentification — retour de ``/login`` vers
+        ``/authorize``, parcours normal de n'importe quel OP — s'inscrit
+        alors dans le namespace de la session créée, tandis qu'une
+        re-présentation anonyme reste un replay refusé (§12.1.1.1).
         """
         document, error = await self._document(params)
         if error is not None:
             return _with_state(error, document or params.get("request", ""))
+        if document:
+            document, error = await self._prepare(params, document)
+            if error is not None:
+                return _with_state(error, document or params.get("request", ""))
         client = await self._find_client(params.get("client_id", ""))
         if not document:
             if client is not None and client.fapi_enabled:
@@ -197,22 +278,27 @@ class RequestObjectResolver:
             if isinstance(resolved, RequestObjectError):
                 return _with_state(resolved, document)
             return resolved
-        claims, error = await self._resolve_standard(document, client)
+        claims, error = await self._resolve_standard(document, client, session_scope)
         if error is not None:
             return _with_state(error, document)
         return _merge(params, claims)
 
     async def _resolve_standard(
-        self, document: str, client: Client | None
+        self, document: str, client: Client | None, session_scope: str = ""
     ) -> tuple[dict[str, str], RequestObjectError | None]:
         """Traite le request object d'un client standard : non signé ou RS256.
 
         ``alg=none`` est lu sans vérification (port configuré) ; un JAR
         ``RS256`` est vérifié contre le JWKS du client (embarqué ou
         ``jwks_uri``), avec les claims ``iss``/``aud`` exigés (OIDC Core
-        1.0 §10.1/§10.3). Refus (``invalid_request_object``) si le client
-        est inconnu, si la vérification n'est pas configurée, ou si la
-        signature et les claims échouent.
+        1.0 §10.1/§10.3). Pour un client fédéré (``Client.federated``), le
+        profil OpenID Federation 1.1 §12.1.1.1 s'ajoute : ``exp`` et
+        ``jti`` sont exigés avec anti-replay, ``sub`` est interdit — le
+        ``jti`` est scopé par ``session_scope`` (reprise post-login acceptée,
+        replay anonyme refusé, cf. :meth:`resolve`). Refus
+        (``invalid_request_object``) si le client est inconnu, si la
+        vérification n'est pas configurée, ou si la signature et les
+        claims échouent.
         """
         algorithm = _header_algorithm(document)
         if algorithm == "" or algorithm in self._config.signing_algorithms:
@@ -231,18 +317,30 @@ class RequestObjectResolver:
                 error="invalid_request",
                 error_description="vérification du request object signé non configurée",
             )
+        federated = client.federated
         result = await self._signed.verify(
             token=document,
             client=client,
             issuer=self._config.issuer,
             allowed_algorithms=STANDARD_SIGNED_REQUEST_OBJECT_ALGORITHMS,
-            required_claims=STANDARD_SIGNED_REQUIRED_CLAIMS,
-            enforce_jti=False,
+            required_claims=(
+                FEDERATED_SIGNED_REQUIRED_CLAIMS if federated else STANDARD_SIGNED_REQUIRED_CLAIMS
+            ),
+            enforce_jti=federated,
+            jti_namespace=FEDERATED_JTI_NAMESPACE + (session_scope or "-"),
         )
         if result.claims is None:
             return {}, RequestObjectError(
                 error="invalid_request_object",
                 error_description=result.reason,
+            )
+        if federated and "sub" in result.claims:
+            return {}, RequestObjectError(
+                error="invalid_request_object",
+                error_description=(
+                    "claim 'sub' interdit dans un request object de client fédéré "
+                    "(OpenID Federation 1.1 §12.1.1.1)"
+                ),
             )
         return {name: _stringify(value) for name, value in result.claims.items()}, None
 
@@ -312,6 +410,63 @@ class RequestObjectResolver:
             error_description="request_uri injoignable ou refusée (RFC 9101 §5.2)",
         )
 
+    async def _prepare(
+        self, params: Mapping[str, str], document: str
+    ) -> tuple[str, RequestObjectError | None]:
+        """Déchiffre le document (issue #204) puis contrôle le ``client_id`` (Core §6.1).
+
+        Retourne le document à traiter — le plaintext déchiffré le cas
+        échéant — et son refus éventuel ; ``document`` vide signe un
+        document chiffré refusé, dont l'enveloppe JWE est illisible pour
+        rattacher ``state``.
+        """
+        document, error = await self._decrypt(document)
+        if error is not None:
+            return "", error
+        mismatch = _client_id_mismatch(params, document)
+        if mismatch is not None:
+            return document, mismatch
+        return document, None
+
+    async def _decrypt(self, document: str) -> tuple[str, RequestObjectError | None]:
+        """Déchiffre un request object JWE, ou laisse passer les JWT (issue #204).
+
+        Un document à cinq segments (JWE compact, RFC 7516 §7.1) est
+        déchiffré avec la clé ``KeyUse.ENC`` de l'OP, puis rejoint la
+        chaîne de traitement habituelle ; tout autre document passe
+        inchangé. Refus (``invalid_request_object``, OIDC Core 1.0 §10.1)
+        si le chiffrement des request objects est fermé (configuration
+        vide ou port absent), si les en-têtes ``alg``/``enc`` ne sont pas
+        publiés au discovery, ou si le déchiffrement échoue.
+        """
+        if len(document.split(".")) != 5:
+            return document, None
+        if self._decryption is None:
+            return "", _malformed("chiffrement des request objects non supporté")
+        if not self._config.encryption_algorithms or not self._config.encryption_methods:
+            return "", _malformed("chiffrement des request objects non supporté")
+        algorithm, method, key_id = _jwe_header(document)
+        if algorithm is None:
+            return "", _malformed("en-tête JWE illisible (base64url JSON attendu)")
+        if algorithm not in self._config.encryption_algorithms:
+            return "", RequestObjectError(
+                error="invalid_request_object",
+                error_description=f"algorithme de chiffrement non publié : {algorithm!r}",
+            )
+        if method is None:
+            return "", _malformed("en-tête JWE sans algorithme de chiffrement du contenu (enc)")
+        if method not in self._config.encryption_methods:
+            return "", RequestObjectError(
+                error="invalid_request_object",
+                error_description=f"méthode de chiffrement non publiée : {method!r}",
+            )
+        result = await self._decryption.decrypt(
+            document=document, algorithm=algorithm, method=method, key_id=key_id
+        )
+        if not result.plaintext:
+            return "", _malformed(f"déchiffrement impossible : {result.reason}")
+        return result.plaintext, None
+
 
 def _header_algorithm(document: str) -> str:
     """Retourne le claim ``alg`` de l'en-tête, ``""`` si le document est illisible."""
@@ -322,6 +477,26 @@ def _header_algorithm(document: str) -> str:
     if header is None:
         return ""
     return str(header.get("alg", JWTAlgorithm.NONE.value))
+
+
+def _jwe_header(document: str) -> tuple[str | None, str | None, str]:
+    """Retourne ``alg``, ``enc`` et ``kid`` de l'en-tête JWE (RFC 7516 §4.1).
+
+    ``alg``/``enc`` sont ``None`` s'ils sont absents ou non textuels — le
+    cas d'utilisation rend alors le refus dédié. ``kid`` vaut ``""`` s'il
+    est absent : le déchiffreur sélectionne alors la clé unique de l'OP.
+    """
+    header = _decode_segment(document.split(".")[0])
+    if header is None:
+        return None, None, ""
+    algorithm = header.get("alg")
+    method = header.get("enc")
+    key_id = header.get("kid")
+    return (
+        algorithm if isinstance(algorithm, str) else None,
+        method if isinstance(method, str) else None,
+        key_id if isinstance(key_id, str) else "",
+    )
 
 
 def _claims(
@@ -393,6 +568,30 @@ def _merge_fapi(params: Mapping[str, str], claims: dict[str, object]) -> dict[st
         {name: _stringify(value) for name, value in claims.items() if name not in _EMBEDDED}
     )
     return merged
+
+
+def _client_id_mismatch(params: Mapping[str, str], document: str) -> RequestObjectError | None:
+    """Refuse un ``client_id`` de transport différent de celui du request object.
+
+    OIDC Core 1.0 §6.1 : ``client_id`` (et ``response_type``) de la query
+    doivent correspondre aux valeurs du request object quand il en porte —
+    sans quoi la demande est ``invalid_request``. Le contrôle porte sur le
+    payload non vérifié (lecture seule) : un document illisible emprunte le
+    refus dédié ``invalid_request_object``. Module federation
+    ``invalid-client-id-in-query-parameters`` (OIDFED §12.1.1.1).
+    """
+    transport = params.get("client_id", "")
+    if not transport:
+        return None
+    embedded = _unverified_claim(document, "client_id") or _unverified_iss(document)
+    if not embedded or embedded == transport:
+        return None
+    return RequestObjectError(
+        error="invalid_request",
+        error_description=(
+            "client_id de la requête différent de celui du request object (OIDC Core 1.0 §6.1)"
+        ),
+    )
 
 
 def _unverified_iss(document: str) -> str:

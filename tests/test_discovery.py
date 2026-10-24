@@ -57,6 +57,16 @@ def test_discovery_usecase_builds_document_from_base_url() -> None:
     assert document["backchannel_logout_session_supported"] is True
     assert document["device_authorization_endpoint"] == f"{_BASE_URL}/device_authorization"
     assert document["id_token_signing_alg_values_supported"] == _ALL_ALGOS
+    assert document["response_types_supported"] == [
+        "code",
+        "id_token",
+        "token",
+        "id_token token",
+        "code id_token",
+        "code token",
+        "code id_token token",
+    ]
+    assert document["subject_types_supported"] == ["public", "pairwise", "ephemeral"]
 
 
 def test_discovery_usecase_falls_back_to_issuer_as_base_url() -> None:
@@ -131,6 +141,55 @@ def test_discovery_advertises_request_object_signing_algorithms() -> None:
     ]
     assert document["request_parameter_supported"] is True
     assert document["request_uri_parameter_supported"] is True
+
+
+def test_discovery_advertises_request_object_encryption_algorithms() -> None:
+    """OIDC Core 1.0 §10.1 (issue #204) : ``alg``/``enc`` publiés par défaut."""
+    usecase = DiscoveryUseCase(DiscoveryConfig(issuer=_ISSUER))
+    document = run(usecase.execute())
+
+    assert document["request_object_encryption_alg_values_supported"] == [
+        "RSA-OAEP",
+        "RSA-OAEP-256",
+    ]
+    assert document["request_object_encryption_enc_values_supported"] == [
+        "A128CBC-HS256",
+        "A256CBC-HS512",
+        "A128GCM",
+        "A256GCM",
+    ]
+
+
+def test_discovery_omits_request_object_encryption_when_closed() -> None:
+    """Deux listes vides ferment la porte : aucune metadata n'est publiée."""
+    usecase = DiscoveryUseCase(
+        DiscoveryConfig(
+            issuer=_ISSUER,
+            request_object_encryption_algorithms=(),
+            request_object_encryption_methods=(),
+        )
+    )
+    document = run(usecase.execute())
+
+    assert "request_object_encryption_alg_values_supported" not in document
+    assert "request_object_encryption_enc_values_supported" not in document
+
+
+def test_discovery_route_omits_closed_request_object_encryption() -> None:
+    """Le routeur exclut les listes ``None`` du document servi (exclude_none)."""
+    settings = Settings(
+        issuer=_ISSUER,
+        base_url=_BASE_URL,
+        request_object_encryption_algorithms=(),
+        request_object_encryption_methods=(),
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.get("/.well-known/openid-configuration")
+
+    assert response.status_code == 200
+    metadata = response.json()
+    assert "request_object_encryption_alg_values_supported" not in metadata
+    assert "request_object_encryption_enc_values_supported" not in metadata
 
 
 def test_discovery_advertises_fapi1_client_assertion_algorithms() -> None:

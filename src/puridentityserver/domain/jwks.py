@@ -36,13 +36,29 @@ class KeyUse(str, Enum):
                  automatiquement mais **jamais purgée** : un secret est
                  chiffré à vie dans le registre, l'ancienne clé doit
                  rester le temps du drain avant retrait manuel.
+    ``enc``    : chiffrement des request objects présentés à l'OP (OIDC
+                 Core 1.0 §10.1, issue #204) — la clé privée ne quitte
+                 jamais le serveur, la clé publique RSA est publiée au
+                 JWKS OIDC et dans le ``jwks`` de l'entity statement
+                 fédéré, seules sources où un RP puisse lire le matériel
+                 de chiffrement.
+    ``federation``: signature des entity statements et des chaînes de
+                 confiance (OpenID Federation 1.1 §2.1, §3) — jamais
+                 publiée au JWKS OIDC, la spec recommandant que ces clés
+                 ne servent à aucun autre protocole.
     """
 
     SIG = "sig"
     SESSION = "session"
     RESET = "reset"
     VERIFY = "verify"
-    SECRET = "secret"  # ruff: ignore[hardcoded-password-string] — valeur de persistance de l'enum, pas un vrai mot de passe
+    ENC = "enc"
+    SECRET = "secret"  # ruff: ignore[hardcoded-password-string] - valeur de persistance de l'enum, pas un vrai mot de passe
+    # `federation` : signature des entity statements et de la chaîne de
+    # confiance (OpenID Federation 1.1 §2.1, §3). Ces clés sont distinctes
+    # des clés de signature OIDC : la spec recommande qu'elles ne servent
+    # à aucun autre protocole.
+    FEDERATION = "federation"
 
 
 class JWTAlgorithm(str, Enum):
