@@ -1391,3 +1391,38 @@ def test_authorize_issues_code_then_unsigned_id_token_for_none_client() -> None:
     decoded = json.loads(base64.urlsafe_b64decode(claims + "=" * (-len(claims) % 4)))
     assert decoded["nonce"] == "nonce-unsigned"
     assert "at_hash" not in decoded
+
+
+def test_authorize_redirects_invalid_request_for_federated_client() -> None:
+    """Issue #211: federated Entity Identifier -> redirect with invalid_request."""
+    with TestClient(_app()) as client:
+        response = client.get(
+            "/authorize",
+            params={
+                "request": "pas-un-jwt",
+                "client_id": "https://rp.example/op",
+                "redirect_uri": "https://app.example/callback",
+                "state": "state-fed",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert location.startswith("https://app.example/callback?")
+    query = parse_qs(urlparse(location).query)
+    assert "error" in query
+    assert query["state"] == ["state-fed"]
+
+
+def test_authorize_error_page_for_federated_client_without_redirect_uri() -> None:
+    """Issue #211: federated without redirect_uri -> error page 400."""
+    with TestClient(_app()) as client:
+        response = client.get(
+            "/authorize",
+            params={"request": "pas-un-jwt", "client_id": "https://rp.example/op"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 400
+    assert "location" not in response.headers
