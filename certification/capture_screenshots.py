@@ -270,52 +270,52 @@ _FEDERATION_JAR_SCENARIOS: tuple[tuple[str, str, str], ...] = (
     (
         "openid-federation-automatic-client-registration-invalid-signature-on-request-object",
         "tampered",
-        "invalid_request_object",
+        "invalid_request",
     ),
     (
         "openid-federation-automatic-client-registration-invalid-signature-with-other-keys-on-request-object",
         "foreign-key",
-        "invalid_request_object",
+        "invalid_request",
     ),
     (
         "openid-federation-automatic-client-registration-invalid-request-object-exp",
         "exp-past",
-        "invalid_request_object",
+        "invalid_request",
     ),
     (
         "openid-federation-automatic-client-registration-invalid-request-object-iss",
         "bad-iss",
-        "invalid_request_object",
+        "invalid_request",
     ),
     (
         "openid-federation-automatic-client-registration-invalid-request-object-aud",
         "bad-aud",
-        "invalid_request_object",
+        "invalid_request",
     ),
     (
         "openid-federation-automatic-client-registration-invalid-request-object-sub",
         "sub-present",
-        "invalid_request_object",
+        "invalid_request",
     ),
     (
         "openid-federation-automatic-client-registration-invalid-missing-request-object-jti",
         "no-jti",
-        "invalid_request_object",
+        "invalid_request",
     ),
     (
         "openid-federation-automatic-client-registration-invalid-missing-request-object-exp",
         "no-exp",
-        "invalid_request_object",
+        "invalid_request",
     ),
     (
         "openid-federation-automatic-client-registration-invalid-missing-request-object-iss",
         "no-iss",
-        "invalid_request_object",
+        "invalid_request",
     ),
     (
         "openid-federation-automatic-client-registration-invalid-missing-request-object-aud",
         "no-aud",
-        "invalid_request_object",
+        "invalid_request",
     ),
 )
 
@@ -683,7 +683,7 @@ def _capture_federation_scenarios(
         _capture_federation_error_page(
             page,
             url,
-            "invalid_request_object",
+            "invalid_request",
             out / f"{_FEDERATION_DUPLICATE_TEST_NAME}.png",
         )
 
