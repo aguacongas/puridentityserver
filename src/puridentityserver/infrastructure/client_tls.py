@@ -22,6 +22,7 @@ token endpoint de comparer le certificat au lien enregistré pour le client.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from ssl import SSLSocket
 from typing import cast
@@ -73,12 +74,40 @@ def extract_client_certificate(
 
 
 def _normalize_header_value(value: str) -> str:
-    r"""Dé-URL-encode puis rétablit les sauts de ligne (``%0A`` ou ``\n`` littéral).
+    r"""Dé-URL-encode puis rétablit les séquences d'échappement d'un PEM.
 
-    Les proxies de terminaison TLS encodent le PEM différemment : URL
-    encoding (``%0A``) ou séquences ``\n`` deux-caractères dans l'en-tête.
+    Les proxies de terminaison TLS encodent les caractères de contrôle du
+    PEM différemment selon l'implémentation :
+
+    - URL encoding (``%0A``) ;
+    - séquences ``\n``/``\r``/``\t`` deux-caractères ;
+    - escapes hex nginx ``\x0a``/``\x0d``/``\x09`` — le format de
+      ``proxy_set_header`` quand la valeur provient d'une variable
+      multi-lignes comme ``$ssl_client_cert`` (issue #209 : sans ce
+      décodage, le PEM n'est jamais parsé, ``der`` reste ``None`` et le
+      token endpoint rejette ``invalid_client`` « Certificat client mTLS
+      requis » alors que le certificat est bien arrivé) ;
+    - une barre inverse résiduelle devant un saut de ligne réel (pliage
+      de ligne ``obs-fold`` RFC 9110 §5.2 reconstitué par le client).
+
+    Les séquences hex à deux chiffres propres au sujet DN RFC 4514
+    (``\2C``, ``\3D``…) ne sont pas touchées : seules les formes
+    ``\x0a``/``\x0d``/``\x09`` (trois caractères après la barre inverse)
+    sont reconnues.
     """
-    return unquote(value).replace("\\n", "\n").replace("\\r", "\r").strip()
+    decoded = unquote(value)
+    for sequence, replacement in (
+        ("\\x0a", "\n"),
+        ("\\x0d", "\r"),
+        ("\\x09", "\t"),
+        ("\\n", "\n"),
+        ("\\r", "\r"),
+        ("\\t", "\t"),
+    ):
+        decoded = decoded.replace(sequence, replacement)
+    # Barre inverse seule devant un saut de ligne/tabulation réels
+    # (« \ » + newline) : rejetée, le PEM ne contient aucun antislash.
+    return re.sub(r"\\[\r\n\t]", lambda m: m.group(0)[1:], decoded).strip()
 
 
 def _der_from_headers(request: Request, header_names: ClientCertificateHeaderNames) -> bytes | None:

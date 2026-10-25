@@ -603,6 +603,47 @@ class TestConfigurableCertificateHeaders:
         assert from_url.der == _DER
         assert from_escaped.der == _DER
 
+    def test_extract_reads_nginx_hex_escaped_pem(self) -> None:
+        r"""Décodage des escapes hex nginx (``\x0a``) — issue #209.
+
+        ``proxy_set_header`` échappe les sauts de ligne de ``$ssl_client_cert``
+        en ``\x0a`` : sans décodage, le PEM n'est jamais parsé, ``der`` reste
+        ``None`` et le token endpoint rejette ``invalid_client`` « Certificat
+        client mTLS requis » alors que le certificat est bien arrivé (plan
+        fapi1 hébergé en échec, run 40185729680).
+        """
+        hex_escaped = _PEM_TEXT.replace("\n", "\\x0a")
+        fold_escaped = _PEM_TEXT.replace("\n", "\\\n")
+        tab_escaped = _PEM_TEXT.replace("\n", "\\x09").replace(
+            "-----BEGIN CERTIFICATE-----\\x09", "-----BEGIN CERTIFICATE-----\\x0a"
+        )
+        headers = ClientCertificateHeaderNames(certificate="x-mtls-cert")
+
+        from_hex = extract_client_certificate(
+            _request_with_headers({"x-mtls-cert": hex_escaped}), headers
+        )
+        from_fold = extract_client_certificate(
+            _request_with_headers({"x-mtls-cert": fold_escaped}), headers
+        )
+        from_tab = extract_client_certificate(
+            _request_with_headers({"x-mtls-cert": tab_escaped}), headers
+        )
+
+        assert from_hex.der == _DER
+        assert from_fold.der == _DER
+        assert from_tab.der == _DER
+
+    def test_extract_keeps_dn_hex_escape(self) -> None:
+        r"""Le sujet DN RFC 4514 garde ses escapes hex (``\2C``) intacts."""
+        headers = ClientCertificateHeaderNames(certificate="x-mtls-cert", subject_dn="x-mtls-dn")
+
+        extracted = extract_client_certificate(
+            _request_with_headers({"x-mtls-dn": r"CN=alice\2C CFO,O=example"}), headers
+        )
+
+        assert extracted.der is None
+        assert extracted.subject_dn == r"CN=alice\2C CFO,O=example"
+
     def test_extract_falls_back_to_configured_dn_header(self) -> None:
         headers = ClientCertificateHeaderNames(certificate="x-mtls-cert", subject_dn="x-mtls-dn")
 
