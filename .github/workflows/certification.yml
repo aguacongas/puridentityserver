@@ -55,7 +55,7 @@ on:
         # `ekyc` de `CERTIFICATION_PLANS` (certification/selectors.sh) — le
         # workflow local, lui, épingle la dernière release et n'est pas
         # concerné.
-        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + Dynamic + CIBA + FAPI1 + FAPI2 + FAPI2 Message Signing + ekyc ; ekyc = identité assurance, hors programme officiel)"
+        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + Dynamic + CIBA + FAPI1 + FAPI2 + FAPI2 Message Signing + ekyc + federation ; ekyc = identité assurance, federation = OpenID Federation, hors programme officiel)"
         type: choice
         required: false
         default: all
@@ -71,7 +71,8 @@ on:
           - fapi2
           - fapi2-message-signing
           - ekyc
-
+          - federation
+          
 permissions:
   contents: read
 

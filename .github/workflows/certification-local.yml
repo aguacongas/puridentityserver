@@ -57,6 +57,7 @@ on:
           - fapi2
           - fapi2-message-signing
           - ekyc
+          - federation
   pull_request:
     branches: ["main"]
     paths:
