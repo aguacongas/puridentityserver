@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 import time
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import Annotated, Protocol
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -101,6 +101,19 @@ class AuthorizeQueryParams(BaseModel):
     register_marker: str = Field("", alias="register")
 
 
+class _FederatedClientRedirectView(Protocol):
+    """Vue minimale d'un client fédéré résolu par la trust chain."""
+
+    redirect_uris: tuple[str, ...]
+
+
+class _TrustChainRedirectResolver(Protocol):
+    """Résolveur de redirect_uri à partir d'un Entity Identifier federé."""
+
+    async def resolve(self, entity_identifier: str) -> _FederatedClientRedirectView | None:
+        ...
+
+
 def authorize_router(
     usecase: AuthorizeUseCase,
     par_usecase: PushedAuthorizationUseCase | None = None,
@@ -113,7 +126,7 @@ def authorize_router(
     base_url: str = "",
     jarm_signer: JarmSigner | None = None,
     issuer: str = "",
-    federated_redirect_resolver: Any = None,
+    federated_redirect_resolver: _TrustChainRedirectResolver | None = None,
 ) -> APIRouter:
     """Construit le routeur FastAPI exposant ``GET /authorize``.
 
@@ -262,7 +275,7 @@ async def _direct_authorize_request(
     session_scope: str = "",
     jarm_signer: JarmSigner | None = None,
     issuer: str = "",
-    federated_redirect_resolver: object | None = None,
+    federated_redirect_resolver: _TrustChainRedirectResolver | None = None,
 ) -> AuthorizeRequest | RedirectResponse | HTMLResponse:
     """Construit la demande d'une requête **non poussée** (RFC 6749 §3.1).
 
@@ -475,7 +488,7 @@ async def _request_object_error_response(
     jarm_signer: JarmSigner | None = None,
     *,
     issuer: str = "",
-    trust_chain_resolver: Any = None,
+    trust_chain_resolver: _TrustChainRedirectResolver | None = None,
 ) -> RedirectResponse | HTMLResponse:
     """Transporte un refus de request object (RFC 6749 §4.1.2.1, issue #178).
 
@@ -516,8 +529,8 @@ async def _request_object_error_response(
         if not redirect_uri and trust_chain_resolver is not None:
             try:
                 derived = await trust_chain_resolver.resolve(client_id)
-                if derived is not None and getattr(derived, "redirect_uris", None):
-                    redirect_uri = derived.redirect_uris[0]
+                if derived is not None and derived.redirect_uris:
+                    redirect_uri = next(iter(derived.redirect_uris), "")
             except Exception:
                 redirect_uri = redirect_uri
         if not redirect_uri:
@@ -1004,7 +1017,7 @@ async def _authorize_entry(
     session_scope: str = "",
     jarm_signer: JarmSigner | None = None,
     issuer: str = "",
-    federated_redirect_resolver: Any = None,
+    federated_redirect_resolver: _TrustChainRedirectResolver | None = None,
 ) -> tuple[AuthorizeRequest | Response, str]:
     """Résout l'entrée ``/authorize`` : poussée (``request_uri``) ou directe.
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import cast
 
 from fastapi import FastAPI
 
@@ -111,7 +112,7 @@ from puridentityserver.infrastructure.signed_request_object import (
     PyJWTSignedRequestObjectVerifier,
 )
 from puridentityserver.infrastructure.tokens import PyJWTTokenManager
-from puridentityserver.interfaces.api.authorize import authorize_router
+from puridentityserver.interfaces.api.authorize import _TrustChainRedirectResolver, authorize_router
 from puridentityserver.interfaces.api.backchannel_authorize import (
     backchannel_authorization_router,
     ciba_approval_router,
@@ -245,7 +246,7 @@ def _mount_authorization_routers(
     base_url: str,
     jarm_signer: JarmSigner | None = None,
     issuer: str = "",
-    federated_redirect_resolver: object | None = None,
+    federated_redirect_resolver: _TrustChainRedirectResolver | None = None,
 ) -> None:
     """Monte ``/authorize`` (+ ``/par`` + ``/consent`` selon la configuration).
 
@@ -693,7 +694,10 @@ class ProtocolDependencies:
             base_url=self.settings.base_url or self.settings.issuer,
             jarm_signer=self.jarm_signer,
             issuer=self.settings.issuer,
-            federated_redirect_resolver=self.federated_resolver,
+            federated_redirect_resolver=cast(
+                _TrustChainRedirectResolver | None,
+                self.federated_resolver,
+            ),
         )
         app.include_router(token_router(self.token_usecase, self.client_certificate_headers))
         app.include_router(device_authorization_router(self.device_usecase))
