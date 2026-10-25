@@ -486,7 +486,11 @@ class TestFederatedRequestObject:
         assert resolved["nonce"] == "nonce-federation"
 
     def test_missing_jti_is_refused(self) -> None:
-        """§12.1.1.1 : ``jti`` obligatoire (module invalid-missing-request-object-jti)."""
+        """§12.1.1.1 : ``jti`` obligatoire (module invalid-missing-request-object-jti).
+
+        Pour un client fédéré (enregistrement auto), le refus renvoie
+        ``invalid_request`` (aligné FAPI 1/2) et non ``invalid_request_object``.
+        """
         key, jwks = _jar_key()
         resolver = _jar_resolver(_federated_client(jwks))
         future = int(datetime.now(timezone.utc).timestamp()) + 300
@@ -498,11 +502,15 @@ class TestFederatedRequestObject:
         )
 
         assert isinstance(resolved, RequestObjectError)
-        assert resolved.error == "invalid_request_object"
+        assert resolved.error == "invalid_request"
         assert "jti" in resolved.error_description
 
     def test_missing_exp_is_refused(self) -> None:
-        """§12.1.1.1 : ``exp`` obligatoire (module invalid-missing-request-object-exp)."""
+        """§12.1.1.1 : ``exp`` obligatoire (module invalid-missing-request-object-exp).
+
+        Pour un client fédéré (enregistrement auto), le refus renvoie
+        ``invalid_request`` (aligné FAPI 1/2).
+        """
         key, jwks = _jar_key()
         resolver = _jar_resolver(_federated_client(jwks))
 
@@ -513,11 +521,15 @@ class TestFederatedRequestObject:
         )
 
         assert isinstance(resolved, RequestObjectError)
-        assert resolved.error == "invalid_request_object"
+        assert resolved.error == "invalid_request"
         assert "exp" in resolved.error_description
 
     def test_sub_is_refused(self) -> None:
-        """§12.1.1.1 : ``sub`` interdit (module invalid-request-object-sub)."""
+        """§12.1.1.1 : ``sub`` interdit (module invalid-request-object-sub).
+
+        Pour un client fédéré (enregistrement auto), le refus renvoie
+        ``invalid_request`` (aligné FAPI 1/2).
+        """
         key, jwks = _jar_key()
         resolver = _jar_resolver(_federated_client(jwks))
         future = int(datetime.now(timezone.utc).timestamp()) + 300
@@ -529,11 +541,15 @@ class TestFederatedRequestObject:
         )
 
         assert isinstance(resolved, RequestObjectError)
-        assert resolved.error == "invalid_request_object"
+        assert resolved.error == "invalid_request"
         assert "sub" in resolved.error_description
 
     def test_replayed_jti_is_refused(self) -> None:
-        """§12.1.1.1 : ``jti`` anti-replay (module invalid-duplicate-request-object-jti)."""
+        """§12.1.1.1 : ``jti`` anti-replay (module invalid-duplicate-request-object-jti).
+
+        Pour un client fédéré (enregistrement auto), le refus renvoie
+        ``invalid_request`` (aligné FAPI 1/2).
+        """
         key, jwks = _jar_key()
         resolver = _jar_resolver(_federated_client(jwks))
         future = int(datetime.now(timezone.utc).timestamp()) + 300
@@ -544,7 +560,7 @@ class TestFederatedRequestObject:
 
         assert isinstance(first, dict)
         assert isinstance(second, RequestObjectError)
-        assert second.error == "invalid_request_object"
+        assert second.error == "invalid_request"
         assert "déjà présenté" in second.error_description
 
     def test_same_jti_after_login_in_another_session_is_accepted(self) -> None:
@@ -566,7 +582,11 @@ class TestFederatedRequestObject:
         assert isinstance(after_login, dict)
 
     def test_same_jti_replayed_under_the_same_session_is_refused(self) -> None:
-        """Le replay reste refusé quand la session navigateur est inchangée."""
+        """Le replay reste refusé quand la session navigateur est inchangée.
+
+        Pour un client fédéré (enregistrement auto), le refus renvoie
+        ``invalid_request`` (aligné FAPI 1/2).
+        """
         key, jwks = _jar_key()
         resolver = _jar_resolver(_federated_client(jwks))
         future = int(datetime.now(timezone.utc).timestamp()) + 300
@@ -577,7 +597,7 @@ class TestFederatedRequestObject:
 
         assert isinstance(first, dict)
         assert isinstance(second, RequestObjectError)
-        assert second.error == "invalid_request_object"
+        assert second.error == "invalid_request"
 
     def test_standard_client_keeps_accepting_a_jar_without_jti(self) -> None:
         """Le profil fédéré ne s'applique qu'aux clients ``federated`` (issue #170)."""
@@ -822,7 +842,11 @@ class TestEncryptedRequestObject:
         assert "non supporté" in resolved.error_description
 
     def test_encrypted_federated_jar_keeps_section_12_requirements(self) -> None:
-        """Le déchiffrement ne contourne pas le profil fédéré (§12.1.1.1)."""
+        """Le déchiffrement ne contourne pas le profil fédéré (§12.1.1.1).
+
+        Pour un client fédéré (enregistrement auto), le refus renvoie
+        ``invalid_request`` (aligné FAPI 1/2).
+        """
         decrypter, public_key = _op_encryption_key()
         key, jwks = _jar_key()
         resolver = _encrypted_resolver(_federated_client(jwks), decrypter)
@@ -834,7 +858,7 @@ class TestEncryptedRequestObject:
         )
 
         assert isinstance(resolved, RequestObjectError)
-        assert resolved.error == "invalid_request_object"
+        assert resolved.error == "invalid_request"
         assert "jti" in resolved.error_description
 
     def test_unknown_kid_selects_no_key(self) -> None:

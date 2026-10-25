@@ -286,10 +286,12 @@ class RequestObjectResolver:
         profil OpenID Federation 1.1 §12.1.1.1 s'ajoute : ``exp`` et
         ``jti`` sont exigés avec anti-replay, ``sub`` est interdit — le
         ``jti`` est scopé par ``session_scope`` (reprise post-login acceptée,
-        replay anonyme refusé, cf. :meth:`resolve`). Refus
-        (``invalid_request_object``) si le client est inconnu, si la
-        vérification n'est pas configurée, ou si la signature et les
-        claims échouent.
+        replay anonyme refusé, cf. :meth:`resolve`).
+
+        Pour un client fédéré (enregistrement automatique §12.1.1.1), les
+        refus renvoient ``invalid_request`` (aligné sur FAPI 1/2) plutôt
+        que ``invalid_request_object``. Pour un client standard, le code
+        reste ``invalid_request_object``.
         """
         algorithm = _header_algorithm(document)
         if algorithm == "" or algorithm in self._config.signing_algorithms:
@@ -309,6 +311,9 @@ class RequestObjectResolver:
                 error_description="vérification du request object signé non configurée",
             )
         federated = client.federated
+        # Pour les clients fédérés (enregistrement auto), on renvoie
+        # invalid_request (FAPI 1/2) ; pour les standards, invalid_request_object.
+        error_code = "invalid_request" if federated else "invalid_request_object"
         result = await self._signed.verify(
             token=document,
             client=client,
@@ -322,12 +327,12 @@ class RequestObjectResolver:
         )
         if result.claims is None:
             return {}, RequestObjectError(
-                error="invalid_request_object",
+                error=error_code,
                 error_description=result.reason,
             )
         if federated and "sub" in result.claims:
             return {}, RequestObjectError(
-                error="invalid_request_object",
+                error=error_code,
                 error_description=(
                     "claim 'sub' interdit dans un request object de client fédéré "
                     "(OpenID Federation 1.1 §12.1.1.1)"

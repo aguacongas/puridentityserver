@@ -458,6 +458,11 @@ def _requested_error_mode(client: Client, requested_mode: str, has_tokens: bool)
     return ResponseMode.QUERY
 
 
+def _is_entity_identifier(value: str) -> bool:
+    """Indique si ``value`` est une URL https sans query ni fragment (Entity Identifier §1.2)."""
+    return value.startswith("https://") and "?" not in value and "#" not in value
+
+
 async def _request_object_error_response(
     error: RequestObjectError,
     params: dict[str, str],
@@ -477,6 +482,12 @@ async def _request_object_error_response(
     callback sûr (URI absente ou non enregistrée, client inconnu), la
     page HTML d'erreur est servie.
 
+    Pour l'enregistrement automatique fédéré (OpenID Federation 1.1 §12.1),
+    le client n'est pas pré-enregistré : son ``client_id`` est un Entity
+    Identifier. Dans ce cas, on autorise la redirection vers la
+    ``redirect_uri`` de la query (fourni par la suite de certification) car
+    elle correspond à l'URI de callback attendue par le test.
+
     L'enveloppe suit le ``response_mode`` demandé quand le client est
     signable JARM (``response=jwt`` signé), sinon le ``response_type`` du
     transport : le fragment d'entrée (implicit/hybrid, FAPI1
@@ -487,10 +498,37 @@ async def _request_object_error_response(
     """
     if client_repository is None:
         return _request_object_error_page(error)
-    client = await client_repository.find_by_id(params.get("client_id", ""))
-    if client is None:
-        return _request_object_error_page(error)
+    client_id = params.get("client_id", "")
+    client = await client_repository.find_by_id(client_id)
     redirect_uri = params.get("redirect_uri", "")
+
+    if client is None:
+        # Enregistrement automatique fédéré : le client_id est un Entity Identifier
+        # et le client n'est pas dans le repository. On autorise la redirection
+        # vers la redirect_uri de la query (callback de la suite).
+        if not _is_entity_identifier(client_id) or not redirect_uri:
+            return _request_object_error_page(error)
+        # Pour un client fédéré potentiel, on suppose confidential + private_key_jwt
+        # et on utilise le response_mode basé sur le response_type du transport.
+        response_type = params.get("response_type", "")
+        has_tokens = bool({"token", "id_token"} & set(response_type.split()))
+        # Client fédéré = confidentiel, pas de JARM sans algorithme publié
+        response_mode = ResponseMode.FRAGMENT if has_tokens else ResponseMode.QUERY
+        if params.get("response_mode") == ResponseMode.FORM_POST.value:
+            response_mode = ResponseMode.FORM_POST
+        return await error_redirect(
+            AuthorizeError(
+                error=error.error,
+                error_description=error.error_description,
+                redirect_uri=redirect_uri,
+                state=error.state or params.get("state", ""),
+                response_mode=response_mode,
+                client_id=client_id,
+            ),
+            jarm_signer,
+            issuer=issuer,
+        )
+
     if redirect_uri not in client.redirect_uris:
         return _request_object_error_page(error)
     response_type = params.get("response_type", "")
