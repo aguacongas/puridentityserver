@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 import time
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -113,6 +113,7 @@ def authorize_router(
     base_url: str = "",
     jarm_signer: JarmSigner | None = None,
     issuer: str = "",
+    federated_redirect_resolver: Any = None,
 ) -> APIRouter:
     """Construit le routeur FastAPI exposant ``GET /authorize``.
 
@@ -200,6 +201,7 @@ def authorize_router(
             session_scope=await session_sid(request),
             jarm_signer=jarm_signer,
             issuer=issuer,
+            federated_redirect_resolver=federated_redirect_resolver,
         )
         if isinstance(auth_request, Response):
             return auth_request
@@ -260,6 +262,7 @@ async def _direct_authorize_request(
     session_scope: str = "",
     jarm_signer: JarmSigner | None = None,
     issuer: str = "",
+    federated_redirect_resolver: object | None = None,
 ) -> AuthorizeRequest | RedirectResponse | HTMLResponse:
     """Construit la demande d'une requête **non poussée** (RFC 6749 §3.1).
 
@@ -288,7 +291,9 @@ async def _direct_authorize_request(
     resolved = await request_object_resolver.resolve(params, session_scope=session_scope)
     if isinstance(resolved, RequestObjectError):
         return await _request_object_error_response(
-            resolved, params, client_repository, jarm_signer, issuer=issuer
+            resolved, params, client_repository, jarm_signer,
+            issuer=issuer,
+            trust_chain_resolver=federated_redirect_resolver,
         )
     params = resolved
     missing = [
@@ -470,6 +475,7 @@ async def _request_object_error_response(
     jarm_signer: JarmSigner | None = None,
     *,
     issuer: str = "",
+    trust_chain_resolver: Any = None,
 ) -> RedirectResponse | HTMLResponse:
     """Transporte un refus de request object (RFC 6749 §4.1.2.1, issue #178).
 
@@ -500,13 +506,21 @@ async def _request_object_error_response(
         return _request_object_error_page(error)
     client_id = params.get("client_id", "")
     client = await client_repository.find_by_id(client_id)
-    redirect_uri = params.get("redirect_uri", "")
+    redirect_uri = (params.get("redirect_uri", "") or "").strip()
 
     if client is None:
         # Enregistrement automatique fédéré : le client_id est un Entity Identifier
-        # et le client n'est pas dans le repository. On autorise la redirection
-        # vers la redirect_uri de la query (callback de la suite).
-        if not _is_entity_identifier(client_id) or not redirect_uri:
+        # et le client n'est pas dans le repository.
+        if not _is_entity_identifier(client_id):
+            return _request_object_error_page(error)
+        if not redirect_uri and trust_chain_resolver is not None:
+            try:
+                derived = await trust_chain_resolver.resolve(client_id)
+                if derived is not None and getattr(derived, "redirect_uris", None):
+                    redirect_uri = derived.redirect_uris[0]
+            except Exception:
+                redirect_uri = redirect_uri
+        if not redirect_uri:
             return _request_object_error_page(error)
         # Pour un client fédéré potentiel, on suppose confidential + private_key_jwt
         # et on utilise le response_mode basé sur le response_type du transport.
@@ -990,6 +1004,7 @@ async def _authorize_entry(
     session_scope: str = "",
     jarm_signer: JarmSigner | None = None,
     issuer: str = "",
+    federated_redirect_resolver: Any = None,
 ) -> tuple[AuthorizeRequest | Response, str]:
     """Résout l'entrée ``/authorize`` : poussée (``request_uri``) ou directe.
 
@@ -1016,6 +1031,7 @@ async def _authorize_entry(
         session_scope=session_scope,
         jarm_signer=jarm_signer,
         issuer=issuer,
+            federated_redirect_resolver=federated_redirect_resolver,
     )
     if isinstance(built, HTMLResponse):
         return built, ""

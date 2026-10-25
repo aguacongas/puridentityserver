@@ -245,6 +245,7 @@ def _mount_authorization_routers(
     base_url: str,
     jarm_signer: JarmSigner | None = None,
     issuer: str = "",
+    federated_redirect_resolver: object | None = None,
 ) -> None:
     """Monte ``/authorize`` (+ ``/par`` + ``/consent`` selon la configuration).
 
@@ -263,6 +264,7 @@ def _mount_authorization_routers(
             base_url=base_url,
             jarm_signer=jarm_signer,
             issuer=issuer,
+            federated_redirect_resolver=federated_redirect_resolver,
         )
     )
     app.include_router(
@@ -344,6 +346,11 @@ class ProtocolDependencies:
                 frozenset(settings.registration_required_claim_values),
             ),
         )
+        self.federated_resolver = (
+            TrustChainClientResolver(lambda: self.federation_usecase)
+            if settings.federation_enabled
+            else None
+        )
         self.readers = build_readers_from_stores(
             client=stores.client,
             user=stores.user,
@@ -352,11 +359,7 @@ class ProtocolDependencies:
             # Enregistrement automatique (OpenID Federation 1.1 §12.1) : le
             # resolveur est résolu paresseusement, le cas d'usage de la
             # Fédération n'étant construit qu'après le discovery.
-            federated_resolver=(
-                TrustChainClientResolver(lambda: self.federation_usecase)
-                if settings.federation_enabled
-                else None
-            ),
+            federated_resolver=self.federated_resolver,
         )
         self.scope_registry = ScopeRegistry(
             self.readers.identity_resource,
@@ -690,6 +693,7 @@ class ProtocolDependencies:
             base_url=self.settings.base_url or self.settings.issuer,
             jarm_signer=self.jarm_signer,
             issuer=self.settings.issuer,
+            federated_redirect_resolver=self.federated_resolver,
         )
         app.include_router(token_router(self.token_usecase, self.client_certificate_headers))
         app.include_router(device_authorization_router(self.device_usecase))
