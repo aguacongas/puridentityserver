@@ -3,15 +3,20 @@
 """Prune stale (unpublished) test plans on the OpenID Foundation conformance server.
 
 Issue #132 : chaque run cree des plans frais (1 run = 1 plan). On garde les N
-plans les plus recents par planName et on supprime les plus anciens, sans
+plans les plus recents par alias et on supprime les plus anciens, sans
 jamais toucher un plan publie (l'API renvoie 405 Method Not Allowed).
 Les plans publies (immutable) sont conserves quoi qu'il arrive.
+
+Le rattachement se fait via le champ ``alias`` du plan (le repo nomme ses
+plans ``puridentityserver-<plan>``, cf. certification/plans/*.json) — pas
+``planName``, qui porte le type de plan OIDF (ex. oidcc-basic-...) : le
+filtre sur ``planName`` ne matchait jamais (purge silencieusement vide).
 
 Variables d'environnement (heritees du workflow certification.yml) :
   CONFORMANCE_SERVER   base URL de la suite (defaut https://www.certification.openid.net/)
   CONFORMANCE_TOKEN    Bearer token admin (requis)
-  KEEP_PLANS           nombre de plans recents a conserver par planName (defaut 3)
-  PLAN_NAME_PREFIX     prefixe de nom a considerer (defaut puridentityserver-)
+  KEEP_PLANS           nombre de plans recents a conserver par alias (defaut 1)
+  PLAN_NAME_PREFIX     prefixe d'alias a considerer (defaut puridentityserver-)
 """
 
 from __future__ import annotations
@@ -21,7 +26,7 @@ import sys
 
 import httpx
 
-KEEP = int(os.environ.get("KEEP_PLANS", "3"))
+KEEP = int(os.environ.get("KEEP_PLANS", "1"))
 PREFIX = os.environ.get("PLAN_NAME_PREFIX", "puridentityserver-")
 BASE = os.environ.get("CONFORMANCE_SERVER", "https://www.certification.openid.net/")
 TOKEN = os.environ.get("CONFORMANCE_TOKEN", "")
@@ -57,6 +62,19 @@ def _is_published(plan: dict) -> bool:
     return False
 
 
+def _alias_of(plan: dict) -> str:
+    """Alias du plan : champ ``alias`` plat, ou ``config.alias`` (builds anciens)."""
+    alias = plan.get("alias")
+    if isinstance(alias, str) and alias:
+        return alias
+    config = plan.get("config")
+    if isinstance(config, dict):
+        nested = config.get("alias")
+        if isinstance(nested, str):
+            return nested
+    return ""
+
+
 def main() -> int:
     with _client() as client:
         # 1. lister tous les plans du user
@@ -78,13 +96,18 @@ def main() -> int:
             start += length
 
         # 2. garder uniquement les plans de notre alias
-        ours = [pl for pl in plans if str(pl.get("planName", "")).startswith(PREFIX)]
+        ours = [pl for pl in plans if _alias_of(pl).startswith(PREFIX)]
         print(f"prune: {len(plans)} plan(s) total, {len(ours)} de prefixe '{PREFIX}'")
+        if plans and not ours:
+            # Diagnostic d'un filtre qui ne matche plus : on montre les alias
+            # observes pour ajuster PREFIX sans purge silencieusement vide.
+            observed = sorted({_alias_of(pl) or "<sans alias>" for pl in plans})[:10]
+            print(f"prune: alias observes (exemples) : {', '.join(observed)}")
 
-        # 3. grouper par planName, trier par started (ISO, desc)
+        # 3. grouper par alias, trier par started (ISO, desc)
         groups: dict[str, list[dict]] = {}
         for pl in ours:
-            groups.setdefault(pl.get("planName", ""), []).append(pl)
+            groups.setdefault(_alias_of(pl), []).append(pl)
 
         to_delete: list[tuple[str, str]] = []
         for name, group in groups.items():

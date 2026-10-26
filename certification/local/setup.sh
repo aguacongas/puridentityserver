@@ -36,11 +36,6 @@ SUITE_HOSTNAME="localhost.emobix.co.uk"
 SUITE_PORT="8443"
 MTLS_PORT="9443"
 OP_ALIAS="op"
-# Ancre du stub de captures fédérées (certification/federation_capture_stub.py) :
-# seconde trust anchor de l'OP local, hébergée par le script de captures sur le
-# même port — inatteignable depuis l'instance hébergée (issue de suivi).
-FEDERATION_STUB_PORT="9444"
-FEDERATION_STUB_ANCHOR="https://localhost:$FEDERATION_STUB_PORT/federation-capture-anchor"
 
 mkdir -p "$LOCAL_DIR"
 cd "$REPO_ROOT"
@@ -231,16 +226,11 @@ docker run -d --name "$OP_ALIAS-mtls" \
 
 # ---6) Config OP locale (issuer op:9443, callbacks suite locale, SQLite) ------
 log "génération de la config OP locale"
-# La seconde trust anchor est l'ancre du stub de captures fédérées : elle
-# complète l'ancre de la suite (inchangée, toujours en tête de liste) —
-# l'OP peut alors résoudre la chaîne du RP de capture du script
-# certification/capture_screenshots.py --federation. Idempotent : la config
-# est régénérée depuis le template à chaque run.
+# Idempotent : la config est régénérée depuis le template à chaque run.
 sed \
   -e "s|issuer = \"http://127.0.0.1:8000\"|issuer = \"https://$OP_ALIAS:$MTLS_PORT\"|" \
   -e "s|https://www.certification.openid.net|https://$SUITE_HOSTNAME:$SUITE_PORT|g" \
   -e "s|storage_dsn = \"sqlite:///puridentityserver.db\"|storage_dsn = \"sqlite:///$(winpath "$LOCAL_DIR/op.db")\"|" \
-  -e "s|^federation_trust_anchors = \(.*trust-anchor\"\)\]$|federation_trust_anchors = \1, \"$FEDERATION_STUB_ANCHOR\"]|" \
   "$REPO_ROOT/certification/config.render.toml" > "$LOCAL_DIR/op-config.toml"
 
 # ---7) OP uvicorn (hôte) ------------------------------------------------------

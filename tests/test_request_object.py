@@ -486,7 +486,11 @@ class TestFederatedRequestObject:
         assert resolved["nonce"] == "nonce-federation"
 
     def test_missing_jti_is_refused(self) -> None:
-        """§12.1.1.1 : ``jti`` obligatoire (module invalid-missing-request-object-jti)."""
+        """§12.1.1.1 : ``jti`` obligatoire (module invalid-missing-request-object-jti).
+
+        Pour un client fédéré (enregistrement auto), le refus renvoie
+        ``invalid_request`` (aligné FAPI 1/2) et non ``invalid_request_object``.
+        """
         key, jwks = _jar_key()
         resolver = _jar_resolver(_federated_client(jwks))
         future = int(datetime.now(timezone.utc).timestamp()) + 300
@@ -498,11 +502,15 @@ class TestFederatedRequestObject:
         )
 
         assert isinstance(resolved, RequestObjectError)
-        assert resolved.error == "invalid_request_object"
+        assert resolved.error == "invalid_request"
         assert "jti" in resolved.error_description
 
     def test_missing_exp_is_refused(self) -> None:
-        """§12.1.1.1 : ``exp`` obligatoire (module invalid-missing-request-object-exp)."""
+        """§12.1.1.1 : ``exp`` obligatoire (module invalid-missing-request-object-exp).
+
+        Pour un client fédéré (enregistrement auto), le refus renvoie
+        ``invalid_request`` (aligné FAPI 1/2).
+        """
         key, jwks = _jar_key()
         resolver = _jar_resolver(_federated_client(jwks))
 
@@ -513,11 +521,15 @@ class TestFederatedRequestObject:
         )
 
         assert isinstance(resolved, RequestObjectError)
-        assert resolved.error == "invalid_request_object"
+        assert resolved.error == "invalid_request"
         assert "exp" in resolved.error_description
 
     def test_sub_is_refused(self) -> None:
-        """§12.1.1.1 : ``sub`` interdit (module invalid-request-object-sub)."""
+        """§12.1.1.1 : ``sub`` interdit (module invalid-request-object-sub).
+
+        Pour un client fédéré (enregistrement auto), le refus renvoie
+        ``invalid_request`` (aligné FAPI 1/2).
+        """
         key, jwks = _jar_key()
         resolver = _jar_resolver(_federated_client(jwks))
         future = int(datetime.now(timezone.utc).timestamp()) + 300
@@ -529,11 +541,15 @@ class TestFederatedRequestObject:
         )
 
         assert isinstance(resolved, RequestObjectError)
-        assert resolved.error == "invalid_request_object"
+        assert resolved.error == "invalid_request"
         assert "sub" in resolved.error_description
 
     def test_replayed_jti_is_refused(self) -> None:
-        """§12.1.1.1 : ``jti`` anti-replay (module invalid-duplicate-request-object-jti)."""
+        """§12.1.1.1 : ``jti`` anti-replay (module invalid-duplicate-request-object-jti).
+
+        Pour un client fédéré (enregistrement auto), le refus renvoie
+        ``invalid_request`` (aligné FAPI 1/2).
+        """
         key, jwks = _jar_key()
         resolver = _jar_resolver(_federated_client(jwks))
         future = int(datetime.now(timezone.utc).timestamp()) + 300
@@ -544,7 +560,7 @@ class TestFederatedRequestObject:
 
         assert isinstance(first, dict)
         assert isinstance(second, RequestObjectError)
-        assert second.error == "invalid_request_object"
+        assert second.error == "invalid_request"
         assert "déjà présenté" in second.error_description
 
     def test_same_jti_after_login_in_another_session_is_accepted(self) -> None:
@@ -566,7 +582,11 @@ class TestFederatedRequestObject:
         assert isinstance(after_login, dict)
 
     def test_same_jti_replayed_under_the_same_session_is_refused(self) -> None:
-        """Le replay reste refusé quand la session navigateur est inchangée."""
+        """Le replay reste refusé quand la session navigateur est inchangée.
+
+        Pour un client fédéré (enregistrement auto), le refus renvoie
+        ``invalid_request`` (aligné FAPI 1/2).
+        """
         key, jwks = _jar_key()
         resolver = _jar_resolver(_federated_client(jwks))
         future = int(datetime.now(timezone.utc).timestamp()) + 300
@@ -577,7 +597,7 @@ class TestFederatedRequestObject:
 
         assert isinstance(first, dict)
         assert isinstance(second, RequestObjectError)
-        assert second.error == "invalid_request_object"
+        assert second.error == "invalid_request"
 
     def test_standard_client_keeps_accepting_a_jar_without_jti(self) -> None:
         """Le profil fédéré ne s'applique qu'aux clients ``federated`` (issue #170)."""
@@ -822,7 +842,11 @@ class TestEncryptedRequestObject:
         assert "non supporté" in resolved.error_description
 
     def test_encrypted_federated_jar_keeps_section_12_requirements(self) -> None:
-        """Le déchiffrement ne contourne pas le profil fédéré (§12.1.1.1)."""
+        """Le déchiffrement ne contourne pas le profil fédéré (§12.1.1.1).
+
+        Pour un client fédéré (enregistrement auto), le refus renvoie
+        ``invalid_request`` (aligné FAPI 1/2).
+        """
         decrypter, public_key = _op_encryption_key()
         key, jwks = _jar_key()
         resolver = _encrypted_resolver(_federated_client(jwks), decrypter)
@@ -834,7 +858,7 @@ class TestEncryptedRequestObject:
         )
 
         assert isinstance(resolved, RequestObjectError)
-        assert resolved.error == "invalid_request_object"
+        assert resolved.error == "invalid_request"
         assert "jti" in resolved.error_description
 
     def test_unknown_kid_selects_no_key(self) -> None:
@@ -1367,3 +1391,300 @@ def test_authorize_issues_code_then_unsigned_id_token_for_none_client() -> None:
     decoded = json.loads(base64.urlsafe_b64decode(claims + "=" * (-len(claims) % 4)))
     assert decoded["nonce"] == "nonce-unsigned"
     assert "at_hash" not in decoded
+
+
+def test_authorize_error_page_for_federated_client_without_trust_chain() -> None:
+    """Issue #211: sans trust chain, aucune redirection — page d'erreur 400.
+
+    Fail-closed confirmé : la ``redirect_uri`` de la query n'étant pas
+    validable contre une trust chain (federation désactivée dans l'app de
+    test), l'OP ne redirige jamais vers une cible non vérifiée.
+    """
+    with TestClient(_app()) as client:
+        response = client.get(
+            "/authorize",
+            params={
+                "request": "pas-un-jwt",
+                "client_id": "https://rp.example/op",
+                "redirect_uri": "https://app.example/callback",
+                "state": "state-fed",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 400
+    assert "location" not in response.headers
+
+
+def test_authorize_error_page_for_federated_client_without_redirect_uri() -> None:
+    """Issue #211: federated without redirect_uri -> error page 400."""
+    with TestClient(_app()) as client:
+        response = client.get(
+            "/authorize",
+            params={"request": "pas-un-jwt", "client_id": "https://rp.example/op"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 400
+    assert "location" not in response.headers
+
+
+class _StaticResolver:
+    """RÃ©solveur de trust chain factice pour les tests isolÃ©s."""
+
+    def __init__(self, result: object = None, *, exc: Exception | None = None) -> None:
+        self._result = result
+        self._exc = exc
+
+    async def resolve(self, entity_identifier: str) -> object:
+        if self._exc is not None:
+            raise self._exc
+        return self._result
+
+
+def _make_view(uris: object) -> object:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(redirect_uris=uris)
+
+
+def _run_error_response(
+    params: dict[str, str], resolver: object = None, client: object = None
+) -> object:
+    import asyncio
+
+    from puridentityserver.interfaces.api.authorize import _request_object_error_response
+
+    async def _main() -> object:
+        from puridentityserver.application.request_object import RequestObjectError
+        from puridentityserver.infrastructure.persistence.memory.clients import (
+            InMemoryClientRepository,
+        )
+
+        repo = InMemoryClientRepository()
+        if client is not None:
+            await repo.save(client)  # type: ignore[arg-type]
+        return await _request_object_error_response(
+            RequestObjectError(error="invalid_request", error_description="bad", state="state-fed"),
+            params,
+            repo,
+            None,
+            issuer="https://id.example",
+            trust_chain_resolver=resolver,
+        )
+
+    return asyncio.run(_main())
+
+
+def test_federated_error_page_without_resolver_fail_closed() -> None:
+    """Fail-closed : sans trust chain, la ``redirect_uri`` de la query n'est pas validable."""
+    params = {
+        "request": "pas-un-jwt",
+        "client_id": "https://rp.example/op",
+        "redirect_uri": "https://app.example/callback",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, resolver=None)
+    assert getattr(response, "status_code", None) == 400
+
+
+def test_federated_error_redirect_for_seeded_entity_client() -> None:
+    """Client seedé par Entity Identifier : le claim JAR est validé au registre.
+
+    Le ``federated`` du client seedé n'est pas renseigné (seul ``derive_client``
+    le pose) : c'est le ``client_id`` Entity Identifier qui autorise le candidat
+    ``redirect_uri`` du request object, borné aux ``redirect_uris`` du registre
+    — sample ``federation-client``, issue #211.
+    """
+    seeded = Client(
+        client_id="https://rp.example",
+        redirect_uris=frozenset({"https://rp.example/cb"}),
+        scopes=frozenset({Scope.OPENID}),
+        client_type=ClientType.CONFIDENTIAL,
+    )
+    claims = {"redirect_uri": "https://rp.example/cb"}
+    params = {
+        "request": _request_object(claims),
+        "client_id": "https://rp.example",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, client=seeded)
+    assert getattr(response, "status_code", None) == 302
+    location = getattr(response, "headers", {}).get("location", "")
+    assert location.startswith("https://rp.example/cb?")
+
+
+def test_federated_error_page_seeded_entity_client_outside_registry() -> None:
+    """Client seedé par Entity Identifier : claim hors registre -> page 400."""
+    seeded = Client(
+        client_id="https://rp.example",
+        redirect_uris=frozenset({"https://rp.example/cb"}),
+        scopes=frozenset({Scope.OPENID}),
+        client_type=ClientType.CONFIDENTIAL,
+    )
+    claims = {"redirect_uri": "https://evil.example/steal"}
+    params = {
+        "request": _request_object(claims),
+        "client_id": "https://rp.example",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, client=seeded)
+    assert getattr(response, "status_code", None) == 400
+
+
+def test_federated_error_page_without_redirect_uri_and_resolver() -> None:
+    params = {
+        "request": "pas-un-jwt",
+        "client_id": "https://rp.example/op",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, resolver=None)
+    assert getattr(response, "status_code", None) == 400
+
+
+def test_federated_error_redirect_valid_query() -> None:
+    view = _make_view(("https://app.example/callback",))
+    params = {
+        "request": "pas-un-jwt",
+        "client_id": "https://rp.example/op",
+        "redirect_uri": "https://app.example/callback",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, resolver=_StaticResolver(result=view))
+    assert getattr(response, "status_code", None) == 302
+
+
+def test_federated_error_page_invalid_query() -> None:
+    view = _make_view(("https://other.example/callback",))
+    params = {
+        "request": "pas-un-jwt",
+        "client_id": "https://rp.example/op",
+        "redirect_uri": "https://app.example/callback",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, resolver=_StaticResolver(result=view))
+    assert getattr(response, "status_code", None) == 400
+
+
+def test_federated_error_redirect_from_request_object_claim() -> None:
+    """Le claim ``redirect_uri`` du request object porte la cible (§12.1.1.1).
+
+    Le RP fédéré ne passe sa ``redirect_uri`` que dans le JAR : l'OP la lit
+    comme candidat et la valide contre la trust chain — issue #211.
+    """
+    view = _make_view(("https://chain.example/callback",))
+    claims = {"redirect_uri": "https://chain.example/callback"}
+    params = {
+        "request": _request_object(claims),
+        "client_id": "https://rp.example/op",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, resolver=_StaticResolver(result=view))
+    assert getattr(response, "status_code", None) == 302
+    location = getattr(response, "headers", {}).get("location", "")
+    assert location.startswith("https://chain.example/callback?")
+    query = parse_qs(urlparse(location).query)
+    assert query["state"] == ["state-fed"]
+
+
+def test_federated_error_page_claim_outside_trust_chain() -> None:
+    """Le claim ``redirect_uri`` hors trust chain n'est pas une cible sûre : page 400."""
+    view = _make_view(("https://chain.example/callback",))
+    claims = {"redirect_uri": "https://evil.example/steal"}
+    params = {
+        "request": _request_object(claims),
+        "client_id": "https://rp.example/op",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, resolver=_StaticResolver(result=view))
+    assert getattr(response, "status_code", None) == 400
+
+
+def test_federated_error_page_without_any_redirect_uri() -> None:
+    """Ni ``redirect_uri`` en query ni claim lisible : jamais de choix arbitraire — 400."""
+    view = _make_view(("https://chain.example/callback",))
+    params = {
+        "request": "pas-un-jwt",
+        "client_id": "https://rp.example/op",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, resolver=_StaticResolver(result=view))
+    assert getattr(response, "status_code", None) == 400
+
+
+def test_federated_error_page_resolver_returns_none() -> None:
+    params = {
+        "request": "pas-un-jwt",
+        "client_id": "https://rp.example/op",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, resolver=_StaticResolver(result=None))
+    assert getattr(response, "status_code", None) == 400
+
+
+def test_federated_error_page_resolver_raises() -> None:
+    params = {
+        "request": "pas-un-jwt",
+        "client_id": "https://rp.example/op",
+        "state": "state-fed",
+    }
+    response = _run_error_response(
+        params=params, resolver=_StaticResolver(exc=RuntimeError("boom"))
+    )
+    assert getattr(response, "status_code", None) == 400
+
+
+def _run_non_redirectable_error(redirect_uri: str, resolver: object = None) -> object:
+    """Joue ``_non_redirectable_error`` pour un client fédéré inconnu du registre."""
+    import asyncio
+
+    from puridentityserver.application.authorize import AuthorizeRequest
+    from puridentityserver.infrastructure.persistence.memory.clients import (
+        InMemoryClientRepository,
+    )
+    from puridentityserver.interfaces.api.authorize import _non_redirectable_error
+
+    async def _main() -> object:
+        return await _non_redirectable_error(
+            AuthorizeRequest(
+                response_type="code",
+                client_id="https://rp.example/op",
+                redirect_uri=redirect_uri,
+                scope="openid",
+                state="state-fed",
+            ),
+            InMemoryClientRepository(),
+            federated_redirect_resolver=resolver,
+        )
+
+    return asyncio.run(_main())
+
+
+def test_non_redirectable_federated_redirect_to_requested_uri() -> None:
+    """Le refus fédéré repart vers la ``redirect_uri`` demandée si la trust chain l'admet.
+
+    Client inconnu du registre (invalid_client, RFC 6749 §4.1.2.1) mais connu
+    de la trust chain : la cible est celle demandée par le RP — issue #211.
+    """
+    view = _make_view(("https://app.example/callback",))
+    response = _run_non_redirectable_error(
+        "https://app.example/callback", resolver=_StaticResolver(result=view)
+    )
+    assert getattr(response, "status_code", None) == 302
+
+
+def test_non_redirectable_federated_page_outside_trust_chain() -> None:
+    """``redirect_uri`` hors trust chain : page d'erreur, jamais de cible arbitraire."""
+    view = _make_view(("https://other.example/callback",))
+    response = _run_non_redirectable_error(
+        "https://app.example/callback", resolver=_StaticResolver(result=view)
+    )
+    assert getattr(response, "status_code", None) == 400
+
+
+def test_non_redirectable_federated_page_without_resolver() -> None:
+    """Sans resolveur (fail-closed) : page d'erreur, aucune redirection fédérée."""
+    response = _run_non_redirectable_error(
+        "https://app.example/callback", resolver=_StaticResolver(result=None)
+    )
+    assert getattr(response, "status_code", None) == 400

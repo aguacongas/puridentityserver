@@ -27,7 +27,13 @@ Le scénario vérifie :
 6. ``GET /federation/resolve`` sans paramètre obligatoire → 400
    ``invalid_request`` (§8.3) ;
 7. resolve vers une ancre injoignable → 404 ``not_found`` : aucune chaîne ne
-   peut être construite (§10.1).
+   peut être construite (§10.1) ;
+8. ``GET /authorize`` avec un request object refusable (algorithme ``HS256``
+   non supporté) dont la ``redirect_uri`` est enregistrée → redirection 302
+   ``invalid_request_object`` vers la callback du RP (issue #211 : le RP
+   fédéré ne place sa ``redirect_uri`` que dans le request object, §12.1.1.1) ;
+9. même demande avec une ``redirect_uri`` hors registre → page 400, aucune
+   redirection (le registre reste l'autorité sur la cible).
 
 Le sous-processus est terminé dans tous les cas (``finally``) et un
 garde-fou borne la durée totale.
@@ -41,7 +47,9 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import jwt as pyjwt
@@ -96,6 +104,28 @@ def _unverified_jwks(token: str) -> dict[str, object]:
     return dict(jwks)
 
 
+def _invalid_request_object(redirect_uri: str) -> str:
+    """Construit un request object refusable (algorithme ``HS256`` non supporté).
+
+    L'OP n'accepte que ``RS256``/``none`` (OIDC Core 1.0 §10.1) : la
+    ``redirect_uri`` portée par le jeton sert de candidat à la redirection
+    d'erreur, validée contre les ``redirect_uris`` du registre (issue #211).
+    """
+    claims = {
+        "iss": _FEDERATED_CLIENT_ID,
+        "client_id": _FEDERATED_CLIENT_ID,
+        "aud": SERVER_URL,
+        "response_type": "code",
+        "scope": "openid",
+        "redirect_uri": redirect_uri,
+        "exp": int(time.time()) + 300,
+        "jti": "sample-211",
+    }
+    return str(
+        pyjwt.encode(claims, "sample-secret-0123456789abcdef0123456789ab", algorithm="HS256")
+    )
+
+
 def _run_scenario(rp_jwk: dict[str, str]) -> None:
     """Joue le parcours de l'OP en supérieur de la fédération."""
     with httpx.Client(timeout=_HTTP_TIMEOUT) as http:
@@ -112,18 +142,18 @@ def _run_scenario(rp_jwk: dict[str, str]) -> None:
         assert federation["federation_fetch_endpoint"] == f"{SERVER_URL}/federation/fetch"
         assert federation["federation_list_endpoint"] == f"{SERVER_URL}/federation/list"
         assert federation["federation_resolve_endpoint"] == f"{SERVER_URL}/federation/resolve"
-        print("  [1/7] entity statement de l'OP verifie (§5.1.1, §9)")
+        print("  [1/9] entity statement de l'OP verifie (§5.1.1, §9)")
 
         metadata = http.get(f"{SERVER_URL}/.well-known/openid-configuration").json()
         assert metadata["federation_registration_endpoint"].endswith("/federation/register")
         assert metadata["client_registration_types_supported"] == ["automatic", "explicit"]
-        print("  [2/7] discovery : registration federation + types publies (§5.1.3)")
+        print("  [2/9] discovery : registration federation + types publies (§5.1.3)")
 
         listed = http.get(f"{SERVER_URL}/federation/list")
         assert listed.status_code == 200, listed.text
         assert listed.headers["content-type"].startswith("application/json")
         assert listed.json() == [_FEDERATED_CLIENT_ID], listed.json()
-        print("  [3/7] liste des subordonnes : seul le client federe est rendu (§8.2.2)")
+        print("  [3/9] liste des subordonnes : seul le client federe est rendu (§8.2.2)")
 
         fetched = http.get(f"{SERVER_URL}/federation/fetch", params={"sub": _FEDERATED_CLIENT_ID})
         assert fetched.status_code == 200, fetched.text
@@ -135,7 +165,7 @@ def _run_scenario(rp_jwk: dict[str, str]) -> None:
         registered = subordinate["metadata"]["openid_relying_party"]
         assert registered["redirect_uris"] == [f"{_FEDERATED_CLIENT_ID}/cb"], registered
         assert registered["jwks"] == {"keys": [rp_jwk]}, registered
-        print("  [4/7] subordinate statement signe par l'OP, cles attestees (§8.1, §3.1.3)")
+        print("  [4/9] subordinate statement signe par l'OP, cles attestees (§8.1, §3.1.3)")
 
         missing = http.get(f"{SERVER_URL}/federation/fetch")
         assert missing.status_code == 400, missing.text
@@ -148,12 +178,12 @@ def _run_scenario(rp_jwk: dict[str, str]) -> None:
         )
         assert unknown.status_code == 404, unknown.text
         assert unknown.json()["error"] == "not_found", unknown.json()
-        print("  [5/7] fetch : contrats d'erreur (400 invalid_request, 404 not_found, §8.9)")
+        print("  [5/9] fetch : contrats d'erreur (400 invalid_request, 404 not_found, §8.9)")
 
         resolve_missing = http.get(f"{SERVER_URL}/federation/resolve")
         assert resolve_missing.status_code == 400, resolve_missing.text
         assert resolve_missing.json()["error"] == "invalid_request", resolve_missing.json()
-        print("  [6/7] resolve : parametres obligatoires manquants -> 400 (§8.3)")
+        print("  [6/9] resolve : parametres obligatoires manquants -> 400 (§8.3)")
 
         unresolvable = http.get(
             f"{SERVER_URL}/federation/resolve",
@@ -161,7 +191,41 @@ def _run_scenario(rp_jwk: dict[str, str]) -> None:
         )
         assert unresolvable.status_code == 404, unresolvable.text
         assert unresolvable.json()["error"] == "not_found", unresolvable.json()
-        print("  [7/7] resolve : ancre injoignable -> 404, aucune chaine (§10.1)")
+        print("  [7/9] resolve : ancre injoignable -> 404, aucune chaine (§10.1)")
+
+        refused = http.get(
+            f"{SERVER_URL}/authorize",
+            params={
+                "client_id": _FEDERATED_CLIENT_ID,
+                "response_type": "code",
+                "scope": "openid",
+                "state": "state-sample",
+                "request": _invalid_request_object(_FEDERATED_CLIENT_ID + "/cb"),
+            },
+            follow_redirects=False,
+        )
+        assert refused.status_code == 302, refused.text
+        location = refused.headers["location"]
+        assert location.startswith(f"{_FEDERATED_CLIENT_ID}/cb?"), location
+        refused_query = parse_qs(urlparse(location).query)
+        assert refused_query["error"] == ["invalid_request_object"], refused_query
+        assert refused_query["state"] == ["state-sample"], refused_query
+        print("  [8/9] JAR refuse -> redirection d'erreur vers la callback du RP (issue #211)")
+
+        outside = http.get(
+            f"{SERVER_URL}/authorize",
+            params={
+                "client_id": _FEDERATED_CLIENT_ID,
+                "response_type": "code",
+                "scope": "openid",
+                "state": "state-sample",
+                "request": _invalid_request_object("https://evil.example/steal"),
+            },
+            follow_redirects=False,
+        )
+        assert outside.status_code == 400, outside.text
+        assert "location" not in outside.headers, dict(outside.headers)
+        print("  [9/9] redirect_uri du JAR hors registre -> page 400, aucune redirection")
 
 
 def main() -> int:

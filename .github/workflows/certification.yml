@@ -55,7 +55,7 @@ on:
         # `ekyc` de `CERTIFICATION_PLANS` (certification/selectors.sh) — le
         # workflow local, lui, épingle la dernière release et n'est pas
         # concerné.
-        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + Dynamic + CIBA + FAPI1 + FAPI2 + FAPI2 Message Signing + ekyc ; ekyc = identité assurance, hors programme officiel)"
+        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + Dynamic + CIBA + FAPI1 + FAPI2 + FAPI2 Message Signing + ekyc + federation ; ekyc = identité assurance, federation = OpenID Federation, hors programme officiel)"
         type: choice
         required: false
         default: all
@@ -71,7 +71,8 @@ on:
           - fapi2
           - fapi2-message-signing
           - ekyc
-
+          - federation
+          
 permissions:
   contents: read
 
@@ -423,16 +424,12 @@ jobs:
           # Captures réelles obligatoires produites par le job `prepare`
           # (issue #161) : une capture absente ou invalide lève une erreur
           # fatale dans le driver (détectée par le garde-fou ci-dessous, le
-          # step restant witness pour les gaps de modules). Exception plan
-          # federation : la mini-fédération qui héberge la trust chain des
-          # captures fédérées n'est joignable qu'en local (localhost:9444,
-          # certification/federation_capture_stub.py) — l'OP hébergé ne
-          # résout donc pas la chaîne du RP de capture : SCREENSHOTS_DIR
-          # reste vide pour ce plan (witness, PNG de secours pour ses 13
-          # modules REVIEW ; le local les couvre en captures réelles).
-          # Suivi : stub public joignable depuis Render, ou exemption
-          # déclarée dans certification/expected-failures/.
-          SCREENSHOTS_DIR: ${{ matrix.plan != 'federation' && format('{0}/screenshots', github.workspace) || '' }}
+          # step restant witness pour les gaps de modules). Le plan
+          # federation n'attend plus aucune capture : ses modules tournent
+          # en SUCCESS (l'erreur d'un request object refusé repart par
+          # redirection, issue #211) — le dossier est néanmoins fourni, une
+          # régression en REVIEW se verrait donc en échec witness.
+          SCREENSHOTS_DIR: ${{ format('{0}/screenshots', github.workspace) }}
         run: |
           set +e
           # Le driver écrit les exports (.zip) dans --export-dir : le créer
@@ -526,14 +523,14 @@ jobs:
           name: certification-screenshots
           path: screenshots
 
-      - name: Purge des plans stale (issue #132, garde les 3 derniers par alias)
+      - name: Purge des plans stale (issue #132, garde la dernière version par alias)
         # Supprime les plans non publies des runs precedents pour chaque alias,
         # sans jamais toucher un plan publie (l'API refuse en 405/403).
         if: always()
         env:
           CONFORMANCE_SERVER: ${{ env.CONFORMANCE_SERVER }}
           CONFORMANCE_TOKEN: ${{ secrets.CONFORMANCE_TOKEN }}
-          KEEP_PLANS: '3'
+          KEEP_PLANS: '1'
         run: |
           python3 -m pip install --disable-pip-version-check --quiet httpx >/dev/null
           python3 certification/prune_stale_plans.py

@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 import time
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Protocol
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -29,6 +29,8 @@ from puridentityserver.application.request_object import (
     RequestObjectError,
     RequestObjectResolver,
     is_pushed_request_uri,
+    unverified_issuer,
+    unverified_redirect_uri,
 )
 from puridentityserver.application.resource_indicators import encode_resource_parameter
 from puridentityserver.domain.authorization import Client, ResponseMode, Scope
@@ -101,6 +103,18 @@ class AuthorizeQueryParams(BaseModel):
     register_marker: str = Field("", alias="register")
 
 
+class _FederatedClientRedirectView(Protocol):
+    """Vue minimale d'un client fédéré résolu par la trust chain."""
+
+    redirect_uris: tuple[str, ...]
+
+
+class _TrustChainRedirectResolver(Protocol):
+    """Résolveur de redirect_uri à partir d'un Entity Identifier federé."""
+
+    async def resolve(self, entity_identifier: str) -> _FederatedClientRedirectView | None: ...
+
+
 def authorize_router(
     usecase: AuthorizeUseCase,
     par_usecase: PushedAuthorizationUseCase | None = None,
@@ -113,6 +127,7 @@ def authorize_router(
     base_url: str = "",
     jarm_signer: JarmSigner | None = None,
     issuer: str = "",
+    federated_redirect_resolver: _TrustChainRedirectResolver | None = None,
 ) -> APIRouter:
     """Construit le routeur FastAPI exposant ``GET /authorize``.
 
@@ -200,6 +215,7 @@ def authorize_router(
             session_scope=await session_sid(request),
             jarm_signer=jarm_signer,
             issuer=issuer,
+            federated_redirect_resolver=federated_redirect_resolver,
         )
         if isinstance(auth_request, Response):
             return auth_request
@@ -213,6 +229,7 @@ def authorize_router(
             jarm_signer=jarm_signer,
             issuer=issuer,
             register_marker=params.get("register", ""),
+            federated_redirect_resolver=federated_redirect_resolver,
         )
         if pre is not None:
             return pre
@@ -260,6 +277,7 @@ async def _direct_authorize_request(
     session_scope: str = "",
     jarm_signer: JarmSigner | None = None,
     issuer: str = "",
+    federated_redirect_resolver: _TrustChainRedirectResolver | None = None,
 ) -> AuthorizeRequest | RedirectResponse | HTMLResponse:
     """Construit la demande d'une requête **non poussée** (RFC 6749 §3.1).
 
@@ -288,7 +306,12 @@ async def _direct_authorize_request(
     resolved = await request_object_resolver.resolve(params, session_scope=session_scope)
     if isinstance(resolved, RequestObjectError):
         return await _request_object_error_response(
-            resolved, params, client_repository, jarm_signer, issuer=issuer
+            resolved,
+            params,
+            client_repository,
+            jarm_signer,
+            issuer=issuer,
+            trust_chain_resolver=federated_redirect_resolver,
         )
     params = resolved
     missing = [
@@ -458,6 +481,28 @@ def _requested_error_mode(client: Client, requested_mode: str, has_tokens: bool)
     return ResponseMode.QUERY
 
 
+def _is_entity_identifier(value: str) -> bool:
+    """Indique si ``value`` est une URL https sans query ni fragment (Entity Identifier §1.2)."""
+    return value.startswith("https://") and "?" not in value and "#" not in value
+
+
+async def _resolve_federated_allowed_redirect_uris(
+    client_id: str,
+    resolver: _TrustChainRedirectResolver | None,
+) -> set[str] | None:
+    if resolver is None:
+        return None
+    try:
+        derived = await resolver.resolve(client_id)
+        if derived is not None:
+            uris = derived.redirect_uris
+            if uris:
+                return set(uris)
+    except Exception:
+        return None
+    return None
+
+
 async def _request_object_error_response(
     error: RequestObjectError,
     params: dict[str, str],
@@ -465,6 +510,7 @@ async def _request_object_error_response(
     jarm_signer: JarmSigner | None = None,
     *,
     issuer: str = "",
+    trust_chain_resolver: _TrustChainRedirectResolver | None = None,
 ) -> RedirectResponse | HTMLResponse:
     """Transporte un refus de request object (RFC 6749 §4.1.2.1, issue #178).
 
@@ -477,6 +523,18 @@ async def _request_object_error_response(
     callback sûr (URI absente ou non enregistrée, client inconnu), la
     page HTML d'erreur est servie.
 
+    Pour l'enregistrement automatique fédéré (OpenID Federation 1.1 §12.1),
+    le client n'est pas pré-enregistré : son ``client_id`` est un Entity
+    Identifier et la ``redirect_uri`` ne figure que **dans** le request
+    object (§12.1.1.1), jamais dans la query. L'OP lit alors la ``redirect_uri``
+    du request object comme **candidat** et la valide contre les
+    ``redirect_uris`` de la trust chain : le refus repart au RP émetteur
+    (modules federation ``invalid-request-object-*``,
+    ``invalid-missing-request-object-*``, ``invalid-signature-*``,
+    ``invalid-client-id-*``), au lieu d'un avis d'erreur que la suite exige
+    de photographier (issue #211). Candidat hors liste ou illisible : page
+    d'erreur — jamais une URI choisie arbitrairement dans la trust chain.
+
     L'enveloppe suit le ``response_mode`` demandé quand le client est
     signable JARM (``response=jwt`` signé), sinon le ``response_type`` du
     transport : le fragment d'entrée (implicit/hybrid, FAPI1
@@ -487,27 +545,108 @@ async def _request_object_error_response(
     """
     if client_repository is None:
         return _request_object_error_page(error)
-    client = await client_repository.find_by_id(params.get("client_id", ""))
+    client_id = params.get("client_id", "")
+    client = await client_repository.find_by_id(client_id)
+    if client is None and not _is_entity_identifier(client_id):
+        return _request_object_error_page(error)
+    allowed = await _federated_error_redirect_uris(params, client, client_id, trust_chain_resolver)
+    redirect_uri = _pick_error_redirect_uri(params, allowed)
+    if not redirect_uri:
+        return _request_object_error_page(error)
     if client is None:
-        return _request_object_error_page(error)
-    redirect_uri = params.get("redirect_uri", "")
-    if redirect_uri not in client.redirect_uris:
-        return _request_object_error_page(error)
-    response_type = params.get("response_type", "")
-    has_tokens = bool({"token", "id_token"} & set(response_type.split()))
-    response_mode = _requested_error_mode(client, params.get("response_mode", ""), has_tokens)
+        # Client fédéré non résolu : confidentiel supposé, pas de JARM sans
+        # algorithme publié — le transport du ``response_type`` fait foi.
+        return await error_redirect(
+            AuthorizeError(
+                error=error.error,
+                error_description=error.error_description,
+                redirect_uri=redirect_uri,
+                state=error.state or params.get("state", ""),
+                response_mode=_federated_error_mode(params),
+                client_id=client_id,
+            ),
+            jarm_signer,
+            issuer=issuer,
+        )
+    has_tokens = bool({"token", "id_token"} & set(params.get("response_type", "").split()))
     return await error_redirect(
         AuthorizeError(
             error=error.error,
             error_description=error.error_description,
             redirect_uri=redirect_uri,
             state=error.state or params.get("state", ""),
-            response_mode=response_mode,
+            response_mode=_requested_error_mode(
+                client, params.get("response_mode", ""), has_tokens
+            ),
             client_id=client.client_id,
         ),
         jarm_signer,
         issuer=issuer,
     )
+
+
+async def _federated_error_redirect_uris(
+    params: dict[str, str],
+    client: Client | None,
+    client_id: str,
+    resolver: _TrustChainRedirectResolver | None,
+) -> set[str]:
+    """Liste des ``redirect_uris`` de confiance pour un refus (issue #211).
+
+    Retourne la **liste** admise — registre ou trust chain — contre laquelle
+    :func:`_pick_error_redirect_uri` valide le candidat. Pour un client
+    **fédéré** (§12.1) non pré-enregistré, cette liste vient de la trust
+    chain : le RP fédéré ne place sa ``redirect_uri`` que dans le request
+    object (§12.1.1.1). Un client standard doit la passer dans la query
+    (RFC 6749 §3.1.2.3) : sans elle, la page d'erreur fait foi. Sans
+    ``client``, l'``iss`` lisible du request object nomme l'entité émetteuse
+    dont la trust chain valide la cible — le jeton refuse ne choisit jamais
+    la cible seul.
+    """
+    if client is not None:
+        if (
+            client.federated
+            or _is_entity_identifier(client.client_id)
+            or (params.get("redirect_uri", "") or "").strip()
+        ):
+            return set(client.redirect_uris)
+        return set()
+    allowed = await _resolve_federated_allowed_redirect_uris(client_id, resolver)
+    if allowed:
+        return allowed
+    return (
+        await _resolve_federated_allowed_redirect_uris(
+            unverified_issuer(params.get("request", "")), resolver
+        )
+        or set()
+    )
+
+
+def _pick_error_redirect_uri(params: dict[str, str], allowed: set[str]) -> str:
+    """Choisit la cible du refus parmi ``allowed`` ; ``""`` si aucune n'est sûre.
+
+    Le candidat vient de la ``redirect_uri`` de la query (RFC 6749 §3.1.2.3),
+    ou — client fédéré, qui ne la passe jamais en query (OpenID Federation
+    1.1 §12.1.1.1) — du claim ``redirect_uri`` lisible du request object.
+    Dans les deux cas il doit appartenir à ``allowed`` (registre ou trust
+    chain) : hors liste ou absent, aucune redirection, page d'erreur. La
+    cible est toujours celle demandée par le RP, jamais une URI choisie
+    arbitrairement dans la configuration.
+    """
+    if not allowed:
+        return ""
+    candidate = (params.get("redirect_uri", "") or "").strip()
+    if not candidate:
+        candidate = unverified_redirect_uri(params.get("request", ""))
+    return candidate if candidate in allowed else ""
+
+
+def _federated_error_mode(params: dict[str, str]) -> ResponseMode:
+    """Mode d'encodage d'un refus fédéré : ``response_mode`` demandé, sinon transport."""
+    if params.get("response_mode") == ResponseMode.FORM_POST.value:
+        return ResponseMode.FORM_POST
+    has_tokens = bool({"token", "id_token"} & set(params.get("response_type", "").split()))
+    return ResponseMode.FRAGMENT if has_tokens else ResponseMode.QUERY
 
 
 async def _pre_execution_response(
@@ -521,6 +660,7 @@ async def _pre_execution_response(
     jarm_signer: JarmSigner | None = None,
     issuer: str = "",
     register_marker: str = "",
+    federated_redirect_resolver: _TrustChainRedirectResolver | None = None,
 ) -> RedirectResponse | HTMLResponse | None:
     """Réponses possibles **avant** émission : page d'erreur, reconnexion, ``prompt``.
 
@@ -531,7 +671,9 @@ async def _pre_execution_response(
     marqueur ``register=`` de l'URL (annulation/refus d'inscription, issue
     #166). ``None`` : la demande peut être exécutée.
     """
-    error_page = await _non_redirectable_error(auth_request, client_repository)
+    error_page = await _non_redirectable_error(
+        auth_request, client_repository, federated_redirect_resolver=federated_redirect_resolver
+    )
     if error_page is not None:
         return error_page
     return await _authentication_gate(
@@ -574,7 +716,10 @@ async def _with_authenticated_subject(
 
 
 async def _non_redirectable_error(
-    auth_request: AuthorizeRequest, client_repository: ClientReader | None
+    auth_request: AuthorizeRequest,
+    client_repository: ClientReader | None,
+    *,
+    federated_redirect_resolver: _TrustChainRedirectResolver | None = None,
 ) -> RedirectResponse | HTMLResponse | None:
     """Affiche la page d'erreur pour les erreurs qui interdisent la redirection.
 
@@ -589,8 +734,49 @@ async def _non_redirectable_error(
         return None
     validated = await validate_authorization_request(auth_request, client_repository)
     if isinstance(validated, AuthorizeError) and not validated.redirectable:
+        federated = await _federated_error_redirect(
+            auth_request, validated, federated_redirect_resolver
+        )
+        if federated is not None:
+            return federated
         return await error_response(validated)
     return None
+
+
+async def _federated_error_redirect(
+    auth_request: AuthorizeRequest,
+    validated: AuthorizeError,
+    resolver: _TrustChainRedirectResolver | None,
+) -> RedirectResponse | HTMLResponse | None:
+    """Redirige un refus fédéré vers la ``redirect_uri`` demandée si elle est admise.
+
+    Un client fédéré (Entity Identifier, OpenID Federation 1.1 §12.1) n'est
+    pas pré-enregistré : la liste de ses ``redirect_uris`` vient de la trust
+    chain. L'erreur ne repart en redirection (RFC 6749 §4.1.2.1) que vers la
+    cible que le RP a demandée et qui figure sur cette liste ; hors liste ou
+    absente, ``None`` pour servir la page d'erreur — jamais une cible choisie
+    arbitrairement dans la configuration (issue #211).
+    """
+    if not _is_entity_identifier(auth_request.client_id):
+        return None
+    if validated.error not in {"invalid_client", "invalid_request"}:
+        return None
+    allowed = await _resolve_federated_allowed_redirect_uris(auth_request.client_id, resolver)
+    redirect_uri = _pick_error_redirect_uri(
+        {"redirect_uri": auth_request.redirect_uri}, allowed or set()
+    )
+    if not redirect_uri:
+        return None
+    return await error_redirect(
+        AuthorizeError(
+            error=validated.error,
+            error_description=validated.error_description,
+            redirect_uri=redirect_uri,
+            state=validated.state or auth_request.state,
+            response_mode=validated.response_mode,
+            client_id=auth_request.client_id,
+        )
+    )
 
 
 async def _authentication_gate(
@@ -952,6 +1138,7 @@ async def _authorize_entry(
     session_scope: str = "",
     jarm_signer: JarmSigner | None = None,
     issuer: str = "",
+    federated_redirect_resolver: _TrustChainRedirectResolver | None = None,
 ) -> tuple[AuthorizeRequest | Response, str]:
     """Résout l'entrée ``/authorize`` : poussée (``request_uri``) ou directe.
 
@@ -978,6 +1165,7 @@ async def _authorize_entry(
         session_scope=session_scope,
         jarm_signer=jarm_signer,
         issuer=issuer,
+        federated_redirect_resolver=federated_redirect_resolver,
     )
     if isinstance(built, HTMLResponse):
         return built, ""

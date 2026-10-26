@@ -185,7 +185,8 @@ Fichier complet : [`certification/proxy/nginx-oracle.conf`](../certification/pro
 Points clés (identiques au proxy local de certification) :
 - `ssl_verify_client optional_no_ca` : demande le cert au handshake **sans bloquer** les navigateurs de la suite (`/authorize` sans cert) ; accepte les certs auto-signés de la suite.
 - Transfert du PEM via `X-SSL-Client-Cert` (URL-encodé, `%0A`) — l'OP normalise dans `infrastructure/client_tls.py` (`_normalize_header_value`).
-- TLS 1.2 RSA au edge (`ssl_ciphers` incluant `RSA-AES128-GCM-SHA256`) pour éviter `DisallowInsecureCipher`.
+- TLS 1.2/1.3 limité aux suites ECDHE (secret perfect forward) : toute suite RSA sans PFS fait échouer `DisallowInsecureCipher` (FAPI1) — même `ssl_ciphers` que `certification/local/nginx-mtls.conf`.
+- Buffers de requête **et** de réponse à 32k (`client_header_buffer_size`, `large_client_header_buffers 4 32k`, `proxy_buffer(s)`) : la trust chain du plan `federation` pèse ~9 Ko dans la query de `/authorize` — au-delà du défaut nginx (4 × 8k), le module `with-jar-and-get-and-trust-chain` reçoit un **414** et `…-post-and-trust-chain` un **502** (les deux étaient `INTERRUPTED` avant ces réglages).
 - `trust_proxy_headers = true` côté OP (déjà activé dans `config.render.toml`) pour reconstruire l'URL publique (claim `htu` DPoP, RFC 9449 §4.3).
 
 ```bash

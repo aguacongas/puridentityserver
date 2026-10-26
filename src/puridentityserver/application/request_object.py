@@ -263,7 +263,7 @@ class RequestObjectResolver:
         if not document:
             return self._without_request_object(params, client)
         if client is None:
-            client = await self._find_client(_unverified_iss(document))
+            client = await self._find_client(unverified_issuer(document))
         if client is not None and client.fapi_enabled:
             resolved = await self._resolve_fapi(params, document, client)
             if isinstance(resolved, RequestObjectError):
@@ -286,10 +286,12 @@ class RequestObjectResolver:
         profil OpenID Federation 1.1 §12.1.1.1 s'ajoute : ``exp`` et
         ``jti`` sont exigés avec anti-replay, ``sub`` est interdit — le
         ``jti`` est scopé par ``session_scope`` (reprise post-login acceptée,
-        replay anonyme refusé, cf. :meth:`resolve`). Refus
-        (``invalid_request_object``) si le client est inconnu, si la
-        vérification n'est pas configurée, ou si la signature et les
-        claims échouent.
+        replay anonyme refusé, cf. :meth:`resolve`).
+
+        Pour un client fédéré (enregistrement automatique §12.1.1.1), les
+        refus renvoient ``invalid_request`` (aligné sur FAPI 1/2) plutôt
+        que ``invalid_request_object``. Pour un client standard, le code
+        reste ``invalid_request_object``.
         """
         algorithm = _header_algorithm(document)
         if algorithm == "" or algorithm in self._config.signing_algorithms:
@@ -309,6 +311,9 @@ class RequestObjectResolver:
                 error_description="vérification du request object signé non configurée",
             )
         federated = client.federated
+        # Pour les clients fédérés (enregistrement auto), on renvoie
+        # invalid_request (FAPI 1/2) ; pour les standards, invalid_request_object.
+        error_code = "invalid_request" if federated else "invalid_request_object"
         result = await self._signed.verify(
             token=document,
             client=client,
@@ -322,12 +327,12 @@ class RequestObjectResolver:
         )
         if result.claims is None:
             return {}, RequestObjectError(
-                error="invalid_request_object",
+                error=error_code,
                 error_description=result.reason,
             )
         if federated and "sub" in result.claims:
             return {}, RequestObjectError(
-                error="invalid_request_object",
+                error=error_code,
                 error_description=(
                     "claim 'sub' interdit dans un request object de client fédéré "
                     "(OpenID Federation 1.1 §12.1.1.1)"
@@ -593,7 +598,7 @@ def _client_id_mismatch(params: Mapping[str, str], document: str) -> RequestObje
     transport = params.get("client_id", "")
     if not transport:
         return None
-    embedded = _unverified_claim(document, "client_id") or _unverified_iss(document)
+    embedded = _unverified_claim(document, "client_id") or unverified_issuer(document)
     if not embedded or embedded == transport:
         return None
     return RequestObjectError(
@@ -604,14 +609,31 @@ def _client_id_mismatch(params: Mapping[str, str], document: str) -> RequestObje
     )
 
 
-def _unverified_iss(document: str) -> str:
+def unverified_issuer(document: str) -> str:
     """Retourne le claim ``iss`` non vérifié du document JWT, ``""`` s'il est illisible.
 
     Sert à identifier le client à partir du request object quand le
     ``client_id`` du transport est absent, avant toute vérification de
-    signature (lecture seule du payload encodé).
+    signature (lecture seule du payload encodé). Exposé à l'interface
+    ``/authorize`` (issue #211) : pour un client fédéré inconnu — module
+    federation ``invalid-client-id-in-query-parameters`` — l'``iss`` lisible
+    du request object nomme l'entité dont on dérive la ``redirect_uri`` de la
+    réponse d'erreur, la cible restant contrôlée par la trust chain.
     """
     return _unverified_claim(document, "iss")
+
+
+def unverified_redirect_uri(document: str) -> str:
+    """Retourne le claim ``redirect_uri`` non vérifié du JWT, ``""`` s'il est absent.
+
+    Exposé à l'interface ``/authorize`` (issue #211) : pour un client fédéré,
+    la ``redirect_uri`` ne figure que dans le request object (OpenID
+    Federation 1.1 §12.1.1.1). Lisible sans vérification de signature, elle
+    ne sert que de **candidat** à la réponse d'erreur : la cible n'est
+    retenue que si elle appartient aux ``redirect_uris`` dérivés de la
+    trust chain — le jeton refuse ne choisit jamais seul où rediriger.
+    """
+    return _unverified_claim(document, "redirect_uri")
 
 
 def _with_state(error: RequestObjectError, document: str) -> RequestObjectError:
