@@ -209,11 +209,6 @@ _FAPI1_JAR_SCENARIOS: tuple[tuple[str, str, str], ...] = (
         "rs256",
         "invalid_request_object",
     ),
-    (
-        "fapi1-advanced-final-ensure-invalid-client-id-in-request-object",
-        "rs256",
-        "invalid_request_object",
-    ),
 )
 
 #: Modules FAPI1 servis en **page HTML** (la query du scénario ne porte pas de
@@ -227,7 +222,6 @@ _FAPI1_PAGE_TEST_NAMES = frozenset(
     {
         "fapi1-advanced-final-ensure-redirect-uri-in-authorization-request",
         "fapi1-advanced-final-ensure-registered-redirect-uri",
-        "fapi1-advanced-final-ensure-invalid-client-id-in-request-object",
     }
 )
 
@@ -240,6 +234,18 @@ _FAPI2_TEST_NAMES = (
     "fapi2-security-profile-final-par-attempt-to-use-expired-request_uri",
     "fapi2-security-profile-final-par-attempt-to-use-request_uri-for-different-client",
 )
+
+#: Module fédéré du plan federation laissé en REVIEW (issue #211) : le
+#: ``client_id`` d'Entity Identifier du request object est invalide ; sans
+#: trust chain résolue, l'OP refuse en page HTML 400 portant ``invalid_client``
+#: (RFC 6749 §4.1.2.1) au lieu de rediriger — capture de cette page.
+_FEDERATION_PAGE_TEST_NAME = (
+    "openid-federation-automatic-client-registration-invalid-client-id-in-request-object"
+)
+
+#: Alias du RP fédéré de la suite (.../test/a/<alias>), dont le chemin
+#: ``/INVALID`` est le client_id hors entité envoyé par le module.
+_FEDERATION_SUITE_PATH = "/test/a/puridentityserver-federation"
 
 
 @dataclass
@@ -807,6 +813,33 @@ def _capture_core_scenarios(
         _unregister_client(context_request, base_url, client)
 
 
+def _capture_federation_scenarios(page: Page, base_url: str, suite_base: str, out: Path) -> None:
+    """Rejoue le module fédéré « client_id invalide dans le request object » (issue #211).
+
+    La requête de la suite porte un ``client_id`` d'Entity Identifier invalide ;
+    sans trust chain résolue, l'OP sert la page d'erreur HTTP 400 portant
+    ``invalid_client`` (RFC 6749 §4.1.2.1) au lieu de rediriger. La requête
+    rejouée ici n'emporte pas de request object — le job captures ne détient
+    pas la clé privée du RP de la suite pour le signer — mais sans JAR le OP
+    suit le même chemin de validation pour le même ``client_id`` (vérifié sur
+    l'app de test). La ``redirect_uri`` est requise pour atteindre ce
+    contrôle : sans elle, l'OP sert la page « paramètres requis manquants »
+    (RFC 6749 §3.1.1) à la place.
+    """
+    client_id = f"{suite_base.rstrip('/')}{_FEDERATION_SUITE_PATH}/INVALID"
+    url = _authorize_url(
+        base_url,
+        client_id,
+        extra={"scope": "openid", "state": None, "nonce": None},
+    )
+    _capture_error_page(
+        page,
+        url,
+        "invalid_client",
+        out / f"{_FEDERATION_PAGE_TEST_NAME}.png",
+    )
+
+
 def _capture_dynamic_scenarios(
     page: Page,
     context_request: APIRequestContext,
@@ -1060,10 +1093,11 @@ def capture_all(
     par_ttl_seconds: int,
     fapi1_redirect: str,
     fapi2_redirect: str,
+    suite_base: str,
 ) -> list[Path]:
     """Rejoue les scénarios et écrit les PNG nommés ``<testName>.png``.
 
-    Les familles FAPI et dynamic sont indépendantes : l'échec
+    Les familles FAPI, fédération et dynamic sont indépendantes : l'échec
     d'une famille est logué sans interrompre les autres (la certification
     retombe sur le PNG de secours pour les fichiers manquants).
     """
@@ -1100,6 +1134,10 @@ def capture_all(
             )
         except Exception as error:
             _LOGGER.error("Captures fapi2 impossibles : %s", error)
+        try:
+            _capture_federation_scenarios(page, base_url, suite_base, out)
+        except Exception as error:
+            _LOGGER.error("Captures fédération impossibles : %s", error)
         # En dernier : les scénarios login vident les cookies du contexte,
         # sans effet sur les familles déjà jouées.
         try:
@@ -1152,6 +1190,7 @@ def main(argv: list[str] | None = None) -> int:
     expected |= {f"{name}.png" for name in _DYNAMIC_TEST_NAMES}
     expected |= {f"{name}.png" for name, _mode, _error in _FAPI1_JAR_SCENARIOS}
     expected |= {f"{name}.png" for name in _FAPI2_TEST_NAMES}
+    expected |= {f"{_FEDERATION_PAGE_TEST_NAME}.png"}
     try:
         with sync_playwright() as playwright:
             produced = capture_all(
@@ -1164,6 +1203,7 @@ def main(argv: list[str] | None = None) -> int:
                 par_ttl_seconds=args.par_ttl_seconds,
                 fapi1_redirect=fapi1_redirect,
                 fapi2_redirect=fapi2_redirect,
+                suite_base=suite_base,
             )
     except Exception as error:
         _LOGGER.error("Capture impossible : %s", error)
