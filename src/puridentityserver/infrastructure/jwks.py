@@ -143,19 +143,25 @@ class DefaultKeyManager:
         """Clés retirées conservées, de la plus récente à la plus ancienne."""
         if limit <= 0:
             return []
-        return (await self._retired_keys())[:limit]
+        return (await self.get_retired_keys())[:limit]
 
     async def prune_inactive_keys(self, keep: int) -> int:
         """Supprime les clés retirées au-delà des ``keep`` plus récentes."""
-        retired = await self._retired_keys()
+        retired = await self.get_retired_keys()
         removed = 0
         for key in retired[max(keep, 0) :]:
             await self._repository.delete(key.kid)
             removed += 1
         return removed
 
-    async def _retired_keys(self) -> list[KeyPair]:
-        """Clés retirées (inactives) de la famille, de la plus récente à la plus ancienne."""
+    async def get_retired_keys(self) -> list[KeyPair]:
+        """Toutes les clés retirées (inactives) de la famille, plus récentes d'abord.
+
+        Exposé pour les callers qui doivent retenir une clé par algorithme
+        (et non globalement) lors de la publication du JWKS (OIDC Core 1.0
+        §10.1 — publication des clés récemment retirées pour la vérification
+        des jetons émis avant la rotation).
+        """
         return sorted(
             (key for key in await self._keys() if not key.is_active),
             key=lambda key: (key.created_at, key.kid),

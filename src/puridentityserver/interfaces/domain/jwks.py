@@ -55,6 +55,14 @@ class KeyManager(Protocol):
         """
         ...
 
+    async def get_retired_keys(self) -> list[KeyPair]:
+        """Toutes les clés retirées (inactives) de la famille, plus récentes d'abord.
+
+        Permet aux callers de retenir au moins une clé par algorithme, plutôt
+        qu'``N`` globalement (OIDC Core 1.0 §10.1).
+        """
+        ...
+
     async def prune_inactive_keys(self, keep: int) -> int:
         """Supprime les clés retirées au-delà des ``keep`` plus récentes.
 
