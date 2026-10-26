@@ -1632,3 +1632,59 @@ def test_federated_error_page_resolver_raises() -> None:
         params=params, resolver=_StaticResolver(exc=RuntimeError("boom"))
     )
     assert getattr(response, "status_code", None) == 400
+
+
+def _run_non_redirectable_error(redirect_uri: str, resolver: object = None) -> object:
+    """Joue ``_non_redirectable_error`` pour un client fédéré inconnu du registre."""
+    import asyncio
+
+    from puridentityserver.application.authorize import AuthorizeRequest
+    from puridentityserver.infrastructure.persistence.memory.clients import (
+        InMemoryClientRepository,
+    )
+    from puridentityserver.interfaces.api.authorize import _non_redirectable_error
+
+    async def _main() -> object:
+        return await _non_redirectable_error(
+            AuthorizeRequest(
+                response_type="code",
+                client_id="https://rp.example/op",
+                redirect_uri=redirect_uri,
+                scope="openid",
+                state="state-fed",
+            ),
+            InMemoryClientRepository(),
+            federated_redirect_resolver=resolver,
+        )
+
+    return asyncio.run(_main())
+
+
+def test_non_redirectable_federated_redirect_to_requested_uri() -> None:
+    """Le refus fédéré repart vers la ``redirect_uri`` demandée si la trust chain l'admet.
+
+    Client inconnu du registre (invalid_client, RFC 6749 §4.1.2.1) mais connu
+    de la trust chain : la cible est celle demandée par le RP — issue #211.
+    """
+    view = _make_view(("https://app.example/callback",))
+    response = _run_non_redirectable_error(
+        "https://app.example/callback", resolver=_StaticResolver(result=view)
+    )
+    assert getattr(response, "status_code", None) == 302
+
+
+def test_non_redirectable_federated_page_outside_trust_chain() -> None:
+    """``redirect_uri`` hors trust chain : page d'erreur, jamais de cible arbitraire."""
+    view = _make_view(("https://other.example/callback",))
+    response = _run_non_redirectable_error(
+        "https://app.example/callback", resolver=_StaticResolver(result=view)
+    )
+    assert getattr(response, "status_code", None) == 400
+
+
+def test_non_redirectable_federated_page_without_resolver() -> None:
+    """Sans resolveur (fail-closed) : page d'erreur, aucune redirection fédérée."""
+    response = _run_non_redirectable_error(
+        "https://app.example/callback", resolver=_StaticResolver(result=None)
+    )
+    assert getattr(response, "status_code", None) == 400

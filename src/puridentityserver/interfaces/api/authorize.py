@@ -734,31 +734,49 @@ async def _non_redirectable_error(
         return None
     validated = await validate_authorization_request(auth_request, client_repository)
     if isinstance(validated, AuthorizeError) and not validated.redirectable:
-        if _is_entity_identifier(auth_request.client_id) and validated.error in {
-            "invalid_client",
-            "invalid_request",
-        }:
-            redirect_uri = auth_request.redirect_uri
-            allowed = await _resolve_federated_allowed_redirect_uris(
-                auth_request.client_id, federated_redirect_resolver
-            )
-            if allowed and redirect_uri and redirect_uri not in allowed:
-                redirect_uri = next(iter(allowed), "")
-            if not redirect_uri and allowed:
-                redirect_uri = next(iter(allowed), "")
-            if redirect_uri:
-                return await error_redirect(
-                    AuthorizeError(
-                        error=validated.error,
-                        error_description=validated.error_description,
-                        redirect_uri=redirect_uri,
-                        state=validated.state or auth_request.state,
-                        response_mode=validated.response_mode,
-                        client_id=auth_request.client_id,
-                    ),
-                )
+        federated = await _federated_error_redirect(
+            auth_request, validated, federated_redirect_resolver
+        )
+        if federated is not None:
+            return federated
         return await error_response(validated)
     return None
+
+
+async def _federated_error_redirect(
+    auth_request: AuthorizeRequest,
+    validated: AuthorizeError,
+    resolver: _TrustChainRedirectResolver | None,
+) -> RedirectResponse | HTMLResponse | None:
+    """Redirige un refus fédéré vers la ``redirect_uri`` demandée si elle est admise.
+
+    Un client fédéré (Entity Identifier, OpenID Federation 1.1 §12.1) n'est
+    pas pré-enregistré : la liste de ses ``redirect_uris`` vient de la trust
+    chain. L'erreur ne repart en redirection (RFC 6749 §4.1.2.1) que vers la
+    cible que le RP a demandée et qui figure sur cette liste ; hors liste ou
+    absente, ``None`` pour servir la page d'erreur — jamais une cible choisie
+    arbitrairement dans la configuration (issue #211).
+    """
+    if not _is_entity_identifier(auth_request.client_id):
+        return None
+    if validated.error not in {"invalid_client", "invalid_request"}:
+        return None
+    allowed = await _resolve_federated_allowed_redirect_uris(auth_request.client_id, resolver)
+    redirect_uri = _pick_error_redirect_uri(
+        {"redirect_uri": auth_request.redirect_uri}, allowed or set()
+    )
+    if not redirect_uri:
+        return None
+    return await error_redirect(
+        AuthorizeError(
+            error=validated.error,
+            error_description=validated.error_description,
+            redirect_uri=redirect_uri,
+            state=validated.state or auth_request.state,
+            response_mode=validated.response_mode,
+            client_id=auth_request.client_id,
+        )
+    )
 
 
 async def _authentication_gate(
