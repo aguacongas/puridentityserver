@@ -1393,8 +1393,13 @@ def test_authorize_issues_code_then_unsigned_id_token_for_none_client() -> None:
     assert "at_hash" not in decoded
 
 
-def test_authorize_redirects_invalid_request_for_federated_client() -> None:
-    """Issue #211: federated Entity Identifier -> redirect with invalid_request."""
+def test_authorize_error_page_for_federated_client_without_trust_chain() -> None:
+    """Issue #211: sans trust chain, aucune redirection — page d'erreur 400.
+
+    Fail-closed confirmé : la ``redirect_uri`` de la query n'étant pas
+    validable contre une trust chain (federation désactivée dans l'app de
+    test), l'OP ne redirige jamais vers une cible non vérifiée.
+    """
     with TestClient(_app()) as client:
         response = client.get(
             "/authorize",
@@ -1407,12 +1412,8 @@ def test_authorize_redirects_invalid_request_for_federated_client() -> None:
             follow_redirects=False,
         )
 
-    assert response.status_code == 302
-    location = response.headers["location"]
-    assert location.startswith("https://app.example/callback?")
-    query = parse_qs(urlparse(location).query)
-    assert "error" in query
-    assert query["state"] == ["state-fed"]
+    assert response.status_code == 400
+    assert "location" not in response.headers
 
 
 def test_authorize_error_page_for_federated_client_without_redirect_uri() -> None:
@@ -1447,7 +1448,9 @@ def _make_view(uris: object) -> object:
     return SimpleNamespace(redirect_uris=uris)
 
 
-def _run_error_response(params: dict[str, str], resolver: object = None) -> object:
+def _run_error_response(
+    params: dict[str, str], resolver: object = None, client: object = None
+) -> object:
     import asyncio
 
     from puridentityserver.interfaces.api.authorize import _request_object_error_response
@@ -1459,6 +1462,8 @@ def _run_error_response(params: dict[str, str], resolver: object = None) -> obje
         )
 
         repo = InMemoryClientRepository()
+        if client is not None:
+            await repo.save(client)  # type: ignore[arg-type]
         return await _request_object_error_response(
             RequestObjectError(error="invalid_request", error_description="bad", state="state-fed"),
             params,
@@ -1471,7 +1476,8 @@ def _run_error_response(params: dict[str, str], resolver: object = None) -> obje
     return asyncio.run(_main())
 
 
-def test_federated_error_redirect_allowed_without_resolver() -> None:
+def test_federated_error_page_without_resolver_fail_closed() -> None:
+    """Fail-closed : sans trust chain, la ``redirect_uri`` de la query n'est pas validable."""
     params = {
         "request": "pas-un-jwt",
         "client_id": "https://rp.example/op",
@@ -1479,7 +1485,51 @@ def test_federated_error_redirect_allowed_without_resolver() -> None:
         "state": "state-fed",
     }
     response = _run_error_response(params=params, resolver=None)
+    assert getattr(response, "status_code", None) == 400
+
+
+def test_federated_error_redirect_for_seeded_entity_client() -> None:
+    """Client seedé par Entity Identifier : le claim JAR est validé au registre.
+
+    Le ``federated`` du client seedé n'est pas renseigné (seul ``derive_client``
+    le pose) : c'est le ``client_id`` Entity Identifier qui autorise le candidat
+    ``redirect_uri`` du request object, borné aux ``redirect_uris`` du registre
+    — sample ``federation-client``, issue #211.
+    """
+    seeded = Client(
+        client_id="https://rp.example",
+        redirect_uris=frozenset({"https://rp.example/cb"}),
+        scopes=frozenset({Scope.OPENID}),
+        client_type=ClientType.CONFIDENTIAL,
+    )
+    claims = {"redirect_uri": "https://rp.example/cb"}
+    params = {
+        "request": _request_object(claims),
+        "client_id": "https://rp.example",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, client=seeded)
     assert getattr(response, "status_code", None) == 302
+    location = getattr(response, "headers", {}).get("location", "")
+    assert location.startswith("https://rp.example/cb?")
+
+
+def test_federated_error_page_seeded_entity_client_outside_registry() -> None:
+    """Client seedé par Entity Identifier : claim hors registre -> page 400."""
+    seeded = Client(
+        client_id="https://rp.example",
+        redirect_uris=frozenset({"https://rp.example/cb"}),
+        scopes=frozenset({Scope.OPENID}),
+        client_type=ClientType.CONFIDENTIAL,
+    )
+    claims = {"redirect_uri": "https://evil.example/steal"}
+    params = {
+        "request": _request_object(claims),
+        "client_id": "https://rp.example",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, client=seeded)
+    assert getattr(response, "status_code", None) == 400
 
 
 def test_federated_error_page_without_redirect_uri_and_resolver() -> None:
@@ -1516,7 +1566,42 @@ def test_federated_error_page_invalid_query() -> None:
     assert getattr(response, "status_code", None) == 400
 
 
-def test_federated_error_redirect_default_from_trust_chain() -> None:
+def test_federated_error_redirect_from_request_object_claim() -> None:
+    """Le claim ``redirect_uri`` du request object porte la cible (§12.1.1.1).
+
+    Le RP fédéré ne passe sa ``redirect_uri`` que dans le JAR : l'OP la lit
+    comme candidat et la valide contre la trust chain — issue #211.
+    """
+    view = _make_view(("https://chain.example/callback",))
+    claims = {"redirect_uri": "https://chain.example/callback"}
+    params = {
+        "request": _request_object(claims),
+        "client_id": "https://rp.example/op",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, resolver=_StaticResolver(result=view))
+    assert getattr(response, "status_code", None) == 302
+    location = getattr(response, "headers", {}).get("location", "")
+    assert location.startswith("https://chain.example/callback?")
+    query = parse_qs(urlparse(location).query)
+    assert query["state"] == ["state-fed"]
+
+
+def test_federated_error_page_claim_outside_trust_chain() -> None:
+    """Le claim ``redirect_uri`` hors trust chain n'est pas une cible sûre : page 400."""
+    view = _make_view(("https://chain.example/callback",))
+    claims = {"redirect_uri": "https://evil.example/steal"}
+    params = {
+        "request": _request_object(claims),
+        "client_id": "https://rp.example/op",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, resolver=_StaticResolver(result=view))
+    assert getattr(response, "status_code", None) == 400
+
+
+def test_federated_error_page_without_any_redirect_uri() -> None:
+    """Ni ``redirect_uri`` en query ni claim lisible : jamais de choix arbitraire — 400."""
     view = _make_view(("https://chain.example/callback",))
     params = {
         "request": "pas-un-jwt",
@@ -1524,8 +1609,7 @@ def test_federated_error_redirect_default_from_trust_chain() -> None:
         "state": "state-fed",
     }
     response = _run_error_response(params=params, resolver=_StaticResolver(result=view))
-    assert getattr(response, "status_code", None) == 302
-    assert "chain.example/callback" in getattr(response, "headers", {}).get("location", "")
+    assert getattr(response, "status_code", None) == 400
 
 
 def test_federated_error_page_resolver_returns_none() -> None:

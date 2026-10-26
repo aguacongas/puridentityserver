@@ -28,7 +28,14 @@ Le scénario vérifie :
 6. `GET /federation/resolve` sans `sub`/`trust_anchor` → 400
    `invalid_request` (§8.3) ;
 7. resolve vers une ancre injoignable → 404 `not_found` (aucune chaîne de
-   confiance ne peut être construite, §10.1).
+   confiance ne peut être construite, §10.1) ;
+8. `GET /authorize` avec un request object refusable (`HS256`, non supporté)
+   dont la `redirect_uri` correspond à celle enregistrée du client → 302
+   `invalid_request_object` **redirigé vers la callback du RP** (issue #211 :
+   le RP fédéré ne place sa `redirect_uri` que dans le request object,
+   §12.1.1.1 — l'OP la lit comme candidat et la valide au registre) ;
+9. même demande avec une `redirect_uri` absente du registre → page 400,
+   **aucune redirection** (jamais de cible choisie hors registre/trust chain).
 
 ## Lancement
 
@@ -41,13 +48,15 @@ uv run python samples/federation-client/smoke_test.py
 Sortie pas-à-pas se terminant par :
 
 ```text
-  [1/7] entity statement de l'OP verifie (§5.1.1, §9)
-  [2/7] discovery : registration federation + types publies (§5.1.3)
-  [3/7] liste des subordonnes : seul le client federe est rendu (§8.2.2)
-  [4/7] subordinate statement signe par l'OP, cles attestees (§8.1, §3.1.3)
-  [5/7] fetch : contrats d'erreur (400 invalid_request, 404 not_found, §8.9)
-  [6/7] resolve : parametres obligatoires manquants -> 400 (§8.3)
-  [7/7] resolve : ancre injoignable -> 404, aucune chaine (§10.1)
+  [1/9] entity statement de l'OP verifie (§5.1.1, §9)
+  [2/9] discovery : registration federation + types publies (§5.1.3)
+  [3/9] liste des subordonnes : seul le client federe est rendu (§8.2.2)
+  [4/9] subordinate statement signe par l'OP, cles attestees (§8.1, §3.1.3)
+  [5/9] fetch : contrats d'erreur (400 invalid_request, 404 not_found, §8.9)
+  [6/9] resolve : parametres obligatoires manquants -> 400 (§8.3)
+  [7/9] resolve : ancre injoignable -> 404, aucune chaine (§10.1)
+  [8/9] JAR refuse -> redirection d'erreur vers la callback du RP (issue #211)
+  [9/9] redirect_uri du JAR hors registre -> page 400, aucune redirection
 
 === SCENARIO OK ===
 ```

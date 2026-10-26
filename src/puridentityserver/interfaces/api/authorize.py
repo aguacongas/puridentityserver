@@ -29,6 +29,8 @@ from puridentityserver.application.request_object import (
     RequestObjectError,
     RequestObjectResolver,
     is_pushed_request_uri,
+    unverified_issuer,
+    unverified_redirect_uri,
 )
 from puridentityserver.application.resource_indicators import encode_resource_parameter
 from puridentityserver.domain.authorization import Client, ResponseMode, Scope
@@ -523,9 +525,15 @@ async def _request_object_error_response(
 
     Pour l'enregistrement automatique fédéré (OpenID Federation 1.1 §12.1),
     le client n'est pas pré-enregistré : son ``client_id`` est un Entity
-    Identifier. Dans ce cas, on autorise la redirection vers la
-    ``redirect_uri`` de la query (fourni par la suite de certification) car
-    elle correspond à l'URI de callback attendue par le test.
+    Identifier et la ``redirect_uri`` ne figure que **dans** le request
+    object (§12.1.1.1), jamais dans la query. L'OP lit alors la ``redirect_uri``
+    du request object comme **candidat** et la valide contre les
+    ``redirect_uris`` de la trust chain : le refus repart au RP émetteur
+    (modules federation ``invalid-request-object-*``,
+    ``invalid-missing-request-object-*``, ``invalid-signature-*``,
+    ``invalid-client-id-*``), au lieu d'un avis d'erreur que la suite exige
+    de photographier (issue #211). Candidat hors liste ou illisible : page
+    d'erreur — jamais une URI choisie arbitrairement dans la trust chain.
 
     L'enveloppe suit le ``response_mode`` demandé quand le client est
     signable JARM (``response=jwt`` signé), sinon le ``response_type`` du
@@ -539,64 +547,106 @@ async def _request_object_error_response(
         return _request_object_error_page(error)
     client_id = params.get("client_id", "")
     client = await client_repository.find_by_id(client_id)
-    redirect_uri = (params.get("redirect_uri", "") or "").strip()
-
+    if client is None and not _is_entity_identifier(client_id):
+        return _request_object_error_page(error)
+    allowed = await _federated_error_redirect_uris(params, client, client_id, trust_chain_resolver)
+    redirect_uri = _pick_error_redirect_uri(params, allowed)
+    if not redirect_uri:
+        return _request_object_error_page(error)
     if client is None:
-        # Enregistrement automatique fédéré : le client_id est un Entity Identifier
-        # et le client n'est pas dans le repository.
-        if not _is_entity_identifier(client_id):
-            return _request_object_error_page(error)
-        query_redirect_uri = (params.get("redirect_uri", "") or "").strip()
-        allowed_redirect_uris = await _resolve_federated_allowed_redirect_uris(
-            client_id, trust_chain_resolver
-        )
-        if not query_redirect_uri:
-            if allowed_redirect_uris:
-                redirect_uri = next(iter(allowed_redirect_uris), "")
-            else:
-                return _request_object_error_page(error)
-        elif allowed_redirect_uris and query_redirect_uri not in allowed_redirect_uris:
-            return _request_object_error_page(error)
-        else:
-            redirect_uri = query_redirect_uri
-        # Pour un client fédéré potentiel, on suppose confidential + private_key_jwt
-        # et on utilise le response_mode basé sur le response_type du transport.
-        response_type = params.get("response_type", "")
-        has_tokens = bool({"token", "id_token"} & set(response_type.split()))
-        # Client fédéré = confidentiel, pas de JARM sans algorithme publié
-        response_mode = ResponseMode.FRAGMENT if has_tokens else ResponseMode.QUERY
-        if params.get("response_mode") == ResponseMode.FORM_POST.value:
-            response_mode = ResponseMode.FORM_POST
+        # Client fédéré non résolu : confidentiel supposé, pas de JARM sans
+        # algorithme publié — le transport du ``response_type`` fait foi.
         return await error_redirect(
             AuthorizeError(
                 error=error.error,
                 error_description=error.error_description,
                 redirect_uri=redirect_uri,
                 state=error.state or params.get("state", ""),
-                response_mode=response_mode,
+                response_mode=_federated_error_mode(params),
                 client_id=client_id,
             ),
             jarm_signer,
             issuer=issuer,
         )
-
-    if redirect_uri not in client.redirect_uris:
-        return _request_object_error_page(error)
-    response_type = params.get("response_type", "")
-    has_tokens = bool({"token", "id_token"} & set(response_type.split()))
-    response_mode = _requested_error_mode(client, params.get("response_mode", ""), has_tokens)
+    has_tokens = bool({"token", "id_token"} & set(params.get("response_type", "").split()))
     return await error_redirect(
         AuthorizeError(
             error=error.error,
             error_description=error.error_description,
             redirect_uri=redirect_uri,
             state=error.state or params.get("state", ""),
-            response_mode=response_mode,
+            response_mode=_requested_error_mode(
+                client, params.get("response_mode", ""), has_tokens
+            ),
             client_id=client.client_id,
         ),
         jarm_signer,
         issuer=issuer,
     )
+
+
+async def _federated_error_redirect_uris(
+    params: dict[str, str],
+    client: Client | None,
+    client_id: str,
+    resolver: _TrustChainRedirectResolver | None,
+) -> set[str]:
+    """Liste des ``redirect_uris`` de confiance pour un refus (issue #211).
+
+    Retourne la **liste** admise — registre ou trust chain — contre laquelle
+    :func:`_pick_error_redirect_uri` valide le candidat. Pour un client
+    **fédéré** (§12.1) non pré-enregistré, cette liste vient de la trust
+    chain : le RP fédéré ne place sa ``redirect_uri`` que dans le request
+    object (§12.1.1.1). Un client standard doit la passer dans la query
+    (RFC 6749 §3.1.2.3) : sans elle, la page d'erreur fait foi. Sans
+    ``client``, l'``iss`` lisible du request object nomme l'entité émetteuse
+    dont la trust chain valide la cible — le jeton refuse ne choisit jamais
+    la cible seul.
+    """
+    if client is not None:
+        if (
+            client.federated
+            or _is_entity_identifier(client.client_id)
+            or (params.get("redirect_uri", "") or "").strip()
+        ):
+            return set(client.redirect_uris)
+        return set()
+    allowed = await _resolve_federated_allowed_redirect_uris(client_id, resolver)
+    if allowed:
+        return allowed
+    return (
+        await _resolve_federated_allowed_redirect_uris(
+            unverified_issuer(params.get("request", "")), resolver
+        )
+        or set()
+    )
+
+
+def _pick_error_redirect_uri(params: dict[str, str], allowed: set[str]) -> str:
+    """Choisit la cible du refus parmi ``allowed`` ; ``""`` si aucune n'est sûre.
+
+    Le candidat vient de la ``redirect_uri`` de la query (RFC 6749 §3.1.2.3),
+    ou — client fédéré, qui ne la passe jamais en query (OpenID Federation
+    1.1 §12.1.1.1) — du claim ``redirect_uri`` lisible du request object.
+    Dans les deux cas il doit appartenir à ``allowed`` (registre ou trust
+    chain) : hors liste ou absent, aucune redirection, page d'erreur. La
+    cible est toujours celle demandée par le RP, jamais une URI choisie
+    arbitrairement dans la configuration.
+    """
+    if not allowed:
+        return ""
+    candidate = (params.get("redirect_uri", "") or "").strip()
+    if not candidate:
+        candidate = unverified_redirect_uri(params.get("request", ""))
+    return candidate if candidate in allowed else ""
+
+
+def _federated_error_mode(params: dict[str, str]) -> ResponseMode:
+    """Mode d'encodage d'un refus fédéré : ``response_mode`` demandé, sinon transport."""
+    if params.get("response_mode") == ResponseMode.FORM_POST.value:
+        return ResponseMode.FORM_POST
+    has_tokens = bool({"token", "id_token"} & set(params.get("response_type", "").split()))
+    return ResponseMode.FRAGMENT if has_tokens else ResponseMode.QUERY
 
 
 async def _pre_execution_response(
