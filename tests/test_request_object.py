@@ -1426,3 +1426,125 @@ def test_authorize_error_page_for_federated_client_without_redirect_uri() -> Non
 
     assert response.status_code == 400
     assert "location" not in response.headers
+
+
+class _StaticResolver:
+    """RÃ©solveur de trust chain factice pour les tests isolÃ©s."""
+
+    def __init__(self, result: object = None, *, exc: Exception | None = None) -> None:
+        self._result = result
+        self._exc = exc
+
+    async def resolve(self, entity_identifier: str) -> object:
+        if self._exc is not None:
+            raise self._exc
+        return self._result
+
+
+def _make_view(uris: object) -> object:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(redirect_uris=uris)
+
+
+def _run_error_response(params: dict[str, str], resolver: object = None) -> object:
+    import asyncio
+
+    from puridentityserver.interfaces.api.authorize import _request_object_error_response
+
+    async def _main() -> object:
+        from puridentityserver.application.request_object import RequestObjectError
+        from puridentityserver.infrastructure.persistence.memory.clients import (
+            InMemoryClientRepository,
+        )
+
+        repo = InMemoryClientRepository()
+        return await _request_object_error_response(
+            RequestObjectError(error="invalid_request", error_description="bad", state="state-fed"),
+            params,
+            repo,
+            None,
+            issuer="https://id.example",
+            trust_chain_resolver=resolver,
+        )
+
+    return asyncio.run(_main())
+
+
+def test_federated_error_redirect_allowed_without_resolver() -> None:
+    params = {
+        "request": "pas-un-jwt",
+        "client_id": "https://rp.example/op",
+        "redirect_uri": "https://app.example/callback",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, resolver=None)
+    assert getattr(response, "status_code", None) == 302
+
+
+def test_federated_error_page_without_redirect_uri_and_resolver() -> None:
+    params = {
+        "request": "pas-un-jwt",
+        "client_id": "https://rp.example/op",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, resolver=None)
+    assert getattr(response, "status_code", None) == 400
+
+
+def test_federated_error_redirect_valid_query() -> None:
+    view = _make_view(("https://app.example/callback",))
+    params = {
+        "request": "pas-un-jwt",
+        "client_id": "https://rp.example/op",
+        "redirect_uri": "https://app.example/callback",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, resolver=_StaticResolver(result=view))
+    assert getattr(response, "status_code", None) == 302
+
+
+def test_federated_error_page_invalid_query() -> None:
+    view = _make_view(("https://other.example/callback",))
+    params = {
+        "request": "pas-un-jwt",
+        "client_id": "https://rp.example/op",
+        "redirect_uri": "https://app.example/callback",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, resolver=_StaticResolver(result=view))
+    assert getattr(response, "status_code", None) == 400
+
+
+def test_federated_error_redirect_default_from_trust_chain() -> None:
+    view = _make_view(("https://chain.example/callback",))
+    params = {
+        "request": "pas-un-jwt",
+        "client_id": "https://rp.example/op",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, resolver=_StaticResolver(result=view))
+    assert getattr(response, "status_code", None) == 302
+    assert "chain.example/callback" in getattr(response, "headers", {}).get("location", "")
+
+
+def test_federated_error_page_resolver_returns_none() -> None:
+    params = {
+        "request": "pas-un-jwt",
+        "client_id": "https://rp.example/op",
+        "state": "state-fed",
+    }
+    response = _run_error_response(params=params, resolver=_StaticResolver(result=None))
+    assert getattr(response, "status_code", None) == 400
+
+
+def test_federated_error_page_resolver_raises() -> None:
+    params = {
+        "request": "pas-un-jwt",
+        "client_id": "https://rp.example/op",
+        "state": "state-fed",
+    }
+    response = _run_error_response(
+        params=params, resolver=_StaticResolver(exc=RuntimeError("boom"))
+    )
+    assert getattr(response, "status_code", None) == 400
