@@ -113,9 +113,25 @@ class JWKSetUseCase:
         """
         await self._mark_expired_keys()
         await self._rotate_signing_keys()
-        await self._key_manager.prune_inactive_keys(self._config.retained_keys)
+        # Pruning par algorithme pour couvrir une rotation de chaque
+        # algorithme signant : `retained_keys` est interprété comme un
+        # maximum par algorithme, pas globalement — sinon une rotation
+        # simultanée des 9 algorithmes ne conserve au JWKS qu'une seule
+        # clé retirée et fait échouer `id-token-hint` (clés non vérifiables).
+        managed = _managed_algorithms(self._config.algorithms)
+        await self._key_manager.prune_inactive_keys(
+            self._config.retained_keys * max(1, len(managed))
+        )
         keys = await self._key_manager.get_active_keys()
-        keys.extend(await self._key_manager.get_retained_keys(self._config.retained_keys))
+        # Retention per algorithm: au moins une clé retirée par algorithme.
+        retired = await self._key_manager.get_retired_keys()
+        retained: list[KeyPair] = []
+        counts: dict[JWTAlgorithm, int] = {}
+        for candidate in retired:
+            if counts.get(candidate.algorithm, 0) < self._config.retained_keys:
+                retained.append(candidate)
+                counts[candidate.algorithm] = counts.get(candidate.algorithm, 0) + 1
+        keys.extend(retained)
         keys.extend(await self._encryption_keys_to_publish())
         return keys
 
