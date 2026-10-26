@@ -444,7 +444,7 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
 | `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`, `subject_pairwise_seed` pour les modules sector du plan dynamic, 4 clients statiques FAPI `private_key_jwt` + JWKS public pour les plans fapi1/fapi2) |
 | `plans/basic|implicit|hybrid|formpost|dynamic|ciba|fapi1|fapi2|fapi2-message-signing|ekyc|federation.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; fapi1/fapi2/fapi2-message-signing portent aussi `client`/`client2` en clé privée et `resource` ; `ekyc` porte la configuration eKYC `ekyc.verified_claims_request_list` ; `federation` porte l'Entity Identifier de l'OP, l'ancre de confiance `{SUITEURL}test/a/puridentityserver-federation/trust-anchor` et les clés de test RP/ancre du template officiel) |
 | `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) — avec `SCREENSHOTS_DIR` défini (CI), un fichier absent/vide/trop lourd lève une erreur fatale (captures obligatoires, issue #161) ; sans variable (exécution manuelle), le PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode hébergé) |
-| `capture_screenshots.py` | rejoue les scénarios de relecture (4 Core, 6 dynamic, 16 FAPI1, 4 FAPI2) contre l'OP (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver — `--base-url` = OP, `--suite-url` = base des callbacks de la suite (hébergée par défaut, `https://localhost.emobix.co.uk:8443` en local) |
+| `capture_screenshots.py` | rejoue les scénarios de relecture (4 Core, 6 dynamic, 2 FAPI1 « page », 1 fédéré — 13 PNG, issue #214) contre l'OP (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver — `--base-url` = OP, `--suite-url` = base des callbacks de la suite (hébergée par défaut, `https://localhost.emobix.co.uk:8443` en local) |
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |
 | `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
 | `prune_stale_plans.py` | purge en fin de run : `DELETE /api/plan/{id}` sur les plans non publies les plus anciens, regroupés par **alias** (`alias: puridentityserver-<plan>`, pas `planName` qui porte le type OIDF — le filtre `planName` ne matchait jamais, issue #132) ; conserve la dernière version non publiée par alias (défaut `KEEP_PLANS=1`), jamais les plans publiés (l'API refuse en 405) |
@@ -470,23 +470,25 @@ page différente de l'OP :
 | `oidcc-prompt-login` | second formulaire de connexion (`prompt=login`) |
 | `oidcc-max-age-1` | second formulaire de connexion (`max_age=1`, une seconde après le premier) |
 
-Les modules FAPI1 (request object défectueux) et FAPI2 (demande poussée PAR) sont
-du même ressort : leurs placeholders REVIEW attendent la page d'erreur réellement
-servie par l'OP. Deux étapes couvrent ce besoin :
+Les modules FAPI1 « page » et le module fédéré sont du même ressort : leurs
+placeholders REVIEW attendent la page d'erreur réellement servie par l'OP. Les
+14 autres modules FAPI1 et les 4 modules FAPI2 reçoivent leur erreur par une 302
+vers la callback (RFC 6749 §4.1.2.1, issues #160/#178) et passent sans capture —
+le retrait des 18 captures devenues inutiles est tracé en issue #214. Deux
+étapes couvrent ce besoin :
 
 1. **`capture_screenshots.py`** (étape « Captures d'écran réelles des modules de
    relecture ») : enregistre un client via RFC 7591, rejoue les **scénarios de
    relecture** (les 4 modules Core du tableau, les 6 modules du plan dynamic —
    arbitrages de `redirect_uri` absente/supplémentaire/non concordante et pages
    de connexion des clients DCR porteurs d'un `logo_uri`/`policy_uri`/`tos_uri`,
-   issue #168 —, les 16 modules FAPI1, les 4 modules
-   FAPI2) avec chromium headless contre l'OP (`--base-url`),
+   issue #168 —, les 2 modules FAPI1 servis en page HTML et le module fédéré
+   `invalid-client-id-in-request-object`, issue #212 — 13 PNG au total) avec
+   chromium headless contre l'OP (`--base-url`),
    **contrôle chaque page
    avant export** (statut 400 + marqueur `<code>` du motif — ou extrait « manquants
    : redirect_uri » pour la page sans code de motif, ou titre et
-   `form[action="/login"]` ; les erreurs FAPI2, elles, doivent arriver par une
-   302 vers le callback de la suite portant `error=<code>` — transport
-   RFC 6749 §4.1.2.1, issue #160) puis dépose
+   `form[action="/login"]`) puis dépose
    `screenshots/<testName>.png` — PNG sous les 500 Ko imposés par l'ImageAPI de la
    suite. Le callback des clients Core de capture est `https://rp.example.invalid/callback`
    (RFC 2606) : la navigation finale échoue au DNS, erreur que le script absorbe ;
@@ -498,10 +500,10 @@ servie par l'OP. Deux étapes couvrent ce besoin :
    (installation du navigateur, OP indisponible, scène invalide…) fait échouer
    le run — plus aucun repli silencieux en CI. Les deux workflows l'exécutent :
    - **mode hébergé** : dans le job `prepare` contre l'instance Render, résultat
-     publié en artefact `certification-screenshots` (30 captures) ;
+     publié en artefact `certification-screenshots` (13 captures) ;
    - **mode local** (#158) : job `capture` de `certification-local.yml` contre
      l'OP local (`https://localhost:9443`, cert auto-signé), **une seule fois par
-     run** (30 captures), artefact
+     run** (13 captures), artefact
      `certification-local-screenshots` que les jobs `plan`
      téléchargent (env `SCREENSHOTS_DIR`, substitution du PNG de secours) et que
      le job `report` intègre au rapport.
@@ -531,15 +533,19 @@ Le PNG de secours ne survit qu'à une exécution manuelle sans `SCREENSHOTS_DIR`
 en CI, la capture réelle de chaque module de relecture est exigée et son absence
 fait échouer le run (issue #161).
 
-### Captures du plan `federation` : aucune nécessaire
+### Captures du plan `federation` : une seule, autonome
 
-Le plan `federation` n'attend **aucune** capture. Ses 13 modules
-`…-invalid-*` exigaient jadis la page d'erreur photographiée ; depuis
-l'issue #211, l'OP redirige le refus d'un request object fédéré vers la
-`redirect_uri` du request object (validée contre la trust chain) : la suite
-reçoit l'erreur par redirection et conclut le module **sans** placeholder de
-capture. Un mini-stub hébergeant la trust chain pour rejouer les scénarios en
-dehors d'un run de plan (`federation_capture_stub.py`, ancre seconde de
+Le plan `federation` n'attend **qu'une** capture :
+`invalid-client-id-in-request-object`. Ses 12 autres modules `…-invalid-*`
+exigeaient jadis la page d'erreur photographiée ; depuis l'issue #211, l'OP
+redirige le refus de tout request object fédéré vers la `redirect_uri` du request
+object (validée contre la trust chain) : la suite reçoit l'erreur par redirection
+et conclut le module **sans** placeholder de capture. Seul le module au
+`client_id` d'Entity Identifier inconnu tombe sur la page 400 `invalid_client`
+(trust chain injoignable, RFC 6749 §4.1.2.1) : sa capture est rejouée de façon
+**autonome** par `capture_screenshots.py` (issue #212), sans request object ni
+clé privée du RP de la suite. Un mini-stub hébergeant la trust chain pour
+rejouer les 13 scénarios (`federation_capture_stub.py`, ancre seconde de
 l'OP) a donc été retiré — inutile tant que les modules tournent en SUCCESS.
 Une régression en REVIEW se verrait en échec witness (le dossier des captures
 reste fourni à chaque plan dans `certification.yml`).

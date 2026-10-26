@@ -249,13 +249,14 @@ jobs:
           echo "::error::L'API de certification.openid.net n'a pas répondu (token invalide ou réseau) en 10 min" && exit 1
       - name: Captures d'écran réelles des modules de relecture (Playwright)
         # Les modules laissés en REVIEW par la suite (4 modules Core + 6 dynamic
-        # + 16 FAPI1 + 4 FAPI2, issue #138 / #168) exigent une capture
-        # téléversée via l'ImageAPI
-        # de la suite : ce script rejoue ces 30 scénarios contre l'OP déposé
+        # + 2 modules FAPI1 servis en page + 1 module fédéré, issues #138/#168/
+        # #212 — retrait des captures FAPI redondantes, issue #214) exigent une
+        # capture téléversée via l'ImageAPI
+        # de la suite : ce script rejoue ces 13 scénarios contre l'OP déposé
         # avec chromium headless et dépose <testName>.png dans screenshots/.
         # PyJWT + cryptography signent les request objects des scénarios FAPI
         # avec les clés des clients statiques (certification/plans/).
-        # Blocant (issue #161) : le script exige les 30 captures et sort en
+        # Blocant (issue #161) : le script exige les 13 captures et sort en
         # code non nul dès qu'une scène échoue — sans elles, aucun job plan ne
         # pourrait alimenter les placeholders REVIEW.
         # Une seule exécution par run : les 9 jobs matrix téléchargent le
@@ -274,7 +275,7 @@ jobs:
         # sous la main pour contrôle humain : c'est la preuve visible des
         # verdicts REVIEW, au même titre que le rapport sur GitHub Pages.
         # Sans échec de l'étape précédente (sinon le job est déjà rouge,
-        # issue #161), le répertoire contient les 30 PNG.
+        # issue #161), le répertoire contient les 13 PNG.
         uses: actions/upload-artifact@v7
         with:
           name: certification-screenshots
