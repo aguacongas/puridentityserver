@@ -110,8 +110,7 @@ class _FederatedClientRedirectView(Protocol):
 class _TrustChainRedirectResolver(Protocol):
     """Résolveur de redirect_uri à partir d'un Entity Identifier federé."""
 
-    async def resolve(self, entity_identifier: str) -> _FederatedClientRedirectView | None:
-        ...
+    async def resolve(self, entity_identifier: str) -> _FederatedClientRedirectView | None: ...
 
 
 def authorize_router(
@@ -304,7 +303,10 @@ async def _direct_authorize_request(
     resolved = await request_object_resolver.resolve(params, session_scope=session_scope)
     if isinstance(resolved, RequestObjectError):
         return await _request_object_error_response(
-            resolved, params, client_repository, jarm_signer,
+            resolved,
+            params,
+            client_repository,
+            jarm_signer,
             issuer=issuer,
             trust_chain_resolver=federated_redirect_resolver,
         )
@@ -1065,7 +1067,7 @@ async def _authorize_entry(
         session_scope=session_scope,
         jarm_signer=jarm_signer,
         issuer=issuer,
-            federated_redirect_resolver=federated_redirect_resolver,
+        federated_redirect_resolver=federated_redirect_resolver,
     )
     if isinstance(built, HTMLResponse):
         return built, ""
