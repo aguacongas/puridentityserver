@@ -481,6 +481,23 @@ def _is_entity_identifier(value: str) -> bool:
     return value.startswith("https://") and "?" not in value and "#" not in value
 
 
+async def _resolve_federated_allowed_redirect_uris(
+    client_id: str,
+    resolver: _TrustChainRedirectResolver | None,
+) -> set[str] | None:
+    if resolver is None:
+        return None
+    try:
+        derived = await resolver.resolve(client_id)
+        if derived is not None:
+            uris = derived.redirect_uris
+            if uris:
+                return set(uris)
+    except Exception:
+        return None
+    return None
+
+
 async def _request_object_error_response(
     error: RequestObjectError,
     params: dict[str, str],
@@ -527,19 +544,18 @@ async def _request_object_error_response(
         if not _is_entity_identifier(client_id):
             return _request_object_error_page(error)
         query_redirect_uri = (params.get("redirect_uri", "") or "").strip()
-        allowed_redirect_uris = set()
-        if trust_chain_resolver is not None:
-            try:
-                derived = await trust_chain_resolver.resolve(client_id)
-                if derived is not None:
-                    allowed_redirect_uris = set(derived.redirect_uris or frozenset())
-            except Exception:
-                allowed_redirect_uris = allowed_redirect_uris
-        is_allowed = (query_redirect_uri in allowed_redirect_uris)
-        if query_redirect_uri and allowed_redirect_uris and is_allowed:
-            redirect_uri = query_redirect_uri
-        else:
+        allowed_redirect_uris = await _resolve_federated_allowed_redirect_uris(
+            client_id, trust_chain_resolver
+        )
+        if not query_redirect_uri:
+            if allowed_redirect_uris:
+                redirect_uri = next(iter(allowed_redirect_uris), "")
+            else:
+                return _request_object_error_page(error)
+        elif allowed_redirect_uris and query_redirect_uri not in allowed_redirect_uris:
             return _request_object_error_page(error)
+        else:
+            redirect_uri = query_redirect_uri
         # Pour un client fédéré potentiel, on suppose confidential + private_key_jwt
         # et on utilise le response_mode basé sur le response_type du transport.
         response_type = params.get("response_type", "")
