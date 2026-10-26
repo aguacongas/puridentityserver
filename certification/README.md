@@ -447,7 +447,7 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
 | `capture_screenshots.py` | rejoue les scénarios de relecture (4 Core, 6 dynamic, 16 FAPI1, 4 FAPI2) contre l'OP (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver — `--base-url` = OP, `--suite-url` = base des callbacks de la suite (hébergée par défaut, `https://localhost.emobix.co.uk:8443` en local) |
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |
 | `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
-| `prune_stale_plans.py` | purge en fin de run : `DELETE /api/plan/{id}` sur les plans non publies les plus anciens, par alias (garde les N derniers, jamais les plans publies - l'API refuse en 405) ; issue #132 |
+| `prune_stale_plans.py` | purge en fin de run : `DELETE /api/plan/{id}` sur les plans non publies les plus anciens, regroupés par **alias** (`alias: puridentityserver-<plan>`, pas `planName` qui porte le type OIDF — le filtre `planName` ne matchait jamais, issue #132) ; conserve la dernière version non publiée par alias (défaut `KEEP_PLANS=1`), jamais les plans publiés (l'API refuse en 405) |
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés ; recopie les captures réelles dans `_site/screenshots/` (`--screenshots`) et les affiche dans la section du module correspondant |
 | `local/setup.sh` | bootstrap du harness **auto-hébergé** : alias réseau, clone + déploiement docker de la suite, cert auto-signé + nginx mTLS `op`, config OP locale (issuer `https://op:9443`), OP uvicorn, attente de disponibilité |
 | `local/nginx-mtls.conf` | nginx de terminaison mTLS devant l'OP local : certificat client optionnel (`optional_no_ca`), extraction `$ssl_client_escaped_cert` → `X-SSL-Client-Cert` (pas de newline brute), proxy vers l'OP uvicorn de l'hôte |
@@ -571,8 +571,11 @@ plan vert devient un candidat de publication (`POST /api/plan/{id}/publish`)
 sans devoir nettoyer la membership stale.
 
 **Purge en fin de run** : `certification/prune_stale_plans.py` liste les plans
-du user (`GET /api/plan`), groupe par `planName`, conserve les **N plus
-récents** (défaut 3, réglable via `KEEP_PLANS`) et `DELETE` les autres par
+du user (`GET /api/plan`), groupe par **alias** (`alias: puridentityserver-<plan>` ;
+le champ `planName` porte le type de plan OIDF — ex. `oidcc-basic-...` — et ne
+portait donc jamais notre préfixe : la purge restait silencieusement vide,
+d'où l'accumulation à 48 plans), conserve la **dernière version non publiée**
+par alias (défaut 1, réglable via `KEEP_PLANS`) et `DELETE` les autres par
 alias - **jamais un plan publié** (l'API répond 405/403, traité en no-op).
 Appelé par le job `report` de `.github/workflows/certification.yml`
 (après la publication des artefacts). Le compte `CONFORMANCE_TOKEN` est requis ;

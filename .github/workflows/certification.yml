@@ -523,14 +523,14 @@ jobs:
           name: certification-screenshots
           path: screenshots
 
-      - name: Purge des plans stale (issue #132, garde les 3 derniers par alias)
+      - name: Purge des plans stale (issue #132, garde la dernière version par alias)
         # Supprime les plans non publies des runs precedents pour chaque alias,
         # sans jamais toucher un plan publie (l'API refuse en 405/403).
         if: always()
         env:
           CONFORMANCE_SERVER: ${{ env.CONFORMANCE_SERVER }}
           CONFORMANCE_TOKEN: ${{ secrets.CONFORMANCE_TOKEN }}
-          KEEP_PLANS: '3'
+          KEEP_PLANS: '1'
         run: |
           python3 -m pip install --disable-pip-version-check --quiet httpx >/dev/null
           python3 certification/prune_stale_plans.py
