@@ -209,6 +209,11 @@ _FAPI1_JAR_SCENARIOS: tuple[tuple[str, str, str], ...] = (
         "rs256",
         "invalid_request_object",
     ),
+    (
+        "fapi1-advanced-final-ensure-invalid-client-id-in-request-object",
+        "rs256",
+        "invalid_request_object",
+    ),
 )
 
 #: Modules FAPI1 servis en **page HTML** (la query du scénario ne porte pas de
@@ -222,6 +227,7 @@ _FAPI1_PAGE_TEST_NAMES = frozenset(
     {
         "fapi1-advanced-final-ensure-redirect-uri-in-authorization-request",
         "fapi1-advanced-final-ensure-registered-redirect-uri",
+        "fapi1-advanced-final-ensure-invalid-client-id-in-request-object",
     }
 )
 
