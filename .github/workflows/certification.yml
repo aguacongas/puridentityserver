@@ -424,16 +424,12 @@ jobs:
           # Captures réelles obligatoires produites par le job `prepare`
           # (issue #161) : une capture absente ou invalide lève une erreur
           # fatale dans le driver (détectée par le garde-fou ci-dessous, le
-          # step restant witness pour les gaps de modules). Exception plan
-          # federation : la mini-fédération qui héberge la trust chain des
-          # captures fédérées n'est joignable qu'en local (localhost:9444,
-          # certification/federation_capture_stub.py) — l'OP hébergé ne
-          # résout donc pas la chaîne du RP de capture : SCREENSHOTS_DIR
-          # reste vide pour ce plan (witness, PNG de secours pour ses 13
-          # modules REVIEW ; le local les couvre en captures réelles).
-          # Suivi : stub public joignable depuis Render, ou exemption
-          # déclarée dans certification/expected-failures/.
-          SCREENSHOTS_DIR: ${{ matrix.plan != 'federation' && format('{0}/screenshots', github.workspace) || '' }}
+          # step restant witness pour les gaps de modules). Le plan
+          # federation n'attend plus aucune capture : ses modules tournent
+          # en SUCCESS (l'erreur d'un request object refusé repart par
+          # redirection, issue #211) — le dossier est néanmoins fourni, une
+          # régression en REVIEW se verrait donc en échec witness.
+          SCREENSHOTS_DIR: ${{ format('{0}/screenshots', github.workspace) }}
         run: |
           set +e
           # Le driver écrit les exports (.zip) dans --export-dir : le créer
