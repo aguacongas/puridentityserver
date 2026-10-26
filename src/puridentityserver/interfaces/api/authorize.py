@@ -227,6 +227,7 @@ def authorize_router(
             jarm_signer=jarm_signer,
             issuer=issuer,
             register_marker=params.get("register", ""),
+            federated_redirect_resolver=federated_redirect_resolver,
         )
         if pre is not None:
             return pre
@@ -609,6 +610,7 @@ async def _pre_execution_response(
     jarm_signer: JarmSigner | None = None,
     issuer: str = "",
     register_marker: str = "",
+    federated_redirect_resolver: _TrustChainRedirectResolver | None = None,
 ) -> RedirectResponse | HTMLResponse | None:
     """Réponses possibles **avant** émission : page d'erreur, reconnexion, ``prompt``.
 
@@ -619,7 +621,9 @@ async def _pre_execution_response(
     marqueur ``register=`` de l'URL (annulation/refus d'inscription, issue
     #166). ``None`` : la demande peut être exécutée.
     """
-    error_page = await _non_redirectable_error(auth_request, client_repository)
+    error_page = await _non_redirectable_error(
+        auth_request, client_repository, federated_redirect_resolver=federated_redirect_resolver
+    )
     if error_page is not None:
         return error_page
     return await _authentication_gate(
@@ -662,7 +666,10 @@ async def _with_authenticated_subject(
 
 
 async def _non_redirectable_error(
-    auth_request: AuthorizeRequest, client_repository: ClientReader | None
+    auth_request: AuthorizeRequest,
+    client_repository: ClientReader | None,
+    *,
+    federated_redirect_resolver: _TrustChainRedirectResolver | None = None,
 ) -> RedirectResponse | HTMLResponse | None:
     """Affiche la page d'erreur pour les erreurs qui interdisent la redirection.
 
@@ -677,6 +684,29 @@ async def _non_redirectable_error(
         return None
     validated = await validate_authorization_request(auth_request, client_repository)
     if isinstance(validated, AuthorizeError) and not validated.redirectable:
+        if _is_entity_identifier(auth_request.client_id) and validated.error in {
+            "invalid_client",
+            "invalid_request",
+        }:
+            redirect_uri = auth_request.redirect_uri
+            allowed = await _resolve_federated_allowed_redirect_uris(
+                auth_request.client_id, federated_redirect_resolver
+            )
+            if allowed and redirect_uri and redirect_uri not in allowed:
+                redirect_uri = next(iter(allowed), "")
+            if not redirect_uri and allowed:
+                redirect_uri = next(iter(allowed), "")
+            if redirect_uri:
+                return await error_redirect(
+                    AuthorizeError(
+                        error=validated.error,
+                        error_description=validated.error_description,
+                        redirect_uri=redirect_uri,
+                        state=validated.state or auth_request.state,
+                        response_mode=validated.response_mode,
+                        client_id=auth_request.client_id,
+                    ),
+                )
         return await error_response(validated)
     return None
 
