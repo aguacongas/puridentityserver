@@ -122,7 +122,7 @@ jobs:
   capture:
     name: Captures d'écran réelles (Playwright)
     runs-on: ubuntu-latest
-    # Bloquant (issue #161) : le script exige les 30 captures et sort en code
+    # Bloquant (issue #161) : le script exige les 13 captures et sort en code
     # non nul dès qu'une scène échoue ; sans artefact, les jobs plan ne peuvent
     # pas fournir les captures REVIEW exigées et le run échoue.
     steps:

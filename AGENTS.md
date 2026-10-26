@@ -63,10 +63,12 @@ bash certification/local/down.sh             # arrêt du harness (--purge : cont
   instantanie les archives présentes avant le driver et ne compte que les nouvelles
   (les anciennes sont conservées). Sans cette restriction, le bilan mélange les runs
   (issue #199). La CI est immunisée : dossier d'export neuf par job.
-- Captures REVIEW : produire les 30 PNG avec
+- Captures REVIEW : produire les 13 PNG avec
   `python certification/capture_screenshots.py --base-url https://localhost:9443 --out <dir>`
-  (le plan `federation` n'attend plus aucune capture : ses modules tournent en SUCCESS
-  depuis l'issue #211 — l'erreur d'un request object refusé repart par redirection),
+  (le plan `federation` n'attend plus qu'une capture :
+  `invalid-client-id-in-request-object`, rejouée de façon autonome depuis l'issue #212 —
+  les 12 autres modules tournent en SUCCESS depuis l'issue #211, l'erreur d'un request
+  object refusé repart par redirection),
   puis `SCREENSHOTS_DIR=<dir> bash certification/local/run-plan.sh <plan>` ; sans
   `SCREENSHOTS_DIR`, le driver retombe sur le PNG de secours (mode witness) ; avec,
   toute capture absente le fait échouer (issue #161, comportement CI attendu).
