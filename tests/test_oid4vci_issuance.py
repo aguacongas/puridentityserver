@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
-
-from tests.test_userinfo import run as run_async
 
 from puridentityserver.application.oid4vci import OID4VCIIssuerUseCase
 from puridentityserver.domain.jwks import JWTAlgorithm
@@ -46,7 +45,7 @@ def test_issuer_issues_sdjwt_credential_for_valid_access_token() -> None:
         assert isinstance(credential, str) and credential.count(".") == 2
         assert "c_nonce" in result
 
-    run_async(_task())
+    asyncio.run(_task())
 
 
 def test_issuer_rejects_invalid_access_token() -> None:
@@ -64,4 +63,4 @@ def test_issuer_rejects_invalid_access_token() -> None:
         result = await usecase.issue_credential("not-a-valid-jwt", "vc+sd-jwt")
         assert result is None
 
-    run_async(_task())
+    asyncio.run(_task())
