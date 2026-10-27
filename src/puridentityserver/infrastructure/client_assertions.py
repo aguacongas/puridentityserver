@@ -283,9 +283,12 @@ def _decode(
 ) -> dict[str, object] | None:
     """Décode et valide l'assertion (signature, ``aud``, ``exp``, ``iss``).
 
-    ``leeway=60`` tolère un ``nbf``/``iat`` jusqu'à 60 s dans le futur
-    (fenêtre ``EnsureClientAssertionNbf`` de la suite de certification ;
-    un ``exp`` passé de 5 minutes reste refusé).
+    ``leeway=30`` tolère un ``nbf``/``iat`` jusqu'à 30 s dans le futur
+    (fenêtre ``EnsureClientAssertionNbf`` de la suite de certification :
+    « 8 seconds in the future » accepté, « over 60 seconds » rejeté — la
+    suite fabrique 62 s et la latence réseau mange une à deux secondes, un
+    leeway de 60 s laissait le rejet à la limite ; un ``exp`` passé de
+    5 minutes reste refusé).
     """
     try:
         claims = pyjwt.decode(
@@ -294,7 +297,7 @@ def _decode(
             algorithms=algorithms,
             audience=audience,
             issuer=issuer,
-            leeway=60,
+            leeway=30,
             options=_required_options(require_iss_eq_sub),
         )
     except pyjwt.PyJWTError:

@@ -86,6 +86,7 @@ class JWKSetUseCase:
         self._key_manager = key_manager
         self._encryption_keys = encryption_key_manager
         self._lock = asyncio.Lock()
+
     async def initialise(self) -> None:
         """Génère une clé initiale par algorithme si le magasin est vide.
 
