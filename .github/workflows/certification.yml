@@ -283,7 +283,7 @@ jobs:
           if-no-files-found: ignore
 
   plan:
-    name: Plan ${{ matrix.plan }} (witness)
+    name: Plan ${{ matrix.plan }} (strict)
     needs: prepare
     runs-on: ubuntu-latest
     env:
@@ -414,12 +414,11 @@ jobs:
           fi
           find screenshots -mindepth 2 -type f -name '*.png' -exec mv -t screenshots/ {} + 2>/dev/null || true
           ls -l screenshots
-      - name: Lancement du plan ${{ matrix.plan }} (witness)
+      - name: Lancement du plan ${{ matrix.plan }} (strict)
         # Un seul plan par job (matrice) : chaque plan exporte ses .zip dans
         # certification-results-<plan>. Toute la boucle séquentielle d'origine
         # (PLAN_FILTER + for) disparaît — `fail-fast: false` + step non
         # bloquant gardent le contrat witness (gaps acceptés).
-        continue-on-error: true
         working-directory: conformance-suite
         env:
           # Captures réelles obligatoires produites par le job `prepare`
@@ -432,7 +431,6 @@ jobs:
           # régression en REVIEW se verrait donc en échec witness.
           SCREENSHOTS_DIR: ${{ format('{0}/screenshots', github.workspace) }}
         run: |
-          set +e
           # Le driver écrit les exports (.zip) dans --export-dir : le créer
           # sinon chaque téléchargement échoue en FileNotFoundError.
           mkdir -p "$GITHUB_WORKSPACE/results"
@@ -443,8 +441,11 @@ jobs:
             "$GITHUB_WORKSPACE/certification/plans/${{ matrix.plan }}.json" 2>&1 \
             | tee "$GITHUB_WORKSPACE/driver-${{ matrix.plan }}.log" | tee -a "$GITHUB_STEP_SUMMARY"
           code=${PIPESTATUS[0]}
-          echo "- exit code : $code (les gaps sont acceptés en mode witness)" | tee -a "$GITHUB_STEP_SUMMARY"
-          [ "$code" -eq 0 ] || echo "plan ${{ matrix.plan }} en échec partiel (witness)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- exit code : $code" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$code" -ne 0 ]; then
+            echo "::error::Plan ${{ matrix.plan }} en echec (exit code $code) - mode strict"
+            exit 1
+          fi
       - name: "Garde-fou : captures REVIEW fournies (issue #161)"
         # Le step Lancement reste witness (gaps de modules acceptés) : ce
         # garde-fou y repère l'erreur fatale du driver sur une capture
