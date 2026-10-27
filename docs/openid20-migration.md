@@ -117,7 +117,11 @@ uv run python samples/openid20-migration-client/smoke_test.py
 
 - La spec est une **spec de niche** (parc OpenID 2.0 marginal) : le support
   reste **désactivé par défaut** et n'est pas couvert par les plans de
-  certification OIDF.
+  certification OIDF (en configuration standard). Le chemin flag ON est toutefois
+  **couvert manuellement** avant toute release concernée : cf.
+  `certification/README.md` (« Rejeu avec OpenID 2.0 migration active »,
+  run local `certification-local` avec `openid20_migration_enabled = true`,
+  11 plans stricts verts, 475 modules, 0 hors ALLOWED).
 - L'OP ne joue le rôle d'OP OpenID 2.0 que pour **son propre** parc : la
   signature OpenID 2.0 classique (`openid.signed`) n'est pas produite ; la
   preuve d'autorité repose sur la signature RS256 des jetons internes et sur
