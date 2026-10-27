@@ -34,8 +34,10 @@ def test_issuer_issues_sdjwt_credential_for_valid_access_token() -> None:
             scopes=frozenset(),
         )
         usecase = OID4VCIIssuerUseCase(
-            issuer=issuer, key_manager=token_manager._key_manager,
-            algorithm=JWTAlgorithm.RS256, token_manager=token_manager,
+            issuer=issuer,
+            key_manager=token_manager._key_manager,
+            algorithm=JWTAlgorithm.RS256,
+            token_manager=token_manager,
         )
         result = await usecase.issue_credential(token, "vc+sd-jwt")
         assert result is not None
