@@ -19,16 +19,17 @@ name: Certification OIDC
 # `release-vX.Y.Z` listé par `git ls-remote` sur
 # gitlab.com/openid/conformance-suite (échec = run en erreur) — cf. issue #150.
 #
-# Issue #122 : les 10 s'exécutent EN PARALLÈLE (matrix de jobs, même
+# Issue #122 : les plans s'exécutent EN PARALLÈLE (matrix de jobs, même
 # patron que certification-local.yml ; fapi2-message-signing ajouté par
 # l'issue #164, formpost par l'issue #165, dynamic par l'issue #168) : ~3 h
 # séquentielles deviennent la durée
-# du plan le plus long (~40 min) :
+# du plan le plus long (~40 min), SOUS RÉSERVE des deux vagues ci-dessous :
 # - job `prepare` UNIQUE : matrice depuis l'input `plan`, deploy hook Render
 #   (UNE SEULE fois — un redejob par plan remplacerait l'OP en plein run) et
 #   captures Playwright (artefact partagé) ;
-# - job `plan` ×9 (`fail-fast: false`) : clone + patches de la suite, un seul
-#   plan joué en mode witness, export → artefact `certification-results-<plan>`.
+# - job `plan` ×N (`fail-fast: false`) : clone + patches de la suite, un seul
+#   plan joué en mode STRICT (tout module hors SUCCESS/REVIEW fait échouer le
+#   job), export → artefact `certification-results-<plan>`.
 #   Parallélisation sûre : chaque plan porte un alias distinct
 #   (`puridentityserver-<plan>`) et `release_alias` ne stoppe que son propre
 #   alias — voir certification/README.md (« Conflits d'alias ») ;
@@ -75,18 +76,21 @@ on:
           
 permissions:
   contents: read
+  # Lecture des jobs du run courant : le step « vague 1 » attend la fin du
+  # job `Plan dynamic (strict)` avant de lancer les autres plans.
+  actions: read
 
 env:
   # Cible du déploiement Render (back-end interne, sans condition issuer).
   RENDER_OP_URL: ${{ vars.RENDER_OP_URL || 'https://puridentityserver-certification.onrender.com' }}
   # URL publique de l'OP (ou proxy mTLS #133) - celle que la suite utilise comme issuer.
   OP_URL: ${{ vars.CERTIFICATION_OP_URL || 'https://puridentityserver-certification.onrender.com' }}
-  # Mode witness sur l'instance HÉBERGÉE officielle (OpenID Foundation) : le
-  # driver constructeur (run-test-plan.py) ne fait que des appels API REST
-  # authenticate Bearer (CONFORMANCE_TOKEN). L'automation navigateur
-  # (WebRunner/HtmlUnit/Selenium) tourne dans l'infra stable de la Fondation,
-  # qui atteint notre OP public (Render) — aucune dépendance docker quebrada
-  # sur le runner éphémère (plus de modules bloqués en WAITING).
+  # Instance HÉBERGÉE officielle (OpenID Foundation) : le driver constructeur
+  # (run-test-plan.py) ne fait que des appels API REST authenticate Bearer
+  # (CONFORMANCE_TOKEN). L'automation navigateur (WebRunner/HtmlUnit/Selenium)
+  # tourne dans l'infra stable de la Fondation, qui atteint notre OP public
+  # (Render) — aucune dépendance docker quebrada sur le runner éphémère (plus
+  # de modules bloqués en WAITING).
   CONFORMANCE_SERVER: https://www.certification.openid.net/
   CONFORMANCE_TOKEN: ${{ secrets.CONFORMANCE_TOKEN }}
   CONFORMANCE_MODULE_TIMEOUT: '600'
@@ -218,7 +222,7 @@ jobs:
         run: python3 -c "import json,glob; [json.load(open(p)) for p in glob.glob('certification/plans/*.json')]"
 
       - name: Vérification de la présence du secret CONFORMANCE_TOKEN
-        # Mode witness hébergé : l'accès à l'API de certification.openid.net
+        # Run hébergé : l'accès à l'API de certification.openid.net
         # passe par un Bearer token délivré par l'OpenID Foundation. Un secret
         # manquant doit échouer SEC maintenant (message clair), pas via un
         # KeyError/traceback du driver en plein milieu du run — et surtout pas
@@ -297,14 +301,73 @@ jobs:
     strategy:
       # Chaque plan continue même si un autre échoue : le rapport consolidé
       # doit montrer l'état complet du run, pas s'arrêter au premier plan
-      # rouge (mode witness : les gaps de modules ne bloquent pas — les
-      # captures REVIEW, elles, restent bloquantes, cf. garde-fou issue #161).
+      # rouge. Un plan en échec (module hors SUCCESS/REVIEW, export absent…)
+      # reste rouge en fin de run ; les captures REVIEW, elles, restent
+      # bloquantes (cf. garde-fou issue #161).
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
 
     steps:
       - name: Checkout du dépôt
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: "Vague 1 : attente du plan dynamic (isolation de la rotation JWKS)"
+        # Tous les plans partagent un OP unique (Render) : seul `dynamic`
+        # exécute `oidcc-server-rotate-keys` et appelle
+        # `POST /signing-keys/rotate`. Une rotation tombant pendant un module
+        # des autres plans les fait échouer : la suite valide les id_token
+        # avec le JWKS relevé au DÉBUT du module, qui ne contient pas encore
+        # la nouvelle clé (cf. run 40494694247, `oidcc-max-age-1` de `basic`).
+        # Deux vagues donc : `dynamic` seul, puis les autres en parallèle.
+        # Sans `dynamic` dans la matrice, aucune rotation possible → passage
+        # immédiat. Un `dynamic` rouge n'empêche pas les autres plans de
+        # tourner (leur résultat reste exploitable ; le run est de toute
+        # façon rouge).
+        if: matrix.plan != 'dynamic'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MATRIX: ${{ needs.prepare.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          if ! grep -q '"plan":"dynamic"' <<<"$MATRIX"; then
+            echo "Plan dynamic absent de ce run : aucune rotation de clés possible, vague 2 immédiate."
+            exit 0
+          fi
+          echo "Attente du job « Plan dynamic (strict) » avant de lancer les autres plans..."
+          deadline=$((SECONDS + 3600))
+          while :; do
+            # Une seule requête : gh filtre lui-même (--jq embarque jq) et
+            # renvoie « statut<TAB>conclusion<TAB>nom » par job dynamic.
+            report=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
+              --jq '.jobs[] | select(.name | startswith("Plan dynamic")) | "\(.status)\t\(.conclusion // "-")\t\(.name)"') \
+              || { echo "::error::Lecture des jobs du run impossible (permission actions: read)"; exit 1; }
+            total=0
+            done_n=0
+            while IFS=$'\t' read -r status conclusion name; do
+              [ -n "${name:-}" ] || continue
+              total=$((total + 1))
+              if [ "$status" = "completed" ]; then
+                done_n=$((done_n + 1))
+              fi
+              dynamic_conclusion="$conclusion"
+            done <<<"$report"
+            if [ "$total" -gt 0 ] && [ "$done_n" -eq "$total" ]; then
+              {
+                echo "### Vague 1 (dynamic) terminée — $dynamic_conclusion"
+                printf '%s\n' "$report" | while IFS=$'\t' read -r status conclusion name; do
+                  echo "- $name : $conclusion"
+                done
+              } | tee -a "$GITHUB_STEP_SUMMARY"
+              echo "Vague 2 : lancement des autres plans en parallèle."
+              exit 0
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Délai de 60 min dépassé en attente du plan dynamic"
+              exit 1
+            fi
+            echo "dynamic : $done_n/$total job(s) terminé(s) — nouvelle tentative dans 30 s"
+            sleep 30
+          done
 
       - name: Résolution de la dernière release publiée de la suite
         # Dernier tag `release-vX.Y.Z` listé par `git ls-remote` sur
@@ -417,18 +480,19 @@ jobs:
       - name: Lancement du plan ${{ matrix.plan }} (strict)
         # Un seul plan par job (matrice) : chaque plan exporte ses .zip dans
         # certification-results-<plan>. Toute la boucle séquentielle d'origine
-        # (PLAN_FILTER + for) disparaît — `fail-fast: false` + step non
-        # bloquant gardent le contrat witness (gaps acceptés).
+        # (PLAN_FILTER + for) disparaît — `fail-fast: false` évite qu'un plan
+        # rouge ne coupe les autres : le rapport consolidé montre tout le run.
         working-directory: conformance-suite
         env:
           # Captures réelles obligatoires produites par le job `prepare`
           # (issue #161) : une capture absente ou invalide lève une erreur
-          # fatale dans le driver (détectée par le garde-fou ci-dessous, le
-          # step restant witness pour les gaps de modules). Le plan
+          # fatale dans le driver, qui sort alors en échec de lui-même ; le
+          # garde-fou ci-dessous (exécuté seulement si ce Lancement est vert)
+          # couvre le signal resté bénin dans le log. Le plan
           # federation n'attend plus aucune capture : ses modules tournent
           # en SUCCESS (l'erreur d'un request object refusé repart par
           # redirection, issue #211) — le dossier est néanmoins fourni, une
-          # régression en REVIEW se verrait donc en échec witness.
+          # régression en REVIEW se verrait donc en échec strict.
           SCREENSHOTS_DIR: ${{ format('{0}/screenshots', github.workspace) }}
         run: |
           # Le driver écrit les exports (.zip) dans --export-dir : le créer
@@ -447,9 +511,10 @@ jobs:
             exit 1
           fi
       - name: "Garde-fou : captures REVIEW fournies (issue #161)"
-        # Le step Lancement reste witness (gaps de modules acceptés) : ce
-        # garde-fou y repère l'erreur fatale du driver sur une capture
-        # manquante/invalide et fait échouer le job malgré le contrat witness.
+        # Capture REVIEW manquante/invalide : le driver lève une erreur
+        # fatale, signalée dans son log. Ce garde-fou ne tourne que si le
+        # Lancement est vert (step sans `if:`) et transforme ce signal en
+        # échec explicite (issue #161).
         run: |
           if grep -qE 'capture REVIEW (absente|invalide)' "$GITHUB_WORKSPACE/driver-${{ matrix.plan }}.log"; then
             echo "::error::Capture REVIEW manquante ou invalide pendant le plan ${{ matrix.plan }} (captures obligatoires, issue #161)"
@@ -469,11 +534,11 @@ jobs:
 
       - name: "Garde-fou : export du plan présent"
         # Un plan crashé (config invalide, variante refusée…) ne produit
-        # AUCUN export alors que le reste du job reste vert (mode witness) :
-        # sans ce garde-fou, la config fapi1/fapi2 de l'issue #113 était partie
-        # en crash silencieux et le job affichait « success ». Seule
-        # l'absence TOTALE d'export échoue — les gaps (modules FAILED/REVIEW)
-        # produisent des exports et restent tolérés.
+        # AUCUN export alors que le reste du job reste vert : sans ce
+        # garde-fou, la config fapi1/fapi2 de l'issue #113 était partie en
+        # crash silencieux et le job affichait « success ». Seule l'absence
+        # TOTALE d'export échoue ici — les modules hors SUCCESS/REVIEW sont
+        # eux refusés par le mode strict (exit non nul du Lancement).
         run: |
           if [ -z "$(find results -mindepth 1 -print -quit 2>/dev/null)" ]; then
             echo "::error::Aucun export pour le plan ${{ matrix.plan }} : exécution crashée avant tout module terminé (voir l'étape « Lancement »)"
@@ -483,9 +548,11 @@ jobs:
   report:
     name: Rapport statique (artefact, sans Pages)
     needs: [prepare, plan]
-    # Publie même si un plan échoue — le contrat witness. Un
-    # `prepare` rouge (OP hors ligne, secret absent…) bloque la publication :
-    # rien n'a été joué, le rapport serait vide et masquerait la cause réelle.
+    # Publie même si un plan échoue : le rapport doit montrer l'état complet
+    # du run (la consolidation reste distincte du verdict, qui porte sur les
+    # jobs `plan`). Un `prepare` rouge (OP hors ligne, secret absent…)
+    # bloque la publication : rien n'a été joué, le rapport serait vide et
+    # masquerait la cause réelle.
     # GitHub Pages n'est PLUS publiée ici (cf. issue #150) : le workflow local
     # (certification-local.yml) en est seul propriétaire ; les résultats de ce
     # run hébergé seront soumis à l'OpenID Foundation (à venir).

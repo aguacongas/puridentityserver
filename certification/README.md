@@ -29,8 +29,8 @@ retenue :
 > dès qu'un module est FAILED ou INTERRUPTED (ou que le driver remonte un
 > warning inattendu) — le run `Certification OIDC (Local)` est alors rouge,
 > même si le rapport GitHub Pages reste publié. Les modules REVIEW (relecture
-> humaine, captures d'écran) restent tolérés. Le workflow hébergé reste en
-> mode witness et ne s'exécute plus qu'à la demande.
+> humaine, captures d'écran) restent tolérés. Le workflow hébergé est lui aussi
+> en mode strict et ne s'exécute plus qu'à la demande.
 
 ## Résultat attendu
 
@@ -90,8 +90,12 @@ retenue :
   photographie les `kid` du JWKS, déclenche le deploy hook puis patiente
   (15 min max) jusqu'à ce que les `kid` changent — preuve que le build est
   terminé **et** que le disque éphémère (donc l'état) a été recréé avant le
-  premier enregistrement de client ; joue ensuite les **onze plans en
-  parallèle** (11 jobs matrix, `fail-fast: false` — ~40 min au lieu de ~3 h
+  premier enregistrement de client ; joue ensuite les **onze plans** en
+  **deux vagues** : `dynamic` seul d'abord (vague 1, isolée car c'est le seul
+  plan qui déclenche la rotation des clés de signature de l'OP partagé — une
+  rotation pendant un module des autres plans ferait échouer leurs
+  validations), puis les **dix autres en parallèle** (vague 2 : 10 jobs
+  matrix, `fail-fast: false` — ~40 min au lieu de ~3 h
   séquentielles, issue #122 ; les plans FAPI1 Advanced, FAPI2 Security
   Profile, FAPI2 Message Signing (JARM, issue #164), Form Post
   (issue #165), Dynamic (issue #168) et Federation (issue #170) ont été
@@ -271,8 +275,9 @@ non consommée (condition résolue entre-temps, ex. capacité implémentée) fai
 échec `EXPECTED_*_NOT_HAPPEN` : le fichier doit être purgé dès qu'une
 capacité est livrée. `run-plan.sh` et le job plan de
 `certification-local.yml` appliquent les deux fichiers quand ils existent
-(chemin et comportement identiques) ; le workflow hébergé reste witness pur
-(`continue-on-error` sur le lancement).
+(chemin et comportement identiques) ; le workflow hébergé, lui, est passé en
+sortie stricte (issue #219) : `continue-on-error` retiré du lancement, tout
+module hors SUCCESS/REVIEW y fait échouer le job.
 
 En CI : le workflow `Certification OIDC (Local)`
 (`.github/workflows/certification-local.yml`) exécute exactement cette
@@ -425,9 +430,9 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
   modules `ensure-mtls-holder-of-key` / `bare` resteront FAILED sur ce seul
   check derrière CF ; le module `refresh-token` peut devenir 100 % vert.
   Tant que ces deux points ne sont pas levés (CF mTLS + flip des seeds), le
-  plan **fapi1 garde ses modules FAILED sur le run hébergé** (actuellement en
-  mode witness, exécuté à la demande ; la sortie stricte #130 concerne le
-  workflow local, où fapi1 passe).
+  plan **fapi1 garde ses modules FAILED sur le run hébergé** (à la demande,
+  en mode strict depuis l'issue #219 — ces modules y font donc échec ; la
+  sortie stricte #130 concerne le workflow local, où fapi1 passe).
   Démo locale hermétique : `samples/mtls-holder-of-key-client/` (en-têtes
   proxy personnalisés, PEM `\n`-échappé, 8 étapes).
 - **OP déployé sans la config de la branche** (`error=invalid_client` au PAR) :
@@ -451,7 +456,7 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés ; recopie les captures réelles dans `_site/screenshots/` (`--screenshots`) et les affiche dans la section du module correspondant |
 | `local/setup.sh` | bootstrap du harness **auto-hébergé** : alias réseau, clone + déploiement docker de la suite, cert auto-signé + nginx mTLS `op`, config OP locale (issuer `https://op:9443`), OP uvicorn, attente de disponibilité |
 | `local/nginx-mtls.conf` | nginx de terminaison mTLS devant l'OP local : certificat client optionnel (`optional_no_ca`), extraction `$ssl_client_escaped_cert` → `X-SSL-Client-Cert` (pas de newline brute), proxy vers l'OP uvicorn de l'hôte |
-| `../.github/workflows/certification.yml` | workflow hébergé à la demande (`workflow_dispatch` uniquement) : `prepare` (deploy + captures, une fois), `plan` (les 11 plans en parallèle — les 9 du programme officiel **plus** `ekyc` (identité assurance) et `federation` (OpenID Federation 1.1), hors programme officiel — un job matrix chacun, mode witness), `report` (fusion des exports en artefact - publication OIDC des résultats à venir) |
+| `../.github/workflows/certification.yml` | workflow hébergé à la demande (`workflow_dispatch` uniquement) : `prepare` (deploy + captures, une fois), `plan` (les 11 plans en **deux vagues** — `dynamic` seul puis les 10 autres en parallèle, cf. le déroulé du workflow ci-dessus ; les 9 du programme officiel **plus** `ekyc` (identité assurance) et `federation` (OpenID Federation 1.1), hors programme officiel — un job matrix chacun, **mode strict** : tout module hors SUCCESS/REVIEW met le job en échec), `report` (fusion des exports en artefact - publication OIDC des résultats à venir) |
 | `../.github/workflows/certification-local.yml` | workflow **auto-hébergé strict** : déclenché à chaque merge sur `main`, sur les PR (`certification/**`) et à la demande ; 11 plans en matrix (les 10 de l'hébergé, `ekyc` et `federation` étant hors programme officiel de certification), code non nul du driver = job en échec, job `capture` **bloquant** (Playwright, artefact `certification-local-screenshots`, #158/#161 : captures REVIEW obligatoires), **publication GitHub Pages** (sauf sur les PR) |
 
 ## Captures d'écran des modules de relecture (modes hébergé et local)
@@ -547,7 +552,7 @@ et conclut le module **sans** placeholder de capture. Seul le module au
 clé privée du RP de la suite. Un mini-stub hébergeant la trust chain pour
 rejouer les 13 scénarios (`federation_capture_stub.py`, ancre seconde de
 l'OP) a donc été retiré — inutile tant que les modules tournent en SUCCESS.
-Une régression en REVIEW se verrait en échec witness (le dossier des captures
+Une régression en REVIEW se verrait en échec strict (le dossier des captures
 reste fourni à chaque plan dans `certification.yml`).
 
 Le remplissage **immédiat** est interdit : le watcher de placeholders
@@ -621,5 +626,9 @@ Le patch `conformance-alias-release.patch` ajoute `Conformance.release_alias(ali
 Deux compléments côté workflow : `concurrency.cancel-in-progress: false` sérialise
 les runs (un run en cours n'est plus tué en laissant ses modules orphelins), et les
 modules qui restent bloqués sont arrêtés à la fin du plan plutôt que d'attendre le
-prochain run. Au sein d'un run, les plans parallèles (issue #122) ne se gênent pas :
-alias distincts par plan + `release_alias` limité au sien.
+prochain run. Au sein d'un run, les plans parallèles (issue #122) ne se gênent
+pas : alias distincts par plan + `release_alias` limité au sien. Seule la
+rotation des clés (module `oidcc-server-rotate-keys`, porté par `dynamic`)
+riposte entre plans : elle est isolée en vague 1 (le run hébergé attend la fin
+du job `dynamic` avant de lancer les dix autres), les dix autres plans ne
+tournant qu'après elle.

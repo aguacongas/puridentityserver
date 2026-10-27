@@ -37,7 +37,12 @@ uv run python -m pytest -p no:cacheprovider -q   # tests + couverture >= 80 % (9
   certification. Il joue les **11 plans** : les 9 du programme officiel **plus**
   `ekyc` (identité assurance) et `federation` (OpenID Federation 1.1), hors
   programme officiel — choix du
-  maintainer : l'assurance conformité vaut aussi pour la spec de niche).
+  maintainer : l'assurance conformité vaut aussi pour la spec de niche) —
+  en **mode strict** (seuls les modules SUCCESS/REVIEW sont acceptés ; tout
+  autre module met le job en échec) et en **deux vagues** : `dynamic` seul
+  d'abord (il est seul à déclencher la rotation des clés de signature de
+  l'OP partagé, qui casserait les validations des autres plans en cours),
+  puis les 10 autres plans en parallèle.
 - L'ancien rejeu pytest `tests/conformance/` a été supprimé ; le mini-RP client
   (harness de parcours) vit dans `samples/oidc_harness/` et sert les smoke
   tests `samples/fapi1-client/` et `samples/fapi2-client/`.
