@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -84,7 +85,7 @@ class JWKSetUseCase:
         self._config = config
         self._key_manager = key_manager
         self._encryption_keys = encryption_key_manager
-
+        self._lock = asyncio.Lock()
     async def initialise(self) -> None:
         """Génère une clé initiale par algorithme si le magasin est vide.
 
@@ -111,20 +112,21 @@ class JWKSetUseCase:
         signature récemment retirées pour une transition en douceur — un
         jeton signé juste avant la rotation reste donc vérifiable.
         """
-        await self._mark_expired_keys()
-        await self._rotate_signing_keys()
-        # Publication conservatrice : toutes les clés retirées encore présentes
-        # dans le magasin ( période de grâce, ~ jwks_rotation_days +
-        # jwks_grace_period_days ) sont publiées — une clé retirée ne doit
-        # pas disparaître avant la phase d'expiration, sinon les jetons qu'elle
-        # a signés (id_token_hint, max_age...) deviennent non vérifiables
-        # (regression oidcc-max-age-1 / id-token-hint, runs #40406993325).
-        # Aucun pruning ici : mark_expired_keys() purge déjà les clés au-delà
-        # de la grâce.
-        keys = await self._key_manager.get_active_keys()
-        keys.extend(await self._key_manager.get_retired_keys())
-        keys.extend(await self._encryption_keys_to_publish())
-        return keys
+        async with self._lock:
+            await self._mark_expired_keys()
+            await self._rotate_signing_keys()
+            # Publication conservatrice : toutes les clés retirées encore présentes
+            # dans le magasin ( période de grâce, ~ jwks_rotation_days +
+            # jwks_grace_period_days ) sont publiées — une clé retirée ne doit
+            # pas disparaître avant la phase d'expiration, sinon les jetons qu'elle
+            # a signés (id_token_hint, max_age...) deviennent non vérifiables
+            # (regression oidcc-max-age-1 / id-token-hint, runs #40406993325).
+            # Aucun pruning ici : mark_expired_keys() purge déjà les clés au-delà
+            # de la grâce.
+            keys = await self._key_manager.get_active_keys()
+            keys.extend(await self._key_manager.get_retired_keys())
+            keys.extend(await self._encryption_keys_to_publish())
+            return keys
 
     async def rotate_signing_keys(self) -> list[KeyPair]:
         """Fait pivoter à la demande les clés de signature gérées.
@@ -137,10 +139,11 @@ class JWKSetUseCase:
         du JWKS — le magasin de clés est partagé entre l'OP et le serveur
         d'administration.
         """
-        return [
-            await self._key_manager.rotate_key(self._config.key_size, algorithm)
-            for algorithm in _managed_algorithms(self._config.algorithms)
-        ]
+        async with self._lock:
+            return [
+                await self._key_manager.rotate_key(self._config.key_size, algorithm)
+                for algorithm in _managed_algorithms(self._config.algorithms)
+            ]
 
     async def _encryption_keys_to_publish(self) -> list[KeyPair]:
         """Clés ``enc`` publiées aux côtés des clés de signature (issue #204).
