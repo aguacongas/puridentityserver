@@ -331,6 +331,70 @@ class TestClientAssertionVerifier:
 
         assert claims is None
 
+    def test_hmac_accepts_nbf_eight_seconds_in_future(self) -> None:
+        """Fenêtre ``EnsureClientAssertionNbf`` : ``nbf`` à 8 s dans le futur accepté."""
+        cipher = _cipher()
+        client = _client(
+            client_id="jwt-app",
+            method=TokenEndpointAuthMethod.CLIENT_SECRET_JWT,
+            ciphertext=run(cipher.encrypt(_SECRET)),
+        )
+        now = datetime.now(timezone.utc)
+        token = pyjwt.encode(
+            {
+                "iss": "jwt-app",
+                "sub": "jwt-app",
+                "aud": _TOKEN_ENDPOINT,
+                "nbf": int(now.timestamp()) + 8,
+                "exp": int(now.timestamp()) + 600,
+            },
+            _SECRET,
+            algorithm="HS256",
+        )
+
+        claims = run(
+            PyJWTClientAssertionVerifier(cipher).verify(
+                token=token,
+                client=client,
+                audience=_TOKEN_ENDPOINT,
+                require_iss_eq_sub=True,
+            )
+        )
+
+        assert claims is not None
+
+    def test_hmac_rejects_nbf_over_sixty_seconds_in_future(self) -> None:
+        """Bloc ``over 60 seconds in the future`` : ``nbf`` à 62 s rejeté (leeway 30 s)."""
+        cipher = _cipher()
+        client = _client(
+            client_id="jwt-app",
+            method=TokenEndpointAuthMethod.CLIENT_SECRET_JWT,
+            ciphertext=run(cipher.encrypt(_SECRET)),
+        )
+        now = datetime.now(timezone.utc)
+        token = pyjwt.encode(
+            {
+                "iss": "jwt-app",
+                "sub": "jwt-app",
+                "aud": _TOKEN_ENDPOINT,
+                "nbf": int(now.timestamp()) + 62,
+                "exp": int(now.timestamp()) + 600,
+            },
+            _SECRET,
+            algorithm="HS256",
+        )
+
+        claims = run(
+            PyJWTClientAssertionVerifier(cipher).verify(
+                token=token,
+                client=client,
+                audience=_TOKEN_ENDPOINT,
+                require_iss_eq_sub=True,
+            )
+        )
+
+        assert claims is None
+
     def test_hmac_rejects_sub_mismatch_when_required(self) -> None:
         cipher = _cipher()
         client = _client(
