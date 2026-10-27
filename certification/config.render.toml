@@ -58,6 +58,10 @@ registration_initial_access_token_mode = "disabled"
 # (certification/local/setup.sh, etape 6), le chemin /test/a/<alias>/ restant
 # identique dans les deux harness.
 federation_enabled = true
+
+# OpenID 2.0 to OpenID Connect Migration 1.0 (issue #169/#201) :
+# validation du chemin flag ON en certification ; le default code reste OFF.
+openid20_migration_enabled = true
 federation_trust_anchors = ["https://www.certification.openid.net/test/a/puridentityserver-federation/trust-anchor"]
 
 # API d'administration (issue #194) : l'autorisation est branchee sur le

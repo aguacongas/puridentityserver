@@ -441,6 +441,29 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
 - **ERREUR sur Redis/nginx** : relancer ; le premier pull des images
   `registry.gitlab.com/openid/conformance-suite` est long (~10 min).
 
+## Rejeu avec OpenID 2.0 migration active (issue #201)
+
+Le flag `openid20_migration_enabled` est **désactivé par défaut** dans le code.
+Il n'existe que pour couvrir le chemin OpenID 2.0 → OpenID Connect lors d'une
+release ou d'un audit.
+
+Avant une release impliquant le chemin de migration, valider le bilan en mode
+flag ON :
+
+1. Basculer le flag dans `certification/config.render.toml`
+   (`openid20_migration_enabled = true`).
+2. Rejouer **les 11 plans en matrix** (workflow `Certification OIDC (Local)` sur
+   une branche de test, `plan=all`, sortie stricte) — ou en séquentiel via
+   `certification/local/run-plan.sh` — avec les captures REVIEW obligatoires.
+3. Comparer par plan les compteurs `PASSED`/`REVIEW` et vérifier **0 FAILED
+   inattendu** (tout écart déclaré et expliqué).
+4. Remettre `openid20_migration_enabled = false` dans `config.render.toml`, sauf
+   décision documentée de garder l'activation dans la configuration de
+   certification uniquement.
+
+Dernier rejeu complet validé (issue #201, run local 40554511718) : 11 plans
+stricts verts — 475 modules, 0 hors `PASSED`/`REVIEW`/`SKIPPED`.
+
 ## Fichiers
 
 | Fichier | Rôle |
