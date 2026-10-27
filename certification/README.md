@@ -96,7 +96,7 @@ retenue :
   rotation pendant un module des autres plans ferait échouer leurs
   validations), puis les **dix autres en parallèle** (vague 2 : 10 jobs
   matrix, `fail-fast: false` — ~40 min au lieu de ~3 h
-  séquentielles, issue #122 ; les plans FAPI1 Advanced, FAPI2 Security
+  séquentielles, issue #122, isolation de la rotation en issue #219 ; les plans FAPI1 Advanced, FAPI2 Security
   Profile, FAPI2 Message Signing (JARM, issue #164), Form Post
   (issue #165), Dynamic (issue #168) et Federation (issue #170) ont été
   ajoutés par les issues #113, #164, #165, #168 et #170), chaque
@@ -276,7 +276,7 @@ non consommée (condition résolue entre-temps, ex. capacité implémentée) fai
 capacité est livrée. `run-plan.sh` et le job plan de
 `certification-local.yml` appliquent les deux fichiers quand ils existent
 (chemin et comportement identiques) ; le workflow hébergé, lui, est passé en
-sortie stricte (issue #219) : `continue-on-error` retiré du lancement, tout
+sortie stricte (issue #218) : `continue-on-error` retiré du lancement, tout
 module hors SUCCESS/REVIEW y fait échouer le job.
 
 En CI : le workflow `Certification OIDC (Local)`
@@ -431,7 +431,7 @@ maintenant dans `samples/oidc_harness/` (habillé par les smoke tests
   check derrière CF ; le module `refresh-token` peut devenir 100 % vert.
   Tant que ces deux points ne sont pas levés (CF mTLS + flip des seeds), le
   plan **fapi1 garde ses modules FAILED sur le run hébergé** (à la demande,
-  en mode strict depuis l'issue #219 — ces modules y font donc échec ; la
+  en mode strict depuis l'issue #218 — ces modules y font donc échec ; la
   sortie stricte #130 concerne le workflow local, où fapi1 passe).
   Démo locale hermétique : `samples/mtls-holder-of-key-client/` (en-têtes
   proxy personnalisés, PEM `\n`-échappé, 8 étapes).
