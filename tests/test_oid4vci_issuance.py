@@ -42,7 +42,8 @@ def test_issuer_issues_sdjwt_credential_for_valid_access_token() -> None:
         assert result is not None
         assert result["credentials"]
         credential = result["credentials"][0]["credential"]
-        assert isinstance(credential, str) and credential.count(".") == 2
+        assert isinstance(credential, str)
+        assert credential.count(".") == 2
         assert "c_nonce" in result
 
     asyncio.run(_task())
