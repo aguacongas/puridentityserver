@@ -427,6 +427,12 @@ class Settings(BaseSettings):
     # et peut resoudre la chaine de confiance d'un RP federe. Desactive par
     # defaut : sans lui, aucune route de federation n'est montee.
     federation_enabled: bool = False
+    # Feature flags OpenID for Verifiable Credentials (issue #172) :
+    # desactives par defaut. `oid4vci_enabled` monte l'endpoint
+    # `/.well-known/openid-credential-issuer` et `/credential` ;
+    # `oid4vp_enabled` monte les endpoints de presentation (request/response).
+    oid4vci_enabled: bool = False
+    oid4vp_enabled: bool = False
     # `federation_entity_identifier` est l'Entity Identifier de l'OP (une URL
     # https sans query ni fragment, spec 1.2) ; vide = l'issuer de l'OP.
     federation_entity_identifier: str = ""

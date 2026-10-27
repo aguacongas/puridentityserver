@@ -126,6 +126,7 @@ from puridentityserver.interfaces.api.federation import federation_router
 from puridentityserver.interfaces.api.introspect import introspect_router
 from puridentityserver.interfaces.api.jwks import jwk_set_router
 from puridentityserver.interfaces.api.logout import logout_router
+from puridentityserver.interfaces.api.oid4vci import oid4vci_router
 from puridentityserver.interfaces.api.openid20_provider import openid20_provider_router
 from puridentityserver.interfaces.api.par import par_router
 from puridentityserver.interfaces.api.protected_resource import protected_resource_router
@@ -681,6 +682,11 @@ class ProtocolDependencies:
             app.include_router(
                 openid20_provider_router(self.openid20_provider, issuer=self.settings.issuer)
             )
+        if self.settings.oid4vci_enabled:
+            # OpenID4VCI : surface minimale (slice #172/#222) ; montée
+            # uniquement si le flag est actif — sans elle, aucune route n'existe.
+            app.include_router(oid4vci_router(issuer=self.settings.issuer))
+
         _mount_authorization_routers(
             app,
             authorize_usecase=self.authorize_usecase,
