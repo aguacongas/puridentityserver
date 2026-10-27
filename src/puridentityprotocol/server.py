@@ -369,7 +369,8 @@ class ProtocolDependencies:
             self.readers.api_resource,
             extra_scopes=(
                 frozenset({Scope.OPENID20}) if settings.openid20_migration_enabled else frozenset()
-            ),
+            )
+            | (frozenset({Scope.OID4VCI}) if settings.oid4vci_enabled else frozenset()),
         )
         self.openid20_migration = OpenID20MigrationUseCase(
             stores.openid20_identifier,
