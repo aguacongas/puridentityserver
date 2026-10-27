@@ -550,8 +550,8 @@ class TestSigningKeyRotation:
 
         published = run(usecase.get_published_keys())
 
-        assert len(published) == 2
-        assert len(run(manager._repository.find_all())) == 2
+        assert len(published) == 4
+        assert len(run(manager._repository.find_all())) == 4
 
     def test_token_signed_before_the_rotation_is_still_valid(self) -> None:
         """La clé retirée continue de valider les jetons qu'elle a signés."""
@@ -621,7 +621,7 @@ class TestSigningKeyRotation:
         first_kids = {key["kid"] for key in first if key.get("use") == "sig"}
         second_kids = {key["kid"] for key in second if key.get("use") == "sig"}
         assert len(first_kids) == 2
-        assert len(second_kids) == 2
+        assert len(second_kids) == 3
         assert first_kids != second_kids
         assert first_kids & second_kids
 
