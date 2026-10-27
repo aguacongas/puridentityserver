@@ -37,8 +37,8 @@ def test_credential_requires_bearer() -> None:
     assert response.status_code == 401
 
 
-def test_credential_not_implemented_yet() -> None:
+def test_credential_rejects_invalid_bearer() -> None:
     settings = Settings(oid4vci_enabled=True)
     client = TestClient(create_app(settings=settings))
     response = client.post("/credential", headers={"Authorization": "Bearer token"})
-    assert response.status_code == 501
+    assert response.status_code == 401
