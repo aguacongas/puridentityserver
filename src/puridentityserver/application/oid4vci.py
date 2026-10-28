@@ -183,22 +183,24 @@ class OID4VCIIssuerUseCase:
         """Vérifie la première preuve JWT et rend la JWK à lier au credential."""
         candidates = [proof for proof in proofs if proof]
         if not candidates:
-            return None, CredentialError(
-                "invalid_proof", "preuve cryptographique (proofs.jwt) requise"
+            return (
+                None,
+                CredentialError("invalid_proof", "preuve cryptographique (proofs.jwt) requise"),
             )
         claims, jwk = self._decode_proof(candidates[0])
         if claims is None or jwk is None:
-            return None, CredentialError("invalid_proof", "preuve JWT invalide")
+            return (None, CredentialError("invalid_proof", "preuve JWT invalide"))
         if not self._audience_matches(claims.get("aud")):
-            return None, CredentialError(
-                "invalid_proof", "audience de la preuve differente de l'emetteur"
+            return (
+                None,
+                CredentialError("invalid_proof", "audience de la preuve differente de l'emetteur"),
             )
         nonce = claims.get("nonce")
         if not isinstance(nonce, str) or not nonce:
-            return None, CredentialError("invalid_proof", "nonce absent de la preuve")
+            return (None, CredentialError("invalid_proof", "nonce absent de la preuve"))
         if not await self._c_nonce_valid(nonce):
-            return None, CredentialError("invalid_nonce", "c_nonce inconnu, invalide ou expire")
-        return jwk, None
+            return (None, CredentialError("invalid_nonce", "c_nonce inconnu, invalide ou expire"))
+        return (jwk, None)
 
     def _audience_matches(self, audience: object) -> bool:
         """Contrôle que la preuve vise bien cet émetteur."""
