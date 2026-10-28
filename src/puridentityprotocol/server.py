@@ -50,6 +50,7 @@ from puridentityserver.application.jarm import JarmSigner
 from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
 from puridentityserver.application.logout import LogoutConfig, LogoutUseCase
 from puridentityserver.application.oid4vci import OID4VCIIssuerUseCase
+from puridentityserver.application.oid4vp import OID4VPVerifierUseCase
 from puridentityserver.application.openid20_migration import OpenID20MigrationUseCase
 from puridentityserver.application.openid20_provider import OpenID20ProviderUseCase
 from puridentityserver.application.par import PushedAuthorizationConfig, PushedAuthorizationUseCase
@@ -128,6 +129,7 @@ from puridentityserver.interfaces.api.introspect import introspect_router
 from puridentityserver.interfaces.api.jwks import jwk_set_router
 from puridentityserver.interfaces.api.logout import logout_router
 from puridentityserver.interfaces.api.oid4vci import oid4vci_router
+from puridentityserver.interfaces.api.oid4vp import oid4vp_router
 from puridentityserver.interfaces.api.openid20_provider import openid20_provider_router
 from puridentityserver.interfaces.api.par import par_router
 from puridentityserver.interfaces.api.protected_resource import protected_resource_router
@@ -392,6 +394,15 @@ class ProtocolDependencies:
                 token_manager=self.token_manager,
             )
             if settings.oid4vci_enabled
+            else None
+        )
+        self.oid4vp_usecase = (
+            OID4VPVerifierUseCase(
+                issuer=settings.issuer,
+                key_manager=self.key_manager,
+                algorithm=_primary_algorithm(settings),
+            )
+            if settings.oid4vp_enabled
             else None
         )
         self.session_management = SessionManagementUseCase()
@@ -700,6 +711,14 @@ class ProtocolDependencies:
                 oid4vci_router(
                     issuer=self.settings.issuer,
                     oid4vci_usecase=self.oid4vci_usecase,
+                )
+            )
+        if self.settings.oid4vp_enabled:
+            # OpenID4VP (issue #172) - demande de présentation + réception.
+            app.include_router(
+                oid4vp_router(
+                    issuer=self.settings.issuer,
+                    oid4vp_usecase=self.oid4vp_usecase,
                 )
             )
 
