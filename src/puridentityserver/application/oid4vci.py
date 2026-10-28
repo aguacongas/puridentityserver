@@ -213,7 +213,7 @@ class OID4VCIIssuerUseCase:
     def _decode_proof(self, proof_jwt: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         """Vérifie la signature d'une preuve JWT et rend (claims, JWK)."""
         try:
-            header = pyjwt.get_unverified_header(proof_jwt)  # NOSONAR
+            header = pyjwt.get_unverified_header(proof_jwt)  # NOSONAR(S5659)
         except pyjwt.PyJWTError:
             return None, None
         if header.get("typ") not in PROOF_TYPES:
@@ -263,7 +263,7 @@ class OID4VCIIssuerUseCase:
     async def _c_nonce_valid(self, nonce: str) -> bool:
         """Vérifie qu'un ``c_nonce`` a été signé par l'OP et n'a pas expiré."""
         try:
-            header = pyjwt.get_unverified_header(nonce)
+            header = pyjwt.get_unverified_header(nonce)  # NOSONAR(S5659)
         except pyjwt.PyJWTError:
             return False
         if header.get("typ") != C_NONCE_TYP:
