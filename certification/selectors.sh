@@ -69,11 +69,14 @@ selector_for() {
     # plan ; client_registration=automatic impose (seule combinaison valide
     # avec la variante FederationEntityMetadata du plan).
     federation) echo 'openid-federation-entity-joined-to-test-federation-op-test-plan[server_metadata=discovery][client_registration=automatic]' ;;
-    # OID4VCI (issue #172 / #224) : plan HAIP issuer - hors programme officiel.
-    # Variante wallet-initiated (authorization_code) avec SD-JWT VC ; le plan
-    # issuer_initiated (vci_authorization_code_flow_variant=issuer_initiated)
-    # sera ajoute quand l'issuance sera prete.
-    oid4vci) echo 'oid4vci-1_0-issuer-haip-test-plan[credential_format=sd_jwt_vc][grant_management=disabled][vci_authorization_code_flow_variant=wallet_initiated]' ;;
+    # OID4VCI (issue #172 / #224) : plan alpha issuer VCI (hors programme de
+    # certification, la reference finale etant le plan HAIP). Profil `vci`
+    # (pas `vci_haip`) + `private_key_jwt` : le profil HAIP impose
+    # l'attestation wallet (client attestation + key attestation), non
+    # implementee — slice dediee. Toutes les variantes sans valeur par defaut
+    # doivent etre explicites, sinon la creation du plan echoue.
+    # Variante wallet-initiated (authorization_code) avec SD-JWT VC.
+    oid4vci) echo 'oid4vci-1_0-issuer-test-plan[fapi_profile=vci][client_auth_type=private_key_jwt][sender_constrain=dpop][fapi_request_method=unsigned][openid=plain_oauth][fapi_response_mode=plain_response][credential_format=sd_jwt_vc][vci_grant_type=authorization_code][vci_authorization_code_flow_variant=wallet_initiated]' ;;
     # OID4VP (issue #172 / #224) : plan HAIP verifier.
     oid4vp) echo 'oid4vp-1final-verifier-haip-test-plan[credential_format=sd_jwt_vc][response_mode=direct_post.jwt]' ;;
     *) return 1 ;;

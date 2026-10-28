@@ -301,3 +301,33 @@ require_dpop = true
 id_token_signed_response_alg = "PS256"
 authorization_signed_response_alg = "PS256"
 jwks = [{ kty = "RSA", e = "AQAB", kid = "puridentityserver-fapi2-client2-20261011", alg = "PS256", n = "0ZageizBn1mdYVtlnvfOx7n-J3_MXhgXgttj7WS3OW1nNc0t9DzeRCzNo2ri3sxqZJyLuNWiCQSjZTZnpixqetRwZhMRfEF0LTp3415IJIePJvH32VoKLchVbF-ZZGt7rWFvZRhquDTS7BgjEZGOhT8C8BaSmgcNNI-GfqNWWQZNmsYtGy3X58J2X7XPyEHHyPDFC8SlRzIAp1fJLFYMNW3kH5EQ5PhCF-aa4PNYeaqQswCRXmZLTRkBHvFM7t3IvIxhOLvbDYRXs5bGtsFBy0j5dkYzUpm72uOPwCjhIhlx2MI0XtnXhzE0C_bxkAZ9Mj_oX6ogleKHi6cxVL92dw" }]
+
+# Client statique OID4VCI (issue #172 / #224) : le plan VCI de la suite exige
+# une configuration client statique (condition GetStaticClientConfiguration),
+# donc un enregistrement prealable cote OP (private_key_jwt, DPoP). Les cles
+# privees correspondantes vivent dans certification/plans/oid4vci.json.
+# Cles EC P-256 / ES256 : la suite genere la preuve JWT du wallet avec le
+# meme JWKS et impose ES256 (VCIGenerateJwtProof).
+[[settings.clients_seed]]
+client_id = "puridentityserver-oid4vci-client"
+redirect_uris = [
+    "https://www.certification.openid.net/test/a/puridentityserver-oid4vci/callback",
+    "https://www.certification.openid.net/test/a/puridentityserver-oid4vci/callback?dummy1=lorem&dummy2=ipsum",
+]
+scopes = "openid openid4vci"
+client_type = "confidential"
+token_endpoint_auth_method = "private_key_jwt"
+require_dpop = true
+jwks = [{ kty = "EC", crv = "P-256", x = "odKpJUcrMIJz5oZP9zW2WS5uu6aFTXIvjvA1EJ162n0", y = "kYgAhsqEU1rygzwge47pHWdwrKFuAYl2ApbqTphoZCs", kid = "puridentityserver-oid4vci-client-20261028", alg = "ES256", use = "sig" }]
+
+[[settings.clients_seed]]
+client_id = "puridentityserver-oid4vci-client2"
+redirect_uris = [
+    "https://www.certification.openid.net/test/a/puridentityserver-oid4vci/callback",
+    "https://www.certification.openid.net/test/a/puridentityserver-oid4vci/callback?dummy1=lorem&dummy2=ipsum",
+]
+scopes = "openid openid4vci"
+client_type = "confidential"
+token_endpoint_auth_method = "private_key_jwt"
+require_dpop = true
+jwks = [{ kty = "EC", crv = "P-256", x = "s_NWNTpQOVcZXjZcZhq7pvX65ELfUuThVzidyRv1fYY", y = "BJf-9WwA5TxH4Jr_O7didISG75fC3r7XRbw-YVUyq1w", kid = "puridentityserver-oid4vci-client2-20261028", alg = "ES256", use = "sig" }]
