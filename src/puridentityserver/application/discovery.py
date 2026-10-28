@@ -96,6 +96,11 @@ class DiscoveryConfig:
     # par la fédération. Publiés seulement quand la Fédération est activée.
     client_registration_types_supported: tuple[str, ...] = ()
     federation_registration_endpoint: str = ""
+    # Scopes acceptés par l'OP qui ne proviennent pas d'une IdentityResource
+    # ni d'une ApiResource (ex. ``openid4vci``) : un scope honoré sur
+    # /authorize doit figurer dans ``scopes_supported`` (RFC 8414 §2), sinon
+    # la suite de certification le tient pour inconnu.
+    extra_scopes: tuple[str, ...] = ()
 
 
 #: Types de réponse publiés au discovery ET dans l'entity statement
@@ -318,6 +323,7 @@ class DiscoveryUseCase:
                     seen.add(claim)
                     claims.append(claim)
         scopes.extend(sorted(await self._api_scope_names()))
+        scopes.extend(scope for scope in self._config.extra_scopes if scope not in scopes)
         return scopes, claims
 
     async def _api_scope_names(self) -> set[str]:

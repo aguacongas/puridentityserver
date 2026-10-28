@@ -1,0 +1,23 @@
+[
+  {
+    "test-name": "oid4vci-1_0-issuer-metadata-test-signed",
+    "variant": "*",
+    "configuration-filename": "*",
+    "condition": "*",
+    "current-block": "*"
+  },
+  {
+    "test-name": "oid4vci-1_0-issuer-batch-issuance",
+    "variant": "*",
+    "configuration-filename": "*",
+    "condition": "*",
+    "current-block": "*"
+  },
+  {
+    "test-name": "oid4vci-1_0-issuer-fail-invalid-key-attestation-signature",
+    "variant": "*",
+    "configuration-filename": "*",
+    "condition": "*",
+    "current-block": "*"
+  }
+]

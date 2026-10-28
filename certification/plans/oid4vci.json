@@ -1,0 +1,130 @@
+{
+  "alias": "puridentityserver-oid4vci",
+  "description": "PurIdentityServer - OID4VCI OP certification (CI)",
+  "browser_verbose": true,
+  "server": {
+    "discoveryUrl": "{OPURL}/.well-known/openid-configuration"
+  },
+  "browser": [
+    {
+      "match": "{OPURL}/authorize*",
+      "tasks": [
+        {
+          "task": "Login",
+          "optional": true,
+          "match": "{OPURL}/login*",
+          "commands": [
+            [
+              "text",
+              "name",
+              "username",
+              "alice@example.com"
+            ],
+            [
+              "text",
+              "name",
+              "password",
+              "password"
+            ],
+            [
+              "click",
+              "css",
+              "button[type=submit]"
+            ]
+          ]
+        },
+        {
+          "task": "Consent",
+          "optional": true,
+          "match": "{OPURL}/consent*",
+          "commands": [
+            [
+              "click",
+              "css",
+              "button[name=action][value=authorize]"
+            ]
+          ]
+        },
+        {
+          "task": "Attente form_post",
+          "optional": true,
+          "match": "{SUITEURL}test/a/*/callback",
+          "commands": [
+            [
+              "wait",
+              "id",
+              "submission_complete",
+              30
+            ]
+          ]
+        },
+        {
+          "task": "Attente de l'envoi implicite (query)",
+          "optional": true,
+          "match": "{SUITEURL}test/a/*/callback?*",
+          "commands": [
+            [
+              "wait",
+              "id",
+              "submission_complete",
+              30
+            ]
+          ]
+        },
+        {
+          "task": "Attente de l'envoi implicite (fragment)",
+          "optional": true,
+          "match": "{SUITEURL}test/a/*/callback#*",
+          "commands": [
+            [
+              "wait",
+              "id",
+              "submission_complete",
+              30
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "vci": {
+    "credential_issuer_url": "{OPURL}",
+    "credential_configuration_id": "puridentityserver-sdjwt-vc"
+  },
+  "client": {
+    "client_id": "puridentityserver-oid4vci-client",
+    "scope": "openid openid4vci",
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "odKpJUcrMIJz5oZP9zW2WS5uu6aFTXIvjvA1EJ162n0",
+          "y": "kYgAhsqEU1rygzwge47pHWdwrKFuAYl2ApbqTphoZCs",
+          "d": "AaBLqunIa-fcy-aQ2hCCiv21okJ6zGUSavs9l8uj6J0",
+          "kid": "puridentityserver-oid4vci-client-20261028",
+          "alg": "ES256",
+          "use": "sig"
+        }
+      ]
+    }
+  },
+  "client2": {
+    "client_id": "puridentityserver-oid4vci-client2",
+    "scope": "openid openid4vci",
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "s_NWNTpQOVcZXjZcZhq7pvX65ELfUuThVzidyRv1fYY",
+          "y": "BJf-9WwA5TxH4Jr_O7didISG75fC3r7XRbw-YVUyq1w",
+          "d": "5GB65Gz4eTsfxAp4i4Oy3ylqUNAlkojbFL-239q71bk",
+          "kid": "puridentityserver-oid4vci-client2-20261028",
+          "alg": "ES256",
+          "use": "sig"
+        }
+      ]
+    }
+  }
+}

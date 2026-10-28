@@ -355,7 +355,13 @@ async def validate_authorization_request(
     if param_error is not None:
         return param_error
 
-    scope_error = await _scope_profile_error(scopes, scope_registry, request, response_mode)
+    scope_error = await _scope_profile_error(
+        scopes,
+        scope_registry,
+        request,
+        response_mode,
+        wants_id_token=wants_id_token,
+    )
     if scope_error is not None:
         return scope_error
 
@@ -383,13 +389,19 @@ async def _scope_profile_error(
     scope_registry: ScopeRegistry | None,
     request: AuthorizeRequest,
     response_mode: ResponseMode,
+    *,
+    wants_id_token: bool,
 ) -> AuthorizeError | None:
     """Contrôle ``openid`` requis et scopes inconnus (OIDC Core 1.0 §3.1.2.1).
 
-    ``None`` si chaque scope demandé est enregistré ; sinon ``invalid_scope``
-    portant le scope fautif ou l'absence d'``openid``.
+    ``openid`` n'est exigé que si la réponse porte un id_token : sans ce
+    scope, la requête est une demande OAuth 2.0 (comportement non spécifié
+    par OIDC Core, §3.1.2.1) et reste honorée en ``response_type=code`` — cas
+    des flux OpenID4VCI, dont la demande d'autorisation ne porte que le
+    scope du credential. ``None`` si chaque scope demandé est enregistré ;
+    sinon ``invalid_scope`` portant le scope fautif ou l'absence d'``openid``.
     """
-    if Scope.OPENID not in scopes:
+    if wants_id_token and Scope.OPENID not in scopes:
         return _authorize_error(
             "invalid_scope",
             request,

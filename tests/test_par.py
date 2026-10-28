@@ -181,12 +181,10 @@ class TestPushedAuthorizationUseCase:
         assert stored.params["state"] == "st-1"
         assert "client_secret" not in stored.params
 
-    def test_push_rejects_missing_openid_scope(self) -> None:
+    def test_push_allows_oauth_request_without_openid_scope(self) -> None:
         uc, _, _ = _make_usecase()
         result = run(uc.push({**_PARAMS, "scope": "profile"}))
-        assert isinstance(result, PushError)
-        assert result.error == "invalid_scope"
-        assert result.status_code == 400
+        assert isinstance(result, PushResult)
 
     def test_push_rejects_unsupported_response_type(self) -> None:
         uc, _, _ = _make_usecase()
@@ -284,7 +282,9 @@ class TestPushedAuthorizationUseCase:
 
     def test_status_code_of_push_errors(self) -> None:
         uc, _, _ = _make_usecase()
-        assert isinstance(run(uc.push({**_PARAMS, "scope": "profile"})), PushError)
+        assert isinstance(
+            run(uc.push({**_PARAMS, "redirect_uri": "https://evil.example/phish"})), PushError
+        )
         assert isinstance(run(uc.push({**_PARAMS, "client_id": "unknown"})), PushError)
 
 
@@ -397,7 +397,7 @@ class TestParIntegrationHTTP:
                     "response_type": "code",
                     "client_id": _CLIENT_ID,
                     "redirect_uri": "https://app.example/callback",
-                    "scope": "profile",
+                    "scope": "unknown_scope",
                 },
             )
         assert resp.status_code == 400

@@ -1,23 +1,79 @@
-"""Cas d'usage minimal de l'issuance OpenID4VCI (slice 1, issue #172/#222)."""
+"""Cas d'usage de l'issuance OpenID4VCI (slice 1, issue #172/#222)."""
 
 from __future__ import annotations
 
+import json
 import uuid
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 import jwt as pyjwt
-from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from cryptography.hazmat.primitives.serialization import (
+    load_pem_private_key,
+    load_pem_public_key,
+)
 
+from puridentityserver.domain.dpop import access_token_hash
 from puridentityserver.domain.jwks import JWTAlgorithm, KeyPair
 from puridentityserver.infrastructure.jwks import DefaultKeyManager, first_active_key
+from puridentityserver.interfaces.domain.dpop import DpopProofValidator, DpopValidationError
 from puridentityserver.interfaces.domain.tokens import TokenManager
+
+#: Identifiant de la configuration de credential publiée par l'OP.
+CREDENTIAL_CONFIGURATION_ID = "puridentityserver-sdjwt-vc"
+
+#: Chemin du type de credential publié par l'OP (SD-JWT VC). Le ``vct`` du
+#: credential et l'URL de sa Type Metadata (SD-JWT VC §6.3.1) en dérivent.
+CREDENTIAL_VCT_PATH = "/credentials/example"
+
+#: Type JOSE de l'en-tête d'un SD-JWT VC (SD-JWT VC §3.2.1).
+SD_JWT_VC_TYP = "dc+sd-jwt"
+
+#: Formats SD-JWT VC acceptés dans une requête de credential.
+CREDENTIAL_FORMATS = frozenset({SD_JWT_VC_TYP, "vc+sd-jwt"})
+
+#: En-têtes ``typ`` admis pour une preuve JWT (OID4VCI 1.0 §7.1).
+PROOF_TYPES = frozenset({"openid4vci-proof+jwt", "jwt"})
+
+#: Algorithmes de preuve annoncés dans la metadata de l'émetteur.
+PROOF_ALGORITHMS = frozenset({"ES256", "RS256"})
+
+#: Type JOSE d'un ``c_nonce`` signé par l'OP.
+C_NONCE_TYP = "c_nonce+jwt"
+
+#: Durée de vie d'un ``c_nonce``, en secondes (OID4VCI 1.0 §7).
+C_NONCE_LIFETIME = 300
+
+
+def credential_vct(issuer: str) -> str:
+    """URL absolue du ``vct`` publié pour le credential de démonstration."""
+    return f"{issuer.rstrip('/')}{CREDENTIAL_VCT_PATH}"
+
+
+@dataclass(frozen=True)
+class CredentialError:
+    """Erreur OID4VCI typée, rendue telle quelle par ``/credential``.
+
+    Les codes suivent OID4VCI 1.0 §8.3.1 : ``invalid_proof`` et
+    ``invalid_nonce`` pour les preuves, ``unknown_credential_configuration`` et
+    ``unknown_credential_identifier`` pour une cible inconnue. Seul un défaut
+    de jeton reste en 401, tout le reste est un 400.
+    """
+
+    error: str
+    error_description: str
+    status_code: int = 400
 
 
 class OID4VCIIssuerUseCase:
     """Émet un credential verifiable SD-JWT pour l'OP.
 
-    La preuve de possession (proof_type JWT) est vérifiée si fournie.
+    La preuve de possession (``proofs.jwt``) est obligatoire : la configuration
+    publiée annonce ``cryptographic_binding_methods_supported``, donc une
+    requête sans preuve est refusée (OID4VCI 1.0 §8.2). La liaison DPoP de
+    l'access token est vérifiée de la même façon (RFC 9449 §7.1).
     """
 
     def __init__(
@@ -27,82 +83,264 @@ class OID4VCIIssuerUseCase:
         key_manager: DefaultKeyManager,
         algorithm: JWTAlgorithm,
         token_manager: TokenManager,
+        dpop: DpopProofValidator | None = None,
     ) -> None:
         """Initialise l'émetteur et mémorise les dépendances cryptographiques."""
         self._issuer = issuer.rstrip("/")
         self._key_manager = key_manager
         self._algorithm = algorithm
         self._token_manager = token_manager
+        self._dpop = dpop
+
+    async def issue_nonce(self) -> dict[str, Any]:
+        """Émet un ``c_nonce`` signé, sans état (OID4VCI 1.0 §7).
+
+        Le nonce est un JWT court signé par la clé de signature de l'OP : sa
+        validation ne dépend d'aucun stockage, donc reste correcte derrière
+        plusieurs workers.
+        """
+        return {"c_nonce": await self._sign_nonce()}
 
     async def issue_credential(
         self,
         bearer_token: str,
-        requested_format: str = "vc+sd-jwt",
-        proof_jwt: str | None = None,
-    ) -> dict[str, Any] | None:
-        """Retourne le JSON de réponse OID4VCI, ou ``None`` si non autorisé."""
+        *,
+        credential_configuration_id: str | None = None,
+        credential_identifier: str | None = None,
+        requested_format: str | None = None,
+        proofs: Iterable[str] = (),
+        auth_scheme: str = "bearer",
+        dpop_proof: str = "",
+        htu: str = "",
+        method: str = "POST",
+    ) -> dict[str, Any] | CredentialError:
+        """Retourne le JSON de réponse OID4VCI, ou l'erreur typée à rendre."""
         claims = await self._token_manager.validate_access_token(
             token=bearer_token, issuer=self._issuer
         )
         if claims is None:
-            return None
+            return CredentialError(
+                "invalid_token", "access token invalide, expire ou non autorise", 401
+            )
+
+        if not await self._dpop_authorized(
+            claims,
+            token=bearer_token,
+            auth_scheme=auth_scheme,
+            dpop_proof=dpop_proof,
+            htu=htu,
+            method=method,
+        ):
+            return CredentialError(
+                "invalid_token", "preuve DPoP absente ou non conforme au jeton", 401
+            )
 
         sub = str(claims.get("sub") or claims.get("client_id") or "")
         if not sub:
-            return None
+            return CredentialError("invalid_token", "access token sans sujet", 401)
 
-        binding_jwk: dict[str, Any] | None = None
-        if proof_jwt:
-            binding_jwk = self._verify_proof(proof_jwt)
-            if binding_jwk is None:
-                return None
+        configuration_error = self._configuration_error(
+            credential_configuration_id, credential_identifier, requested_format
+        )
+        if configuration_error is not None:
+            return configuration_error
 
+        binding_jwk, proof_error = await self._binding_key(proofs)
+        if proof_error is not None:
+            return proof_error
+
+        return await self._issue(sub, binding_jwk)
+
+    @staticmethod
+    def _configuration_error(
+        credential_configuration_id: str | None,
+        credential_identifier: str | None,
+        requested_format: str | None,
+    ) -> CredentialError | None:
+        """Vérifie la cible demandée (configuration, identifiant, format)."""
+        if credential_identifier is not None:
+            # Le token endpoint ne distribue pas de ``credential_identifiers`` :
+            # toute valeur reçue désigne donc une cible non émise par l'OP.
+            return CredentialError("unknown_credential_identifier", "credential_identifier inconnu")
+        if credential_configuration_id is None:
+            return CredentialError(
+                "invalid_credential_request",
+                "credential_configuration_id ou credential_identifier requis",
+            )
+        if credential_configuration_id != CREDENTIAL_CONFIGURATION_ID:
+            return CredentialError(
+                "unknown_credential_configuration", "credential_configuration_id inconnu"
+            )
+        if requested_format is not None and requested_format not in CREDENTIAL_FORMATS:
+            return CredentialError(
+                "invalid_credential_request", "format de credential non supporte"
+            )
+        return None
+
+    async def _binding_key(
+        self, proofs: Iterable[str]
+    ) -> tuple[dict[str, Any] | None, CredentialError | None]:
+        """Vérifie la première preuve JWT et rend la JWK à lier au credential."""
+        candidates = [proof for proof in proofs if proof]
+        if not candidates:
+            return (
+                None,
+                CredentialError("invalid_proof", "preuve cryptographique (proofs.jwt) requise"),
+            )
+        claims, jwk = self._decode_proof(candidates[0])
+        if claims is None or jwk is None:
+            return (None, CredentialError("invalid_proof", "preuve JWT invalide"))
+        if not self._audience_matches(claims.get("aud")):
+            return (
+                None,
+                CredentialError("invalid_proof", "audience de la preuve differente de l'emetteur"),
+            )
+        nonce = claims.get("nonce")
+        if not isinstance(nonce, str) or not nonce:
+            return (None, CredentialError("invalid_proof", "nonce absent de la preuve"))
+        if not await self._c_nonce_valid(nonce):
+            return (None, CredentialError("invalid_nonce", "c_nonce inconnu, invalide ou expire"))
+        return (jwk, None)
+
+    def _audience_matches(self, audience: object) -> bool:
+        """Contrôle que la preuve vise bien cet émetteur."""
+        if isinstance(audience, str):
+            return audience == self._issuer
+        if isinstance(audience, list):
+            return self._issuer in [item for item in audience if isinstance(item, str)]
+        return False
+
+    def _decode_proof(self, proof_jwt: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """Vérifie la signature d'une preuve JWT et rend (claims, JWK)."""
+        try:
+            header = pyjwt.get_unverified_header(proof_jwt)  # NOSONAR(S5659)
+        except pyjwt.PyJWTError:
+            return None, None
+        if header.get("typ") not in PROOF_TYPES:
+            return None, None
+        algorithm_name = header.get("alg")
+        jwk = header.get("jwk")
+        if (
+            not isinstance(algorithm_name, str)
+            or algorithm_name not in PROOF_ALGORITHMS
+            or not isinstance(jwk, dict)
+        ):
+            return None, None
+        algorithm = pyjwt.algorithms.get_default_algorithms().get(algorithm_name)
+        if algorithm is None:
+            return None, None
+        try:
+            public_key = algorithm.from_jwk(json.dumps(jwk))
+            claims = pyjwt.decode(
+                proof_jwt,
+                public_key,
+                algorithms=[algorithm_name],
+                options={"verify_aud": False},
+            )
+        except (pyjwt.PyJWTError, ValueError, TypeError):
+            return None, None
+        if not isinstance(claims, dict):
+            return None, None
+        return claims, jwk
+
+    async def _sign_nonce(self) -> str:
+        """Signe un ``c_nonce`` court avec la clé de signature de l'OP."""
         key: KeyPair = await first_active_key(self._key_manager, self._algorithm)
         private_key = load_pem_private_key(key.private_key_pem.encode("ascii"), password=None)
         now = int(datetime.now(timezone.utc).timestamp())
         payload: dict[str, object] = {
             "iss": self._issuer,
-            "sub": sub,
             "iat": now,
-            "exp": now + 1800,
-            "vct": "https://puridentityserver.example/credentials/example",
+            "exp": now + C_NONCE_LIFETIME,
+            "jti": uuid.uuid4().hex,
+        }
+        headers = {"typ": C_NONCE_TYP, "kid": key.kid}
+        return cast(
+            str,
+            pyjwt.encode(payload, private_key, algorithm=self._algorithm.value, headers=headers),
+        )
+
+    async def _c_nonce_valid(self, nonce: str) -> bool:
+        """Vérifie qu'un ``c_nonce`` a été signé par l'OP et n'a pas expiré."""
+        try:
+            header = pyjwt.get_unverified_header(nonce)  # NOSONAR(S5659)
+        except pyjwt.PyJWTError:
+            return False
+        if header.get("typ") != C_NONCE_TYP:
+            return False
+        kid = header.get("kid")
+        if not isinstance(kid, str):
+            return False
+        key = await self._key_manager.get_key_by_kid(kid)
+        if key is None or key.algorithm is not self._algorithm:
+            return False
+        try:
+            public_key = load_pem_public_key(key.public_key_pem.encode("ascii"))
+            pyjwt.decode(
+                nonce,
+                public_key,
+                algorithms=[self._algorithm.value],
+                issuer=self._issuer,
+            )
+        except (pyjwt.PyJWTError, ValueError, TypeError):
+            return False
+        return True
+
+    async def _issue(self, sub: str, binding_jwk: dict[str, Any] | None) -> dict[str, Any]:
+        """Signe le SD-JWT VC et joint un nouveau ``c_nonce``."""
+        key: KeyPair = await first_active_key(self._key_manager, self._algorithm)
+        private_key = load_pem_private_key(key.private_key_pem.encode("ascii"), password=None)
+        now = int(datetime.now(timezone.utc).timestamp())
+        rounded_now = (now // 300) * 300
+        payload: dict[str, object] = {
+            "iss": self._issuer,
+            "sub": sub,
+            "iat": rounded_now,
+            "exp": rounded_now + 1800,
+            "vct": credential_vct(self._issuer),
         }
         if binding_jwk is not None:
             payload["cnf"] = {"jwk": binding_jwk}
-        headers = {"typ": requested_format, "kid": key.kid, "alg": self._algorithm.value}
-        credential = pyjwt.encode(
-            payload, private_key, algorithm=self._algorithm.value, headers=headers
+        headers = {"typ": SD_JWT_VC_TYP, "kid": key.kid, "alg": self._algorithm.value}
+        credential = cast(
+            str,
+            pyjwt.encode(payload, private_key, algorithm=self._algorithm.value, headers=headers),
         )
         return {
-            "credentials": [{"credential": credential}],
-            "c_nonce": uuid.uuid4().hex,
-            "c_nonce_expires_in": 300,
+            # Format combiné SD-JWT (RFC 9901 §8.1) : JWT émetteur suivi de
+            # ``~`` et, ici, d'aucune divulgation. Sans le ``~`` final le
+            # credential n'est pas un SD-JWT valide.
+            "credentials": [{"credential": f"{credential}~"}],
         }
 
-    def _verify_proof(self, proof_jwt: str) -> dict[str, Any] | None:
-        """Vérifie une preuve JWT OID4VCI (``proof_type=jwt``) et renvoie la JWK."""
-        try:
-            header = pyjwt.get_unverified_header(proof_jwt)
-        except pyjwt.PyJWTError:
-            return None
-        alg = header.get("alg")
-        jwk = header.get("jwk")
-        if not isinstance(alg, str) or not isinstance(jwk, dict):
-            return None
-        if alg not in {"RS256", "ES256"}:
-            return None
-        algorithm = pyjwt.algorithms.get_default_algorithms().get(alg)
-        if algorithm is None:
-            return None
-        try:
-            public_key = algorithm.from_jwk(__import__("json").dumps(jwk))
-            pyjwt.decode(
-                proof_jwt,
-                public_key,
-                algorithms=[alg],
-                audience=self._issuer,
-                options={"verify_exp": True, "verify_nbf": True},
-            )
-        except (pyjwt.PyJWTError, ValueError, TypeError):
-            return None
-        return jwk
+    async def _dpop_authorized(
+        self,
+        claims: dict[str, object],
+        *,
+        token: str,
+        auth_scheme: str,
+        dpop_proof: str,
+        htu: str,
+        method: str,
+    ) -> bool:
+        """Contrôle la présentation d'un access token éventuellement lié DPoP.
+
+        Un jeton lié (``cnf.jkt``) n'est accepté qu'avec le scheme ``DPoP``
+        et une preuve dont l'empreinte correspond (RFC 9449 §7.1) ; le
+        scheme ``Bearer`` reste admis pour un jeton non lié.
+        """
+        cnf = claims.get("cnf")
+        bound_jkt = str(cnf.get("jkt", "")) if isinstance(cnf, dict) else ""
+        if not bound_jkt:
+            return True
+        if auth_scheme != "dpop" or self._dpop is None or not dpop_proof:
+            return False
+        proof = await self._dpop.validate(
+            proof=dpop_proof,
+            htu=htu,
+            method=method,
+            ath=access_token_hash(token),
+        )
+        if isinstance(proof, DpopValidationError):
+            return False
+        return proof.jkt == bound_jkt

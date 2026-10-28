@@ -1210,6 +1210,21 @@ class TokenUseCase:
         et l'access token embarque les claims permettant à ``/userinfo``
         de la reproduire.
         """
+        if Scope.OPENID not in scopes:
+            # Requête OAuth 2.0 sans ``openid`` (OIDC Core 1.0 §3.1.2.1) :
+            # aucun id_token n'est émis — cas des flux OpenID4VCI, dont la
+            # demande d'autorisation ne porte que le scope du credential.
+            access_token, token_ttl = await self._issue_access_token(
+                client,
+                subject=subject,
+                scopes=scopes,
+                now=now,
+                dpop_jkt=dpop_jkt,
+                resources=resources,
+                tls_cert_hash=tls_cert_hash,
+                subject_material=subject_material,
+            )
+            return "", access_token, token_ttl
         id_token_context = context or IdTokenContext()
         claims_request = (
             parse_claims_parameter(id_token_context.claims) if id_token_context.claims else None

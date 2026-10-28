@@ -182,6 +182,10 @@ def _discovery_config(
         client_registration_types_supported=(
             ("automatic", "explicit") if settings.federation_enabled else ()
         ),
+        extra_scopes=(
+            ((Scope.OPENID20,) if settings.openid20_migration_enabled else ())
+            + ((Scope.OID4VCI,) if settings.oid4vci_enabled else ())
+        ),
         federation_registration_endpoint=(
             f"{(settings.base_url or settings.issuer).rstrip('/')}/federation/register"
             if settings.federation_enabled
@@ -392,6 +396,7 @@ class ProtocolDependencies:
                 key_manager=self.key_manager,
                 algorithm=_primary_algorithm(settings),
                 token_manager=self.token_manager,
+                dpop=self.dpop_validator,
             )
             if settings.oid4vci_enabled
             else None
@@ -711,6 +716,8 @@ class ProtocolDependencies:
                 oid4vci_router(
                     issuer=self.settings.issuer,
                     oid4vci_usecase=self.oid4vci_usecase,
+                    discovery_usecase=self.discovery_usecase,
+                    trust_proxy_headers=self.settings.trust_proxy_headers,
                 )
             )
         if self.settings.oid4vp_enabled:

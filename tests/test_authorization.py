@@ -154,7 +154,10 @@ def test_authorize_rejects_unregistered_redirect_uri() -> None:
     assert "invalid_redirect_uri" in response.text
 
 
-def test_authorize_rejects_missing_openid_scope() -> None:
+def test_authorize_allows_oauth_code_request_without_openid_scope() -> None:
+    # Sans ``openid``, la demande est une requête OAuth 2.0 (OIDC Core 1.0
+    # §3.1.2.1) : elle est honorée en response_type=code, ce dont dépendent
+    # les flux OpenID4VCI (scope du credential uniquement).
     with TestClient(_app()) as client:
         response = client.get(
             "/authorize",
@@ -168,7 +171,25 @@ def test_authorize_rejects_missing_openid_scope() -> None:
         )
 
     assert response.status_code == 302
-    assert _redirect_query(response.headers["location"])["error"] == ["invalid_scope"]
+    assert "code" in _redirect_query(response.headers["location"])
+
+
+def test_authorize_rejects_missing_openid_scope_for_id_token() -> None:
+    with TestClient(_app()) as client:
+        response = client.get(
+            "/authorize",
+            params={
+                "response_type": "id_token",
+                "client_id": "web-app",
+                "redirect_uri": "https://app.example/callback",
+                "scope": "profile",
+                "nonce": "n-0S6_WzA2Mj",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert "error=invalid_scope" in response.headers["location"]
 
 
 def test_authorize_rejects_invalid_code_challenge_method() -> None:
@@ -340,6 +361,47 @@ def test_token_exchange_issues_id_and_access_tokens() -> None:
         assert payload["expires_in"] == 3600
         assert payload["id_token"]
         assert payload["access_token"]
+
+
+def test_token_exchange_without_openid_scope_omits_id_token() -> None:
+    # Échange d'un code OAuth 2.0 (sans ``openid``) : la réponse ne doit pas
+    # porter d'id_token (OIDC Core 1.0 §3.1.2.1).
+    settings = Settings(
+        issuer=_ISSUER,
+        base_url=_ISSUER,
+        jwks_algorithms=("RS256",),
+        clients_seed=(_CLIENT_JSON,),
+    )
+    with TestClient(create_app(settings)) as client:
+        auth = client.get(
+            "/authorize",
+            params={
+                "response_type": "code",
+                "client_id": "web-app",
+                "redirect_uri": "https://app.example/callback",
+                "scope": "profile",
+                "code_challenge": _s256_challenge("verifier-verifier"),
+            },
+            follow_redirects=False,
+        )
+        code = _redirect_query(auth.headers["location"])["code"][0]
+        response = client.post(
+            "/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": "https://app.example/callback",
+                "client_id": "web-app",
+                "client_secret": "super-secret",
+                "code_verifier": "verifier-verifier",
+            },
+        )
+        payload = response.json()
+
+    assert response.status_code == 200
+    assert "id_token" not in payload
+    assert payload["access_token"]
+    assert payload["scope"] == "profile"
 
 
 def test_token_exchange_replays_consumed_code() -> None:
