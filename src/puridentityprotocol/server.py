@@ -717,7 +717,6 @@ class ProtocolDependencies:
             # OpenID4VP (issue #172) - demande de présentation + réception.
             app.include_router(
                 oid4vp_router(
-                    issuer=self.settings.issuer,
                     oid4vp_usecase=self.oid4vp_usecase,
                 )
             )

@@ -15,7 +15,6 @@ _JSON_MEDIA_TYPE = "application/json"
 
 def oid4vp_router(
     *,
-    issuer: str,
     oid4vp_usecase: OID4VPVerifierUseCase | None = None,
 ) -> APIRouter:
     """Construit le routeur FastAPI de présentation OpenID4VP."""

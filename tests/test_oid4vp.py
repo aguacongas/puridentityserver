@@ -19,7 +19,8 @@ def test_flag_on_creates_presentation_request() -> None:
     response = client.post("/presentation_requests", json={})
     assert response.status_code == 200
     body = response.json()
-    assert "request" in body and "nonce" in body
+    assert "request" in body
+    assert "nonce" in body
 
 
 def test_vp_response_not_implemented_yet() -> None:
