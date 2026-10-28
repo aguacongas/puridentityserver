@@ -20,6 +20,7 @@ from puridentityserver.domain.jwks import JWTAlgorithm, KeyPair
 from puridentityserver.infrastructure.jwks import DefaultKeyManager, first_active_key
 from puridentityserver.interfaces.domain.dpop import DpopProofValidator, DpopValidationError
 from puridentityserver.interfaces.domain.tokens import TokenManager
+from puridentityserver.interfaces.schemas.jwks import JWKKeyResponse
 
 #: Identifiant de la configuration de credential publiée par l'OP.
 CREDENTIAL_CONFIGURATION_ID = "puridentityserver-sdjwt-vc"
@@ -30,6 +31,9 @@ CREDENTIAL_VCT_PATH = "/credentials/example"
 
 #: Type JOSE de l'en-tête d'un SD-JWT VC (SD-JWT VC §3.2.1).
 SD_JWT_VC_TYP = "dc+sd-jwt"
+
+#: Type JOSE d'une réponse de métadonnées signées (OID4VCI 1.0 §12.2.2).
+ISSUER_METADATA_TYP = "openidvci-issuer-metadata+jwt"
 
 #: Formats SD-JWT VC acceptés dans une requête de credential.
 CREDENTIAL_FORMATS = frozenset({SD_JWT_VC_TYP, "vc+sd-jwt"})
@@ -50,6 +54,29 @@ C_NONCE_LIFETIME = 300
 def credential_vct(issuer: str) -> str:
     """URL absolue du ``vct`` publié pour le credential de démonstration."""
     return f"{issuer.rstrip('/')}{CREDENTIAL_VCT_PATH}"
+
+
+def issuer_metadata_payload(issuer: str) -> dict[str, Any]:
+    """Construit le document de métadonnées de l'émetteur OID4VCI (non signé)."""
+    normalized = issuer.rstrip("/")
+    return {
+        "credential_issuer": normalized,
+        "authorization_servers": [normalized],
+        "credential_endpoint": f"{normalized}/credential",
+        "nonce_endpoint": f"{normalized}/nonce",
+        "credential_configurations_supported": {
+            CREDENTIAL_CONFIGURATION_ID: {
+                "format": SD_JWT_VC_TYP,
+                "scope": "openid4vci",
+                "vct": credential_vct(normalized),
+                "cryptographic_binding_methods_supported": ["jwk"],
+                "credential_signing_alg_values_supported": ["RS256"],
+                "proof_types_supported": {
+                    "jwt": {"proof_signing_alg_values_supported": ["ES256", "RS256"]}
+                },
+            }
+        },
+    }
 
 
 @dataclass(frozen=True)
@@ -100,6 +127,32 @@ class OID4VCIIssuerUseCase:
         plusieurs workers.
         """
         return {"c_nonce": await self._sign_nonce()}
+
+    def issuer_metadata(self) -> dict[str, Any]:
+        """Renvoie les métadonnées non signées de l'émetteur."""
+        return issuer_metadata_payload(self._issuer)
+
+    async def signed_issuer_metadata(self) -> str:
+        """Signe les métadonnées de l'émetteur en ``application/jwt``.
+
+        OID4VCI 1.0 §12.2.2 : la clé publique d'émission est embarquée dans
+        l'en-tête JOSE (``jwk``), le payload porte ``sub`` (URL d'émetteur)
+        et ``iat`` requis, plus tous les paramètres de métadonnées au premier
+        niveau. La signature est réalisée avec la clé active de l'OP.
+        """
+        key: KeyPair = await first_active_key(self._key_manager, self._algorithm)
+        private_key = load_pem_private_key(key.private_key_pem.encode("ascii"), password=None)
+        now = int(datetime.now(timezone.utc).timestamp())
+        payload: dict[str, object] = dict(self.issuer_metadata())
+        payload["sub"] = self._issuer
+        payload["iss"] = self._issuer
+        payload["iat"] = now
+        jwk = JWKKeyResponse.from_key_pair(key).model_dump(mode="json", exclude_none=True)
+        headers = {"typ": ISSUER_METADATA_TYP, "kid": key.kid, "jwk": jwk}
+        return cast(
+            str,
+            pyjwt.encode(payload, private_key, algorithm=self._algorithm.value, headers=headers),
+        )
 
     async def issue_credential(
         self,
