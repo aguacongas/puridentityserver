@@ -10,8 +10,11 @@ oid4vci_enabled = true
 ou `PURIDENTITYSERVER_OID4VCI_ENABLED=true`.
 
 Dans cet état, l'OP publie ses métadonnées d'émetteur (`GET
-/.well-known/openid-credential-issuer`) et monte `POST /credential`, qui répond `501`
-en attente de l'implémentation de l'émission complète (sous-issue #222).
+/.well-known/openid-credential-issuer`) et monte `POST /credential`, qui **rejette
+401** tout requête sans access token et émet, en cas de jeton valide, un
+credential **SD-JWT** (`vc+sd-jwt`) signé à la clé active de l'OP pour le `sub`
+transporté. Le consentement, les preuves de possession (proof_type), c_nonce et le
+flux wallet/authorization code restent à implémenter (sous-issue #222 tranche 2).
 
 Les fonctionnalités prévues (grants, proof_type JWT, SD-JWT VC avec disclosure,
 mdoc, c_nonce, HAIP) sont traitées dans les sous-issues #222, #223 et #224.

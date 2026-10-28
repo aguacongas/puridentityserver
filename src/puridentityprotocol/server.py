@@ -49,6 +49,7 @@ from puridentityserver.application.introspect import IntrospectConfig, Introspec
 from puridentityserver.application.jarm import JarmSigner
 from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
 from puridentityserver.application.logout import LogoutConfig, LogoutUseCase
+from puridentityserver.application.oid4vci import OID4VCIIssuerUseCase
 from puridentityserver.application.openid20_migration import OpenID20MigrationUseCase
 from puridentityserver.application.openid20_provider import OpenID20ProviderUseCase
 from puridentityserver.application.par import PushedAuthorizationConfig, PushedAuthorizationUseCase
@@ -368,7 +369,8 @@ class ProtocolDependencies:
             self.readers.api_resource,
             extra_scopes=(
                 frozenset({Scope.OPENID20}) if settings.openid20_migration_enabled else frozenset()
-            ),
+            )
+            | (frozenset({Scope.OID4VCI}) if settings.oid4vci_enabled else frozenset()),
         )
         self.openid20_migration = OpenID20MigrationUseCase(
             stores.openid20_identifier,
@@ -381,6 +383,16 @@ class ProtocolDependencies:
             base_url=settings.base_url or settings.issuer,
             enabled=settings.openid20_migration_enabled,
             algorithm=_primary_algorithm(settings),
+        )
+        self.oid4vci_usecase = (
+            OID4VCIIssuerUseCase(
+                issuer=settings.issuer,
+                key_manager=self.key_manager,
+                algorithm=_primary_algorithm(settings),
+                token_manager=self.token_manager,
+            )
+            if settings.oid4vci_enabled
+            else None
         )
         self.session_management = SessionManagementUseCase()
         self.claims_provider = UserStoreClaimsProvider(self.readers.user)
@@ -683,9 +695,13 @@ class ProtocolDependencies:
                 openid20_provider_router(self.openid20_provider, issuer=self.settings.issuer)
             )
         if self.settings.oid4vci_enabled:
-            # OpenID4VCI : surface minimale (slice #172/#222) ; montée
-            # uniquement si le flag est actif — sans elle, aucune route n'existe.
-            app.include_router(oid4vci_router(issuer=self.settings.issuer))
+            # OpenID4VCI (issue #172) - surface minime + issuance via access token.
+            app.include_router(
+                oid4vci_router(
+                    issuer=self.settings.issuer,
+                    oid4vci_usecase=self.oid4vci_usecase,
+                )
+            )
 
         _mount_authorization_routers(
             app,

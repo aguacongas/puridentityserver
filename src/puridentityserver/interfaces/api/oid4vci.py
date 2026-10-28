@@ -1,32 +1,35 @@
-"""Routes FastAPI Minimale de l'OP pour l'émission de credentials OID4VCI (OIDF, slice 1).
+"""Routes FastAPI de l'OP pour l'émission de credentials OID4VCI (OIDF, slice 1).
 
-L'intégration complète de l'issuance (grants, preuves de possession, etc.)
-est déclinée par sous-issue #172 ; ici on expose :
-- la métadonnée de l'issuer (`/.well-known/openid-credential-issuer`) ;
-- `/credential`, qui, dans cet état de développement, répond `501` (point
-  d'ancrage pour l'implémentation de l'émission).
-
-Les routes ne sont montées que si le support est activé
-(``oid4vci_enabled``).
+Surface montée uniquement lorsque le flag ``oid4vci_enabled`` est actif.
 """
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+
+if TYPE_CHECKING:
+    from puridentityserver.application.oid4vci import OID4VCIIssuerUseCase
 
 _JSON_MEDIA_TYPE = "application/json"
 
 
-def oid4vci_router(*, issuer: str) -> APIRouter:
-    """Construit le routeur FastAPI de l'émetteur OID4VCI (slice 0 / issue #222).
+def oid4vci_router(
+    *,
+    issuer: str,
+    oid4vci_usecase: OID4VCIIssuerUseCase | None = None,
+) -> APIRouter:
+    """Construit le routeur FastAPI de l'émetteur OID4VCI.
 
     ``issuer`` est la valeur du claim ``credential_issuer`` ; sans le flag
-    d'activation, aucune route n'est montée. Seule la métadonnée est servie
-    actuellement : `/credential` répond `501`.
+    d'activation, aucune route n'est montée. ``oid4vci_usecase`` porte
+    l'issuance effectif ; sans lui, ``/credential`` reste ``501``.
     """
     router = APIRouter(tags=["oid4vci"])
     normalized = issuer.rstrip("/")
+    usecase = oid4vci_usecase
 
     @router.get(
         "/.well-known/openid-credential-issuer",
@@ -55,26 +58,39 @@ def oid4vci_router(*, issuer: str) -> APIRouter:
 
     @router.post(
         "/credential",
-        summary="Endpoint `/credential` OID4VCI (protection bearer/token)",
+        summary="Endpoint `/credential` OID4VCI (issuance SD-JWT)",
         response_model=None,
     )
     async def credential(request: Request) -> JSONResponse:
         authorization = request.headers.get("authorization", "")
         if not authorization.lower().startswith("bearer "):
-            return JSONResponse(
-                {"error": "invalid_token", "error_description": "bearer token requis"},
-                status_code=401,
-                headers={"WWW-Authenticate": "Bearer"},
-                media_type=_JSON_MEDIA_TYPE,
+            return _error(401, "invalid_token", "bearer token requis")
+        if usecase is None:
+            return _error(
+                501,
+                "not_implemented",
+                "issuance OID4VCI pas encore cablee dans ce deploiement.",
             )
-        # Slice 0 : issuance implémentée dans la sous-issue #222 (PID4VCI).
-        return JSONResponse(
-            {
-                "error": "not_implemented",
-                "error_description": "issuance OID4VCI pas encore implémentée (slice 0).",
-            },
-            status_code=501,
-            media_type=_JSON_MEDIA_TYPE,
-        )
+        bearer = authorization[len("Bearer ") :].strip()
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        requested_format = str(payload.get("format") or "vc+sd-jwt")
+        result = await usecase.issue_credential(bearer, requested_format)
+        if result is None:
+            return _error(401, "invalid_token", "access token invalide ou scope manquant")
+        return JSONResponse(result, media_type=_JSON_MEDIA_TYPE)
 
     return router
+
+
+def _error(status_code: int, error: str, description: str) -> JSONResponse:
+    return JSONResponse(
+        {"error": error, "error_description": description},
+        status_code=status_code,
+        headers={"WWW-Authenticate": "Bearer"} if status_code == 401 else None,
+        media_type=_JSON_MEDIA_TYPE,
+    )
