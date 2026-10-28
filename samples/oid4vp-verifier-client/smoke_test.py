@@ -5,6 +5,7 @@ Ce script demarre uniquement l executable PurIdentityServer tel quel et
 imprime un recapitulatif pour qu'un operateir humaire puisse piloter
 manuellement le module verifier (oid4vp-1final-verifier-haip-test-plan).
 """
+
 from __future__ import annotations
 
 import subprocess
