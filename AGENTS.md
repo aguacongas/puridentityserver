@@ -14,6 +14,11 @@ uv run python -m pytest -p no:cacheprovider -q   # tests + couverture >= 80 % (9
 
 - CI = Python 3.13, `uv sync --extra dev --extra sql --locked`.
 - SonarCloud analyse le diff de chaque PR : **aucune nouvelle issue acceptée** (DoD).
+- **Toujours consulter le rapport SonarCloud**, même quand le check est vert :
+  une issue nouvelle peut être masquée derrière un quality gate « vert » (ex.
+  nouvelle issue de code smell ou de complexité cognitive) et doit être corrigée
+  immédiatement — piège récurrent. Vérifier le dashboard / le diff de la PR
+  avant toute fusion.
 - Windows/PowerShell : pas de heredoc shell ; utiliser `--body-file` pour les loads dans gh.
 
 ## Certification OIDC (suite officielle)
