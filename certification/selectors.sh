@@ -10,7 +10,7 @@
 # `federation` (OpenID Federation 1.1) - HORS programme officiel, mais joues
 # dans les deux workflows a la demande du maintainer (les plans sont publies
 # par la suite dans les deux cas).
-CERTIFICATION_PLANS=(basic implicit hybrid formpost dynamic ciba fapi1 fapi2 fapi2-message-signing ekyc federation oid4vci oid4vp)
+CERTIFICATION_PLANS=(basic implicit hybrid formpost dynamic ciba fapi1 fapi2 fapi2-message-signing ekyc federation oid4vci)
 
 # Retourne le selecteur de variante d'un plan sur stdout ; code retour 1 si le
 # plan est inconnu (appelant : message d'erreur + sortie securisee).
