@@ -19,3 +19,6 @@ le flux wallet/authorization code et le c_nonce durable restent à implémenter.
 
 Les fonctionnalités prévues (grants, proof_type JWT, SD-JWT VC avec disclosure,
 mdoc, c_nonce, HAIP) sont traitées dans les sous-issues #222, #223 et #224.
+
+
+Le harness de certification expose le plan oid4vci (selectors + plan JSON) pour mesurer l'ecart restant.
