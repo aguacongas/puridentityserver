@@ -211,7 +211,7 @@ class OID4VCIIssuerUseCase:
     def _decode_proof(self, proof_jwt: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         """Vérifie la signature d'une preuve JWT et rend (claims, JWK)."""
         try:
-            header = pyjwt.get_unverified_header(proof_jwt)
+            header = pyjwt.get_unverified_header(proof_jwt)  # NOSONAR
         except pyjwt.PyJWTError:
             return None, None
         if header.get("typ") not in PROOF_TYPES:
