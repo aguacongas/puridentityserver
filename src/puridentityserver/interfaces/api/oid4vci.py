@@ -79,7 +79,11 @@ def oid4vci_router(
         if not isinstance(payload, dict):
             payload = {}
         requested_format = str(payload.get("format") or "vc+sd-jwt")
-        result = await usecase.issue_credential(bearer, requested_format)
+        proof = payload.get("proof")
+        proof_jwt = proof.get("jwt") if isinstance(proof, dict) else None
+        if not isinstance(proof_jwt, str):
+            proof_jwt = None
+        result = await usecase.issue_credential(bearer, requested_format, proof_jwt)
         if result is None:
             return _error(401, "invalid_token", "access token invalide ou scope manquant")
         return JSONResponse(result, media_type=_JSON_MEDIA_TYPE)
