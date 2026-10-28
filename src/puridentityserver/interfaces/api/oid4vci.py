@@ -188,16 +188,16 @@ def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _proof_jwts(proofs: object) -> tuple[str, ...]:
+def _proof_jwts(proofs: object) -> list[str]:
     """Extrait les preuves JWT de ``proofs.jwt`` (OID4VCI 1.0 §8.2)."""
     if not isinstance(proofs, dict):
-        return ()
+        return []
     values = proofs.get("jwt")
     if isinstance(values, str):
-        return (values,)
+        return [values]
     if isinstance(values, list):
-        return tuple(value for value in values if isinstance(value, str))
-    return ()
+        return [value for value in values if isinstance(value, str)]
+    return []
 
 
 def _error(status_code: int, error: str, description: str) -> JSONResponse:
