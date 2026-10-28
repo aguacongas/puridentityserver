@@ -59,6 +59,9 @@ registration_initial_access_token_mode = "disabled"
 # identique dans les deux harness.
 federation_enabled = true
 
+# OpenID4VCI (issue #172) : activation pour la certification locale.
+oid4vci_enabled = true
+
 # OpenID 2.0 to OpenID Connect Migration 1.0 (issue #169/#201) :
 # validation du chemin flag ON en certification ; le default code reste OFF.
 openid20_migration_enabled = true
