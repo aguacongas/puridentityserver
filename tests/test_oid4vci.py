@@ -79,7 +79,8 @@ def test_nonce_endpoint_returns_c_nonce() -> None:
     # Le c_nonce est un JWT signé par l'OP (validation sans état).
     header = pyjwt.get_unverified_header(body["c_nonce"])
     assert header["typ"] == "c_nonce+jwt"
-    assert body["c_nonce_expires_in"] > 0
+    # Note: c_nonce_expires_in n'est plus renvoyé (suite conformance) ;
+    # le c_nonce est un JWT dont l'expiration est portée par lui-même.
 
 
 def test_credential_requires_bearer() -> None:

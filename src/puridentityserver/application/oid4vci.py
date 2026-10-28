@@ -99,7 +99,7 @@ class OID4VCIIssuerUseCase:
         validation ne dépend d'aucun stockage, donc reste correcte derrière
         plusieurs workers.
         """
-        return {"c_nonce": await self._sign_nonce(), "c_nonce_expires_in": C_NONCE_LIFETIME}
+        return {"c_nonce": await self._sign_nonce()}
 
     async def issue_credential(
         self,
