@@ -383,3 +383,162 @@ def test_bound_token_rejected_when_dpop_key_differs() -> None:
         assert error.status_code == 401
 
     asyncio.run(_task())
+
+
+def test_key_attestation_valid_signature_accepted() -> None:
+    """Une attestation de cle valide est acceptee (OID4VCI appendice D.1)."""
+    import asyncio
+
+    key_manager = DefaultKeyManager(InMemoryKeyPairRepository())
+    usecase = OID4VCIIssuerUseCase(
+        issuer=ISSUER,
+        key_manager=key_manager,
+        algorithm=JWTAlgorithm.RS256,
+        token_manager=_FakeTokenManager({"sub": "user1"}),
+    )
+    nonce = asyncio.run(usecase.issue_nonce())["c_nonce"]
+
+    bind_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    bind_jwk = RSAAlgorithm.to_jwk(bind_key.public_key(), as_dict=True)  # type: ignore[attr-defined]
+    bind_jwk["alg"] = "RS256"
+
+    att_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    att_jwk = RSAAlgorithm.to_jwk(att_key.public_key(), as_dict=True)  # type: ignore[attr-defined]
+    att_jwk["alg"] = "RS256"
+    now = int(datetime.now(timezone.utc).timestamp())
+    attestation = pyjwt.encode(
+        {"iat": now, "exp": now + 300, "attested_keys": {"keys": [bind_jwk]}},
+        att_key,
+        algorithm="RS256",
+        headers={"typ": "key-attestation+jwt", "jwk": att_jwk},
+    )
+
+    proof = pyjwt.encode(
+        {"aud": ISSUER, "iat": now, "nonce": nonce},
+        bind_key,
+        algorithm="RS256",
+        headers={"typ": "openid4vci-proof+jwt", "jwk": bind_jwk, "key_attestation": attestation},
+    )
+
+    result = asyncio.run(
+        usecase.issue_credential(
+            "dummy",
+            credential_configuration_id=CREDENTIAL_CONFIGURATION_ID,
+            proofs=[proof],
+        )
+    )
+    assert isinstance(result, dict)
+    assert len(result["credentials"]) == 1
+
+
+def test_key_attestation_invalid_signature_rejected() -> None:
+    """Une attestation de cle a signature invalide est rejetee (invalid_proof)."""
+    import asyncio
+
+    key_manager = DefaultKeyManager(InMemoryKeyPairRepository())
+    usecase = OID4VCIIssuerUseCase(
+        issuer=ISSUER,
+        key_manager=key_manager,
+        algorithm=JWTAlgorithm.RS256,
+        token_manager=_FakeTokenManager({"sub": "user1"}),
+    )
+    nonce = asyncio.run(usecase.issue_nonce())["c_nonce"]
+
+    bind_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    bind_jwk = RSAAlgorithm.to_jwk(bind_key.public_key(), as_dict=True)  # type: ignore[attr-defined]
+    bind_jwk["alg"] = "RS256"
+
+    att_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    att_jwk = RSAAlgorithm.to_jwk(att_key.public_key(), as_dict=True)  # type: ignore[attr-defined]
+    att_jwk["alg"] = "RS256"
+    now = int(datetime.now(timezone.utc).timestamp())
+    attestation = pyjwt.encode(
+        {"iat": now, "exp": now + 300},
+        att_key,
+        algorithm="RS256",
+        headers={"typ": "key-attestation+jwt", "jwk": att_jwk},
+    )
+    parts = attestation.split(".")
+    bad_attestation = parts[0] + "." + parts[1] + "." + ("A" + parts[2][1:])
+
+    proof = pyjwt.encode(
+        {"aud": ISSUER, "iat": now, "nonce": nonce},
+        bind_key,
+        algorithm="RS256",
+        headers={
+            "typ": "openid4vci-proof+jwt",
+            "jwk": bind_jwk,
+            "key_attestation": bad_attestation,
+        },
+    )
+
+    result = asyncio.run(
+        usecase.issue_credential(
+            "dummy",
+            credential_configuration_id=CREDENTIAL_CONFIGURATION_ID,
+            proofs=[proof],
+        )
+    )
+    assert isinstance(result, CredentialError)
+    assert result.error == "invalid_proof"
+
+
+def test_key_attestation_x509_valid_accepted() -> None:
+    """Branche x5c : attestation valide acceptee."""
+    import asyncio
+    import base64
+
+    from cryptography import x509 as _x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec as _ec
+    from cryptography.x509.oid import NameOID
+
+    key_manager = DefaultKeyManager(InMemoryKeyPairRepository())
+    usecase = OID4VCIIssuerUseCase(
+        issuer=ISSUER,
+        key_manager=key_manager,
+        algorithm=JWTAlgorithm.RS256,
+        token_manager=_FakeTokenManager({"sub": "user1"}),
+    )
+    nonce = asyncio.run(usecase.issue_nonce())["c_nonce"]
+
+    bind_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    bind_jwk = RSAAlgorithm.to_jwk(bind_key.public_key(), as_dict=True)  # type: ignore[attr-defined]
+    bind_jwk["alg"] = "RS256"
+
+    ec_key = _ec.generate_private_key(_ec.SECP256R1())
+    subject = _x509.Name([_x509.NameAttribute(NameOID.COMMON_NAME, "attester")])
+    cert = (
+        _x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(ec_key.public_key())
+        .serial_number(_x509.random_serial_number())
+        .not_valid_before(datetime.now(timezone.utc))
+        .not_valid_after(datetime.now(timezone.utc) + __import__("datetime").timedelta(hours=1))
+        .sign(ec_key, hashes.SHA256())
+    )
+    x5c = base64.b64encode(cert.public_bytes(serialization.Encoding.DER)).decode()
+    now = int(datetime.now(timezone.utc).timestamp())
+    attestation = pyjwt.encode(
+        {"iat": now, "exp": now + 300},
+        ec_key,
+        algorithm="ES256",
+        headers={"typ": "key-attestation+jwt", "alg": "ES256", "x5c": [x5c]},
+    )
+
+    proof = pyjwt.encode(
+        {"aud": ISSUER, "iat": now, "nonce": nonce},
+        bind_key,
+        algorithm="RS256",
+        headers={"typ": "openid4vci-proof+jwt", "jwk": bind_jwk, "key_attestation": attestation},
+    )
+
+    result = asyncio.run(
+        usecase.issue_credential(
+            "dummy",
+            credential_configuration_id=CREDENTIAL_CONFIGURATION_ID,
+            proofs=[proof],
+        )
+    )
+    assert isinstance(result, dict)
