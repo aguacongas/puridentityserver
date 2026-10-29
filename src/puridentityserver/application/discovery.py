@@ -247,6 +247,7 @@ class DiscoveryUseCase:
             metadata["grant_types_supported"] = [
                 *self._config.grant_types_supported,
                 "urn:openid:params:grant-type:ciba",
+                "urn:ietf:params:oauth:grant-type:pre-authorized_code",
             ]
         # Request objects (RFC 9101 §5.2) : ``alg=none`` pour les clients
         # standards, ``PS256``/``ES256`` pour le profil FAPI1 Advanced

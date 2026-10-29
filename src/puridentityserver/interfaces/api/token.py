@@ -60,6 +60,8 @@ def token_router(
             resource=encode_resource_parameter([str(v) for v in form.getlist("resource")]),
             device_code=_form_field(form, "device_code"),
             auth_req_id=_form_field(form, "auth_req_id"),
+            pre_authorized_code=_form_field(form, "pre-authorized_code"),
+            tx_code=_form_field(form, "tx_code"),
             client_assertion_type=_form_field(form, "client_assertion_type"),
             client_assertion=_form_field(form, "client_assertion"),
             assertion=_form_field(form, "assertion"),
