@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import uuid
 from collections.abc import Iterable
@@ -10,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, cast
 
 import jwt as pyjwt
+from cryptography import x509
 from cryptography.hazmat.primitives.serialization import (
     load_pem_private_key,
     load_pem_public_key,
@@ -72,7 +74,13 @@ def issuer_metadata_payload(issuer: str) -> dict[str, Any]:
                 "cryptographic_binding_methods_supported": ["jwk"],
                 "credential_signing_alg_values_supported": ["RS256"],
                 "proof_types_supported": {
-                    "jwt": {"proof_signing_alg_values_supported": ["ES256", "RS256"]}
+                    "jwt": {
+                        "proof_signing_alg_values_supported": ["ES256", "RS256"],
+                    },
+                    "attestation": {
+                        "proof_signing_alg_values_supported": ["ES256", "RS256"],
+                        "key_attestations_required": {},
+                    },
                 },
             }
         },
@@ -259,8 +267,16 @@ class OID4VCIIssuerUseCase:
             if not await self._c_nonce_valid(nonce):
                 return (
                     None,
-                    CredentialError("invalid_nonce", "c_nonce inconnu, invalide ou expire"),
+                    CredentialError(
+                        "invalid_nonce",
+                        "c_nonce inconnu, invalide ou expire",
+                    ),
                 )
+            # Justification: en-tete lu avant verification de la signature
+            proof_header = pyjwt.get_unverified_header(proof_jwt)  # NOSONAR(S5659)
+            attestation = proof_header.get("key_attestation")
+            if isinstance(attestation, str) and not self._key_attestation_valid(attestation, jwk):
+                return (None, CredentialError("invalid_proof", "attestation de cle invalide"))
             binding_jwks.append(jwk)
         return (binding_jwks, None)
 
@@ -304,6 +320,73 @@ class OID4VCIIssuerUseCase:
         if not isinstance(claims, dict):
             return None, None
         return claims, jwk
+
+    def _key_attestation_public_key(self, header: dict[str, object]) -> Any | None:  # ruff: ignore[any-type]
+        """Extrait la cle publique d une attestation (x5c ou jwk)."""
+        x5c = header.get("x5c")
+        if isinstance(x5c, list) and x5c and isinstance(x5c[0], str):
+            try:
+                padding = "=" * (-len(x5c[0]) % 4)
+                der = base64.b64decode(x5c[0] + padding)
+                return x509.load_der_x509_certificate(der).public_key()
+            except Exception:
+                return None
+
+        jwk = header.get("jwk")
+        if not isinstance(jwk, dict):
+            return None
+        try:
+            alg_cls = (
+                pyjwt.algorithms.RSAAlgorithm
+                if jwk.get("kty") == "RSA"
+                else pyjwt.algorithms.ECAlgorithm
+            )
+            return alg_cls.from_jwk(__import__("json").dumps(jwk))
+        except Exception:
+            return None
+
+    def _key_attestation_covers(
+        self, binding_jwk: dict[str, Any], claims: dict[str, object]
+    ) -> bool:
+        """Verifie que la cle de preuve figure dans attested_keys si present."""
+        attested_keys = claims.get("attested_keys")
+        if not isinstance(attested_keys, dict):
+            return True
+        keys = attested_keys.get("keys")
+        if not isinstance(keys, list) or not keys:
+            return True
+        if binding_jwk in keys:
+            return True
+        binding_kid = binding_jwk.get("kid")
+        return any(isinstance(item, dict) and item.get("kid") == binding_kid for item in keys)
+
+    def _key_attestation_valid(self, attestation_jwt: str, binding_jwk: dict[str, Any]) -> bool:
+        """Valide la signature d une attestation de cle."""
+        try:
+            # Justification: en-tete lu avant verification de la signature
+            header = pyjwt.get_unverified_header(attestation_jwt)  # NOSONAR(S5659)
+        except pyjwt.PyJWTError:
+            return False
+        algorithm_name = header.get("alg")
+        if not isinstance(algorithm_name, str):
+            return False
+
+        public_key = self._key_attestation_public_key(dict(header))
+        if public_key is None:
+            return False
+
+        try:
+            claims = pyjwt.decode(
+                attestation_jwt,
+                public_key,
+                algorithms=[algorithm_name],
+                options={"verify_aud": False},
+            )
+        except (pyjwt.PyJWTError, ValueError, TypeError):
+            return False
+        if not isinstance(claims, dict):
+            return False
+        return self._key_attestation_covers(binding_jwk, claims)
 
     async def _sign_nonce(self) -> str:
         """Signe un ``c_nonce`` court avec la clé de signature de l'OP."""
