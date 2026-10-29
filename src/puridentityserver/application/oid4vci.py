@@ -125,6 +125,10 @@ class CredentialError:
     status_code: int = 400
 
 
+# Message d erreur d access token invalide, partage.
+INVALID_ACCESS_TOKEN_ERROR = "access token invalide, expire ou non autorise"  # ruff: ignore[hardcoded-password-string]
+
+
 class OID4VCIIssuerUseCase:
     """Émet un credential verifiable SD-JWT pour l'OP.
 
@@ -164,19 +168,13 @@ class OID4VCIIssuerUseCase:
         self,
         bearer_token: str,
         transaction_id: str,
-        auth_scheme: str = "bearer",
-        dpop_proof: str = "",
-        htu: str = "",
-        method: str = "POST",
     ) -> dict[str, Any] | CredentialError:
         """Traite une requete deferred (issuance immediate : aucun transaction_id)."""
         claims = await self._token_manager.validate_access_token(
             token=bearer_token, issuer=self._issuer
         )
         if claims is None:
-            return CredentialError(
-                "invalid_token", "access token invalide, expire ou non autorise", 401
-            )
+            return CredentialError("invalid_token", INVALID_ACCESS_TOKEN_ERROR, 401)
         return CredentialError("invalid_transaction_id", "transaction_id inconnu ou deja consomme")
 
     async def notify(
@@ -184,16 +182,13 @@ class OID4VCIIssuerUseCase:
         bearer_token: str,
         notification_id: str,
         event: str,
-        event_description: str = "",
     ) -> CredentialError | None:
         """Enregistre une notification du wallet pour une issuance."""
         claims = await self._token_manager.validate_access_token(
             token=bearer_token, issuer=self._issuer
         )
         if claims is None:
-            return CredentialError(
-                "invalid_token", "access token invalide, expire ou non autorise", 401
-            )
+            return CredentialError("invalid_token", INVALID_ACCESS_TOKEN_ERROR, 401)
         if notification_id not in self._notifications:
             return CredentialError("invalid_notification_id", "notification_id inconnu", 400)
         if event not in {"credential_accepted", "credential_failure", "credential_deleted"}:
@@ -247,9 +242,7 @@ class OID4VCIIssuerUseCase:
             token=bearer_token, issuer=self._issuer
         )
         if claims is None:
-            return CredentialError(
-                "invalid_token", "access token invalide, expire ou non autorise", 401
-            )
+            return CredentialError("invalid_token", INVALID_ACCESS_TOKEN_ERROR, 401)
 
         if not await self._dpop_authorized(
             claims,
