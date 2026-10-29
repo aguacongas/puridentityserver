@@ -7,11 +7,11 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit
 
+import jwt as _jwt
 import jwt as pyjwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi.testclient import TestClient
-import jwt as _jwt
 
 from puridentityserver.application.oid4vci import credential_vct
 from puridentityserver.infrastructure.settings import Settings
@@ -133,10 +133,6 @@ def test_credential_rejects_invalid_bearer() -> None:
 def test_deferred_and_notification_http() -> None:
     import json as _json
     import time
-
-    import jwt as _jwt
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric import ec
 
     settings = Settings(oid4vci_enabled=True)
     settings.clients_seed = [
