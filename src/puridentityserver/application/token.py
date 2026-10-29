@@ -84,6 +84,7 @@ from puridentityserver.application.resource_indicators import (
 from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.domain.authorization import (
     CIBA_GRANT_TYPE,
+    PRE_AUTHORIZED_CODE_GRANT_TYPE,
     AuthorizationCode,
     BackchannelAuthenticationRequest,
     BackchannelAuthenticationStatus,
@@ -165,6 +166,8 @@ class TokenRequest:
     refresh_token: str = ""
     device_code: str = ""
     auth_req_id: str = ""
+    pre_authorized_code: str = ""
+    tx_code: str = ""
     scope: str = ""
     resource: str = ""
     client_assertion_type: str = ""
@@ -332,6 +335,8 @@ class TokenUseCase:
             return await self._device_code(request)
         if request.grant_type == CIBA_GRANT_TYPE:
             return await self._ciba(request)
+        if request.grant_type == PRE_AUTHORIZED_CODE_GRANT_TYPE:
+            return await self._pre_authorized_code(request)
         return self._error("unsupported_grant_type")
 
     def _deduce_client_id(self, request: TokenRequest) -> None:
@@ -1465,6 +1470,70 @@ class TokenUseCase:
             expected = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
             return expected == auth_code.code_challenge
         return code_verifier == auth_code.code_challenge
+
+    async def _resolve_pre_authorized_code(
+        self, code_value: str, now: datetime
+    ) -> AuthorizationCode | TokenError:
+        auth_code = await self._codes.find_by_code(code_value)
+        if auth_code is None or not auth_code.pre_authorized:
+            return self._error("invalid_grant", "Code pre-autorise invalide")
+        if auth_code.is_consumed:
+            await self._revoke_issued_tokens(auth_code)
+            return self._error("invalid_grant", "Code pre-autorise deja consomme")
+        if auth_code.expires_at < now:
+            return self._error("invalid_grant", "Code pre-autorise expire")
+        return auth_code
+
+    async def _pre_authorized_code(self, request: TokenRequest) -> TokenResponse | TokenError:
+        """Echange un code pre-autorise contre un access token (OID4VCI)."""
+        now = datetime.now(timezone.utc)
+        auth_code = await self._resolve_pre_authorized_code(request.pre_authorized_code, now)
+        if isinstance(auth_code, TokenError):
+            return auth_code
+
+        client = await self._clients.find_by_id(request.client_id)
+        if client is None or not client.is_active:
+            return self._error("invalid_client", "Client inconnu ou inactif")
+        authenticated = await self._authenticate_client(client, request)
+        if authenticated is not None:
+            return authenticated
+        if auth_code.client_id and auth_code.client_id != client.client_id:
+            return self._error("invalid_grant", "Code emis pour un autre client")
+
+        if auth_code.tx_code_hash and (
+            not request.tx_code
+            or hashlib.sha256(request.tx_code.encode()).hexdigest() != auth_code.tx_code_hash
+        ):
+            return self._error("invalid_grant", "tx_code invalide")
+
+        binding = await self._evaluate_dpop(client, request, bound_jkt=auth_code.dpop_jkt)
+        if isinstance(binding, TokenError):
+            return binding
+        resources = await self._effective_resources(request, auth_code.resource_uris)
+        if isinstance(resources, TokenError):
+            return resources
+
+        await self._codes.consume(auth_code.code)
+
+        tls_cert_hash = _tls_certificate_bound_hash(client, request)
+        access_token, expires_in = await self._issue_access_token(
+            client,
+            subject=auth_code.subject,
+            scopes=auth_code.scopes,
+            now=now,
+            dpop_jkt=binding.jkt if binding.bound else "",
+            resources=resources or (),
+            tls_cert_hash=tls_cert_hash,
+            subject_material=auth_code.subject_material,
+        )
+        return self._success(
+            id_token="",
+            access_token=access_token,
+            token_ttl=expires_in,
+            scopes=auth_code.scopes,
+            refresh_token="",
+            dpop_bound=binding.bound,
+        )
 
     def _error(self, error: str, description: str = "") -> TokenError:
         """Construit une réponse d'erreur du token endpoint (RFC 6749 §5.2)."""

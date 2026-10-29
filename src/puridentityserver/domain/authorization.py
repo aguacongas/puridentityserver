@@ -461,6 +461,8 @@ class AuthorizationCode:
     refresh_token_hash: str = ""
     dpop_jkt: str = ""
     resource_uris: tuple[str, ...] = ()
+    pre_authorized: bool = False
+    tx_code_hash: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -579,6 +581,7 @@ class BackchannelAuthenticationStatus(str, Enum):
 
 #: Type de grant CIBA (OIDC CIBA 1.0 §4 — extension grant OAuth 2.0 §4.5).
 CIBA_GRANT_TYPE = "urn:openid:params:grant-type:ciba"
+PRE_AUTHORIZED_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:pre-authorized_code"
 
 
 @dataclass(frozen=True, slots=True)

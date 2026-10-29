@@ -13,6 +13,7 @@ import pytest
 from puridentityserver.application.token import (
     TokenConfig,
     TokenDependencies,
+    TokenError,
     TokenRequest,
     TokenUseCase,
 )
@@ -958,3 +959,119 @@ class TestPyJWTTokenManager:
         claims = jwt.decode(token, options={"verify_signature": False})
         assert "sid" not in claims
         assert claims["sub"] == "u-1"
+
+
+class TestPreAuthorizedCodeGrant:
+    """Grant pre-authorized code (OID4VCI)."""
+
+    def _code(
+        self,
+        codes: InMemoryAuthorizationCodeRepository,
+        *,
+        client_id: str = "web-app",
+        tx_code_hash: str = "",
+        expires_in: int = 300,
+    ) -> AuthorizationCode:
+        from datetime import timedelta
+
+        code = AuthorizationCode(
+            code="preauth-code",
+            client_id=client_id,
+            redirect_uri="",
+            subject="user-1",
+            scopes=frozenset({Scope.OID4VCI}),
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=expires_in),
+            pre_authorized=True,
+            tx_code_hash=tx_code_hash,
+        )
+        run(codes.save(code))
+        return code
+
+    def test_exchange_pre_authorized_code(self) -> None:
+        usecase, codes, _refresh, _revoked = _make_usecase()
+        self._code(codes)
+        request = TokenRequest(
+            grant_type="urn:ietf:params:oauth:grant-type:pre-authorized_code",
+            pre_authorized_code="preauth-code",
+            client_id="web-app",
+            client_secret=_CLIENT_SECRET,
+            scope="openid4vci",
+        )
+        result = run(usecase.execute(request))
+        assert not isinstance(result, TokenError)
+        assert result.access_token
+        assert result.token_type == "Bearer"
+
+    def test_tx_code_invalid(self) -> None:
+        import hashlib
+
+        usecase, codes, _refresh, _revoked = _make_usecase()
+        self._code(codes, tx_code_hash=hashlib.sha256(b"1234").hexdigest())
+        request = TokenRequest(
+            grant_type="urn:ietf:params:oauth:grant-type:pre-authorized_code",
+            pre_authorized_code="preauth-code",
+            client_id="web-app",
+            client_secret=_CLIENT_SECRET,
+            tx_code="9999",
+            scope="openid4vci",
+        )
+        result = run(usecase.execute(request))
+        assert isinstance(result, TokenError)
+        assert result.error == "invalid_grant"
+
+    def test_unknown_code(self) -> None:
+        usecase, _codes, _refresh, _revoked = _make_usecase()
+        request = TokenRequest(
+            grant_type="urn:ietf:params:oauth:grant-type:pre-authorized_code",
+            pre_authorized_code="nope",
+            client_id="web-app",
+            client_secret=_CLIENT_SECRET,
+            scope="openid4vci",
+        )
+        result = run(usecase.execute(request))
+        assert isinstance(result, TokenError)
+        assert result.error == "invalid_grant"
+
+    def test_expired_code(self) -> None:
+        usecase, codes, _refresh, _revoked = _make_usecase()
+        self._code(codes, expires_in=-10)
+        request = TokenRequest(
+            grant_type="urn:ietf:params:oauth:grant-type:pre-authorized_code",
+            pre_authorized_code="preauth-code",
+            client_id="web-app",
+            client_secret=_CLIENT_SECRET,
+            scope="openid4vci",
+        )
+        result = run(usecase.execute(request))
+        assert isinstance(result, TokenError)
+        assert result.error == "invalid_grant"
+
+    def test_reused_code(self) -> None:
+        usecase, codes, _refresh, _revoked = _make_usecase()
+        self._code(codes)
+        request = TokenRequest(
+            grant_type="urn:ietf:params:oauth:grant-type:pre-authorized_code",
+            pre_authorized_code="preauth-code",
+            client_id="web-app",
+            client_secret=_CLIENT_SECRET,
+            scope="openid4vci",
+        )
+        first = run(usecase.execute(request))
+        assert not isinstance(first, TokenError)
+        second = run(usecase.execute(request))
+        assert isinstance(second, TokenError)
+        assert second.error == "invalid_grant"
+
+    def test_wrong_client(self) -> None:
+        usecase, codes, _refresh, _revoked = _make_usecase()
+        self._code(codes, client_id="other-client")
+        request = TokenRequest(
+            grant_type="urn:ietf:params:oauth:grant-type:pre-authorized_code",
+            pre_authorized_code="preauth-code",
+            client_id="web-app",
+            client_secret=_CLIENT_SECRET,
+            scope="openid4vci",
+        )
+        result = run(usecase.execute(request))
+        assert isinstance(result, TokenError)
+        assert result.error == "invalid_grant"
