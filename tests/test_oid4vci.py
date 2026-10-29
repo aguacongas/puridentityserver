@@ -8,7 +8,10 @@ from __future__ import annotations
 from urllib.parse import urlsplit
 
 import jwt as pyjwt
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi.testclient import TestClient
+import jwt as _jwt
 
 from puridentityserver.application.oid4vci import credential_vct
 from puridentityserver.infrastructure.settings import Settings
@@ -125,3 +128,92 @@ def test_credential_rejects_invalid_bearer() -> None:
     client = TestClient(create_app(settings=settings))
     response = client.post("/credential", headers={"Authorization": "Bearer token"})
     assert response.status_code == 401
+
+
+def test_deferred_and_notification_http() -> None:
+    import json as _json
+    import time
+
+    import jwt as _jwt
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    settings = Settings(oid4vci_enabled=True)
+    settings.clients_seed = [
+        {
+            "client_id": "tcc2",
+            "client_secret": "secret",
+            "scopes": "openid4vci",
+            "client_type": "confidential",
+        }
+    ]
+    app = create_app(settings=settings)
+    with TestClient(app) as client:
+        assert client.post("/deferred_credential", json={"transaction_id": "x"}).status_code == 401
+        assert (
+            client.post(
+                "/notification", json={"notification_id": "x", "event": "credential_accepted"}
+            ).status_code
+            == 401
+        )
+
+        token_response = client.post(
+            "/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": "tcc2",
+                "client_secret": "secret",
+                "scope": "openid4vci",
+            },
+        )
+        assert token_response.status_code == 200, token_response.text
+        token = token_response.json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        deferred = client.post(
+            "/deferred_credential", json={"transaction_id": "tid"}, headers=headers
+        )
+        assert deferred.status_code == 400
+        assert deferred.json()["error"] == "invalid_transaction_id"
+
+        notif = client.post(
+            "/notification",
+            json={"notification_id": "nope", "event": "credential_accepted"},
+            headers=headers,
+        )
+        assert notif.status_code == 400
+        assert notif.json()["error"] == "invalid_notification_id"
+
+        nonce = client.post("/nonce").json()["c_nonce"]
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_jwk = _json.loads(
+            _jwt.algorithms.ECAlgorithm.to_jwk(private_key.public_key(), as_dict=False)
+        )
+        public_jwk["alg"] = "ES256"
+        proof = _jwt.encode(
+            {"aud": settings.issuer, "nonce": nonce, "iat": int(time.time())},
+            private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            ),
+            algorithm="ES256",
+            headers={"typ": "openid4vci-proof+jwt", "jwk": public_jwk},
+        )
+        cred = client.post(
+            "/credential",
+            json={
+                "credential_configuration_id": "puridentityserver-sdjwt-vc",
+                "proofs": {"jwt": [proof]},
+            },
+            headers=headers,
+        )
+        assert cred.status_code == 200, cred.text
+        notification_id = cred.json()["notification_id"]
+
+        accepted = client.post(
+            "/notification",
+            json={"notification_id": notification_id, "event": "credential_accepted"},
+            headers=headers,
+        )
+        assert accepted.status_code == 204
