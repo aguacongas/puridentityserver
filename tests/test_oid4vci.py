@@ -72,7 +72,9 @@ def test_signed_issuer_metadata_served_when_accepted() -> None:
         public_key = RSAAlgorithm.from_jwk(json.dumps(jwk))
     else:
         public_key = ECAlgorithm.from_jwk(json.dumps(jwk))
-    claims = pyjwt.decode(token, public_key, algorithms=[header["alg"]], options={"verify_aud": False})
+    claims = pyjwt.decode(
+        token, public_key, algorithms=[str(header["alg"])], options={"verify_aud": False}
+    )
     assert claims["sub"] == settings.issuer
     assert claims["credential_issuer"] == settings.issuer
     assert "iat" in claims
