@@ -56,12 +56,8 @@ def oid4vp_router(
             return _error(501, "not_implemented", "OID4VP désactivé")
         fields = await _read_fields(request)
         vp_token = fields.get("vp_token")
-        presentation_submission = fields.get("presentation_submission")
-        state = str(fields.get("state") or "")
-        result = await usecase.validate_presentation_response(
+        result = usecase.validate_presentation_response(
             vp_token=vp_token,
-            presentation_submission=presentation_submission,
-            state=state,
         )
         if isinstance(result, str):
             return _error(400, result, "Réponse de présentation invalide.")

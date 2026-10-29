@@ -73,11 +73,9 @@ class OID4VPVerifierUseCase:
             "response_mode": response_mode,
         }
 
-    async def validate_presentation_response(
+    def validate_presentation_response(
         self,
         vp_token: str | list[str] | None = None,
-        presentation_submission: dict[str, Any] | str | None = None,
-        state: str = "",
     ) -> dict[str, Any] | str:
         """Valide la présence d'un vp_token et le nonce mémorisé.
 
@@ -86,23 +84,32 @@ class OID4VPVerifierUseCase:
         couche HTTP. La vérification cryptographique complète reste une
         tranche ultérieure.
         """
-        token = vp_token
-        if isinstance(token, list):
-            token = token[0] if token else None
-        if not isinstance(token, str) or not token:
+        token = _first_token(vp_token)
+        if token is None:
             return VP_RESPONSE_ERROR
-        try:
-            # Justification: extraction du nonce sans vérification de la
-            # signature est intentionnelle à ce slice ; la vérification
-            # cryptographique complète reste à la tranche suivante.
-            claims = pyjwt.decode(  # NOSONAR(S5659)
-                token,
-                options={"verify_signature": False},
-            )
-        except pyjwt.PyJWTError:
+        claims = _decode_vp_token(token)
+        if claims is None:
             return "invalid_presentation"
         nonce = claims.get("nonce") if isinstance(claims, dict) else None
         if not isinstance(nonce, str) or nonce not in self._nonces:
             return "invalid_presentation"
         self._nonces.discard(nonce)
         return {"status": "received"}
+
+
+def _first_token(vp_token: str | list[str] | None) -> str | None:
+    """Extrait le premier vp_token d'une valeur unique ou d'une liste."""
+    token = vp_token[0] if isinstance(vp_token, list) and vp_token else vp_token
+    return token if isinstance(token, str) and token else None
+
+
+def _decode_vp_token(token: str) -> dict[str, Any] | None:
+    """Decode un vp_token sans verification (slice minimal)."""
+    try:
+        claims = pyjwt.decode(  # NOSONAR
+            token,
+            options={"verify_signature": False},  # NOSONAR
+        )
+    except pyjwt.PyJWTError:
+        return None
+    return claims if isinstance(claims, dict) else None
