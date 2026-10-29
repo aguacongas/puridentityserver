@@ -323,7 +323,8 @@ class OID4VCIIssuerUseCase:
         x5c = header.get("x5c")
         if isinstance(x5c, list) and x5c and isinstance(x5c[0], str):
             try:
-                der = base64.b64decode(x5c[0], validate=True)
+                padding = "=" * (-len(x5c[0]) % 4)
+                der = base64.b64decode(x5c[0] + padding)
                 return x509.load_der_x509_certificate(der).public_key()
             except Exception:
                 return None
