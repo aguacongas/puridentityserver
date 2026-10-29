@@ -23,7 +23,32 @@ def test_flag_on_creates_presentation_request() -> None:
     assert "nonce" in body
 
 
-def test_vp_response_not_implemented_yet() -> None:
+def test_vp_response_requires_vp_token() -> None:
     client = TestClient(create_app(settings=Settings(oid4vp_enabled=True)))
     response = client.post("/vp_response")
-    assert response.status_code == 501
+    assert response.status_code == 400
+
+
+def test_vp_response_http() -> None:
+    import jwt as pyjwt
+
+    client = TestClient(create_app(settings=Settings(oid4vp_enabled=True)))
+
+    # Corps vide : 400.
+    assert client.post("/vp_response").status_code == 400
+
+    request = client.post("/presentation_requests", json={})
+    assert request.status_code == 200
+    nonce = request.json()["nonce"]
+
+    vp_token = pyjwt.encode(
+        {"nonce": nonce}, "secret123456789012345678901234567890", algorithm="HS256"
+    )
+
+    form_response = client.post("/vp_response", data={"vp_token": vp_token})
+    assert form_response.status_code == 200
+    assert form_response.json()["status"] == "received"
+
+    json_response = client.post("/vp_response", json={"vp_token": vp_token})
+    # nonce deja consomme.
+    assert json_response.status_code == 400
