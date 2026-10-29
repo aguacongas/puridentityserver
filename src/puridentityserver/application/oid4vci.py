@@ -269,7 +269,8 @@ class OID4VCIIssuerUseCase:
                         "c_nonce inconnu, invalide ou expire",
                     ),
                 )
-            attestation = pyjwt.get_unverified_header(proof_jwt).get("key_attestation")
+            proof_header = pyjwt.get_unverified_header(proof_jwt)  # NOSONAR(S5659)
+            attestation = proof_header.get("key_attestation")
             if isinstance(attestation, str) and not self._key_attestation_valid(attestation, jwk):
                 return (None, CredentialError("invalid_proof", "attestation de cle invalide"))
             binding_jwks.append(jwk)
@@ -357,7 +358,7 @@ class OID4VCIIssuerUseCase:
     def _key_attestation_valid(self, attestation_jwt: str, binding_jwk: dict[str, Any]) -> bool:
         """Valide la signature d une attestation de cle."""
         try:
-            header = pyjwt.get_unverified_header(attestation_jwt)
+            header = pyjwt.get_unverified_header(attestation_jwt)  # NOSONAR(S5659)
         except pyjwt.PyJWTError:
             return False
         algorithm_name = header.get("alg")
