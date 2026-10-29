@@ -563,22 +563,30 @@ class OID4VCIIssuerUseCase:
                 salt = secrets.token_urlsafe(16)
                 disclosure = [salt, claim_name, claim_value]
                 disclosure_json = json.dumps(disclosure, separators=(",", ":"))
-                digest = base64.urlsafe_b64encode(
-                    hashlib.sha256(disclosure_json.encode("ascii")).digest()
-                ).rstrip(b"=").decode("ascii")
+                digest = (
+                    base64.urlsafe_b64encode(
+                        hashlib.sha256(disclosure_json.encode("ascii")).digest()
+                    )
+                    .rstrip(b"=")
+                    .decode("ascii")
+                )
                 sd_payload.append(digest)
-                encoded_disclosure = base64.urlsafe_b64encode(
-                    disclosure_json.encode("ascii")
-                ).rstrip(b"=").decode("ascii")
+                encoded_disclosure = (
+                    base64.urlsafe_b64encode(disclosure_json.encode("ascii"))
+                    .rstrip(b"=")
+                    .decode("ascii")
+                )
                 disclosures.append(encoded_disclosure)
             # Digests leurres (RFC 9901 s4.2.6) pour masquer le nombre de
             # claims reellement divulgables.
             for _ in range(2):
                 decoy_salt = secrets.token_urlsafe(16)
                 decoy_json = json.dumps([decoy_salt], separators=(",", ":"))
-                decoy_digest = base64.urlsafe_b64encode(
-                    hashlib.sha256(decoy_json.encode("ascii")).digest()
-                ).rstrip(b"=").decode("ascii")
+                decoy_digest = (
+                    base64.urlsafe_b64encode(hashlib.sha256(decoy_json.encode("ascii")).digest())
+                    .rstrip(b"=")
+                    .decode("ascii")
+                )
                 sd_payload.append(decoy_digest)
             payload: dict[str, object] = {
                 "iss": self._issuer,
