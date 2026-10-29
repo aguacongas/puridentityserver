@@ -36,6 +36,13 @@ def main() -> int:
     if status != 200:
         print(body)
         return 1
+    try:
+        metadata = json.loads(body)
+        batch = metadata.get("batch_credential_issuance", {})
+        if isinstance(batch, dict):
+            print(f"batch_size: {batch.get('batch_size')}")
+    except json.JSONDecodeError:
+        pass
 
     status, content_type, token = _get(
         "/.well-known/openid-credential-issuer", accept="application/jwt"

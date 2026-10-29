@@ -47,3 +47,5 @@ local, plan `oid4vci`) deja documentee dans `certification/README.md`.
 
 - README pas-a-pas, lancement, config, resultat attendu.
 - Coherent avec `samples/oid4vp-verifier-client` et `samples/fapi2-client`.
+- Variante batch : la metadata annonce batch_credential_issuance.batch_size; /credential accepte plusieurs proofs.jwt.
+
