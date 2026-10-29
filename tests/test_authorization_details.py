@@ -31,7 +31,9 @@ def test_non_list_raises() -> None:
 
 def test_missing_type_raises() -> None:
     with pytest.raises(AuthorizationDetailsError):
-        parse_authorization_details('[{"credential_configuration_id":"puridentityserver-sdjwt-vc"}]')
+        parse_authorization_details(
+            '[{"credential_configuration_id":"puridentityserver-sdjwt-vc"}]'
+        )
 
 
 def test_unknown_type_ignored() -> None:
