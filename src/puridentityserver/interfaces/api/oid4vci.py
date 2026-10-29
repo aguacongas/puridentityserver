@@ -5,14 +5,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from puridentityserver.application.oid4vci import (
-    CREDENTIAL_CONFIGURATION_ID,
     CREDENTIAL_VCT_PATH,
-    SD_JWT_VC_TYP,
     CredentialError,
     credential_vct,
+    issuer_metadata_payload,
 )
 from puridentityserver.interfaces.api.forwarded import public_url
 
@@ -35,14 +34,16 @@ def oid4vci_router(
     normalized = issuer.rstrip("/")
     usecase = oid4vci_usecase
 
-    _mount_metadata(router, normalized)
+    _mount_metadata(router, normalized, usecase)
     _mount_oauth_metadata(router, discovery_usecase)
     _mount_nonce(router, usecase)
     _mount_credential(router, usecase, trust_proxy_headers)
     return router
 
 
-def _mount_metadata(router: APIRouter, normalized: str) -> None:
+def _mount_metadata(
+    router: APIRouter, normalized: str, usecase: OID4VCIIssuerUseCase | None
+) -> None:
     @router.get(
         "/.well-known/openid-credential-issuer",
         summary="Métadonnées de l'émetteur OID4VCI (OIDF 1.0 §9.1)",
@@ -53,27 +54,15 @@ def _mount_metadata(router: APIRouter, normalized: str) -> None:
         include_in_schema=False,
         response_model=None,
     )
-    async def credential_issuer_metadata() -> JSONResponse:
-        return JSONResponse(
-            {
-                "credential_issuer": normalized,
-                "authorization_servers": [normalized],
-                "credential_endpoint": (f"{normalized}/credential"),
-                "nonce_endpoint": (f"{normalized}/nonce"),
-                "credential_configurations_supported": {
-                    CREDENTIAL_CONFIGURATION_ID: {
-                        "format": SD_JWT_VC_TYP,
-                        "scope": "openid4vci",
-                        "vct": credential_vct(normalized),
-                        "cryptographic_binding_methods_supported": ["jwk"],
-                        "credential_signing_alg_values_supported": ["RS256"],
-                        "proof_types_supported": {
-                            "jwt": {"proof_signing_alg_values_supported": ["ES256", "RS256"]}
-                        },
-                    }
-                },
-            }
-        )
+    async def credential_issuer_metadata(request: Request) -> Response:
+        # OID4VCI 1.0 §12.2.2 : le client peut demander des métadonnées
+        # signées en envoyant ``Accept: application/jwt``. Sinon on garde le
+        # comportement historique en ``application/json`` non signé.
+        accept = request.headers.get("accept", "").lower()
+        if usecase is not None and "application/jwt" in accept:
+            token = await usecase.signed_issuer_metadata()
+            return Response(content=token, media_type="application/jwt")
+        return JSONResponse(issuer_metadata_payload(normalized), media_type=_JSON_MEDIA_TYPE)
 
     @router.get(
         CREDENTIAL_VCT_PATH,

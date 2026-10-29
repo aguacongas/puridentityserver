@@ -50,6 +50,36 @@ def test_credential_type_metadata_served_at_vct() -> None:
     assert body["claims"]
 
 
+def test_signed_issuer_metadata_served_when_accepted() -> None:
+    settings = Settings(oid4vci_enabled=True)
+    client = TestClient(create_app(settings=settings))
+    response = client.get(
+        "/.well-known/openid-credential-issuer",
+        headers={"Accept": "application/jwt"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/jwt")
+    token = response.text
+    header = pyjwt.get_unverified_header(token)
+    assert header["typ"] == "openidvci-issuer-metadata+jwt"
+    assert "jwk" in header
+    import json
+
+    from jwt.algorithms import ECAlgorithm, RSAAlgorithm
+
+    jwk = header["jwk"]
+    if jwk["kty"] == "RSA":
+        public_key = RSAAlgorithm.from_jwk(json.dumps(jwk))
+    else:
+        public_key = ECAlgorithm.from_jwk(json.dumps(jwk))
+    claims = pyjwt.decode(
+        token, public_key, algorithms=[str(header["alg"])], options={"verify_aud": False}
+    )
+    assert claims["sub"] == settings.issuer
+    assert claims["credential_issuer"] == settings.issuer
+    assert "iat" in claims
+
+
 def test_metadata_served_with_trailing_slash() -> None:
     client = TestClient(create_app(settings=Settings(oid4vci_enabled=True)))
     response = client.get("/.well-known/openid-credential-issuer/")

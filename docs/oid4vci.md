@@ -22,3 +22,17 @@ mdoc, c_nonce, HAIP) sont traitées dans les sous-issues #222, #223 et #224.
 
 
 Le harness de certification expose le plan oid4vci (selectors + plan JSON) pour mesurer l'ecart restant.
+
+
+## Metadonnees d emetteur signees (OID4VCI 1.0)
+
+L emetteur peut servir ses metadonnees signees en envoyant :
+
+    GET /.well-known/openid-credential-issuer
+    Accept: application/jwt
+
+La reponse est un JWT signe avec la cle active de l OP (media type application/jwt),
+typ openidvci-issuer-metadata+jwt, la cle publique dans l entete JOSE (jwk),
+les claims sub et iat requis et tous les parametres de metadonnees au
+premier niveau. Par defaut (pas d entete Accept: application/jwt), la
+reponse reste en application/json non signe.

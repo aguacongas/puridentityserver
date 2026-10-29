@@ -8,9 +8,7 @@ manuellement le module verifier (oid4vp-1final-verifier-haip-test-plan).
 
 from __future__ import annotations
 
-import subprocess
 import sys
-import time
 
 print("=== OID4VP verifier smoke (placeholder) ===")
 print("L'OP est demarre manuellement via :")
