@@ -103,3 +103,14 @@ parametre est persiste sur le code d'autorisation, porte dans l'access token
 a la place de `credential_configuration_id`. Sans `authorization_details`,
 `/credential` conserve l'exigence du scope `openid4vci` et de
 `credential_configuration_id`.
+
+
+## Divulgations selectives SD-JWT (RFC 9901)
+
+Le credential SD-JWT emis porte les claims `given_name` et `family_name`
+sous forme selectivement divulgables : le JWT emetteur contient leur
+digest sale dans le membre `_sd` (`_sd_alg = sha-256`), et les
+divulgations completes figurent dans le format combine (apres le premier
+`~`). Des digests leurres masquent le nombre de claims. Le wallet peut
+ainsi reveler un sous-ensemble de ces claims lors de la presentation, sans
+reveler le reste.
