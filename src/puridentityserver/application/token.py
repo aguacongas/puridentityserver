@@ -1471,17 +1471,25 @@ class TokenUseCase:
             return expected == auth_code.code_challenge
         return code_verifier == auth_code.code_challenge
 
-    async def _pre_authorized_code(self, request: TokenRequest) -> TokenResponse | TokenError:
-        """Echange un code pre-autorise contre un access token (OID4VCI)."""
-        auth_code = await self._codes.find_by_code(request.pre_authorized_code)
+    async def _resolve_pre_authorized_code(
+        self, code_value: str, now: datetime
+    ) -> AuthorizationCode | TokenError:
+        auth_code = await self._codes.find_by_code(code_value)
         if auth_code is None or not auth_code.pre_authorized:
             return self._error("invalid_grant", "Code pre-autorise invalide")
         if auth_code.is_consumed:
             await self._revoke_issued_tokens(auth_code)
             return self._error("invalid_grant", "Code pre-autorise deja consomme")
-        now = datetime.now(timezone.utc)
         if auth_code.expires_at < now:
             return self._error("invalid_grant", "Code pre-autorise expire")
+        return auth_code
+
+    async def _pre_authorized_code(self, request: TokenRequest) -> TokenResponse | TokenError:
+        """Echange un code pre-autorise contre un access token (OID4VCI)."""
+        now = datetime.now(timezone.utc)
+        auth_code = await self._resolve_pre_authorized_code(request.pre_authorized_code, now)
+        if isinstance(auth_code, TokenError):
+            return auth_code
 
         client = await self._clients.find_by_id(request.client_id)
         if client is None or not client.is_active:
