@@ -221,41 +221,62 @@ class OID4VCIIssuerUseCase:
         if not sub:
             return CredentialError("invalid_token", "access token sans sujet", 401)
 
-        authorization_details_claim = claims.get("authorization_details")
-        if has_authorization_details(authorization_details_claim):
-            resolved_configuration, configuration_error = self._resolve_authorized_configuration(
-                authorization_details_claim,
-                credential_configuration_id,
-                credential_identifier,
-            )
-            if configuration_error is not None:
-                return configuration_error
-            credential_configuration_id = resolved_configuration
-        else:
-            scopes = str(claims.get("scope") or "").split()
-            if "openid4vci" not in scopes:
-                return CredentialError(
-                    "insufficient_scope",
-                    "scope openid4vci requis pour emettre un credential",
-                    403,
-                )
-            configuration_error = self._configuration_error(
-                credential_configuration_id, credential_identifier, requested_format
-            )
-            if configuration_error is not None:
-                return configuration_error
-            requested_format = None  # déjà validé par _configuration_error
-
-        if requested_format is not None and requested_format not in CREDENTIAL_FORMATS:
-            return CredentialError(
-                "invalid_credential_request", "format de credential non supporte"
-            )
+        credential_configuration_id, configuration_error = self._resolve_requested_configuration(
+            claims,
+            credential_configuration_id,
+            credential_identifier,
+            requested_format,
+        )
+        if configuration_error is not None:
+            return configuration_error
 
         binding_jwks, proof_error = await self._binding_keys(proofs)
         if proof_error is not None:
             return proof_error
 
         return await self._issue(sub, binding_jwks)
+
+    @staticmethod
+    def _resolve_requested_configuration(
+        claims: dict[str, object],
+        credential_configuration_id: str | None,
+        credential_identifier: str | None,
+        requested_format: str | None,
+    ) -> tuple[str | None, CredentialError | None]:
+        """Résout la configuration ciblée selon le type d'autorisation du jeton."""
+        authorization_details_claim = claims.get("authorization_details")
+        if has_authorization_details(authorization_details_claim):
+            resolved, configuration_error = OID4VCIIssuerUseCase._resolve_authorized_configuration(
+                authorization_details_claim,
+                credential_configuration_id,
+                credential_identifier,
+            )
+            if configuration_error is not None:
+                return (None, configuration_error)
+            if requested_format is not None and requested_format not in CREDENTIAL_FORMATS:
+                return (
+                    None,
+                    CredentialError(
+                        "invalid_credential_request", "format de credential non supporte"
+                    ),
+                )
+            return (resolved, None)
+        scopes = str(claims.get("scope") or "").split()
+        if "openid4vci" not in scopes:
+            return (
+                None,
+                CredentialError(
+                    "insufficient_scope",
+                    "scope openid4vci requis pour emettre un credential",
+                    403,
+                ),
+            )
+        configuration_error = OID4VCIIssuerUseCase._configuration_error(
+            credential_configuration_id, credential_identifier, requested_format
+        )
+        if configuration_error is not None:
+            return (None, configuration_error)
+        return (credential_configuration_id, None)
 
     @staticmethod
     def _resolve_authorized_configuration(
