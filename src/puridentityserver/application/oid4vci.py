@@ -76,6 +76,7 @@ def issuer_metadata_payload(issuer: str) -> dict[str, Any]:
                 },
             }
         },
+        "batch_credential_issuance": {"batch_size": 5},
     }
 
 
@@ -198,11 +199,11 @@ class OID4VCIIssuerUseCase:
         if configuration_error is not None:
             return configuration_error
 
-        binding_jwk, proof_error = await self._binding_key(proofs)
+        binding_jwks, proof_error = await self._binding_keys(proofs)
         if proof_error is not None:
             return proof_error
 
-        return await self._issue(sub, binding_jwk)
+        return await self._issue(sub, binding_jwks)
 
     @staticmethod
     def _configuration_error(
@@ -230,30 +231,38 @@ class OID4VCIIssuerUseCase:
             )
         return None
 
-    async def _binding_key(
+    async def _binding_keys(
         self, proofs: Iterable[str]
-    ) -> tuple[dict[str, Any] | None, CredentialError | None]:
-        """Vérifie la première preuve JWT et rend la JWK à lier au credential."""
+    ) -> tuple[list[dict[str, Any]] | None, CredentialError | None]:
+        """Vérifie chaque preuve JWT et rend les JWK à lier aux credentials."""
         candidates = [proof for proof in proofs if proof]
         if not candidates:
             return (
                 None,
                 CredentialError("invalid_proof", "preuve cryptographique (proofs.jwt) requise"),
             )
-        claims, jwk = self._decode_proof(candidates[0])
-        if claims is None or jwk is None:
-            return (None, CredentialError("invalid_proof", "preuve JWT invalide"))
-        if not self._audience_matches(claims.get("aud")):
-            return (
-                None,
-                CredentialError("invalid_proof", "audience de la preuve differente de l'emetteur"),
-            )
-        nonce = claims.get("nonce")
-        if not isinstance(nonce, str) or not nonce:
-            return (None, CredentialError("invalid_proof", "nonce absent de la preuve"))
-        if not await self._c_nonce_valid(nonce):
-            return (None, CredentialError("invalid_nonce", "c_nonce inconnu, invalide ou expire"))
-        return (jwk, None)
+        binding_jwks: list[dict[str, Any]] = []
+        for proof_jwt in candidates:
+            claims, jwk = self._decode_proof(proof_jwt)
+            if claims is None or jwk is None:
+                return (None, CredentialError("invalid_proof", "preuve JWT invalide"))
+            if not self._audience_matches(claims.get("aud")):
+                return (
+                    None,
+                    CredentialError(
+                        "invalid_proof", "audience de la preuve differente de l'emetteur"
+                    ),
+                )
+            nonce = claims.get("nonce")
+            if not isinstance(nonce, str) or not nonce:
+                return (None, CredentialError("invalid_proof", "nonce absent de la preuve"))
+            if not await self._c_nonce_valid(nonce):
+                return (
+                    None,
+                    CredentialError("invalid_nonce", "c_nonce inconnu, invalide ou expire"),
+                )
+            binding_jwks.append(jwk)
+        return (binding_jwks, None)
 
     def _audience_matches(self, audience: object) -> bool:
         """Contrôle que la preuve vise bien cet émetteur."""
@@ -339,32 +348,43 @@ class OID4VCIIssuerUseCase:
             return False
         return True
 
-    async def _issue(self, sub: str, binding_jwk: dict[str, Any] | None) -> dict[str, Any]:
-        """Signe le SD-JWT VC et joint un nouveau ``c_nonce``."""
+    async def _issue(self, sub: str, binding_jwks: list[dict[str, Any]] | None) -> dict[str, Any]:
+        """Signe les SD-JWT VC d un lot et joint un nouveau ``c_nonce``."""
         key: KeyPair = await first_active_key(self._key_manager, self._algorithm)
         private_key = load_pem_private_key(key.private_key_pem.encode("ascii"), password=None)
         now = int(datetime.now(timezone.utc).timestamp())
-        rounded_now = (now // 300) * 300
-        payload: dict[str, object] = {
-            "iss": self._issuer,
-            "sub": sub,
-            "iat": rounded_now,
-            "exp": rounded_now + 1800,
-            "vct": credential_vct(self._issuer),
-        }
-        if binding_jwk is not None:
-            payload["cnf"] = {"jwk": binding_jwk}
-        headers = {"typ": SD_JWT_VC_TYP, "kid": key.kid, "alg": self._algorithm.value}
-        credential = cast(
-            str,
-            pyjwt.encode(payload, private_key, algorithm=self._algorithm.value, headers=headers),
-        )
-        return {
-            # Format combiné SD-JWT (RFC 9901 §8.1) : JWT émetteur suivi de
-            # ``~`` et, ici, d'aucune divulgation. Sans le ``~`` final le
-            # credential n'est pas un SD-JWT valide.
-            "credentials": [{"credential": f"{credential}~"}],
-        }
+        # Arrondi à l'heure pour éviter la corrélation inter-credential du lot
+        # (RFC 9901 §10.1) ; voir ``VCIEnsureBatchTimeClaimsNotLinkable``.
+        rounded_now = (now // 3600) * 3600
+        credentials: list[dict[str, str]] = []
+        if not binding_jwks:
+            binding_jwks = [None]  # type: ignore[list-item]
+        for binding_jwk in binding_jwks:
+            payload: dict[str, object] = {
+                "iss": self._issuer,
+                "sub": sub,
+                "iat": rounded_now,
+                "exp": rounded_now + 3600,
+                "vct": credential_vct(self._issuer),
+            }
+            if binding_jwk is not None:
+                payload["cnf"] = {"jwk": binding_jwk}
+            headers = {"typ": SD_JWT_VC_TYP, "kid": key.kid, "alg": self._algorithm.value}
+            credential = cast(
+                str,
+                pyjwt.encode(
+                    payload, private_key, algorithm=self._algorithm.value, headers=headers
+                ),
+            )
+            credentials.append(
+                {
+                    # Format combiné SD-JWT (RFC 9901 §8.1) : JWT émetteur suivi de
+                    # ``~`` et, ici, d'aucune divulgation. Sans le ``~`` final le
+                    # credential n'est pas un SD-JWT valide.
+                    "credential": f"{credential}~",
+                }
+            )
+        return {"credentials": credentials}
 
     async def _dpop_authorized(
         self,
