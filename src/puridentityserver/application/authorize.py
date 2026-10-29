@@ -36,6 +36,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
 
+from puridentityserver.application.authorization_details import (
+    AuthorizationDetailsError,
+    grant_authorization_details,
+    parse_authorization_details,
+)
 from puridentityserver.application.claims_request import (
     ClaimsRequest,
     parse_claims_parameter,
@@ -138,6 +143,7 @@ class AuthorizeRequest:
     openid2_realm: str = ""  # openid.realm demandé (spec de migration OpenID 2.0 §2)
     dpop_jkt: str = ""  # empreinte de la clé DPoP liant le code (RFC 9449 §4.2)
     resource: str = ""  # resource indicators RFC 8707 (URI uniques ou tableau JSON compact)
+    authorization_details: str = ""  # détails d'autorisation RFC 9396 (OpenID4VCI §5.1.1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,6 +245,23 @@ async def _parameter_error(
             "invalid_request",
             request,
             description="code_challenge_method doit être 'S256' ou 'plain' (RFC 7636 §4.3)",
+            response_mode=response_mode,
+        )
+    if request.authorization_details:
+        try:
+            parse_authorization_details(request.authorization_details)
+        except AuthorizationDetailsError as exc:
+            return _authorize_error(
+                "invalid_authorization_details",
+                request,
+                description=str(exc),
+                response_mode=response_mode,
+            )
+    if not request.scope and not request.authorization_details:
+        return _authorize_error(
+            "invalid_scope",
+            request,
+            description="scope ou authorization_details requis (OID4VCI 1.0 §5.1.1)",
             response_mode=response_mode,
         )
     return await _resource_error(request, scope_registry, response_mode)
@@ -667,6 +690,7 @@ class AuthorizeUseCase:
                 code,
                 validated.wants_id_token,
                 validated.wants_token,
+                authorization_details=request.authorization_details,
             )
             if isinstance(issued, AuthorizeError):
                 return issued
@@ -758,6 +782,7 @@ class AuthorizeUseCase:
             openid2_realm=request.openid2_realm,
             dpop_jkt=request.dpop_jkt,
             resource_uris=parse_resource_parameter(request.resource),
+            authorization_details=request.authorization_details,
             expires_at=now + timedelta(seconds=code_ttl),
         )
         await self._codes.save(code)
@@ -771,6 +796,7 @@ class AuthorizeUseCase:
         code: str,
         wants_id_token: bool,
         wants_token: bool,
+        authorization_details: str = "",
     ) -> tuple[str, str, int] | AuthorizeError:
         """Émet id_token et/ou access token depuis ``/authorize`` (implicit/hybrid).
 
@@ -810,7 +836,10 @@ class AuthorizeUseCase:
                 expires_at=expires_epoch,
                 issued_at=issued_at,
                 scopes=scopes,
-                additional_claims=_merged_userinfo_payload(claims_request, subject_claims),
+                additional_claims=_merge_authorization_details(
+                    _merged_userinfo_payload(claims_request, subject_claims),
+                    authorization_details,
+                ),
             )
             at_hash = _hash_artefact(access_token, self._config.signing_algorithm)
 
@@ -1113,6 +1142,21 @@ def _hash_artefact(value: str, algorithm: JWTAlgorithm) -> str:
         return ""
     digest = hashlib.new(f"sha{algorithm.value[-3:]}", value.encode("ascii")).digest()
     return base64.urlsafe_b64encode(digest[: len(digest) // 2]).rstrip(b"=").decode("ascii")
+
+
+def _merge_authorization_details(
+    base: Mapping[str, object] | None, raw: str
+) -> Mapping[str, object] | None:
+    """Ajoute le claim ``authorization_details`` accordé à un payload existant."""
+    payload: dict[str, object] = dict(base) if base else {}
+    if raw:
+        try:
+            details = parse_authorization_details(raw)
+        except AuthorizationDetailsError:
+            details = ()
+        if details:
+            payload["authorization_details"] = grant_authorization_details(details)
+    return payload or None
 
 
 def _merged_userinfo_payload(

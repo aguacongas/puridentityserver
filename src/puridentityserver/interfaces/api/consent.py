@@ -161,6 +161,7 @@ class _ConsentQueryParams(BaseModel):
     acr_values: str = ""
     claims: str = ""
     dpop_jkt: str = ""
+    authorization_details: str = ""
 
 
 class _ConsentFormParams(BaseModel):
@@ -186,6 +187,7 @@ class _ConsentFormParams(BaseModel):
     acr_values: str = ""
     claims: str = ""
     dpop_jkt: str = ""
+    authorization_details: str = ""
     action: str = "authorize"
 
 
@@ -211,6 +213,7 @@ def _authorize_request(params: _ConsentQueryParams | _ConsentFormParams) -> Auth
         acr_values=params.acr_values,
         claims=params.claims,
         dpop_jkt=params.dpop_jkt,
+        authorization_details=getattr(params, "authorization_details", ""),
     )
 
 
@@ -319,7 +322,12 @@ def consent_router(
                 jarm_signer,
                 issuer=issuer,
             )
-        await consent_usecase.grant(str(user.id), request.client_id, _requested_scopes(request))
+        await consent_usecase.grant(
+            str(user.id),
+            request.client_id,
+            _requested_scopes(request),
+            request.authorization_details,
+        )
         return await _execution_redirect(
             authorize_usecase,
             AuthorizeRequest(
@@ -336,6 +344,7 @@ def consent_router(
                 acr_values=request.acr_values,
                 claims=request.claims,
                 dpop_jkt=request.dpop_jkt,
+                authorization_details=request.authorization_details,
             ),
             par_usecase=par_usecase,
             pushed_reference=pushed_reference,
@@ -392,10 +401,15 @@ async def _handle_consent(
         acr_values=request.acr_values,
         claims=request.claims,
         dpop_jkt=request.dpop_jkt,
+        authorization_details=request.authorization_details,
     )
     forced = "consent" in request.prompt.split()
     if not await consent_usecase.is_required(
-        validated.client, subject, _requested_scopes(request), force=forced
+        validated.client,
+        subject,
+        _requested_scopes(request),
+        request.authorization_details,
+        force=forced,
     ):
         return await _execution_redirect(
             authorize_usecase,

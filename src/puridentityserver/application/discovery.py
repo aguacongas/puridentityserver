@@ -101,6 +101,7 @@ class DiscoveryConfig:
     # /authorize doit figurer dans ``scopes_supported`` (RFC 8414 §2), sinon
     # la suite de certification le tient pour inconnu.
     extra_scopes: tuple[str, ...] = ()
+    authorization_details_types: tuple[str, ...] = ()
 
 
 #: Types de réponse publiés au discovery ET dans l'entity statement
@@ -298,6 +299,10 @@ class DiscoveryUseCase:
         if self._config.federation_registration_endpoint:
             metadata["federation_registration_endpoint"] = (
                 self._config.federation_registration_endpoint
+            )
+        if self._config.authorization_details_types:
+            metadata["authorization_details_types_supported"] = list(
+                self._config.authorization_details_types
             )
         return metadata
 

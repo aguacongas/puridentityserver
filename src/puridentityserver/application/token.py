@@ -51,6 +51,11 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
 
+from puridentityserver.application.authorization_details import (
+    AuthorizationDetailsError,
+    grant_authorization_details,
+    parse_authorization_details,
+)
 from puridentityserver.application.claims_request import (
     ClaimsRequest,
     parse_claims_parameter,
@@ -187,6 +192,7 @@ class TokenResponse:
     expires_in: int = 3600
     scope: str = ""
     refresh_token: str = ""
+    authorization_details: tuple[dict[str, object], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -396,6 +402,11 @@ class TokenUseCase:
                 tls_cert_hash=tls_cert_hash,
                 subject_material=auth_code.subject_material,
             )
+        try:
+            parsed_details = parse_authorization_details(auth_code.authorization_details)
+        except AuthorizationDetailsError:
+            parsed_details = ()
+        granted_details = tuple(grant_authorization_details(parsed_details))
         issued = await self._issue_tokens(
             client,
             auth_code.subject,
@@ -413,6 +424,7 @@ class TokenUseCase:
             resources=resources,
             tls_cert_hash=tls_cert_hash,
             subject_material=auth_code.subject_material,
+            authorization_details=granted_details,
         )
         if isinstance(issued, TokenError):
             return issued
@@ -431,6 +443,7 @@ class TokenUseCase:
             auth_code.scopes,
             refresh_token,
             dpop_bound=binding.bound,
+            authorization_details=granted_details,
         )
 
     async def _validate_code_exchange(
@@ -1196,6 +1209,7 @@ class TokenUseCase:
         resources: tuple[str, ...] = (),
         tls_cert_hash: str = "",
         subject_material: str = "",
+        authorization_details: tuple[dict[str, object], ...] = (),
     ) -> tuple[str, str, int] | TokenError:
         """Émet et retourne l'``id_token``, l'``access_token`` et la TTL effective.
 
@@ -1228,6 +1242,7 @@ class TokenUseCase:
                 resources=resources,
                 tls_cert_hash=tls_cert_hash,
                 subject_material=subject_material,
+                authorization_details=authorization_details,
             )
             return "", access_token, token_ttl
         id_token_context = context or IdTokenContext()
@@ -1308,7 +1323,11 @@ class TokenUseCase:
             issued_at=issued_at,
             scopes=scopes,
             additional_claims=_access_token_additional_claims(
-                claims_request, dpop_jkt, tls_cert_hash, subject_claims
+                claims_request,
+                dpop_jkt,
+                tls_cert_hash,
+                subject_claims,
+                authorization_details=authorization_details,
             ),
         )
         return id_token, access_token, token_ttl
@@ -1335,6 +1354,7 @@ class TokenUseCase:
         resources: tuple[str, ...] = (),
         tls_cert_hash: str = "",
         subject_material: str = "",
+        authorization_details: tuple[dict[str, object], ...] = (),
     ) -> tuple[str, int]:
         """Émet et retourne un ``access_token`` et sa TTL effective.
 
@@ -1366,6 +1386,7 @@ class TokenUseCase:
                 dpop_jkt,
                 tls_cert_hash,
                 access_token_subject_claims(client, subject, material=subject_material),
+                authorization_details=authorization_details,
             ),
         )
         return access_token, token_ttl
@@ -1441,6 +1462,7 @@ class TokenUseCase:
         refresh_token: str = "",
         *,
         dpop_bound: bool = False,
+        authorization_details: tuple[dict[str, object], ...] = (),
     ) -> TokenResponse:
         """Construit une réponse de succès (avec ou sans id_token/refresh token).
 
@@ -1454,6 +1476,7 @@ class TokenUseCase:
             expires_in=token_ttl,
             scope=" ".join(sorted(scope.value for scope in scopes)),
             refresh_token=refresh_token,
+            authorization_details=authorization_details,
         )
 
     @staticmethod
@@ -1562,6 +1585,7 @@ def _access_token_additional_claims(
     dpop_jkt: str,
     tls_cert_hash: str = "",
     subject_claims: Mapping[str, str] | None = None,
+    authorization_details: tuple[dict[str, object], ...] = (),
 ) -> dict[str, object] | None:
     """Claims additionnels de l'access token : member ``userinfo`` + liens du jeton.
 
@@ -1592,6 +1616,8 @@ def _access_token_additional_claims(
         additional["cnf"] = confirmation
     if subject_claims:
         additional.update(subject_claims)
+    if authorization_details:
+        additional["authorization_details"] = [dict(d) for d in authorization_details]
     return additional or None
 
 

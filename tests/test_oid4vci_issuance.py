@@ -15,6 +15,7 @@ from puridentityserver.application.oid4vci import (
     OID4VCIIssuerUseCase,
     credential_vct,
 )
+from puridentityserver.domain.authorization import Scope
 from puridentityserver.domain.dpop import DPoPProof
 from puridentityserver.domain.jwks import JWTAlgorithm
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
@@ -95,7 +96,7 @@ async def _ready_usecase() -> tuple[OID4VCIIssuerUseCase, str]:
         audience="wallet-client",
         expires_at=now + 600,
         issued_at=now,
-        scopes=frozenset(),
+        scopes=frozenset({Scope.OID4VCI}),
     )
     usecase = OID4VCIIssuerUseCase(
         issuer=ISSUER,
@@ -330,7 +331,9 @@ def test_bound_token_accepted_with_matching_dpop_proof() -> None:
     validator = _FakeDpopValidator(
         DPoPProof(jkt="thumbprint", jti="j", htm="POST", htu="https://id.example/credential")
     )
-    usecase = _usecase_with({"sub": "alice", "cnf": {"jkt": "thumbprint"}}, validator)
+    usecase = _usecase_with(
+        {"sub": "alice", "scope": "openid4vci", "cnf": {"jkt": "thumbprint"}}, validator
+    )
 
     async def _task() -> None:
         await usecase._key_manager.ensure_active_key(2048, JWTAlgorithm.RS256)  # type: ignore[attr-defined]
@@ -351,7 +354,9 @@ def test_bound_token_accepted_with_matching_dpop_proof() -> None:
 
 def test_bound_token_rejected_when_dpop_proof_invalid() -> None:
     validator = _FakeDpopValidator(DpopValidationError("invalid_dpop_proof", "bad"))
-    usecase = _usecase_with({"sub": "alice", "cnf": {"jkt": "thumbprint"}}, validator)
+    usecase = _usecase_with(
+        {"sub": "alice", "scope": "openid4vci", "cnf": {"jkt": "thumbprint"}}, validator
+    )
 
     async def _task() -> None:
         await usecase._key_manager.ensure_active_key(2048, JWTAlgorithm.RS256)  # type: ignore[attr-defined]
@@ -370,7 +375,9 @@ def test_bound_token_rejected_when_dpop_key_differs() -> None:
     validator = _FakeDpopValidator(
         DPoPProof(jkt="other", jti="j", htm="POST", htu="https://id.example/credential")
     )
-    usecase = _usecase_with({"sub": "alice", "cnf": {"jkt": "thumbprint"}}, validator)
+    usecase = _usecase_with(
+        {"sub": "alice", "scope": "openid4vci", "cnf": {"jkt": "thumbprint"}}, validator
+    )
 
     async def _task() -> None:
         await usecase._key_manager.ensure_active_key(2048, JWTAlgorithm.RS256)  # type: ignore[attr-defined]
@@ -394,7 +401,7 @@ def test_key_attestation_valid_signature_accepted() -> None:
         issuer=ISSUER,
         key_manager=key_manager,
         algorithm=JWTAlgorithm.RS256,
-        token_manager=_FakeTokenManager({"sub": "user1"}),
+        token_manager=_FakeTokenManager({"sub": "user1", "scope": "openid4vci"}),
     )
     nonce = asyncio.run(usecase.issue_nonce())["c_nonce"]
 
@@ -440,7 +447,7 @@ def test_key_attestation_invalid_signature_rejected() -> None:
         issuer=ISSUER,
         key_manager=key_manager,
         algorithm=JWTAlgorithm.RS256,
-        token_manager=_FakeTokenManager({"sub": "user1"}),
+        token_manager=_FakeTokenManager({"sub": "user1", "scope": "openid4vci"}),
     )
     nonce = asyncio.run(usecase.issue_nonce())["c_nonce"]
 
@@ -498,7 +505,7 @@ def test_key_attestation_x509_valid_accepted() -> None:
         issuer=ISSUER,
         key_manager=key_manager,
         algorithm=JWTAlgorithm.RS256,
-        token_manager=_FakeTokenManager({"sub": "user1"}),
+        token_manager=_FakeTokenManager({"sub": "user1", "scope": "openid4vci"}),
     )
     nonce = asyncio.run(usecase.issue_nonce())["c_nonce"]
 

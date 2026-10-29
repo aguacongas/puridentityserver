@@ -56,6 +56,7 @@ class AuthorizationCodeRow(PersistenceBase):
     )
     pre_authorized: Mapped[bool] = mapped_column(Boolean, default=False)
     tx_code_hash: Mapped[str] = mapped_column(String(64), default="")
+    authorization_details: Mapped[str] = mapped_column(Text, default="", server_default=text("''"))
 
 
 class SQLAuthorizationCodeRepository:
@@ -133,6 +134,7 @@ def _to_row(code: AuthorizationCode) -> AuthorizationCodeRow:
         resource_uris=list(code.resource_uris),
         pre_authorized=code.pre_authorized,
         tx_code_hash=code.tx_code_hash,
+        authorization_details=code.authorization_details,
     )
 
 
@@ -168,4 +170,5 @@ def _from_row(row: AuthorizationCodeRow) -> AuthorizationCode:
         resource_uris=tuple(row.resource_uris or ()),
         pre_authorized=bool(row.pre_authorized),
         tx_code_hash=row.tx_code_hash or "",
+        authorization_details=row.authorization_details or "",
     )

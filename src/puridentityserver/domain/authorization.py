@@ -463,6 +463,7 @@ class AuthorizationCode:
     resource_uris: tuple[str, ...] = ()
     pre_authorized: bool = False
     tx_code_hash: str = ""
+    authorization_details: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -667,7 +668,12 @@ class Consent:
     client_id: str
     scopes: frozenset[Scope] = frozenset()
     granted_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    authorization_details: frozenset[str] = frozenset()
 
-    def covers(self, requested: frozenset[Scope]) -> bool:
-        """Vrai si les scopes demandés sont déjà inclus dans le consentement."""
-        return requested <= self.scopes
+    def covers(
+        self,
+        requested_scopes: frozenset[Scope],
+        requested_details: frozenset[str] = frozenset(),
+    ) -> bool:
+        """Vrai si les scopes et détails demandés sont déjà dans le consentement."""
+        return requested_scopes <= self.scopes and requested_details <= self.authorization_details

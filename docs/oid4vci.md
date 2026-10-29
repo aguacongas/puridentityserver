@@ -14,10 +14,15 @@ Dans cet état, l'OP publie ses métadonnées d'émetteur (`GET
 401** tout requête sans access token, **valide la preuve** `proof_type=jwt`
 (émetteur = issuer, preuve signée par la JWK embarquée) et émet, en cas de jeton
 valide, un credential **SD-JWT** (`vc+sd-jwt`) signé à la clé active de l'OP
-pour le `sub` transporté, avec `cnf.jwk` si une preuve est fournie. Le flux
-pre-autorisé est complet (offre de credential, code à usage unique, échange au
-token endpoint) ; le consentement, le flux wallet/authorization code et le
-c_nonce durable restent à implémenter.
+pour le `sub` transporté, avec `cnf.jwk` si une preuve est fournie. Le flux pre-autorisé (offre de credential, code à usage unique, échange au
+token endpoint) et le flux interactif (authorization code avec
+`authorization_details` RFC 9396, type `openid_credential`) sont implémentés.
+Le consentement réutilise l'écran OIDC existant. Le jeton d'accès porte le
+claim `authorization_details` (avec `credential_identifiers`) quand ce
+paramètre a été utilisé ; `/credential` exige alors `credential_identifier`
+et refuse `credential_configuration_id`. La publication AS annonce
+`authorization_details_types_supported: ["openid_credential"]`. Le c_nonce
+durable reste à implémenter.
 
 Les fonctionnalités prévues (grants, proof_type JWT, SD-JWT VC avec disclosure,
 mdoc, c_nonce, HAIP) sont traitées dans les sous-issues #222, #223 et #224.
@@ -85,3 +90,16 @@ Les offres sont persistees (`credential_offers`, backend memoire ou SQL)
 pour que la reference reste servable derriere plusieurs workers. La
 reference est une URL `https` en production (OID4VCI 1.0 s4.1 : scheme
 `https` exige), duree de vie et usage unique compris (s13.5).
+
+
+## Flux interactif (authorization code) (OID4VCI 1.0 s5.1.1)
+
+L'OP accepte `authorization_details` (RFC 9396) de type `openid_credential`
+sur `/authorize` et `/par`, en plus du scope `openid4vci` conserve en repli.
+Chaque detail porte un `credential_configuration_id` reconnu par l'OP. Le
+parametre est persiste sur le code d'autorisation, porte dans l'access token
+(claim RFC 9396 s7) et impose, sur `/credential`, l'usage de
+`credential_identifier` (appartenant aux `credential_identifiers` accordes)
+a la place de `credential_configuration_id`. Sans `authorization_details`,
+`/credential` conserve l'exigence du scope `openid4vci` et de
+`credential_configuration_id`.

@@ -94,6 +94,8 @@ def _success_response(result: TokenResponse) -> Response:
         payload["id_token"] = result.id_token
     if result.refresh_token:
         payload["refresh_token"] = result.refresh_token
+    if result.authorization_details:
+        payload["authorization_details"] = [dict(d) for d in result.authorization_details]
     return Response(
         content=json.dumps(payload),
         media_type="application/json",

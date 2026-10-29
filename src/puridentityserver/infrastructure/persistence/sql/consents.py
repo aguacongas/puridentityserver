@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, String
+from sqlalchemy import JSON, DateTime, String, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -32,6 +32,9 @@ class ConsentRow(PersistenceBase):
     client_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     scopes: Mapped[list[str]] = mapped_column(JSON)
     granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    authorization_details: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default=text("'[]'")
+    )
 
 
 class SQLConsentRepository:
@@ -85,6 +88,7 @@ def _to_row(consent: Consent) -> ConsentRow:
         client_id=consent.client_id,
         scopes=sorted(scope.value for scope in consent.scopes),
         granted_at=consent.granted_at,
+        authorization_details=sorted(consent.authorization_details),
     )
 
 
@@ -93,9 +97,11 @@ def _from_row(row: ConsentRow) -> Consent:
     granted_at = row.granted_at
     if granted_at.tzinfo is None:
         granted_at = granted_at.replace(tzinfo=timezone.utc)
+    details = row.authorization_details if row.authorization_details is not None else []
     return Consent(
         subject=row.subject,
         client_id=row.client_id,
         scopes=frozenset(Scope(value) for value in row.scopes),
         granted_at=granted_at,
+        authorization_details=frozenset(str(v) for v in details),
     )
