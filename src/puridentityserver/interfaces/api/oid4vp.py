@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Request
@@ -70,11 +71,22 @@ async def _read_fields(request: Request) -> dict[str, Any]:
     """Lit les champs direct_post (form ou JSON)."""
     content_type = request.headers.get("content-type", "").lower()
     if "application/json" in content_type:
-        try:
-            payload = await request.json()
-        except Exception:
-            return {}
-        return payload if isinstance(payload, dict) else {}
+        return await _read_json_fields(request)
+    data = await _read_form_fields(request)
+    return _normalize_submission(data)
+
+
+async def _read_json_fields(request: Request) -> dict[str, Any]:
+    """Lit les champs d'un corps JSON."""
+    try:
+        payload = await request.json()
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+async def _read_form_fields(request: Request) -> dict[str, Any]:
+    """Lit les champs d'un corps form-urlencoded."""
     try:
         form = await request.form()
     except Exception:
@@ -86,14 +98,23 @@ async def _read_fields(request: Request) -> dict[str, Any]:
             data[key] = value
         else:
             values = form.getlist(key)
-            if len(values) == 1 and isinstance(values[0], str):
-                data[key] = values[0]
-            else:
-                data[key] = [str(v) for v in values if isinstance(v, str)]
-    # presentation_submission may be JSON string.
-    if isinstance(data.get("presentation_submission"), str):
+            data[key] = _collapse_form_values(values)
+    return data
+
+
+def _collapse_form_values(values: Sequence[object]) -> object:
+    """Réduit une liste form en scalaire ou en liste de chaînes."""
+    if len(values) == 1 and isinstance(values[0], str):
+        return values[0]
+    return [str(v) for v in values if isinstance(v, str)]
+
+
+def _normalize_submission(data: dict[str, Any]) -> dict[str, Any]:
+    """Parse presentation_submission s'il est encodé en JSON textuel."""
+    value = data.get("presentation_submission")
+    if isinstance(value, str):
         with contextlib.suppress(Exception):
-            data["presentation_submission"] = json.loads(data["presentation_submission"])
+            data["presentation_submission"] = json.loads(value)
     return data
 
 
