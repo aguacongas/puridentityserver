@@ -23,7 +23,7 @@ def test_flag_on_creates_presentation_request() -> None:
     assert "nonce" in body
 
 
-def test_vp_response_not_implemented_yet() -> None:
+def test_vp_response_requires_vp_token() -> None:
     client = TestClient(create_app(settings=Settings(oid4vp_enabled=True)))
     response = client.post("/vp_response")
-    assert response.status_code == 501
+    assert response.status_code == 400

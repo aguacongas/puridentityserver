@@ -12,3 +12,5 @@ ou `PURIDENTITYSERVER_OID4VP_ENABLED=true`.
 Dans cet état, l'OP monte `POST /presentation_requests` (request object signé) et
 `POST /vp_response`, qui renvoie `501` en attente de la validation complète de la
 présentation (sous-issue #223).
+
+Validation de la reponse direct_post implementee (vp_token, nonce).

@@ -1,14 +1,17 @@
-"""Routes FastAPI minimales pour OpenID4VP (slice 0, issue #172/#223)."""
+"""Routes FastAPI minimales pour OpenID4VP (slice 0, issue #172/#223 et suivantes)."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import contextlib
+import json
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 if TYPE_CHECKING:
     from puridentityserver.application.oid4vp import OID4VPVerifierUseCase
+
 
 _JSON_MEDIA_TYPE = "application/json"
 
@@ -49,17 +52,53 @@ def oid4vp_router(
         response_model=None,
     )
     async def vp_response(request: Request) -> JSONResponse:
-        # Validation de la présentation : tranche suivante (#223).
-        return JSONResponse(
-            {
-                "error": "not_implemented",
-                "error_description": "validation de réponse OID4VP pas encore implémentée.",
-            },
-            status_code=501,
-            media_type=_JSON_MEDIA_TYPE,
+        if usecase is None:
+            return _error(501, "not_implemented", "OID4VP désactivé")
+        fields = await _read_fields(request)
+        vp_token = fields.get("vp_token")
+        presentation_submission = fields.get("presentation_submission")
+        state = str(fields.get("state") or "")
+        result = await usecase.validate_presentation_response(
+            vp_token=vp_token,
+            presentation_submission=presentation_submission,
+            state=state,
         )
+        if isinstance(result, str):
+            return _error(400, result, "Réponse de présentation invalide.")
+        return JSONResponse(result, media_type=_JSON_MEDIA_TYPE)
 
     return router
+
+
+async def _read_fields(request: Request) -> dict[str, Any]:
+    """Lit les champs direct_post (form ou JSON)."""
+    content_type = request.headers.get("content-type", "").lower()
+    if "application/json" in content_type:
+        try:
+            payload = await request.json()
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+    try:
+        form = await request.form()
+    except Exception:
+        return {}
+    data: dict[str, Any] = {}
+    for key in form:
+        value = form.get(key)
+        if isinstance(value, str):
+            data[key] = value
+        else:
+            values = form.getlist(key)
+            if len(values) == 1 and isinstance(values[0], str):
+                data[key] = values[0]
+            else:
+                data[key] = [str(v) for v in values if isinstance(v, str)]
+    # presentation_submission may be JSON string.
+    if isinstance(data.get("presentation_submission"), str):
+        with contextlib.suppress(Exception):
+            data["presentation_submission"] = json.loads(data["presentation_submission"])
+    return data
 
 
 def _error(status_code: int, error: str, description: str) -> JSONResponse:
