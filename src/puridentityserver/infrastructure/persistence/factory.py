@@ -23,6 +23,9 @@ from puridentityserver.interfaces.repositories.backchannel_authentication_reposi
 )
 from puridentityserver.interfaces.repositories.client_repository import ClientRepository
 from puridentityserver.interfaces.repositories.consent_repository import ConsentRepository
+from puridentityserver.interfaces.repositories.credential_offer_repository import (
+    CredentialOfferRepository,
+)
 from puridentityserver.interfaces.repositories.device_authorization_repository import (
     DeviceAuthorizationRepository,
 )
@@ -247,6 +250,23 @@ def build_consent_repository(settings: Settings) -> ConsentRepository:
         )
 
         return SQLConsentRepository(settings.storage_dsn)
+    raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")
+
+
+def build_credential_offer_repository(settings: Settings) -> CredentialOfferRepository:
+    """Retourne le repository des offres de credential selon ``storage_type``."""
+    if settings.storage_type == "memory":
+        from puridentityserver.infrastructure.persistence.memory.credential_offers import (
+            InMemoryCredentialOfferRepository,
+        )
+
+        return InMemoryCredentialOfferRepository()
+    if settings.storage_type == "sql":
+        from puridentityserver.infrastructure.persistence.sql.credential_offers import (
+            SQLCredentialOfferRepository,
+        )
+
+        return SQLCredentialOfferRepository(settings.storage_dsn)
     raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")
 
 

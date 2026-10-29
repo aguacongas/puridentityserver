@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+import secrets
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 import jwt as pyjwt
@@ -17,11 +19,24 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_public_key,
 )
 
+from puridentityserver.domain.authorization import AuthorizationCode, Scope
+from puridentityserver.domain.credential_offer import (
+    CREDENTIAL_OFFER_TTL,
+    TX_CODE_LENGTH,
+    CredentialOffer,
+    credential_offer_payload,
+)
 from puridentityserver.domain.dpop import access_token_hash
 from puridentityserver.domain.jwks import JWTAlgorithm, KeyPair
 from puridentityserver.infrastructure.jwks import DefaultKeyManager, first_active_key
 from puridentityserver.interfaces.domain.dpop import DpopProofValidator, DpopValidationError
 from puridentityserver.interfaces.domain.tokens import TokenManager
+from puridentityserver.interfaces.repositories.authorization_code_repository import (
+    AuthorizationCodeRepository,
+)
+from puridentityserver.interfaces.repositories.credential_offer_repository import (
+    CredentialOfferRepository,
+)
 from puridentityserver.interfaces.schemas.jwks import JWKKeyResponse
 
 #: Identifiant de la configuration de credential publiée par l'OP.
@@ -500,3 +515,187 @@ class OID4VCIIssuerUseCase:
         if isinstance(proof, DpopValidationError):
             return False
         return proof.jkt == bound_jkt
+
+
+#: Scope exigé pour créer une offre de credential.
+CREDENTIAL_OFFER_SCOPE = Scope.OID4VCI
+
+
+@dataclass(frozen=True, slots=True)
+class _OfferCaller:
+    """Porteur identifié par l'access token de création d'offre.
+
+    ``machine`` distingue un jeton ``client_credentials`` (``sub`` égal au
+    ``client_id``, sans utilisateur final) d'un jeton utilisateur : seul un
+    jeton machine peut désigner un sujet autre que le sien.
+    """
+
+    subject: str
+    client_id: str
+    machine: bool
+
+
+class CredentialOfferUseCase:
+    """Crée et résout les offres de credential (OID4VCI 1.0 §4.1.1).
+
+    La création exige un access token portant le scope ``openid4vci``.
+    L'offre porte un code pré-autorisé — usage unique et courte durée —
+    stocké comme code d'autorisation, ce qui rend le grant
+    ``urn:ietf:params:oauth:grant-type:pre-authorized_code`` immédiatement
+    utilisable. ``credential_offer_uri`` référence l'offre persistée : le
+    wallet la déréférence sans authentification, et la référence cesse de
+    répondre dès que le code est consommé ou expiré.
+    """
+
+    def __init__(
+        self,
+        *,
+        issuer: str,
+        offer_repository: CredentialOfferRepository,
+        code_repository: AuthorizationCodeRepository,
+        token_manager: TokenManager,
+        offer_ttl: int = CREDENTIAL_OFFER_TTL,
+    ) -> None:
+        """Injecte l'émetteur, les stockages et la validation des jetons."""
+        self._issuer = issuer.rstrip("/")
+        self._offers = offer_repository
+        self._codes = code_repository
+        self._token_manager = token_manager
+        self._offer_ttl = offer_ttl
+
+    async def create(
+        self,
+        access_token: str,
+        *,
+        credential_configuration_ids: Sequence[str] = (),
+        subject: str = "",
+        tx_code: bool = False,
+    ) -> dict[str, Any] | CredentialError:
+        """Crée une offre et retourne sa forme par valeur et par référence.
+
+        ``subject`` désigne le titulaire du credential : il est facultatif
+        pour un jeton utilisateur (défaut : le ``sub`` du jeton) et
+        obligatoire pour un jeton machine. Un jeton utilisateur ne peut pas
+        désigner un autre sujet que le sien. ``tx_code`` demande un code de
+        transaction à 6 chiffres, restitué une seule fois dans la réponse
+        (OID4VCI 1.0 §4.1.1 : canal séparé, absent par défaut).
+        """
+        caller = await self._caller(access_token)
+        if isinstance(caller, CredentialError):
+            return caller
+
+        configurations = self._configuration_ids(credential_configuration_ids)
+        if isinstance(configurations, CredentialError):
+            return configurations
+
+        resolved_subject = self._offer_subject(caller, subject)
+        if isinstance(resolved_subject, CredentialError):
+            return resolved_subject
+
+        now = datetime.now(timezone.utc)
+        tx_code_value = _transaction_code() if tx_code else ""
+        code = AuthorizationCode(
+            code=secrets.token_urlsafe(32),
+            client_id="",
+            redirect_uri="",
+            subject=resolved_subject,
+            scopes=frozenset({CREDENTIAL_OFFER_SCOPE}),
+            pre_authorized=True,
+            tx_code_hash=(
+                hashlib.sha256(tx_code_value.encode("utf-8")).hexdigest() if tx_code_value else ""
+            ),
+            expires_at=now + timedelta(seconds=self._offer_ttl),
+        )
+        offer = CredentialOffer(
+            offer_id=secrets.token_urlsafe(16),
+            credential_configuration_ids=configurations,
+            subject=resolved_subject,
+            pre_authorized_code=code.code,
+            client_id=caller.client_id,
+            tx_code_required=bool(tx_code_value),
+            created_at=now,
+            expires_at=code.expires_at,
+        )
+        await self._codes.save(code)
+        await self._offers.save(offer)
+        response: dict[str, Any] = {
+            "credential_offer": credential_offer_payload(offer, self._issuer),
+            "credential_offer_uri": f"{self._issuer}/credential-offer/{offer.offer_id}",
+        }
+        if tx_code_value:
+            response["tx_code"] = tx_code_value
+        return response
+
+    async def resolve(self, offer_id: str) -> dict[str, Any] | CredentialError:
+        """Retourne l'offre référencée par ``offer_id`` pour le wallet.
+
+        Une offre inconnue, expirée, ou dont le code pré-autorisé a déjà
+        été consommé n'est plus servie : la référence ne survit pas à son
+        usage unique.
+        """
+        offer = await self._offers.find_by_id(offer_id)
+        now = datetime.now(timezone.utc)
+        if offer is None or offer.is_expired(now):
+            return self._unknown_offer()
+        code = await self._codes.find_by_code(offer.pre_authorized_code)
+        if code is None or code.is_consumed or code.expires_at < now:
+            return self._unknown_offer()
+        return credential_offer_payload(offer, self._issuer)
+
+    async def _caller(self, access_token: str) -> _OfferCaller | CredentialError:
+        """Valide le jeton et vérifie le scope exigé pour créer une offre."""
+        claims = await self._token_manager.validate_access_token(
+            token=access_token, issuer=self._issuer
+        )
+        if claims is None:
+            return CredentialError("invalid_token", "access token invalide ou expire", 401)
+        scopes = str(claims.get("scope") or "").split()
+        if CREDENTIAL_OFFER_SCOPE.value not in scopes:
+            return CredentialError(
+                "insufficient_scope", "scope openid4vci requis pour creer une offre", 403
+            )
+        subject = str(claims.get("sub") or "")
+        if not subject:
+            return CredentialError("invalid_token", "access token sans sujet", 401)
+        client_id = str(claims.get("client_id") or "")
+        return _OfferCaller(
+            subject=subject,
+            client_id=client_id,
+            machine=bool(client_id) and client_id == subject,
+        )
+
+    @staticmethod
+    def _configuration_ids(
+        requested: Sequence[str],
+    ) -> tuple[str, ...] | CredentialError:
+        """Normalise et vérifie les configurations de credential demandées."""
+        configurations = tuple(dict.fromkeys(requested)) or (CREDENTIAL_CONFIGURATION_ID,)
+        if any(item != CREDENTIAL_CONFIGURATION_ID for item in configurations):
+            return CredentialError(
+                "unknown_credential_configuration", "credential_configuration_id inconnu"
+            )
+        return configurations
+
+    @staticmethod
+    def _offer_subject(caller: _OfferCaller, requested: str) -> str | CredentialError:
+        """Détermine le titulaire du credential selon le type de porteur."""
+        if requested:
+            if not caller.machine and requested != caller.subject:
+                return CredentialError(
+                    "invalid_request", "le sujet demande differe du porteur du jeton", 403
+                )
+            return requested
+        if caller.machine:
+            return CredentialError(
+                "invalid_request", "subject requis pour une offre creee par un client", 400
+            )
+        return caller.subject
+
+    def _unknown_offer(self) -> CredentialError:
+        """Erreur unique d'une référence d'offre non servie."""
+        return CredentialError("not_found", "offre de credential inconnue ou expiree", 404)
+
+
+def _transaction_code() -> str:
+    """Génère un code de transaction numérique à ``TX_CODE_LENGTH`` chiffres."""
+    return "".join(str(secrets.randbelow(10)) for _ in range(TX_CODE_LENGTH))

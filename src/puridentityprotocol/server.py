@@ -49,7 +49,7 @@ from puridentityserver.application.introspect import IntrospectConfig, Introspec
 from puridentityserver.application.jarm import JarmSigner
 from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
 from puridentityserver.application.logout import LogoutConfig, LogoutUseCase
-from puridentityserver.application.oid4vci import OID4VCIIssuerUseCase
+from puridentityserver.application.oid4vci import CredentialOfferUseCase, OID4VCIIssuerUseCase
 from puridentityserver.application.oid4vp import OID4VPVerifierUseCase
 from puridentityserver.application.openid20_migration import OpenID20MigrationUseCase
 from puridentityserver.application.openid20_provider import OpenID20ProviderUseCase
@@ -401,6 +401,16 @@ class ProtocolDependencies:
             if settings.oid4vci_enabled
             else None
         )
+        self.oid4vci_offer_usecase = (
+            CredentialOfferUseCase(
+                issuer=settings.issuer,
+                offer_repository=stores.credential_offer,
+                code_repository=stores.code,
+                token_manager=self.token_manager,
+            )
+            if settings.oid4vci_enabled
+            else None
+        )
         self.oid4vp_usecase = (
             OID4VPVerifierUseCase(
                 issuer=settings.issuer,
@@ -716,6 +726,7 @@ class ProtocolDependencies:
                 oid4vci_router(
                     issuer=self.settings.issuer,
                     oid4vci_usecase=self.oid4vci_usecase,
+                    offer_usecase=self.oid4vci_offer_usecase,
                     discovery_usecase=self.discovery_usecase,
                     trust_proxy_headers=self.settings.trust_proxy_headers,
                 )
