@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse, Response
 from puridentityserver.application.oid4vci import (
     CREDENTIAL_VCT_PATH,
     CredentialError,
+    CredentialOfferUseCase,
     credential_vct,
     issuer_metadata_payload,
 )
@@ -21,11 +22,15 @@ if TYPE_CHECKING:
 
 _JSON_MEDIA_TYPE = "application/json"
 
+#: En-têtes des réponses d'offre : ni cache, ni historique navigateur.
+_NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+
 
 def oid4vci_router(
     *,
     issuer: str,
     oid4vci_usecase: OID4VCIIssuerUseCase | None = None,
+    offer_usecase: CredentialOfferUseCase | None = None,
     discovery_usecase: DiscoveryUseCase,
     trust_proxy_headers: bool = False,
 ) -> APIRouter:
@@ -38,6 +43,7 @@ def oid4vci_router(
     _mount_oauth_metadata(router, discovery_usecase)
     _mount_nonce(router, usecase)
     _mount_credential(router, usecase, trust_proxy_headers)
+    _mount_credential_offers(router, offer_usecase)
     return router
 
 
@@ -163,6 +169,51 @@ def _mount_credential(
         return JSONResponse(result, media_type=_JSON_MEDIA_TYPE)
 
 
+def _mount_credential_offers(router: APIRouter, usecase: CredentialOfferUseCase | None) -> None:
+    @router.post(
+        "/credential-offer",
+        summary="Creation d'une offre de credential (OID4VCI 1.0 §4.1.1)",
+        response_model=None,
+    )
+    async def create_credential_offer(request: Request) -> JSONResponse:
+        scheme, _, bearer = request.headers.get("authorization", "").partition(" ")
+        if scheme.lower() not in {"bearer", "dpop"} or not bearer.strip():
+            return _error(401, "invalid_token", "jeton porteur ou DPoP requis")
+        if usecase is None:
+            return _error(
+                501,
+                "not_implemented",
+                "offres de credential pas encore cablees dans ce deploiement.",
+            )
+        payload = await _json_object(request)
+        result = await usecase.create(
+            bearer.strip(),
+            credential_configuration_ids=_string_list(payload.get("credential_configuration_ids")),
+            subject=_optional_str(payload.get("subject")) or "",
+            tx_code=payload.get("tx_code") is True,
+        )
+        if isinstance(result, CredentialError):
+            return _error(result.status_code, result.error, result.error_description)
+        return JSONResponse(result, media_type=_JSON_MEDIA_TYPE, headers=_NO_STORE)
+
+    @router.get(
+        "/credential-offer/{offer_id}",
+        summary="Dereferencement d'une offre de credential (OID4VCI 1.0 §4.1.2)",
+        response_model=None,
+    )
+    async def resolve_credential_offer(offer_id: str) -> JSONResponse:
+        if usecase is None:
+            return _error(
+                501,
+                "not_implemented",
+                "offres de credential pas encore cablees dans ce deploiement.",
+            )
+        result = await usecase.resolve(offer_id)
+        if isinstance(result, CredentialError):
+            return _error(result.status_code, result.error, result.error_description)
+        return JSONResponse(result, media_type=_JSON_MEDIA_TYPE, headers=_NO_STORE)
+
+
 async def _json_object(request: Request) -> dict[str, object]:
     """Lit le corps JSON de la requête, ou un objet vide s'il est illisible."""
     try:
@@ -175,6 +226,15 @@ async def _json_object(request: Request) -> dict[str, object]:
 def _optional_str(value: object) -> str | None:
     """Ramène une valeur JSON optionnelle à une chaîne non vide."""
     return value if isinstance(value, str) and value else None
+
+
+def _string_list(value: object) -> list[str]:
+    """Ramène une valeur JSON optionnelle à une liste de chaînes non vides."""
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, str) and item]
+    return []
 
 
 def _proof_jwts(proofs: object) -> list[str]:

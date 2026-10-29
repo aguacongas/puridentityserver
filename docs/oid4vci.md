@@ -14,8 +14,10 @@ Dans cet état, l'OP publie ses métadonnées d'émetteur (`GET
 401** tout requête sans access token, **valide la preuve** `proof_type=jwt`
 (émetteur = issuer, preuve signée par la JWK embarquée) et émet, en cas de jeton
 valide, un credential **SD-JWT** (`vc+sd-jwt`) signé à la clé active de l'OP
-pour le `sub` transporté, avec `cnf.jwk` si une preuve est fournie. Le consentement,
-le flux wallet/authorization code et le c_nonce durable restent à implémenter.
+pour le `sub` transporté, avec `cnf.jwk` si une preuve est fournie. Le flux
+pre-autorisé est complet (offre de credential, code à usage unique, échange au
+token endpoint) ; le consentement, le flux wallet/authorization code et le
+c_nonce durable restent à implémenter.
 
 Les fonctionnalités prévues (grants, proof_type JWT, SD-JWT VC avec disclosure,
 mdoc, c_nonce, HAIP) sont traitées dans les sous-issues #222, #223 et #224.
@@ -45,7 +47,7 @@ arrondis a l heure pour eviter la correlation (RFC 9901 s10.1).
 
 ## Attestation de cle (OID4VCI appendice D.1)
 
-L emetteur annonce key_attestations_required dans proof_types_supported.jwt. Une preuve peut transporter une attestation
+L emetteur annonce une entree proof_types_supported.attestation dediee (key_attestations_required). Une preuve peut transporter une attestation
 de cle via le parametre d en-tete key_attestation; sa signature est
 verifiee et une attestation invalide est rejetee (invalid_proof).
 
@@ -54,3 +56,32 @@ verifiee et une attestation invalide est rejetee (invalid_proof).
 L'OP accepte le grant `urn:ietf:params:oauth:grant-type:pre-authorized_code` au token
 endpoint, avec `tx_code` optionnel. Les codes sont a usage unique et
 expirent; le jeton d'acces emis permet ensuite d'appeler `/credential`.
+
+## Offre de credential (OID4VCI 1.0 s4.1)
+
+Deux routes, ajoutees par l'OP (la specification ne normalise pas d'endpoint
+de creation d'offre : elle decrit l'objet et sa reference), completent le
+flux issuer-initiated :
+
+    POST /credential-offer
+    Authorization: Bearer <access token portant le scope openid4vci>
+    {"subject": "alice", "credential_configuration_ids": ["puridentityserver-sdjwt-vc"], "tx_code": true}
+
+    GET /credential-offer/{offer_id}
+
+La creation exige un access token portant le scope `openid4vci`. Le
+titulaire du credential est le `sub` du jeton ; un jeton machine
+(`client_credentials`, `sub` egal au `client_id`) doit fournir `subject`
+et peut designer n'importe quel sujet, alors qu'un jeton utilisateur ne
+peut pas designer un autre sujet que le sien (403 sinon). La reponse
+porte l'offre par valeur (`credential_offer`), sa reference
+(`credential_offer_uri`) et, si `tx_code` est demande, le code de
+transaction a 6 chiffres — restitue une seule fois (canal separe).
+
+`GET /credential-offer/{offer_id}` est non authentifie (le wallet n'a pas
+encore de jeton), repond sans cache (`Cache-Control: no-store`) et cesse
+de repondre (404) des que le code pre-autorise est consomme ou expire.
+Les offres sont persistees (`credential_offers`, backend memoire ou SQL)
+pour que la reference reste servable derriere plusieurs workers. La
+reference est une URL `https` en production (OID4VCI 1.0 s4.1 : scheme
+`https` exige), duree de vie et usage unique compris (s13.5).
