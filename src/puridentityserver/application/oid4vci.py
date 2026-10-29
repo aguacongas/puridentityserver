@@ -269,6 +269,7 @@ class OID4VCIIssuerUseCase:
                         "c_nonce inconnu, invalide ou expire",
                     ),
                 )
+            # Justification: en-tete lu avant verification de la signature
             proof_header = pyjwt.get_unverified_header(proof_jwt)  # NOSONAR(S5659)
             attestation = proof_header.get("key_attestation")
             if isinstance(attestation, str) and not self._key_attestation_valid(attestation, jwk):
@@ -358,6 +359,7 @@ class OID4VCIIssuerUseCase:
     def _key_attestation_valid(self, attestation_jwt: str, binding_jwk: dict[str, Any]) -> bool:
         """Valide la signature d une attestation de cle."""
         try:
+            # Justification: en-tete lu avant verification de la signature
             header = pyjwt.get_unverified_header(attestation_jwt)  # NOSONAR(S5659)
         except pyjwt.PyJWTError:
             return False
