@@ -48,3 +48,9 @@ arrondis a l heure pour eviter la correlation (RFC 9901 s10.1).
 L emetteur annonce key_attestations_required dans proof_types_supported.jwt. Une preuve peut transporter une attestation
 de cle via le parametre d en-tete key_attestation; sa signature est
 verifiee et une attestation invalide est rejetee (invalid_proof).
+
+## Grant pre-autorise (OID4VCI 1.0 s6.1)
+
+L'OP accepte le grant `urn:ietf:params:oauth:grant-type:pre-authorized_code` au token
+endpoint, avec `tx_code` optionnel. Les codes sont a usage unique et
+expirent; le jeton d'acces emis permet ensuite d'appeler `/credential`.
