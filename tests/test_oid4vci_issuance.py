@@ -644,3 +644,70 @@ def test_issuer_rejects_unknown_identifier_with_authorization_details() -> None:
         assert result.error == "unknown_credential_identifier"
 
     asyncio.run(_task())
+
+
+def test_deferred_credential_returns_invalid_transaction() -> None:
+    usecase = _usecase_with({"sub": "user1", "scope": "openid4vci"})
+
+    async def _task() -> None:
+        result = await usecase.deferred_credential("token", "tid")
+        assert isinstance(result, CredentialError)
+        assert result.error == "invalid_transaction_id"
+
+    asyncio.run(_task())
+
+
+def test_deferred_credential_rejects_invalid_token() -> None:
+    usecase = _usecase_with(None)
+
+    async def _task() -> None:
+        result = await usecase.deferred_credential("token", "tid")
+        assert isinstance(result, CredentialError)
+        assert result.error == "invalid_token"
+
+    asyncio.run(_task())
+
+
+def test_notify_rejects_unknown_id() -> None:
+    usecase = _usecase_with({"sub": "user1", "scope": "openid4vci"})
+
+    async def _task() -> None:
+        result = await usecase.notify("token", "nope", "credential_accepted")
+        assert isinstance(result, CredentialError)
+        assert result.error == "invalid_notification_id"
+
+    asyncio.run(_task())
+
+
+def test_notify_rejects_invalid_event() -> None:
+    usecase = _usecase_with({"sub": "user1", "scope": "openid4vci"})
+    usecase._notifications.add("nid")
+
+    async def _task() -> None:
+        result = await usecase.notify("token", "nid", "bad")
+        assert isinstance(result, CredentialError)
+        assert result.error == "invalid_notification_request"
+
+    asyncio.run(_task())
+
+
+def test_notify_accepts_registered_id() -> None:
+    usecase = _usecase_with({"sub": "user1", "scope": "openid4vci"})
+    usecase._notifications.add("nid")
+
+    async def _task() -> None:
+        result = await usecase.notify("token", "nid", "credential_accepted")
+        assert result is None
+
+    asyncio.run(_task())
+
+
+def test_notify_rejects_invalid_token() -> None:
+    usecase = _usecase_with(None)
+
+    async def _task() -> None:
+        result = await usecase.notify("token", "nid", "credential_accepted")
+        assert isinstance(result, CredentialError)
+        assert result.error == "invalid_token"
+
+    asyncio.run(_task())
