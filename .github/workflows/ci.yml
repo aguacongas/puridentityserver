@@ -49,11 +49,31 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_SECRET }}
 
       - name: SonarCloud Quality Gate
-        uses: SonarSource/sonarqube-quality-gate-action@v1.3.0
         if: (github.event_name == 'push') || (github.event.pull_request.head.repo.full_name == github.repository)
-        timeout-minutes: 10
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_SECRET }}
+        run: |
+          pr="${{ github.event.pull_request.number }}"
+          if [ -z "${pr}" ]; then
+            branch="${{ github.ref_name }}"
+            status_url="https://sonarcloud.io/api/qualitygates/project_status?projectKey=aguacongas_puridentityserver&branch=${branch}"
+          else
+            status_url="https://sonarcloud.io/api/qualitygates/project_status?projectKey=aguacongas_puridentityserver&pullRequest=${pr}"
+          fi
+          echo "Polling: ${status_url}"
+          for i in $(seq 1 60); do
+            status=$(curl -s -H "Authorization: Bearer ${{ secrets.SONAR_SECRET }}" "${status_url}" | jq -r '.projectStatus.status // "PENDING"')
+            echo "Tentative ${i}/60 : ${status}"
+            if [ "${status}" != "PENDING" ] && [ "${status}" != "null" ]; then
+              if [ "${status}" != "OK" ]; then
+                echo "::error::Quality gate SonarCloud : ${status}"
+                exit 1
+              fi
+              echo "Quality gate SonarCloud : OK"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Timeout en attendant le quality gate SonarCloud"
+          exit 1
 
       - name: SonarCloud — refuser toute nouvelle issue
         if: github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name == github.repository)
