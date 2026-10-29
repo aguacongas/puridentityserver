@@ -1,9 +1,1 @@
-[
-  {
-    "test-name": "oid4vci-1_0-issuer-fail-invalid-key-attestation-signature",
-    "variant": "*",
-    "configuration-filename": "*",
-    "condition": "*",
-    "current-block": "*"
-  }
-]
+[]

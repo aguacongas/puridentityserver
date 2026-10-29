@@ -42,3 +42,9 @@ reponse reste en application/json non signe.
 L emetteur annonce batch_credential_issuance.batch_size dans ses metadonnees. Une requete /credential avec plusieurs preuves (proofs.jwt) declenche l emission d un credential SD-JWT par preuve,
 chacun lie a sa propre cle (cnf.jwk), avec des claims temporels
 arrondis a l heure pour eviter la correlation (RFC 9901 s10.1).
+
+## Attestation de cle (OID4VCI appendice D.1)
+
+L emetteur annonce key_attestations_required dans proof_types_supported.jwt. Une preuve peut transporter une attestation
+de cle via le parametre d en-tete key_attestation; sa signature est
+verifiee et une attestation invalide est rejetee (invalid_proof).
