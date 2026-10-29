@@ -549,3 +549,197 @@ def test_key_attestation_x509_valid_accepted() -> None:
         )
     )
     assert isinstance(result, dict)
+
+
+def test_issuer_issues_with_authorization_details() -> None:
+    claims = {
+        "sub": "user1",
+        "authorization_details": [
+            {
+                "type": "openid_credential",
+                "credential_configuration_id": CREDENTIAL_CONFIGURATION_ID,
+                "credential_identifiers": [CREDENTIAL_CONFIGURATION_ID],
+            }
+        ],
+    }
+    usecase = _usecase_with(claims)
+
+    async def _task() -> None:
+        await usecase._key_manager.ensure_active_key(2048, JWTAlgorithm.RS256)  # type: ignore[attr-defined]
+        nonce = (await usecase.issue_nonce())["c_nonce"]
+        proof = _proof(nonce)
+        result = await usecase.issue_credential(
+            "token",
+            credential_identifier=CREDENTIAL_CONFIGURATION_ID,
+            proofs=(proof,),
+        )
+        assert isinstance(result, dict)
+
+    asyncio.run(_task())
+
+
+def test_issuer_rejects_config_with_authorization_details() -> None:
+    claims = {
+        "sub": "user1",
+        "authorization_details": [
+            {
+                "type": "openid_credential",
+                "credential_configuration_id": CREDENTIAL_CONFIGURATION_ID,
+                "credential_identifiers": [CREDENTIAL_CONFIGURATION_ID],
+            }
+        ],
+    }
+    usecase = _usecase_with(claims)
+
+    async def _task() -> None:
+        result = await usecase.issue_credential(
+            "token",
+            credential_configuration_id=CREDENTIAL_CONFIGURATION_ID,
+            credential_identifier=CREDENTIAL_CONFIGURATION_ID,
+            proofs=(),
+        )
+        assert isinstance(result, CredentialError)
+        assert result.error == "invalid_credential_request"
+
+    asyncio.run(_task())
+
+
+def test_issuer_requires_identifier_with_authorization_details() -> None:
+    claims = {
+        "sub": "user1",
+        "authorization_details": [
+            {
+                "type": "openid_credential",
+                "credential_configuration_id": CREDENTIAL_CONFIGURATION_ID,
+                "credential_identifiers": [CREDENTIAL_CONFIGURATION_ID],
+            }
+        ],
+    }
+    usecase = _usecase_with(claims)
+
+    async def _task() -> None:
+        result = await usecase.issue_credential("token", proofs=())
+        assert isinstance(result, CredentialError)
+        assert result.error == "invalid_credential_request"
+
+    asyncio.run(_task())
+
+
+def test_issuer_rejects_unknown_identifier_with_authorization_details() -> None:
+    claims = {
+        "sub": "user1",
+        "authorization_details": [
+            {
+                "type": "openid_credential",
+                "credential_configuration_id": CREDENTIAL_CONFIGURATION_ID,
+                "credential_identifiers": [CREDENTIAL_CONFIGURATION_ID],
+            }
+        ],
+    }
+    usecase = _usecase_with(claims)
+
+    async def _task() -> None:
+        result = await usecase.issue_credential(
+            "token", credential_identifier="nope", proofs=()
+        )
+        assert isinstance(result, CredentialError)
+        assert result.error == "unknown_credential_identifier"
+
+    asyncio.run(_task())
+
+
+def test_issuer_issues_with_authorization_details() -> None:
+    claims = {
+        "sub": "user1",
+        "authorization_details": [
+            {
+                "type": "openid_credential",
+                "credential_configuration_id": CREDENTIAL_CONFIGURATION_ID,
+                "credential_identifiers": [CREDENTIAL_CONFIGURATION_ID],
+            }
+        ],
+    }
+    usecase = _usecase_with(claims)
+
+    async def _task() -> None:
+        await usecase._key_manager.ensure_active_key(2048, JWTAlgorithm.RS256)  # type: ignore[attr-defined]
+        nonce = (await usecase.issue_nonce())["c_nonce"]
+        proof = _proof(nonce)
+        result = await usecase.issue_credential(
+            "token",
+            credential_identifier=CREDENTIAL_CONFIGURATION_ID,
+            proofs=(proof,),
+        )
+        assert isinstance(result, dict)
+
+    asyncio.run(_task())
+
+
+def test_issuer_rejects_config_with_authorization_details() -> None:
+    claims = {
+        "sub": "user1",
+        "authorization_details": [
+            {
+                "type": "openid_credential",
+                "credential_configuration_id": CREDENTIAL_CONFIGURATION_ID,
+                "credential_identifiers": [CREDENTIAL_CONFIGURATION_ID],
+            }
+        ],
+    }
+    usecase = _usecase_with(claims)
+
+    async def _task() -> None:
+        result = await usecase.issue_credential(
+            "token",
+            credential_configuration_id=CREDENTIAL_CONFIGURATION_ID,
+            credential_identifier=CREDENTIAL_CONFIGURATION_ID,
+            proofs=(),
+        )
+        assert isinstance(result, CredentialError)
+        assert result.error == "invalid_credential_request"
+
+    asyncio.run(_task())
+
+
+def test_issuer_requires_identifier_with_authorization_details() -> None:
+    claims = {
+        "sub": "user1",
+        "authorization_details": [
+            {
+                "type": "openid_credential",
+                "credential_configuration_id": CREDENTIAL_CONFIGURATION_ID,
+                "credential_identifiers": [CREDENTIAL_CONFIGURATION_ID],
+            }
+        ],
+    }
+    usecase = _usecase_with(claims)
+
+    async def _task() -> None:
+        result = await usecase.issue_credential("token", proofs=())
+        assert isinstance(result, CredentialError)
+        assert result.error == "invalid_credential_request"
+
+    asyncio.run(_task())
+
+
+def test_issuer_rejects_unknown_identifier_with_authorization_details() -> None:
+    claims = {
+        "sub": "user1",
+        "authorization_details": [
+            {
+                "type": "openid_credential",
+                "credential_configuration_id": CREDENTIAL_CONFIGURATION_ID,
+                "credential_identifiers": [CREDENTIAL_CONFIGURATION_ID],
+            }
+        ],
+    }
+    usecase = _usecase_with(claims)
+
+    async def _task() -> None:
+        result = await usecase.issue_credential(
+            "token", credential_identifier="nope", proofs=()
+        )
+        assert isinstance(result, CredentialError)
+        assert result.error == "unknown_credential_identifier"
+
+    asyncio.run(_task())

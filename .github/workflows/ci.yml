@@ -47,3 +47,21 @@ jobs:
         if: (github.event_name == 'push') || (github.event.pull_request.head.repo.full_name == github.repository)
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_SECRET }}
+
+      - name: SonarCloud Quality Gate
+        uses: SonarSource/sonarqube-quality-gate-action@v1.3.0
+        if: (github.event_name == 'push') || (github.event.pull_request.head.repo.full_name == github.repository)
+        timeout-minutes: 10
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_SECRET }}
+
+      - name: SonarCloud — refuser toute nouvelle issue
+        if: github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name == github.repository)
+        run: |
+          pr="${{ github.event.pull_request.number }}"
+          new_issues=$(curl -s "https://sonarcloud.io/api/issues/search?componentKeys=aguacongas_puridentityserver&pullRequest=${pr}&resolved=false&statuses=OPEN,CONFIRMED,REOPENED" | jq -r '.total // 0')
+          echo "Nouvelles issues SonarCloud sur la PR ${pr} : ${new_issues}"
+          if [ "${new_issues}" -gt 0 ]; then
+            echo "::error::SonarCloud rapporte ${new_issues} nouvelle(s) issue(s) sur cette PR."
+            exit 1
+          fi
