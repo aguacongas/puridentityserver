@@ -53,3 +53,19 @@ def test_validate_presentation_response() -> None:
         assert usecase.validate_presentation_response(["", "x"]) == "invalid_request"
 
     asyncio.run(_task())
+
+
+def test_presentation_request_with_definition() -> None:
+    async def _task() -> None:
+        key_manager = DefaultKeyManager(InMemoryKeyPairRepository())
+        await key_manager.ensure_active_key(2048, JWTAlgorithm.RS256)
+        usecase = OID4VPVerifierUseCase(
+            issuer="https://id.example",
+            key_manager=key_manager,
+            algorithm=JWTAlgorithm.RS256,
+        )
+        result = await usecase.create_presentation_request({"id": "x"}, "direct_post")
+        assert "request" in result
+        assert usecase.validate_presentation_response("not-a-jwt") == "invalid_presentation"
+
+    asyncio.run(_task())
