@@ -121,7 +121,7 @@ def test_issuer_issues_sdjwt_credential_for_valid_access_token() -> None:
         assert isinstance(credential, str)
         # Format combiné SD-JWT (RFC 9901 §8.1) : JWT + ``~`` sans divulgation.
         assert credential.endswith("~")
-        signed = credential[:-1]
+        signed = credential.split("~")[0]
         assert signed.count(".") == 2
         header = pyjwt.get_unverified_header(signed)
         assert header["typ"] == "dc+sd-jwt"
