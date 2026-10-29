@@ -76,8 +76,11 @@ def issuer_metadata_payload(issuer: str) -> dict[str, Any]:
                 "proof_types_supported": {
                     "jwt": {
                         "proof_signing_alg_values_supported": ["ES256", "RS256"],
+                    },
+                    "attestation": {
+                        "proof_signing_alg_values_supported": ["ES256", "RS256"],
                         "key_attestations_required": {},
-                    }
+                    },
                 },
             }
         },
