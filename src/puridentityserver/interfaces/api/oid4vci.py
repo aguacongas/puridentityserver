@@ -24,6 +24,8 @@ _JSON_MEDIA_TYPE = "application/json"
 
 #: En-têtes des réponses d'offre : ni cache, ni historique navigateur.
 _NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+#: Message d erreur d authentification porteur/DPoP reutilise.
+_BEARER_OR_DPOP_REQUIRED = "jeton porteur ou DPoP requis"
 
 
 def oid4vci_router(
@@ -44,6 +46,8 @@ def oid4vci_router(
     _mount_nonce(router, usecase)
     _mount_credential(router, usecase, trust_proxy_headers)
     _mount_credential_offers(router, offer_usecase)
+    _mount_deferred(router, usecase)
+    _mount_notification(router, usecase)
     return router
 
 
@@ -145,7 +149,7 @@ def _mount_credential(
     async def credential(request: Request) -> JSONResponse:
         scheme, _, bearer = request.headers.get("authorization", "").partition(" ")
         if scheme.lower() not in {"bearer", "dpop"} or not bearer.strip():
-            return _error(401, "invalid_token", "jeton porteur ou DPoP requis")
+            return _error(401, "invalid_token", _BEARER_OR_DPOP_REQUIRED)
         if usecase is None:
             return _error(
                 501,
@@ -178,7 +182,7 @@ def _mount_credential_offers(router: APIRouter, usecase: CredentialOfferUseCase 
     async def create_credential_offer(request: Request) -> JSONResponse:
         scheme, _, bearer = request.headers.get("authorization", "").partition(" ")
         if scheme.lower() not in {"bearer", "dpop"} or not bearer.strip():
-            return _error(401, "invalid_token", "jeton porteur ou DPoP requis")
+            return _error(401, "invalid_token", _BEARER_OR_DPOP_REQUIRED)
         if usecase is None:
             return _error(
                 501,
@@ -212,6 +216,51 @@ def _mount_credential_offers(router: APIRouter, usecase: CredentialOfferUseCase 
         if isinstance(result, CredentialError):
             return _error(result.status_code, result.error, result.error_description)
         return JSONResponse(result, media_type=_JSON_MEDIA_TYPE, headers=_NO_STORE)
+
+
+def _mount_deferred(
+    router: APIRouter,
+    usecase: OID4VCIIssuerUseCase | None,
+) -> None:
+    @router.post("/deferred_credential", summary="Endpoint deferred OID4VCI", response_model=None)
+    async def deferred(request: Request) -> JSONResponse:
+        scheme, _, bearer = request.headers.get("authorization", "").partition(" ")
+        if scheme.lower() not in {"bearer", "dpop"} or not bearer.strip():
+            return _error(401, "invalid_token", _BEARER_OR_DPOP_REQUIRED)
+        if usecase is None:
+            return _error(501, "not_implemented", "issuance OID4VCI pas encore cablee.")
+        payload = await _json_object(request)
+        transaction_id = payload.get("transaction_id")
+        tid = transaction_id if isinstance(transaction_id, str) else ""
+        result = await usecase.deferred_credential(
+            bearer.strip(),
+            tid,
+        )
+        if isinstance(result, CredentialError):
+            return _error(result.status_code, result.error, result.error_description)
+        return JSONResponse(result, media_type=_JSON_MEDIA_TYPE)
+
+
+def _mount_notification(
+    router: APIRouter,
+    usecase: OID4VCIIssuerUseCase | None,
+) -> None:
+    @router.post("/notification", summary="Endpoint notification OID4VCI", response_model=None)
+    async def notification(request: Request) -> Response:
+        scheme, _, bearer = request.headers.get("authorization", "").partition(" ")
+        if scheme.lower() not in {"bearer", "dpop"} or not bearer.strip():
+            return _error(401, "invalid_token", _BEARER_OR_DPOP_REQUIRED)
+        if usecase is None:
+            return _error(501, "not_implemented", "issuance OID4VCI pas encore cablee.")
+        payload = await _json_object(request)
+        nid = payload.get("notification_id")
+        event = payload.get("event")
+        notification_id = nid if isinstance(nid, str) else ""
+        event_value = event if isinstance(event, str) else ""
+        err = await usecase.notify(bearer.strip(), notification_id, event_value)
+        if err is not None:
+            return _error(err.status_code, err.error, err.error_description)
+        return Response(status_code=204)
 
 
 async def _json_object(request: Request) -> dict[str, object]:

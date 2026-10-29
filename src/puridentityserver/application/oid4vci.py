@@ -105,6 +105,8 @@ def issuer_metadata_payload(issuer: str) -> dict[str, Any]:
             }
         },
         "batch_credential_issuance": {"batch_size": 5},
+        "deferred_credential_endpoint": f"{normalized}/deferred_credential",
+        "notification_endpoint": f"{normalized}/notification",
     }
 
 
@@ -121,6 +123,10 @@ class CredentialError:
     error: str
     error_description: str
     status_code: int = 400
+
+
+# Message d erreur d access token invalide, partage.
+INVALID_ACCESS_TOKEN_ERROR = "access token invalide, expire ou non autorise"  # ruff: ignore[hardcoded-password-string]
 
 
 class OID4VCIIssuerUseCase:
@@ -147,6 +153,7 @@ class OID4VCIIssuerUseCase:
         self._algorithm = algorithm
         self._token_manager = token_manager
         self._dpop = dpop
+        self._notifications: set[str] = set()
 
     async def issue_nonce(self) -> dict[str, Any]:
         """Émet un ``c_nonce`` signé, sans état (OID4VCI 1.0 §7).
@@ -156,6 +163,40 @@ class OID4VCIIssuerUseCase:
         plusieurs workers.
         """
         return {"c_nonce": await self._sign_nonce()}
+
+    async def deferred_credential(
+        self,
+        bearer_token: str,
+        transaction_id: str,
+    ) -> dict[str, Any] | CredentialError:
+        """Traite une requete deferred (issuance immediate : aucun transaction_id)."""
+        claims = await self._token_manager.validate_access_token(
+            token=bearer_token, issuer=self._issuer
+        )
+        if claims is None:
+            return CredentialError("invalid_token", INVALID_ACCESS_TOKEN_ERROR, 401)
+        return CredentialError("invalid_transaction_id", "transaction_id inconnu ou deja consomme")
+
+    async def notify(
+        self,
+        bearer_token: str,
+        notification_id: str,
+        event: str,
+    ) -> CredentialError | None:
+        """Enregistre une notification du wallet pour une issuance."""
+        claims = await self._token_manager.validate_access_token(
+            token=bearer_token, issuer=self._issuer
+        )
+        if claims is None:
+            return CredentialError("invalid_token", INVALID_ACCESS_TOKEN_ERROR, 401)
+        if notification_id not in self._notifications:
+            return CredentialError("invalid_notification_id", "notification_id inconnu", 400)
+        if event not in {"credential_accepted", "credential_failure", "credential_deleted"}:
+            return CredentialError("invalid_notification_request", "event non supporte", 400)
+        # idempotent : on garde trace sans retraiter.
+        self._notifications.discard(notification_id)
+        self._notifications.add(notification_id)
+        return None
 
     def issuer_metadata(self) -> dict[str, Any]:
         """Renvoie les métadonnées non signées de l'émetteur."""
@@ -201,9 +242,7 @@ class OID4VCIIssuerUseCase:
             token=bearer_token, issuer=self._issuer
         )
         if claims is None:
-            return CredentialError(
-                "invalid_token", "access token invalide, expire ou non autorise", 401
-            )
+            return CredentialError("invalid_token", INVALID_ACCESS_TOKEN_ERROR, 401)
 
         if not await self._dpop_authorized(
             claims,
@@ -234,7 +273,12 @@ class OID4VCIIssuerUseCase:
         if proof_error is not None:
             return proof_error
 
-        return await self._issue(sub, binding_jwks)
+        result = await self._issue(sub, binding_jwks)
+        if isinstance(result, dict):
+            notification_id = uuid.uuid4().hex
+            self._notifications.add(notification_id)
+            result["notification_id"] = notification_id
+        return result
 
     @staticmethod
     def _resolve_requested_configuration(

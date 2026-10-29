@@ -114,3 +114,13 @@ divulgations completes figurent dans le format combine (apres le premier
 `~`). Des digests leurres masquent le nombre de claims. Le wallet peut
 ainsi reveler un sous-ensemble de ces claims lors de la presentation, sans
 reveler le reste.
+
+
+## Endpoints differe et notification (OID4VCI s9 et s11)
+
+L'OP expose `POST /deferred_credential` (aucun transaction_id n'est emis,
+l'issuance etant immediate) et `POST /notification`. Chaque reponse
+`/credential` porte un `notification_id`, que le wallet peut renvoyer a
+`/notification` avec l'event `credential_accepted` (ou
+`credential_failure`/`credential_deleted`) ; la notification est idempotente.
+Les metadonnees d'emetteur publient les deux endpoints.
