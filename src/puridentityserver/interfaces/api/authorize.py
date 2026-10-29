@@ -96,6 +96,7 @@ class AuthorizeQueryParams(BaseModel):
     openid2_realm: str = ""
     dpop_jkt: str = ""
     resource: list[str] = []
+    authorization_details: str = ""
     # Marqueur OP du parcours ``prompt=create`` (issue #166) : ``cancelled``
     # (annulation sur /signup) ou ``refused`` (création refusée) →
     # ``access_denied`` redirigeable. Sans effet hors ``prompt=create``.
@@ -314,16 +315,19 @@ async def _direct_authorize_request(
             trust_chain_resolver=federated_redirect_resolver,
         )
     params = resolved
+    scope_value = params.get("scope", "")
+    authorization_details_value = params.get("authorization_details", "")
     missing = [
         name
         for name, value in (
             ("response_type", params.get("response_type", "")),
             ("client_id", params.get("client_id", "")),
             ("redirect_uri", params.get("redirect_uri", "")),
-            ("scope", params.get("scope", "")),
         )
         if not value
     ]
+    if not scope_value and not authorization_details_value:
+        missing.append("scope")
     if missing:
         refused = await _form_post_missing_response_type(params, missing, client_repository, issuer)
         if refused is not None:
@@ -351,6 +355,7 @@ async def _direct_authorize_request(
         openid2_realm=params.get("openid2_realm", ""),
         dpop_jkt=params.get("dpop_jkt", ""),
         resource=params.get("resource", ""),
+        authorization_details=params.get("authorization_details", ""),
     )
 
 

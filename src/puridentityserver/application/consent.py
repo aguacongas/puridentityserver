@@ -10,8 +10,23 @@ implicitement).
 
 from __future__ import annotations
 
+from puridentityserver.application.authorization_details import (
+    authorization_detail_keys,
+    parse_authorization_details,
+)
 from puridentityserver.domain.authorization import Client, Consent, Scope
 from puridentityserver.interfaces.repositories.consent_repository import ConsentRepository
+
+
+def _parse_detail_keys(authorization_details: str) -> frozenset[str]:
+    """Clés canoniques des détails présents dans ``authorization_details``."""
+    if not authorization_details:
+        return frozenset()
+    try:
+        details = parse_authorization_details(authorization_details)
+    except ValueError:
+        return frozenset()
+    return authorization_detail_keys(details)
 
 
 class ConsentUseCase:
@@ -22,7 +37,13 @@ class ConsentUseCase:
         self._repository = consent_repository
 
     async def is_required(
-        self, client: Client, subject: str, scopes: frozenset[Scope], *, force: bool = False
+        self,
+        client: Client,
+        subject: str,
+        scopes: frozenset[Scope],
+        authorization_details: str = "",
+        *,
+        force: bool = False,
     ) -> bool:
         """Vrai si le client exige un consentement que ``subject`` n'a pas encore donné.
 
@@ -44,14 +65,33 @@ class ConsentUseCase:
         if force:
             return True
         stored = await self._repository.find(subject, client.client_id)
-        return stored is None or not stored.covers(scopes)
+        if stored is None:
+            return True
+        requested_details = _parse_detail_keys(authorization_details)
+        return not stored.covers(scopes, requested_details)
 
-    async def grant(self, subject: str, client_id: str, scopes: frozenset[Scope]) -> None:
+    async def grant(
+        self,
+        subject: str,
+        client_id: str,
+        scopes: frozenset[Scope],
+        authorization_details: str = "",
+    ) -> None:
         """Mémorise les scopes accordés, fusionnés avec ceux déjà consentis.
 
         La réunion avec le consentement existant garantit qu'une demande
         élargie n'efface jamais les scopes déjà autorisés.
         """
         existing = await self._repository.find(subject, client_id)
-        merged = scopes | (existing.scopes if existing is not None else frozenset())
-        await self._repository.save(Consent(subject=subject, client_id=client_id, scopes=merged))
+        merged_scopes = scopes | (existing.scopes if existing is not None else frozenset())
+        merged_details = _parse_detail_keys(authorization_details) | (
+            existing.authorization_details if existing is not None else frozenset()
+        )
+        await self._repository.save(
+            Consent(
+                subject=subject,
+                client_id=client_id,
+                scopes=merged_scopes,
+                authorization_details=merged_details,
+            )
+        )

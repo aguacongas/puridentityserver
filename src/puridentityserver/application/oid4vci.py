@@ -19,6 +19,11 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_public_key,
 )
 
+from puridentityserver.application.authorization_details import (
+    CREDENTIAL_CONFIGURATION_ID,
+    credential_configuration_for_identifier,
+    has_authorization_details,
+)
 from puridentityserver.domain.authorization import AuthorizationCode, Scope
 from puridentityserver.domain.credential_offer import (
     CREDENTIAL_OFFER_TTL,
@@ -40,7 +45,7 @@ from puridentityserver.interfaces.repositories.credential_offer_repository impor
 from puridentityserver.interfaces.schemas.jwks import JWKKeyResponse
 
 #: Identifiant de la configuration de credential publiée par l'OP.
-CREDENTIAL_CONFIGURATION_ID = "puridentityserver-sdjwt-vc"
+#: Réexporté depuis ``application.authorization_details`` (source unique).
 
 #: Chemin du type de credential publié par l'OP (SD-JWT VC). Le ``vct`` du
 #: credential et l'URL de sa Type Metadata (SD-JWT VC §6.3.1) en dérivent.
@@ -216,8 +221,11 @@ class OID4VCIIssuerUseCase:
         if not sub:
             return CredentialError("invalid_token", "access token sans sujet", 401)
 
-        configuration_error = self._configuration_error(
-            credential_configuration_id, credential_identifier, requested_format
+        credential_configuration_id, configuration_error = self._resolve_requested_configuration(
+            claims,
+            credential_configuration_id,
+            credential_identifier,
+            requested_format,
         )
         if configuration_error is not None:
             return configuration_error
@@ -227,6 +235,81 @@ class OID4VCIIssuerUseCase:
             return proof_error
 
         return await self._issue(sub, binding_jwks)
+
+    @staticmethod
+    def _resolve_requested_configuration(
+        claims: dict[str, object],
+        credential_configuration_id: str | None,
+        credential_identifier: str | None,
+        requested_format: str | None,
+    ) -> tuple[str | None, CredentialError | None]:
+        """Résout la configuration ciblée selon le type d'autorisation du jeton."""
+        authorization_details_claim = claims.get("authorization_details")
+        if has_authorization_details(authorization_details_claim):
+            resolved, configuration_error = OID4VCIIssuerUseCase._resolve_authorized_configuration(
+                authorization_details_claim,
+                credential_configuration_id,
+                credential_identifier,
+            )
+            if configuration_error is not None:
+                return (None, configuration_error)
+            if requested_format is not None and requested_format not in CREDENTIAL_FORMATS:
+                return (
+                    None,
+                    CredentialError(
+                        "invalid_credential_request", "format de credential non supporte"
+                    ),
+                )
+            return (resolved, None)
+        scopes = str(claims.get("scope") or "").split()
+        if "openid4vci" not in scopes:
+            return (
+                None,
+                CredentialError(
+                    "insufficient_scope",
+                    "scope openid4vci requis pour emettre un credential",
+                    403,
+                ),
+            )
+        configuration_error = OID4VCIIssuerUseCase._configuration_error(
+            credential_configuration_id, credential_identifier, requested_format
+        )
+        if configuration_error is not None:
+            return (None, configuration_error)
+        return (credential_configuration_id, None)
+
+    @staticmethod
+    def _resolve_authorized_configuration(
+        authorization_details_claim: object,
+        credential_configuration_id: str | None,
+        credential_identifier: str | None,
+    ) -> tuple[str | None, CredentialError | None]:
+        """Résout la configuration depuis un ``credential_identifier`` accordé."""
+        if credential_configuration_id is not None:
+            return (
+                None,
+                CredentialError(
+                    "invalid_credential_request",
+                    "credential_configuration_id interdit quand authorization_details est present",
+                ),
+            )
+        if credential_identifier is None:
+            return (
+                None,
+                CredentialError(
+                    "invalid_credential_request",
+                    "credential_identifier requis quand authorization_details est present",
+                ),
+            )
+        resolved_configuration = credential_configuration_for_identifier(
+            authorization_details_claim, credential_identifier
+        )
+        if resolved_configuration is None:
+            return (
+                None,
+                CredentialError("unknown_credential_identifier", "credential_identifier inconnu"),
+            )
+        return (resolved_configuration, None)
 
     @staticmethod
     def _configuration_error(

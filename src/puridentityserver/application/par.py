@@ -345,6 +345,7 @@ class PushedAuthorizationUseCase:
             dpop_jkt=params.get("dpop_jkt", ""),
             resource=params.get("resource", ""),
             openid2_realm=params.get("openid2_realm", ""),
+            authorization_details=params.get("authorization_details", ""),
         )
 
         validated = await validate_authorization_request(
@@ -465,6 +466,7 @@ class PushedAuthorizationUseCase:
             dpop_jkt=pushed.params.get("dpop_jkt", ""),
             resource=pushed.params.get("resource", ""),
             openid2_realm=pushed.params.get("openid2_realm", ""),
+            authorization_details=pushed.params.get("authorization_details", ""),
         )
 
     async def complete(self, request_uri: str) -> None:

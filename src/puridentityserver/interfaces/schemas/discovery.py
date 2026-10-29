@@ -179,3 +179,4 @@ class DiscoveryDocument(BaseModel):
     # clients et endpoint d'enregistrement par la fédérateur.
     client_registration_types_supported: list[str] | None = None
     federation_registration_endpoint: str | None = None
+    authorization_details_types_supported: list[str] | None = None

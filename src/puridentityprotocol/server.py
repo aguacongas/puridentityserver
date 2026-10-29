@@ -186,6 +186,7 @@ def _discovery_config(
             ((Scope.OPENID20,) if settings.openid20_migration_enabled else ())
             + ((Scope.OID4VCI,) if settings.oid4vci_enabled else ())
         ),
+        authorization_details_types=(("openid_credential",) if settings.oid4vci_enabled else ()),
         federation_registration_endpoint=(
             f"{(settings.base_url or settings.issuer).rstrip('/')}/federation/register"
             if settings.federation_enabled
