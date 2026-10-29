@@ -124,3 +124,11 @@ l'issuance etant immediate) et `POST /notification`. Chaque reponse
 `/notification` avec l'event `credential_accepted` (ou
 `credential_failure`/`credential_deleted`) ; la notification est idempotente.
 Les metadonnees d'emetteur publient les deux endpoints.
+
+
+## c_nonce durable (OID4VCI s7-s8)
+
+Chaque reponse `/credential` porte un nouveau `c_nonce` signe (`c_nonce`,
+`c_nonce_expires_in`) utilisable pour la requete suivante sans rappeler
+`/nonce`. Le nonce est un JWT signe par l'OP : il reste valide derriere
+plusieurs workers et redemarrages pendant sa duree de vie.
