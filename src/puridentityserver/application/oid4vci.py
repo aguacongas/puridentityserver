@@ -529,8 +529,24 @@ class OID4VCIIssuerUseCase:
             return False
         return True
 
+    #: Claims rendus selectivement divulgables pour le credential de demo.
+    #: Chaque valeur est embarquee dans une divulgation salee (RFC 9901 s4.2).
+    _SELECTIVE_CLAIMS: tuple[tuple[str, object], ...] = (
+        ("given_name", "Alice"),
+        ("family_name", "Martin"),
+    )
+
     async def _issue(self, sub: str, binding_jwks: list[dict[str, Any]] | None) -> dict[str, Any]:
-        """Signe les SD-JWT VC d un lot et joint un nouveau ``c_nonce``."""
+        """Signe les SD-JWT VC d un lot et joint un nouveau ``c_nonce``.
+
+        Les claims de ``_SELECTIVE_CLAIMS`` sont rendus selectivement
+        divulgables : leur digest sale est porte par le membre ``_sd`` de
+        l issuer JWT, et la divulgation complete figure apres le premier
+        ``~`` dans le format combine (RFC 9901 s8.1) pour que le wallet
+        puisse en reveler un sous-ensemble lors de la presentation.
+        Des digests leurres (decoys) masquent le nombre reel de claims
+        (RFC 9901 s4.2.6).
+        """
         key: KeyPair = await first_active_key(self._key_manager, self._algorithm)
         private_key = load_pem_private_key(key.private_key_pem.encode("ascii"), password=None)
         now = int(datetime.now(timezone.utc).timestamp())
@@ -541,12 +557,45 @@ class OID4VCIIssuerUseCase:
         if not binding_jwks:
             binding_jwks = [None]  # type: ignore[list-item]
         for binding_jwk in binding_jwks:
+            sd_payload: list[str] = []
+            disclosures: list[str] = []
+            for claim_name, claim_value in self._SELECTIVE_CLAIMS:
+                salt = secrets.token_urlsafe(16)
+                disclosure = [salt, claim_name, claim_value]
+                disclosure_json = json.dumps(disclosure, separators=(",", ":"))
+                digest = (
+                    base64.urlsafe_b64encode(
+                        hashlib.sha256(disclosure_json.encode("ascii")).digest()
+                    )
+                    .rstrip(b"=")
+                    .decode("ascii")
+                )
+                sd_payload.append(digest)
+                encoded_disclosure = (
+                    base64.urlsafe_b64encode(disclosure_json.encode("ascii"))
+                    .rstrip(b"=")
+                    .decode("ascii")
+                )
+                disclosures.append(encoded_disclosure)
+            # Digests leurres (RFC 9901 s4.2.6) pour masquer le nombre de
+            # claims reellement divulgables.
+            for _ in range(2):
+                decoy_salt = secrets.token_urlsafe(16)
+                decoy_json = json.dumps([decoy_salt], separators=(",", ":"))
+                decoy_digest = (
+                    base64.urlsafe_b64encode(hashlib.sha256(decoy_json.encode("ascii")).digest())
+                    .rstrip(b"=")
+                    .decode("ascii")
+                )
+                sd_payload.append(decoy_digest)
             payload: dict[str, object] = {
                 "iss": self._issuer,
                 "sub": sub,
                 "iat": rounded_now,
                 "exp": rounded_now + 3600,
                 "vct": credential_vct(self._issuer),
+                "_sd": sd_payload,
+                "_sd_alg": "sha-256",
             }
             if binding_jwk is not None:
                 payload["cnf"] = {"jwk": binding_jwk}
@@ -557,12 +606,10 @@ class OID4VCIIssuerUseCase:
                     payload, private_key, algorithm=self._algorithm.value, headers=headers
                 ),
             )
+            combined = credential + "~" + "~".join(disclosures) + "~"
             credentials.append(
                 {
-                    # Format combiné SD-JWT (RFC 9901 §8.1) : JWT émetteur suivi de
-                    # ``~`` et, ici, d'aucune divulgation. Sans le ``~`` final le
-                    # credential n'est pas un SD-JWT valide.
-                    "credential": f"{credential}~",
+                    "credential": combined,
                 }
             )
         return {"credentials": credentials}
