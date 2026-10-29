@@ -36,3 +36,9 @@ typ openidvci-issuer-metadata+jwt, la cle publique dans l entete JOSE (jwk),
 les claims sub et iat requis et tous les parametres de metadonnees au
 premier niveau. Par defaut (pas d entete Accept: application/jwt), la
 reponse reste en application/json non signe.
+
+## Emission par lot (batch) (OID4VCI 1.0)
+
+L emetteur annonce batch_credential_issuance.batch_size dans ses metadonnees. Une requete /credential avec plusieurs preuves (proofs.jwt) declenche l emission d un credential SD-JWT par preuve,
+chacun lie a sa propre cle (cnf.jwk), avec des claims temporels
+arrondis a l heure pour eviter la correlation (RFC 9901 s10.1).
