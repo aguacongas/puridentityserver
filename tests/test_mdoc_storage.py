@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 
 from puridentityserver.infrastructure.mdoc import generate_mdoc_pki
@@ -36,8 +35,14 @@ def test_file_round_trip(tmp_path: Path) -> None:
     assert path.is_file()
     loaded = repo.load()
     assert loaded is not None
-    assert loaded.issuer_private_key.private_numbers().private_value == pki.issuer_private_key.private_numbers().private_value
-    assert loaded.signer_private_key.private_numbers().private_value == pki.signer_private_key.private_numbers().private_value
+    assert (
+        loaded.issuer_private_key.private_numbers().private_value
+        == pki.issuer_private_key.private_numbers().private_value
+    )
+    assert (
+        loaded.signer_private_key.private_numbers().private_value
+        == pki.signer_private_key.private_numbers().private_value
+    )
 
 
 def test_file_malformed_falls_back_none(tmp_path: Path) -> None:
