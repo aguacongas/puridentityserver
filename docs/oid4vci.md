@@ -152,7 +152,10 @@ Quand le wallet cible cette configuration sur `/credential`, l'OP delivre un
   lie au mdoc via `deviceKeyInfo.deviceKey`.
 
 La PKI mdoc (IACA auto-signee + document signer) est generee a la volee, en
-memoire, a la premiere emission. Une cle de preuve non EC P-256 est refusee
-(`invalid_proof`) : elle ne peut pas servir de device key ISO 18013-5.
+memoire, a la premiere emission ; le certificat de l IACA est publie dans
+les metadonnees sous la cle `mdoc_iaca_certificates` (x5c base64 DER sans
+padding) pour servir d ancre de confiance aux verifiers externes. La
+configuration mdoc annonce le seul algorithme de preuve EC `ES256`
+(cose_key) : une cle de preuve non EC P-256 est refusee (`invalid_proof`).
 
 Un sample pas-a-pas est disponible dans `samples/oid4vci-mdoc-client/`.

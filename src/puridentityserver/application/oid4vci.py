@@ -15,6 +15,7 @@ from typing import Any, cast
 import jwt as pyjwt
 from cryptography import x509
 from cryptography.hazmat.primitives.serialization import (
+    Encoding,
     load_pem_private_key,
     load_pem_public_key,
 )
@@ -124,7 +125,7 @@ def issuer_metadata_payload(issuer: str) -> dict[str, Any]:
                 "credential_signing_alg_values_supported": ["ES256"],
                 "proof_types_supported": {
                     "jwt": {
-                        "proof_signing_alg_values_supported": ["ES256", "RS256"],
+                        "proof_signing_alg_values_supported": ["ES256"],
                     },
                 },
             },
@@ -228,9 +229,29 @@ class OID4VCIIssuerUseCase:
         self._notifications.add(notification_id)
         return None
 
+    def _ensure_mdoc_pki(self) -> MdocIssuerPKI:
+        """Genere la PKI mdoc a la volée si elle n'est pas encore chargee."""
+        if self._mdoc_pki is None:
+            self._mdoc_pki = generate_mdoc_pki(self._issuer)
+        return self._mdoc_pki
+
     def issuer_metadata(self) -> dict[str, Any]:
-        """Renvoie les métadonnées non signées de l'émetteur."""
-        return issuer_metadata_payload(self._issuer)
+        """Renvoie les métadonnées non signées de l'émetteur.
+
+        HAIP tranche 2 : publie le certificat de l'IACA pour qu'un verifier
+        externe puisse l'utiliser comme ancre de confiance (x5c base64 DER,
+        sans padding).
+        """
+        result = issuer_metadata_payload(self._issuer)
+        pki = self._ensure_mdoc_pki()
+        result["mdoc_iaca_certificates"] = [
+            base64.urlsafe_b64encode(
+                pki.issuer_certificate.public_bytes(cast(Encoding, Encoding.DER))
+            )
+            .rstrip(b"=")
+            .decode("ascii")
+        ]
+        return result
 
     async def signed_issuer_metadata(self) -> str:
         """Signe les métadonnées de l'émetteur en ``application/jwt``.
@@ -638,8 +659,7 @@ class OID4VCIIssuerUseCase:
         est refusee (``invalid_proof``) : elle ne peut pas servir de device
         key ISO 18013-5.
         """
-        pki = self._mdoc_pki or generate_mdoc_pki(self._issuer)
-        self._mdoc_pki = pki
+        pki = self._ensure_mdoc_pki()
         elements = dict(self._SELECTIVE_CLAIMS)
         credentials: list[dict[str, str]] = []
         for binding_jwk in binding_jwks or []:
