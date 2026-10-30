@@ -106,7 +106,7 @@ def _first_token(vp_token: str | list[str] | None) -> str | None:
 def _verify_vp_token(token: str, audience: str) -> dict[str, Any] | None:
     """Vérifie la signature et l'audience d'un vp_token portant un JWK."""
     try:
-        header = pyjwt.get_unverified_header(token)
+        header = pyjwt.get_unverified_header(token)  # NOSONAR(S5659)
     except pyjwt.PyJWTError:
         return None
     algorithm_name = header.get("alg")

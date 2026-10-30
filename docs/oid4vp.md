@@ -16,3 +16,5 @@ présentation (sous-issue #223).
 Validation de la reponse direct_post implementee (vp_token, nonce).
 
 Verification cryptographique du `vp_token` (signature auto-portee, audience, expiration, nonce) implementee pour `direct_post`.
+
+Verification cryptographique du `vp_token` (JWK embarque, signature, audience, nonce) implementee.
