@@ -40,9 +40,13 @@ def oid4vp_router(
         if not isinstance(payload, dict):
             payload = {}
         presentation_definition = payload.get("presentation_definition")
+        dcql_query = payload.get("dcql_query")
         response_mode = str(payload.get("response_mode") or "direct_post")
         result = await usecase.create_presentation_request(
-            presentation_definition=presentation_definition,
+            presentation_definition=presentation_definition
+            if isinstance(presentation_definition, dict)
+            else None,
+            dcql_query=dcql_query if isinstance(dcql_query, dict) else None,
             response_mode=response_mode,
         )
         return JSONResponse(result, media_type=_JSON_MEDIA_TYPE)

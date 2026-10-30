@@ -45,6 +45,7 @@ class OID4VPVerifierUseCase:
     async def create_presentation_request(
         self,
         presentation_definition: dict[str, Any] | None = None,
+        dcql_query: dict[str, Any] | None = None,
         response_mode: str = "direct_post",
     ) -> dict[str, Any]:
         """Signe et renvoie une demande de présentation (request object)."""
@@ -65,42 +66,68 @@ class OID4VPVerifierUseCase:
         }
         if presentation_definition is not None:
             payload["presentation_definition"] = presentation_definition
+        if dcql_query is not None:
+            payload["dcql_query"] = dcql_query
         headers = {"typ": "oauth-authz-req+jwt", "kid": key.kid, "alg": self._algorithm.value}
         request = pyjwt.encode(
             payload, private_key, algorithm=self._algorithm.value, headers=headers
         )
-        return {
+        result: dict[str, Any] = {
             "request": request,
             "nonce": nonce,
             "response_mode": response_mode,
         }
+        if dcql_query is not None:
+            result["dcql_query"] = dcql_query
+        return result
 
     def validate_presentation_response(
         self,
-        vp_token: str | list[str] | None = None,
+        vp_token: str | list[str] | dict[str, Any] | None = None,
     ) -> dict[str, Any] | str:
-        """Valide un vp_token signé et son nonce.
+        """Valide un ou plusieurs vp_token signés et leur nonce.
 
-        Renvoie ``{"status": "received"}`` en cas de succès, ou une chaîne
+        Accepte la forme scalaire, tableau (`vp_token` multiple) ou objet DCQL
+        (mappage identifiant de requête → vp_token). Renvoie
+        ``{"status": "received"}`` en cas de succès, ou une chaîne
         d'erreur (`invalid_request`, `invalid_presentation`) pour la couche HTTP.
         """
-        token = _first_token(vp_token)
-        if token is None:
+        tokens = _all_tokens(vp_token)
+        if not tokens:
             return VP_RESPONSE_ERROR
-        claims = _verify_vp_token(token, self._issuer)
-        if claims is None:
-            return "invalid_presentation"
-        nonce = claims.get("nonce") if isinstance(claims, dict) else None
-        if not isinstance(nonce, str) or nonce not in self._nonces:
-            return "invalid_presentation"
-        self._nonces.discard(nonce)
+        nonces: set[str] = set()
+        for token in tokens:
+            claims = _verify_vp_token(token, self._issuer)
+            if claims is None:
+                return "invalid_presentation"
+            nonce = claims.get("nonce") if isinstance(claims, dict) else None
+            if not isinstance(nonce, str) or nonce not in self._nonces:
+                return "invalid_presentation"
+            nonces.add(nonce)
+        for nonce in nonces:
+            self._nonces.discard(nonce)
         return {"status": "received"}
 
 
-def _first_token(vp_token: str | list[str] | None) -> str | None:
-    """Extrait le premier vp_token d'une valeur unique ou d'une liste."""
-    token = vp_token[0] if isinstance(vp_token, list) and vp_token else vp_token
+def _first_token(vp_token: object) -> str | None:
+    """Extrait un vp_token代表atif d'une valeur unique, tableau ou objet DCQL."""
+    token = vp_token
+    if isinstance(token, dict) and token:
+        token = next(iter(token.values()))
+    elif isinstance(token, list) and token:
+        token = token[0]
     return token if isinstance(token, str) and token else None
+
+
+def _all_tokens(vp_token: object) -> list[str]:
+    """Collecte les vp_token d'une valeur unique, tableau ou objet DCQL."""
+    if isinstance(vp_token, dict):
+        return [value for value in vp_token.values() if isinstance(value, str) and value]
+    if isinstance(vp_token, list):
+        return [value for value in vp_token if isinstance(value, str) and value]
+    if isinstance(vp_token, str) and vp_token:
+        return [vp_token]
+    return []
 
 
 def _verify_vp_token(token: str, audience: str) -> dict[str, Any] | None:

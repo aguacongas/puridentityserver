@@ -18,3 +18,6 @@ Validation de la reponse direct_post implementee (vp_token, nonce).
 Verification cryptographique du `vp_token` (signature auto-portee, audience, expiration, nonce) implementee pour `direct_post`.
 
 Verification cryptographique du `vp_token` (JWK embarque, signature, audience, nonce) implementee.
+
+Support DCQL : `create_presentation_request` accepte `dcql_query`, et `/vp_response`
+accepte un `vp_token` scalaire, tableau ou objet DCQL (mappage id -> vp_token).
