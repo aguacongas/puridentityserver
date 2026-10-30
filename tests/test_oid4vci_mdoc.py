@@ -21,6 +21,7 @@ from puridentityserver.application.oid4vci import (
     MDOC_DOCTYPE,
     MDOC_FORMAT,
     CredentialError,
+    OID4VCIIssuerUseCase,
     issuer_metadata_payload,
 )
 from puridentityserver.domain.authorization import Scope
@@ -192,5 +193,51 @@ def test_metadata_exposes_iaca_and_restricts_to_es256() -> None:
         der = base64.urlsafe_b64decode(certs[0] + "=" * (-len(certs[0]) % 4))
         certificate = x509.load_der_x509_certificate(der)
         assert certificate.subject is not None
+
+    asyncio.run(_task())
+
+
+def test_repository_backed_usecase_material_is_stable() -> None:
+    """Tranche 3 : avec depot persistant, la PKI chargee reste stable."""
+
+    async def _task() -> None:
+        from puridentityserver.infrastructure.mdoc_storage import InMemoryMdocPKIRepository
+
+        token_manager = PyJWTTokenManager(DefaultKeyManager(InMemoryKeyPairRepository()))
+        await token_manager._key_manager.ensure_active_key(2048, JWTAlgorithm.RS256)
+        now = int(datetime.now(timezone.utc).timestamp())
+        token = await token_manager.create_access_token(
+            algorithm=JWTAlgorithm.RS256,
+            issuer=ISSUER,
+            subject="alice",
+            audience="wallet-client",
+            expires_at=now + 600,
+            issued_at=now,
+            scopes=frozenset({Scope.OID4VCI}),
+        )
+        repository = InMemoryMdocPKIRepository()
+        usecase = OID4VCIIssuerUseCase(
+            issuer=ISSUER,
+            key_manager=token_manager._key_manager,
+            algorithm=JWTAlgorithm.RS256,
+            token_manager=token_manager,
+            mdoc_pki_repository=repository,
+        )
+        n1 = (await usecase.issue_nonce())["c_nonce"]
+        r1 = await usecase.issue_credential(
+            token,
+            credential_configuration_id=MDOC_CREDENTIAL_CONFIGURATION_ID,
+            proofs=(_ec_proof(n1),),
+        )
+        assert isinstance(r1, dict)
+        assert repository.load() is not None
+        metadata = usecase.issuer_metadata()
+        assert "mdoc_iaca_certificates" in metadata
+
+        # persist stable across calls
+        pki_loaded = repository.load()
+        metadata_second = usecase.issuer_metadata()
+        assert metadata_second["mdoc_iaca_certificates"] == metadata["mdoc_iaca_certificates"]
+        assert pki_loaded is repository.load()
 
     asyncio.run(_task())
