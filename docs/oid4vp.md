@@ -14,3 +14,5 @@ Dans cet état, l'OP monte `POST /presentation_requests` (request object signé)
 présentation (sous-issue #223).
 
 Validation de la reponse direct_post implementee (vp_token, nonce).
+
+Verification cryptographique du `vp_token` (signature auto-portee, audience, expiration, nonce) implementee pour `direct_post`.
