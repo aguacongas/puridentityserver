@@ -69,7 +69,7 @@ def test_validate_presentation_response() -> None:
         assert usecase.validate_presentation_response(bad_token) == "invalid_presentation"
 
         assert usecase.validate_presentation_response(None) == "invalid_request"
-        assert usecase.validate_presentation_response(["", "x"]) == "invalid_request"
+        assert usecase.validate_presentation_response([]) == "invalid_request"
         # Signature invalide : token forge, jwk ne correspond pas.
         forged = _signed_vp_token("https://id.example", nonce)
         tampered = forged[:-4] + "AAAA"
@@ -124,5 +124,52 @@ def test_verify_vp_token_rejects_missing_jwk() -> None:
             headers={"typ": "JWT", "alg": "HS256", "jwk": {"kty": "oct", "k": "AA"}},
         )
         assert usecase.validate_presentation_response(bad_alg) == "invalid_presentation"
+
+    asyncio.run(_task())
+
+
+def test_validate_presentation_response_dcql() -> None:
+    import time
+
+    import jwt as _jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from jwt.algorithms import RSAAlgorithm
+
+    async def _task() -> None:
+        key_manager = DefaultKeyManager(InMemoryKeyPairRepository())
+        await key_manager.ensure_active_key(2048, JWTAlgorithm.RS256)
+        usecase = OID4VPVerifierUseCase(
+            issuer="https://id.example",
+            key_manager=key_manager,
+            algorithm=JWTAlgorithm.RS256,
+        )
+        created = await usecase.create_presentation_request(
+            None,
+            dcql_query={"credentials": [{"id": "cred1", "format": "jwt_vc_json"}]},
+            response_mode="direct_post",
+        )
+        nonce = created["nonce"]
+        assert created["dcql_query"] is not None
+
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        public_jwk = RSAAlgorithm.to_jwk(private_key.public_key(), as_dict=True)
+        public_jwk["alg"] = "RS256"
+        now = int(time.time())
+        token = _jwt.encode(
+            {
+                "iss": "did:example:holder",
+                "aud": "https://id.example",
+                "nonce": nonce,
+                "iat": now,
+                "exp": now + 300,
+            },
+            private_key,
+            algorithm="RS256",
+            headers={"typ": "JWT", "alg": "RS256", "jwk": public_jwk},
+        )
+        assert usecase.validate_presentation_response({"cred1": token}) == {"status": "received"}
+
+        # objet DCQL vide.
+        assert usecase.validate_presentation_response({}) == "invalid_request"
 
     asyncio.run(_task())
