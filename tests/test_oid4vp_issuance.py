@@ -92,3 +92,38 @@ def test_presentation_request_with_definition() -> None:
         assert usecase.validate_presentation_response("not-a-jwt") == "invalid_presentation"
 
     asyncio.run(_task())
+
+
+def test_verify_vp_token_rejects_missing_jwk() -> None:
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    async def _task() -> None:
+        key_manager = DefaultKeyManager(InMemoryKeyPairRepository())
+        await key_manager.ensure_active_key(2048, JWTAlgorithm.RS256)
+        usecase = OID4VPVerifierUseCase(
+            issuer="https://id.example",
+            key_manager=key_manager,
+            algorithm=JWTAlgorithm.RS256,
+        )
+
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        no_jwk = pyjwt.encode(
+            {"nonce": "x", "aud": "https://id.example", "exp": 9999999999},
+            private_key,
+            algorithm="RS256",
+            headers={"typ": "JWT", "alg": "RS256"},
+        )
+        assert usecase.validate_presentation_response(no_jwk) == "invalid_presentation"
+
+        # algorithme non autorise
+        bad_alg = pyjwt.encode(
+            {"nonce": "x", "aud": "https://id.example", "exp": 9999999999},
+            "secret01234567890123456789012345678901",
+            algorithm="HS256",
+            headers={"typ": "JWT", "alg": "HS256", "jwk": {"kty": "oct", "k": "AA"}},
+        )
+        assert usecase.validate_presentation_response(bad_alg) == "invalid_presentation"
+
+    asyncio.run(_task())
