@@ -59,7 +59,7 @@ class FileMdocPKIRepository:
         try:
             raw = self._path.read_text(encoding="utf-8")
             data = json.loads(raw)
-        except (OSError, json.JSONDecodeError, ValueError):
+        except (OSError, ValueError):
             _LOGGER.warning("PKI mdoc illisible sur %s, regeneration", self._path)
             return None
         if not isinstance(data, dict):
