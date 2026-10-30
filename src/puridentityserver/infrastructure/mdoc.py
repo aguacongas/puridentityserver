@@ -218,8 +218,7 @@ def _private_cose_key(private_key: ec.EllipticCurvePrivateKey) -> CoseKey:
             -1: _CRV_P256,
             -2: public_numbers.x.to_bytes(32, "big"),
             -3: public_numbers.y.to_bytes(32, "big"),
-            -4: private_key.private_numbers()  # type: ignore[attr-defined]  # méthode abstraite réelle, absente des stubs cryptography
-            .private_value.to_bytes(32, "big"),
+            -4: private_key.private_numbers().private_value.to_bytes(32, "big"),  # type: ignore[attr-defined]  # méthode abstraite réelle, absente des stubs cryptography
         }
     )
 
