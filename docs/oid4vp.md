@@ -21,3 +21,32 @@ Verification cryptographique du `vp_token` (JWK embarque, signature, audience, n
 
 Support DCQL : `create_presentation_request` accepte `dcql_query`, et `/vp_response`
 accepte un `vp_token` scalaire, tableau ou objet DCQL (mappage id -> vp_token).
+
+
+## Mode manuel (plan OID4VP 1.0)
+
+1. Activer la capacite :
+
+   ```toml
+   oid4vp_enabled = true
+   ```
+
+2. Lancer l'OP :
+
+   ```bash
+   uv run python -m puridentityprotocol
+   ```
+
+3. Rejouer `certification/plans/oid4vp.json` via le harness local (navigateur) :
+   - login avec `alice@example.com` / `password` ;
+   - consentir (bouton "Autoriser") ;
+   - attendre `submission_complete`.
+
+4. Observer les logs `/vp_response` et la reponse JSON `{"status":"received"}`.
+
+5. Noter tout warning/erreur de la suite pour alimentation de l'automatisation.
+
+## Preparation de l'automatisation
+
+- Deployer l'OP sur un host TLS (Render/Oracle) avec reverse proxy mTLS.
+- Piper le harness OIDF en mode non interactif (TODO, issue #265).
