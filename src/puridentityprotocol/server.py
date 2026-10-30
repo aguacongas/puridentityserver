@@ -95,6 +95,7 @@ from puridentityserver.infrastructure.federation import (
 from puridentityserver.infrastructure.jarm import PyJarmEnvelopeSigner
 from puridentityserver.infrastructure.jwe import JWEIdTokenEncrypter, JWERequestObjectDecrypter
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
+from puridentityserver.infrastructure.mdoc_storage import FileMdocPKIRepository
 from puridentityserver.infrastructure.persistence.readers import build_readers_from_stores
 from puridentityserver.infrastructure.persistence.stores import (
     Stores,
@@ -398,6 +399,11 @@ class ProtocolDependencies:
                 algorithm=_primary_algorithm(settings),
                 token_manager=self.token_manager,
                 dpop=self.dpop_validator,
+                mdoc_pki_repository=(
+                    FileMdocPKIRepository(settings.mdoc_pki_path)
+                    if settings.oid4vci_enabled and settings.mdoc_pki_path
+                    else None
+                ),
             )
             if settings.oid4vci_enabled
             else None
