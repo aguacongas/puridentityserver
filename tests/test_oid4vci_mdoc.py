@@ -170,3 +170,27 @@ def test_mdoc_rejects_rsa_binding_key() -> None:
         assert result.error == "invalid_proof"
 
     asyncio.run(_task())
+
+
+def test_metadata_exposes_iaca_and_restricts_to_es256() -> None:
+    """Tranche 2 HAIP : IACA publie dans les metadonnees, ES256 seul."""
+
+    async def _task() -> None:
+        usecase, _ = await _ready_usecase()
+        metadata = usecase.issuer_metadata()
+        mdoc = metadata["credential_configurations_supported"][MDOC_CREDENTIAL_CONFIGURATION_ID]
+        assert mdoc["proof_types_supported"]["jwt"]["proof_signing_alg_values_supported"] == [
+            "ES256"
+        ]
+        certs = metadata["mdoc_iaca_certificates"]
+        assert isinstance(certs, list)
+        assert len(certs) == 1
+        import base64
+
+        from cryptography import x509
+
+        der = base64.urlsafe_b64decode(certs[0] + "=" * (-len(certs[0]) % 4))
+        certificate = x509.load_der_x509_certificate(der)
+        assert certificate.subject is not None
+
+    asyncio.run(_task())
