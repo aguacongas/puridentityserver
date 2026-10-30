@@ -19,6 +19,8 @@ dependencies = [
     "pydantic-settings>=2.15.0",
     "python-multipart>=0.0.18",
     "fastapi-users[jwt,sqlalchemy]>=13.0.0",
+    "cbor2>=6.1.5",
+    "cose>=0.9.dev8",
 ]
 
 [project.optional-dependencies]
