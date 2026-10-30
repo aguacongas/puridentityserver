@@ -96,7 +96,6 @@ def test_presentation_request_with_definition() -> None:
 
 def test_verify_vp_token_rejects_missing_jwk() -> None:
     import jwt as pyjwt
-    from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
 
     async def _task() -> None:

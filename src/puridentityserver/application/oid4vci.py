@@ -656,12 +656,7 @@ class OID4VCIIssuerUseCase:
                     "credential": combined,
                 }
             )
-        response: dict[str, Any] = {"credentials": credentials}
-        # OID4VCI s8.3 : un nouveau c_nonce accompagne la reponse pour que
-        # le wallet puisse enchaîner sans rappeler /nonce (c_nonce durable).
-        response["c_nonce"] = await self._sign_nonce()
-        response["c_nonce_expires_in"] = C_NONCE_LIFETIME
-        return response
+        return {"credentials": credentials}
 
     async def _dpop_authorized(
         self,

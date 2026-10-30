@@ -128,7 +128,8 @@ Les metadonnees d'emetteur publient les deux endpoints.
 
 ## c_nonce durable (OID4VCI s7-s8)
 
-Chaque reponse `/credential` porte un nouveau `c_nonce` signe (`c_nonce`,
-`c_nonce_expires_in`) utilisable pour la requete suivante sans rappeler
-`/nonce`. Le nonce est un JWT signe par l'OP : il reste valide derriere
+Le `c_nonce` durable de l'OP reste fourni par l'endpoint `/nonce` (JWT signe)
+et n'est plus duplique dans la reponse `/credential`, conformement aux cles
+attendues par la suite OIDF (`credentials`, `transaction_id`,
+`notification_id`, `interval`). Le nonce est un JWT signe par l'OP : il reste valide derriere
 plusieurs workers et redemarrages pendant sa duree de vie.
