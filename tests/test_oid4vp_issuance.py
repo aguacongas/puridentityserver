@@ -27,9 +27,28 @@ def test_presentation_request_signed() -> None:
     asyncio.run(_task())
 
 
-def test_validate_presentation_response() -> None:
-    import jwt as pyjwt
+def _signed_vp_token(issuer: str, nonce: str) -> str:
+    """Construit un vp_token signe a la cle RSA avec JWK embarque."""
+    import time
 
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from jwt.algorithms import RSAAlgorithm
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwk = RSAAlgorithm.to_jwk(private_key.public_key(), as_dict=True)  # type: ignore[attr-defined]
+    jwk["alg"] = "RS256"
+    now = int(time.time())
+    token = pyjwt.encode(
+        {"iss": "did:example:holder", "aud": issuer, "nonce": nonce, "iat": now, "exp": now + 300},
+        private_key,
+        algorithm="RS256",
+        headers={"typ": "JWT", "alg": "RS256", "jwk": jwk},
+    )
+    return token
+
+
+def test_validate_presentation_response() -> None:
     async def _task() -> None:
         key_manager = DefaultKeyManager(InMemoryKeyPairRepository())
         await key_manager.ensure_active_key(2048, JWTAlgorithm.RS256)
@@ -41,16 +60,20 @@ def test_validate_presentation_response() -> None:
         created = await usecase.create_presentation_request(None, "direct_post")
         nonce = created["nonce"]
 
-        vp_token = pyjwt.encode({"nonce": nonce}, "secret", algorithm="HS256")
+        vp_token = _signed_vp_token("https://id.example", nonce)
         assert usecase.validate_presentation_response(vp_token) == {"status": "received"}
         # nonce consomme.
         assert usecase.validate_presentation_response(vp_token) == "invalid_presentation"
 
-        bad_token = pyjwt.encode({"nonce": "nope"}, "secret", algorithm="HS256")
+        bad_token = _signed_vp_token("https://id.example", "nope")
         assert usecase.validate_presentation_response(bad_token) == "invalid_presentation"
 
         assert usecase.validate_presentation_response(None) == "invalid_request"
         assert usecase.validate_presentation_response(["", "x"]) == "invalid_request"
+        # Signature invalide : token forge, jwk ne correspond pas.
+        forged = _signed_vp_token("https://id.example", nonce)
+        tampered = forged[:-4] + "AAAA"
+        assert usecase.validate_presentation_response(tampered) == "invalid_presentation"
 
     asyncio.run(_task())
 

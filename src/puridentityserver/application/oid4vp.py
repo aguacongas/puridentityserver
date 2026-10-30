@@ -1,11 +1,10 @@
-"""Cas d'utilisation minimal de la présentation OpenID4VP (slice 0, issue #172/#223 et suivantes).
+"""Cas d'utilisation de la présentation OpenID4VP (request + validation direct_post).
 
-Cette version crée une demande de présentation signée par l'OP (request object).
-La réception de la réponse (`/vp_response`) valide qu'elle porte un `vp_token`
-(éventuellement un tableau pour plusieurs présentations) et qu'elle correspond
-à une demande émise par l'OP (nonce mémorisé). La vérification cryptographique
-fine de la présentation (signature du détenteur, chaîne de certificats, etc.)
-est un raffinement ultérieur (#223).
+La vérification reste volontairement à un slice minimal : le vp_token doit
+être un JWT signé par une clé publique embarquée (JWK dans l'en-tête JOSE),
+porter l'audience de l'issuer et un nonce précédemment émis, et être non expiré.
+La vérification complète du détenteur / de la présentation (chaîne de
+certificats, DCQL, présentation intégrale) est une tranche ultérieure.
 """
 
 from __future__ import annotations
@@ -20,7 +19,10 @@ from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from puridentityserver.domain.jwks import JWTAlgorithm
 from puridentityserver.infrastructure.jwks import DefaultKeyManager, first_active_key
 
-#: Codes d'erreur de la réception de présentation.
+#: Algorithms acceptes pour le vp_token auto-porte.
+ALLOWED_VP_ALGORITHMS = frozenset({"RS256", "ES256"})
+
+#: Message d'erreur générique de réception de présentation.
 VP_RESPONSE_ERROR = "invalid_request"
 
 
@@ -77,17 +79,15 @@ class OID4VPVerifierUseCase:
         self,
         vp_token: str | list[str] | None = None,
     ) -> dict[str, Any] | str:
-        """Valide la présence d'un vp_token et le nonce mémorisé.
+        """Valide un vp_token signé et son nonce.
 
-        Renvoie le dictionnaire de succès (status received) ou une chaîne
-        d'erreur (`invalid_request`, `invalid_presentation`) à rendre par la
-        couche HTTP. La vérification cryptographique complète reste une
-        tranche ultérieure.
+        Renvoie ``{"status": "received"}`` en cas de succès, ou une chaîne
+        d'erreur (`invalid_request`, `invalid_presentation`) pour la couche HTTP.
         """
         token = _first_token(vp_token)
         if token is None:
             return VP_RESPONSE_ERROR
-        claims = _decode_vp_token(token)
+        claims = _verify_vp_token(token, self._issuer)
         if claims is None:
             return "invalid_presentation"
         nonce = claims.get("nonce") if isinstance(claims, dict) else None
@@ -103,13 +103,29 @@ def _first_token(vp_token: str | list[str] | None) -> str | None:
     return token if isinstance(token, str) and token else None
 
 
-def _decode_vp_token(token: str) -> dict[str, Any] | None:
-    """Decode un vp_token sans verification (slice minimal)."""
+def _verify_vp_token(token: str, audience: str) -> dict[str, Any] | None:
+    """Vérifie la signature et l'audience d'un vp_token portant un JWK."""
     try:
-        claims = pyjwt.decode(  # NOSONAR
-            token,
-            options={"verify_signature": False},  # NOSONAR
-        )
+        header = pyjwt.get_unverified_header(token)
     except pyjwt.PyJWTError:
+        return None
+    algorithm_name = header.get("alg")
+    jwk = header.get("jwk")
+    if not isinstance(algorithm_name, str) or algorithm_name not in ALLOWED_VP_ALGORITHMS:
+        return None
+    if not isinstance(jwk, dict):
+        return None
+    try:
+        algorithm = pyjwt.algorithms.get_default_algorithms().get(algorithm_name)
+        if algorithm is None:
+            return None
+        public_key = algorithm.from_jwk(__import__("json").dumps(jwk))
+        claims = pyjwt.decode(
+            token,
+            public_key,
+            algorithms=[algorithm_name],
+            audience=audience,
+        )
+    except (pyjwt.PyJWTError, ValueError, TypeError):
         return None
     return claims if isinstance(claims, dict) else None
