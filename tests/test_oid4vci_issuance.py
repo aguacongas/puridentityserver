@@ -466,7 +466,9 @@ def test_key_attestation_invalid_signature_rejected() -> None:
         headers={"typ": "key-attestation+jwt", "jwk": att_jwk},
     )
     parts = attestation.split(".")
-    bad_attestation = parts[0] + "." + parts[1] + "." + ("A" + parts[2][1:])
+    first_sig_char = parts[2][0] if parts[2] else "A"
+    replaced_sig_char = "B" if first_sig_char != "B" else "A"
+    bad_attestation = parts[0] + "." + parts[1] + "." + replaced_sig_char + parts[2][1:]
 
     proof = pyjwt.encode(
         {"aud": ISSUER, "iat": now, "nonce": nonce},
