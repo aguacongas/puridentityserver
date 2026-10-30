@@ -183,7 +183,8 @@ def test_metadata_exposes_iaca_and_restricts_to_es256() -> None:
             "ES256"
         ]
         certs = metadata["mdoc_iaca_certificates"]
-        assert isinstance(certs, list) and len(certs) == 1
+        assert isinstance(certs, list)
+        assert len(certs) == 1
         import base64
 
         from cryptography import x509
