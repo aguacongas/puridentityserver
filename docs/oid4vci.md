@@ -133,3 +133,26 @@ et n'est plus duplique dans la reponse `/credential`, conformement aux cles
 attendues par la suite OIDF (`credentials`, `transaction_id`,
 `notification_id`, `interval`). Le nonce est un JWT signe par l'OP : il reste valide derriere
 plusieurs workers et redemarrages pendant sa duree de vie.
+
+
+## Emission mdoc ISO 18013-5 (format mso_mdoc)
+
+L'OP emet egalement un credential mdoc (ISO/IEC 18013-5) en plus du SD-JWT VC.
+La configuration `puridentityserver-mso-mdoc` est publiee dans les
+metadonnees d'emetteur, avec le format `mso_mdoc`, le doctype
+`org.iso.18013.5.1.mDL` et la methode de liaison `cose_key`.
+
+Quand le wallet cible cette configuration sur `/credential`, l'OP delivre un
+`IssuerSigned` CBOR (encode en base64url sans padding) dont :
+
+- l'`issuerAuth` est un COSE Sign1 (tag CBOR 18) portant la MobileSecurityObject
+  (digests des elements, validityInfo, deviceKeyInfo) ;
+- la chaine `x5chain` (RFC 9360) embarque le document signer puis l'IACA ;
+- le device key du wallet (proof EC P-256) est converti en cle COSE publique et
+  lie au mdoc via `deviceKeyInfo.deviceKey`.
+
+La PKI mdoc (IACA auto-signee + document signer) est generee a la volee, en
+memoire, a la premiere emission. Une cle de preuve non EC P-256 est refusee
+(`invalid_proof`) : elle ne peut pas servir de device key ISO 18013-5.
+
+Un sample pas-a-pas est disponible dans `samples/oid4vci-mdoc-client/`.

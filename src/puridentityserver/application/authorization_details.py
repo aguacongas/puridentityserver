@@ -19,8 +19,14 @@ OPENID_CREDENTIAL_TYPE = "openid_credential"
 #: avec ``oid4vci.CREDENTIAL_CONFIGURATION_ID``).
 CREDENTIAL_CONFIGURATION_ID = "puridentityserver-sdjwt-vc"
 
+#: Configuration de credential mdoc publiée par l'OP (ISO 18013-5). Doit
+#: rester synchronisée avec ``oid4vci.MDOC_CREDENTIAL_CONFIGURATION_ID``.
+MDOC_CREDENTIAL_CONFIGURATION_ID = "puridentityserver-mso-mdoc"
+
 #: Configurations de credential reconnues par l'OP.
-SUPPORTED_CREDENTIAL_CONFIGURATION_IDS = frozenset({CREDENTIAL_CONFIGURATION_ID})
+SUPPORTED_CREDENTIAL_CONFIGURATION_IDS = frozenset(
+    {CREDENTIAL_CONFIGURATION_ID, MDOC_CREDENTIAL_CONFIGURATION_ID}
+)
 
 
 class AuthorizationDetailsError(ValueError):

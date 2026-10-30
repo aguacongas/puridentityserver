@@ -21,6 +21,8 @@ from cryptography.hazmat.primitives.serialization import (
 
 from puridentityserver.application.authorization_details import (
     CREDENTIAL_CONFIGURATION_ID,
+    MDOC_CREDENTIAL_CONFIGURATION_ID,
+    SUPPORTED_CREDENTIAL_CONFIGURATION_IDS,
     credential_configuration_for_identifier,
     has_authorization_details,
 )
@@ -34,6 +36,11 @@ from puridentityserver.domain.credential_offer import (
 from puridentityserver.domain.dpop import access_token_hash
 from puridentityserver.domain.jwks import JWTAlgorithm, KeyPair
 from puridentityserver.infrastructure.jwks import DefaultKeyManager, first_active_key
+from puridentityserver.infrastructure.mdoc import (
+    MdocBindingError,
+    MdocIssuerPKI,
+    generate_mdoc_pki,
+)
 from puridentityserver.interfaces.domain.dpop import DpopProofValidator, DpopValidationError
 from puridentityserver.interfaces.domain.tokens import TokenManager
 from puridentityserver.interfaces.repositories.authorization_code_repository import (
@@ -54,11 +61,17 @@ CREDENTIAL_VCT_PATH = "/credentials/example"
 #: Type JOSE de l'en-tête d'un SD-JWT VC (SD-JWT VC §3.2.1).
 SD_JWT_VC_TYP = "dc+sd-jwt"
 
+#: Format mdoc (ISO 18013-5) accepté dans une requête de credential.
+MDOC_FORMAT = "mso_mdoc"
+
+#: DocType du mdoc émis par l'OP (ISO 18013-5 §9.1.2.1).
+MDOC_DOCTYPE = "org.iso.18013.5.1.mDL"
+
 #: Type JOSE d'une réponse de métadonnées signées (OID4VCI 1.0 §12.2.2).
 ISSUER_METADATA_TYP = "openidvci-issuer-metadata+jwt"
 
-#: Formats SD-JWT VC acceptés dans une requête de credential.
-CREDENTIAL_FORMATS = frozenset({SD_JWT_VC_TYP, "vc+sd-jwt"})
+#: Formats de credential acceptés dans une requête (SD-JWT VC et mdoc).
+CREDENTIAL_FORMATS = frozenset({SD_JWT_VC_TYP, "vc+sd-jwt", MDOC_FORMAT})
 
 #: En-têtes ``typ`` admis pour une preuve JWT (OID4VCI 1.0 §7.1).
 PROOF_TYPES = frozenset({"openid4vci-proof+jwt", "jwt"})
@@ -102,7 +115,19 @@ def issuer_metadata_payload(issuer: str) -> dict[str, Any]:
                         "key_attestations_required": {},
                     },
                 },
-            }
+            },
+            MDOC_CREDENTIAL_CONFIGURATION_ID: {
+                "format": MDOC_FORMAT,
+                "scope": "openid4vci",
+                "doctype": MDOC_DOCTYPE,
+                "cryptographic_binding_methods_supported": ["cose_key"],
+                "credential_signing_alg_values_supported": ["ES256"],
+                "proof_types_supported": {
+                    "jwt": {
+                        "proof_signing_alg_values_supported": ["ES256", "RS256"],
+                    },
+                },
+            },
         },
         "batch_credential_issuance": {"batch_size": 5},
         "deferred_credential_endpoint": f"{normalized}/deferred_credential",
@@ -130,12 +155,16 @@ INVALID_ACCESS_TOKEN_ERROR = "access token invalide, expire ou non autorise"  # 
 
 
 class OID4VCIIssuerUseCase:
-    """Émet un credential verifiable SD-JWT pour l'OP.
+    """Émet un credential verifiable (SD-JWT VC ou mdoc) pour l'OP.
 
     La preuve de possession (``proofs.jwt``) est obligatoire : la configuration
     publiée annonce ``cryptographic_binding_methods_supported``, donc une
     requête sans preuve est refusée (OID4VCI 1.0 §8.2). La liaison DPoP de
     l'access token est vérifiée de la même façon (RFC 9449 §7.1).
+
+    Deux formats sont émis selon la configuration demandée : ``dc+sd-jwt``
+    (défaut) et ``mso_mdoc`` (ISO 18013-5), dont la PKI (IACA + document
+    signer) est générée à la volée à l'instanciation.
     """
 
     def __init__(
@@ -154,6 +183,7 @@ class OID4VCIIssuerUseCase:
         self._token_manager = token_manager
         self._dpop = dpop
         self._notifications: set[str] = set()
+        self._mdoc_pki: MdocIssuerPKI | None = None
 
     async def issue_nonce(self) -> dict[str, Any]:
         """Émet un ``c_nonce`` signé, sans état (OID4VCI 1.0 §7).
@@ -273,7 +303,7 @@ class OID4VCIIssuerUseCase:
         if proof_error is not None:
             return proof_error
 
-        result = await self._issue(sub, binding_jwks)
+        result = await self._issue(sub, binding_jwks, credential_configuration_id)
         if isinstance(result, dict):
             notification_id = uuid.uuid4().hex
             self._notifications.add(notification_id)
@@ -371,7 +401,7 @@ class OID4VCIIssuerUseCase:
                 "invalid_credential_request",
                 "credential_configuration_id ou credential_identifier requis",
             )
-        if credential_configuration_id != CREDENTIAL_CONFIGURATION_ID:
+        if credential_configuration_id not in SUPPORTED_CREDENTIAL_CONFIGURATION_IDS:
             return CredentialError(
                 "unknown_credential_configuration", "credential_configuration_id inconnu"
             )
@@ -580,7 +610,53 @@ class OID4VCIIssuerUseCase:
         ("family_name", "Martin"),
     )
 
-    async def _issue(self, sub: str, binding_jwks: list[dict[str, Any]] | None) -> dict[str, Any]:
+    async def _issue(
+        self,
+        sub: str,
+        binding_jwks: list[dict[str, Any]] | None,
+        credential_configuration_id: str | None,
+    ) -> dict[str, Any] | CredentialError:
+        """Signe les credentials d un lot selon la configuration ciblee.
+
+        La configuration ``mso_mdoc`` delivre un ``IssuerSigned`` CBOR (ISO
+        18013-5) ; toute autre configuration delivre le SD-JWT VC de
+        demonstration (RFC 9901 s8.1). ``sub`` n est utilise que par le
+        chemin SD-JWT (claim ``sub`` du issuer JWT).
+        """
+        if credential_configuration_id == MDOC_CREDENTIAL_CONFIGURATION_ID:
+            return self._issue_mdoc(binding_jwks)
+        return await self._issue_sd_jwt(sub, binding_jwks)
+
+    def _issue_mdoc(
+        self, binding_jwks: list[dict[str, Any]] | None
+    ) -> dict[str, Any] | CredentialError:
+        """Emet un ``IssuerSigned`` CBOR par cle de liaison (format mso_mdoc).
+
+        Chaque JWK de preuve est converti en device key COSE (EC P-256) et
+        devient la cle de liaison du mdoc emis. Le CBOR est rendu en
+        base64url sans padding (OID4VCI 1.0 s8.5.1). Une cle non EC P-256
+        est refusee (``invalid_proof``) : elle ne peut pas servir de device
+        key ISO 18013-5.
+        """
+        pki = self._mdoc_pki or generate_mdoc_pki(self._issuer)
+        self._mdoc_pki = pki
+        elements = dict(self._SELECTIVE_CLAIMS)
+        credentials: list[dict[str, str]] = []
+        for binding_jwk in binding_jwks or []:
+            try:
+                issued = pki.issue(device_jwk=binding_jwk, claims=elements)
+            except MdocBindingError as error:
+                return CredentialError("invalid_proof", str(error))
+            credentials.append(
+                {
+                    "credential": base64.urlsafe_b64encode(issued).rstrip(b"=").decode("ascii"),
+                }
+            )
+        return {"credentials": credentials}
+
+    async def _issue_sd_jwt(
+        self, sub: str, binding_jwks: list[dict[str, Any]] | None
+    ) -> dict[str, Any]:
         """Signe les SD-JWT VC d un lot et joint un nouveau ``c_nonce``.
 
         Les claims de ``_SELECTIVE_CLAIMS`` sont rendus selectivement
@@ -844,7 +920,7 @@ class CredentialOfferUseCase:
     ) -> tuple[str, ...] | CredentialError:
         """Normalise et vérifie les configurations de credential demandées."""
         configurations = tuple(dict.fromkeys(requested)) or (CREDENTIAL_CONFIGURATION_ID,)
-        if any(item != CREDENTIAL_CONFIGURATION_ID for item in configurations):
+        if any(item not in SUPPORTED_CREDENTIAL_CONFIGURATION_IDS for item in configurations):
             return CredentialError(
                 "unknown_credential_configuration", "credential_configuration_id inconnu"
             )
