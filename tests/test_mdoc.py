@@ -64,7 +64,7 @@ def test_issue_produces_verifiable_issuer_signed() -> None:
     assert message.verify_signature() is True
     protected = cbor2.loads(message.phdr_encoded)
     assert protected[1] == -7
-    assert len(protected[33]) == 2
+    assert len(message.uhdr_encoded[33]) == 2
 
 
 def test_issue_embeds_device_key_and_validity() -> None:
@@ -73,13 +73,14 @@ def test_issue_embeds_device_key_and_validity() -> None:
     outer = cbor2.loads(blob)
     message = Sign1Message.from_cose_obj(list(outer["issuerAuth"].value), True)
     message.key = _private_cose_key(pki.signer_private_key)
-    mso = cbor2.loads(message.payload)
+    loaded = cbor2.loads(message.payload)
+    mso = cbor2.loads(loaded.value) if isinstance(loaded, cbor2.CBORTag) else loaded
 
     device_key = mso["deviceKeyInfo"]["deviceKey"]
     assert device_key[1] == 2  # kty: EC2
     assert device_key[3] == -7  # alg: ES256
     assert device_key[-1] == 1  # crv: P-256
-    assert mso["digestAlgorithm"] == "-7"
+    assert mso["digestAlgorithm"] == -16
     assert mso["version"] == "1.0"
     assert "signed" in mso["validityInfo"]
     assert "validUntil" in mso["validityInfo"]
@@ -89,12 +90,10 @@ def test_issue_covers_each_claim_with_digest() -> None:
     pki = generate_mdoc_pki("https://op.example.com")
     blob = pki.issue(device_jwk=_device_jwk(), claims={"given_name": "Alice", "age": 42})
     outer = cbor2.loads(blob)
-    digests = {
-        k: list(v)
-        for k, v in cbor2.loads(
-            Sign1Message.from_cose_obj(list(outer["issuerAuth"].value), True).payload
-        )["valueDigests"].items()
-    }
+    payload = cbor2.loads(Sign1Message.from_cose_obj(list(outer["issuerAuth"].value), True).payload)
+    if isinstance(payload, cbor2.CBORTag):
+        payload = cbor2.loads(payload.value)
+    digests = {k: list(v) for k, v in payload["valueDigests"].items()}
     assert digests == {PERSONAL_NAME_NAMESPACE: ["given_name", "age"]}
 
 
