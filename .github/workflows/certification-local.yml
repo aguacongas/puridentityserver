@@ -59,8 +59,7 @@ on:
           - ekyc
           - federation
           - oid4vci
-          - oid4vci-mdoc
-  pull_request:
+  pull_request::
     branches: ["main"]
     paths:
       - "certification/**"

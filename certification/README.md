@@ -39,9 +39,7 @@ retenue :
   `oidcc-dynamic-certification-test-plan`, `fapi-ciba-id1-test-plan`,
   `fapi1-advanced-final-test-plan`, `fapi2-security-profile-final-test-plan`,
   `fapi2-message-signing-final-test-plan`, `ekyc-test-plan-oidccore`,
-  `openid-federation-entity-joined-to-test-federation-op-test-plan`,
-  `oid4vci-1_0-issuer-test-plan` (dont la variante mdoc jouée par le plan
-  `oid4vci-mdoc`, `credential_format=mdoc`)),
+  `openid-federation-entity-joined-to-test-federation-op-test-plan`),
   le détail des modules testés et leur verdict (PASSED / FAILED / WARNING /
   REVIEW / SKIPPED) dans le résumé du run ;
 - les artefacts `certification-local-results-<plan>` (un par plan) contiennent
@@ -189,7 +187,7 @@ redémarrage, les conteneurs sont réutilisés).
 bash certification/local/setup.sh
 
 # 2. rejouer un plan en une commande (même séquence stricte que la CI)
-bash certification/local/run-plan.sh fapi2   # basic | implicit | hybrid | formpost | dynamic | ciba | fapi1 | fapi2 | fapi2-message-signing | ekyc | federation | oid4vci | oid4vci-mdoc
+bash certification/local/run-plan.sh fapi2   # basic | implicit | hybrid | formpost | dynamic | ciba | fapi1 | fapi2 | fapi2-message-signing | ekyc | federation | oid4vci
 
 # 3. arrêter / nettoyer
 bash certification/local/down.sh             # OP + op-mtls + conteneurs de la suite
@@ -293,26 +291,6 @@ PR). Les modules REVIEW restent tolérés (verdicts de relecture), leur preuve
 étant fournie par les captures réelles obligatoires (issue #161). Les
 lacunes d'enforcement mTLS CIBA sont corrigées (#147, #149) : le plan ciba
 est à 35/35 PASSED (run 38575847610).
-
-### Plan `oid4vci-mdoc` : format `mso_mdoc` (issue #273)
-
-Plan dédié au format mdoc ISO 18013-5 de l'émetteur : même plan OIDF que
-`oid4vci` (`oid4vci-1_0-issuer-test-plan`) avec la variante
-`credential_format=mdoc`, et une configuration pointant sur la configuration
-mdoc de l'OP (`vci.credential_configuration_id =
-puridentityserver-mso-mdoc`). Fichiers : `certification/plans/oid4vci-mdoc.json`,
-sélecteur `oid4vci-mdoc` (`certification/selectors.sh`), écarts
-`certification/expected-failures/oid4vci-mdoc.json` (et `-skips.json`).
-
-Les champs de configuration VICAL (`credential.vical`, `credential.vical_url`,
-`credential.trust_anchor_pem`), affichés par la suite quand
-`credential_format=mdoc`, restent vides : les contrôles d'ancre de confiance
-qui les consomment sont court-circuités par `skipIfStringsMissing` (contrôle
-interne de séquence, pas un saut de module — aucun module n'est ignoré).
-
-Rejeu : `bash certification/local/run-plan.sh oid4vci-mdoc`, ou
-`workflow_dispatch` avec le filtre de plan `oid4vci-mdoc`.
-
 ## Rejeu local pytest (supprimé)
 
 L'ancien rejeu « sans docker » (`tests/conformance/`, 435 scénarios rejoués
