@@ -4,7 +4,7 @@ name: Certification OIDC (Local)
 # le runner, avec l'OP PurIdentityServer local derrière un nginx mTLS — aucune
 # dépendance à l'infra hébergée de la Fondation ni à Render.
 #
-# Assurance conformité COURANTE et déterministe. Les DIX sont joués en
+# Assurance conformité COURANTE et déterministe. Les plans de `CERTIFICATION_PLANS` sont joués en
 # matrix (patron du job hébergé, issue #122 ; fapi2-message-signing ajouté par
 # l'issue #164, formpost par l'issue #165, dynamic par l'issue #168) : chaque
 # job boot son propre
@@ -59,6 +59,7 @@ on:
           - ekyc
           - federation
           - oid4vci
+          - oid4vci-mdoc
   pull_request:
     branches: ["main"]
     paths:

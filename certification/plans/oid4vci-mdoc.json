@@ -1,0 +1,169 @@
+{
+  "alias": "puridentityserver-oid4vci-mdoc",
+  "description": "PurIdentityServer - OID4VCI OP mdoc (mso_mdoc) certification (CI)",
+  "browser_verbose": true,
+  "server": {
+    "discoveryUrl": "{OPURL}/.well-known/openid-configuration"
+  },
+  "browser": [
+    {
+      "match": "{OPURL}/authorize*",
+      "tasks": [
+        {
+          "task": "Login",
+          "optional": true,
+          "match": "{OPURL}/login*",
+          "commands": [
+            [
+              "text",
+              "name",
+              "username",
+              "alice@example.com"
+            ],
+            [
+              "text",
+              "name",
+              "password",
+              "password"
+            ],
+            [
+              "click",
+              "css",
+              "button[type=submit]"
+            ]
+          ]
+        },
+        {
+          "task": "Consent",
+          "optional": true,
+          "match": "{OPURL}/consent*",
+          "commands": [
+            [
+              "click",
+              "css",
+              "button[name=action][value=authorize]"
+            ]
+          ]
+        },
+        {
+          "task": "Attente form_post",
+          "optional": true,
+          "match": "{SUITEURL}test/a/*/callback",
+          "commands": [
+            [
+              "wait",
+              "id",
+              "submission_complete",
+              30
+            ]
+          ]
+        },
+        {
+          "task": "Attente de l'envoi implicite (query)",
+          "optional": true,
+          "match": "{SUITEURL}test/a/*/callback?*",
+          "commands": [
+            [
+              "wait",
+              "id",
+              "submission_complete",
+              30
+            ]
+          ]
+        },
+        {
+          "task": "Attente de l'envoi implicite (fragment)",
+          "optional": true,
+          "match": "{SUITEURL}test/a/*/callback#*",
+          "commands": [
+            [
+              "wait",
+              "id",
+              "submission_complete",
+              30
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "vci": {
+    "credential_issuer_url": "{OPURL}",
+    "credential_configuration_id": "puridentityserver-mso-mdoc",
+    "allow_unexpected_credential_issuer_metadata_fields": [
+      "mdoc_iaca_certificates"
+    ]  },
+  "client": {
+    "client_id": "puridentityserver-oid4vci-client",
+    "scope": "openid openid4vci",
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "odKpJUcrMIJz5oZP9zW2WS5uu6aFTXIvjvA1EJ162n0",
+          "y": "kYgAhsqEU1rygzwge47pHWdwrKFuAYl2ApbqTphoZCs",
+          "d": "AaBLqunIa-fcy-aQ2hCCiv21okJ6zGUSavs9l8uj6J0",
+          "kid": "puridentityserver-oid4vci-client-20261028",
+          "alg": "ES256",
+          "use": "sig"
+        }
+      ]
+    }
+  },
+  "client2": {
+    "client_id": "puridentityserver-oid4vci-client2",
+    "scope": "openid openid4vci",
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "s_NWNTpQOVcZXjZcZhq7pvX65ELfUuThVzidyRv1fYY",
+          "y": "BJf-9WwA5TxH4Jr_O7didISG75fC3r7XRbw-YVUyq1w",
+          "d": "5GB65Gz4eTsfxAp4i4Oy3ylqUNAlkojbFL-239q71bk",
+          "kid": "puridentityserver-oid4vci-client2-20261028",
+          "alg": "ES256",
+          "use": "sig"
+        }
+      ]
+    }
+  },
+  "client_attestation": {
+    "issuer": "https://client-attester.example.org/",
+    "attester_jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "alg": "ES256",
+          "use": "sig",
+          "x": "p-_IHEO9b_XZIyW2SHyYrRyMndwcWjGhnhS-yF6HRiY",
+          "y": "_6IzIjawRYvQLdrypBlCqeBh27jR2tLNUq8h86deoe8",
+          "d": "Gkmh-vjcuC8QStQqLqM_PhJQUp8KepSGGL2-stl79Bs",
+          "kid": "ct_client_attester_key",
+          "x5c": [
+            "MIICdzCCAh2gAwIBAgIUKhwPKUqZwbR7O8Q8/ZBqNQtIFYowCgYIKoZIzj0EAwIwOTELMAkGA1UEBhMCREUxKjAoBgNVBAMMIU9wZW5JRDRWQ0kgQ29uZm9ybWFuY2UgVGVzdHMgUm9vdDAeFw0yNjA4MjIxOTI4MDhaFw0yNzExMjIxOTI4MDhaMFExCzAJBgNVBAYTAkRFMRcwFQYDVQQKDA5FeGFtcGxlIElzc3VlcjEQMA4GA1UECwwHT0lENFZDSTEXMBUGA1UEAwwOaXNzdWVyLmV4YW1wbGUwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASn78gcQ71v9dkjJbZIfJitHIyd3BxaMaGeFL7IXodGJv+iMyI2sEWL0C3a8qQZQqngYdu40drSzVKvIfOnXqHvo4HqMIHnMCQGA1UdEQQdMBuCDmlzc3Vlci5leGFtcGxlgglsb2NhbGhvc3QwHQYDVR0OBBYEFI1AdcS62Ot9AN9tOAsbSYd6kZ6yMB8GA1UdIwQYMBaAFGUz8nNNJ1GhsnbjNHlRru5uc2FxMA4GA1UdDwEB/wQEAwIHgDAVBgNVHSUBAf8ECzAJBgcogYxdBQECMCEGA1UdEgQaMBiBFmNlcnRpZmljYXRpb25Ab2lkZi5vcmcwNQYDVR0fBC4wLDAqoCigJoYkaHR0cDovL2V4YW1wbGUuY29tL3ZjaS10ZXN0LXJvb3QuY3JsMAoGCCqGSM49BAMCA0gAMEUCIDOsABwIHe+95s9Kj5z0ciS2CjRi1bFDAgY2+1tP254SAiEAqnxmK/lRmjzNqU6VK7bsXy6kkBHivdqZe530gsfo+oU="
+          ]
+        }
+      ]
+    },
+    "key_attestation_jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "alg": "ES256",
+          "use": "sig",
+          "x": "p-_IHEO9b_XZIyW2SHyYrRyMndwcWjGhnhS-yF6HRiY",
+          "y": "_6IzIjawRYvQLdrypBlCqeBh27jR2tLNUq8h86deoe8",
+          "d": "Gkmh-vjcuC8QStQqLqM_PhJQUp8KepSGGL2-stl79Bs",
+          "kid": "ct_key_attestation_key",
+          "x5c": [
+            "MIICdzCCAh2gAwIBAgIUKhwPKUqZwbR7O8Q8/ZBqNQtIFYowCgYIKoZIzj0EAwIwOTELMAkGA1UEBhMCREUxKjAoBgNVBAMMIU9wZW5JRDRWQ0kgQ29uZm9ybWFuY2UgVGVzdHMgUm9vdDAeFw0yNjA4MjIxOTI4MDhaFw0yNzExMjIxOTI4MDhaMFExCzAJBgNVBAYTAkRFMRcwFQYDVQQKDA5FeGFtcGxlIElzc3VlcjEQMA4GA1UECwwHT0lENFZDSTEXMBUGA1UEAwwOaXNzdWVyLmV4YW1wbGUwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASn78gcQ71v9dkjJbZIfJitHIyd3BxaMaGeFL7IXodGJv+iMyI2sEWL0C3a8qQZQqngYdu40drSzVKvIfOnXqHvo4HqMIHnMCQGA1UdEQQdMBuCDmlzc3Vlci5leGFtcGxlgglsb2NhbGhvc3QwHQYDVR0OBBYEFI1AdcS62Ot9AN9tOAsbSYd6kZ6yMB8GA1UdIwQYMBaAFGUz8nNNJ1GhsnbjNHlRru5uc2FxMA4GA1UdDwEB/wQEAwIHgDAVBgNVHSUBAf8ECzAJBgcogYxdBQECMCEGA1UdEgQaMBiBFmNlcnRpZmljYXRpb25Ab2lkZi5vcmcwNQYDVR0fBC4wLDAqoCigJoYkaHR0cDovL2V4YW1wbGUuY29tL3ZjaS10ZXN0LXJvb3QuY3JsMAoGCCqGSM49BAMCA0gAMEUCIDOsABwIHe+95s9Kj5z0ciS2CjRi1bFDAgY2+1tP254SAiEAqnxmK/lRmjzNqU6VK7bsXy6kkBHivdqZe530gsfo+oU="
+          ]
+        }
+      ]
+    }
+  }
+}

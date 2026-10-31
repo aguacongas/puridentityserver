@@ -427,6 +427,12 @@ class Settings(BaseSettings):
     # et peut resoudre la chaine de confiance d'un RP federe. Desactive par
     # defaut : sans lui, aucune route de federation n'est montee.
     federation_enabled: bool = False
+
+    # ACR valeurs atteignables par l'OP (OIDC Discovery 1.0 §2). Default :
+    # uniquement le niveau password. Extension via config.toml / env :
+    # PURIDENTITYSERVER_ACR_VALUES_SUPPORTED=...
+    acr_values_supported: Annotated[tuple[str, ...], NoDecode] = ("puridentityserver:pwd",)
+
     # Feature flags OpenID for Verifiable Credentials (issue #172) :
     # desactives par defaut. `oid4vci_enabled` monte l'endpoint
     # `/.well-known/openid-credential-issuer` et `/credential` ;
