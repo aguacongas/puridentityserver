@@ -23,6 +23,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from puridentityserver.application.authorize import (
+    SUPPORTED_ACR_VALUES,
     AuthorizeConfig,
     AuthorizeError,
     AuthorizeRedirect,
@@ -375,10 +376,17 @@ class TestAuthorizeAcrAndClaims:
     def test_id_token_carries_first_acr_value(self) -> None:
         usecase = _make_authorize_usecase()
 
-        result = run(usecase.execute(_authorize_request("id_token", acr_values="1 2")))
+        result = run(
+            usecase.execute(
+                _authorize_request(
+                    "id_token",
+                    acr_values=" ".join((SUPPORTED_ACR_VALUES[0], "1")),
+                )
+            )
+        )
 
         assert isinstance(result, AuthorizeRedirect)
-        assert _decode(result.id_token)["acr"] == "1"
+        assert _decode(result.id_token)["acr"] == SUPPORTED_ACR_VALUES[0]
 
     def test_id_token_gets_scope_claims_only_for_pure_id_token(self) -> None:
         usecase = _make_authorize_usecase()
