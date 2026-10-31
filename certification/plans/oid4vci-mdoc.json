@@ -89,8 +89,10 @@
   ],
   "vci": {
     "credential_issuer_url": "{OPURL}",
-    "credential_configuration_id": "puridentityserver-mso-mdoc"
-  },
+    "credential_configuration_id": "puridentityserver-mso-mdoc",
+    "allow_unexpected_credential_issuer_metadata_fields": [
+      "mdoc_iaca_certificates"
+    ]  },
   "client": {
     "client_id": "puridentityserver-oid4vci-client",
     "scope": "openid openid4vci",
