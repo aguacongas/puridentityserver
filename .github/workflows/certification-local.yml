@@ -59,8 +59,7 @@ on:
           - ekyc
           - federation
           - oid4vci
-  pull_request::
-    branches: ["main"]
+  pull_request:
     paths:
       - "certification/**"
       - ".github/workflows/certification-local.yml"
