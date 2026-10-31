@@ -95,6 +95,7 @@ from puridentityserver.infrastructure.federation import (
 from puridentityserver.infrastructure.jarm import PyJarmEnvelopeSigner
 from puridentityserver.infrastructure.jwe import JWEIdTokenEncrypter, JWERequestObjectDecrypter
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
+from puridentityserver.infrastructure.mdoc_storage import FileMdocPKIRepository
 from puridentityserver.infrastructure.persistence.readers import build_readers_from_stores
 from puridentityserver.infrastructure.persistence.stores import (
     Stores,
@@ -139,6 +140,8 @@ from puridentityserver.interfaces.api.same_origin import SameOriginFormGuardMidd
 from puridentityserver.interfaces.api.session_management import session_management_router
 from puridentityserver.interfaces.api.token import token_router
 from puridentityserver.interfaces.api.userinfo import userinfo_router
+from puridentityserver.interfaces.domain.dpop import DpopProofValidator
+from puridentityserver.interfaces.domain.tokens import TokenManager
 from puridentityserver.interfaces.repositories.readers import ClientReader
 
 _PACKAGE_VERSION = "0.1.0"
@@ -155,6 +158,32 @@ def _primary_algorithm(settings: Settings) -> JWTAlgorithm:
         if algorithm not in SYMMETRIC_ALGORITHMS:
             return algorithm
     return JWTAlgorithm.RS256
+
+
+def _mdoc_pki_repository(settings: Settings) -> FileMdocPKIRepository | None:
+    """Résout le dépôt persistant de la PKI mdoc, ou ``None`` (ephémère)."""
+    if not settings.oid4vci_enabled or not settings.mdoc_pki_path:
+        return None
+    return FileMdocPKIRepository(settings.mdoc_pki_path)
+
+
+def _oid4vci_usecase(
+    settings: Settings,
+    key_manager: DefaultKeyManager,
+    token_manager: TokenManager,
+    dpop_validator: DpopProofValidator | None,
+) -> OID4VCIIssuerUseCase | None:
+    """Construit l émetteur OID4VCI si activé, ``None`` sinon."""
+    if not settings.oid4vci_enabled:
+        return None
+    return OID4VCIIssuerUseCase(
+        issuer=settings.issuer,
+        key_manager=key_manager,
+        algorithm=_primary_algorithm(settings),
+        token_manager=token_manager,
+        dpop=dpop_validator,
+        mdoc_pki_repository=_mdoc_pki_repository(settings),
+    )
 
 
 def _discovery_config(
@@ -391,16 +420,8 @@ class ProtocolDependencies:
             enabled=settings.openid20_migration_enabled,
             algorithm=_primary_algorithm(settings),
         )
-        self.oid4vci_usecase = (
-            OID4VCIIssuerUseCase(
-                issuer=settings.issuer,
-                key_manager=self.key_manager,
-                algorithm=_primary_algorithm(settings),
-                token_manager=self.token_manager,
-                dpop=self.dpop_validator,
-            )
-            if settings.oid4vci_enabled
-            else None
+        self.oid4vci_usecase = _oid4vci_usecase(
+            settings, self.key_manager, self.token_manager, self.dpop_validator
         )
         self.oid4vci_offer_usecase = (
             CredentialOfferUseCase(

@@ -433,6 +433,7 @@ class Settings(BaseSettings):
     # `oid4vp_enabled` monte les endpoints de presentation (request/response).
     oid4vci_enabled: bool = False
     oid4vp_enabled: bool = False
+    mdoc_pki_path: str = ""
     # `federation_entity_identifier` est l'Entity Identifier de l'OP (une URL
     # https sans query ni fragment, spec 1.2) ; vide = l'issuer de l'OP.
     federation_entity_identifier: str = ""

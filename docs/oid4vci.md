@@ -159,3 +159,28 @@ configuration mdoc annonce le seul algorithme de preuve EC `ES256`
 (cose_key) : une cle de preuve non EC P-256 est refusee (`invalid_proof`).
 
 Un sample pas-a-pas est disponible dans `samples/oid4vci-mdoc-client/`.
+
+
+
+## Persistance de la PKI mdoc (OID4VCI tranche 3)
+
+La PKI mdoc (IACA + document signer) peut être persistée via `Settings` :
+
+- `mdoc_pki_path` : chemin complet d'un fichier JSON de PEM persistant.
+
+Configuration via `config.toml` :
+
+```toml
+mdoc_pki_path = "/var/data/puridentity-mdoc-pki.json"
+```
+
+ou env :
+
+```bash
+PURIDENTITYSERVER_MDOC_PKI_PATH=/var/data/puridentity-mdoc-pki.json
+```
+
+Si vide (défaut), le comportement éphémère conserve la génération à la volée
+à chaque démarrage. Quand un chemin est fourni, la PKI est chargée depuis le
+fichier si présent ; sinon une nouvelle PKI est générée puis persistée pour
+les redémarrages suivants et les autres processus.

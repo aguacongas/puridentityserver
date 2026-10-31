@@ -42,6 +42,7 @@ from puridentityserver.infrastructure.mdoc import (
     MdocIssuerPKI,
     generate_mdoc_pki,
 )
+from puridentityserver.infrastructure.mdoc_storage import MdocPKIRepository
 from puridentityserver.interfaces.domain.dpop import DpopProofValidator, DpopValidationError
 from puridentityserver.interfaces.domain.tokens import TokenManager
 from puridentityserver.interfaces.repositories.authorization_code_repository import (
@@ -176,6 +177,7 @@ class OID4VCIIssuerUseCase:
         algorithm: JWTAlgorithm,
         token_manager: TokenManager,
         dpop: DpopProofValidator | None = None,
+        mdoc_pki_repository: MdocPKIRepository | None = None,
     ) -> None:
         """Initialise l'émetteur et mémorise les dépendances cryptographiques."""
         self._issuer = issuer.rstrip("/")
@@ -185,6 +187,7 @@ class OID4VCIIssuerUseCase:
         self._dpop = dpop
         self._notifications: set[str] = set()
         self._mdoc_pki: MdocIssuerPKI | None = None
+        self._mdoc_pki_repository: MdocPKIRepository | None = mdoc_pki_repository
 
     async def issue_nonce(self) -> dict[str, Any]:
         """Émet un ``c_nonce`` signé, sans état (OID4VCI 1.0 §7).
@@ -230,10 +233,27 @@ class OID4VCIIssuerUseCase:
         return None
 
     def _ensure_mdoc_pki(self) -> MdocIssuerPKI:
-        """Genere la PKI mdoc a la volée si elle n'est pas encore chargee."""
-        if self._mdoc_pki is None:
-            self._mdoc_pki = generate_mdoc_pki(self._issuer)
-        return self._mdoc_pki
+        """Genere la PKI mdoc a la volée si elle n'est pas encore chargee.
+
+        Tranche 3 : si un dépôt persistent est fourni, on tente d abord de
+        charger la PKI qu il contient ; a defaut (absence ou erreur) on genere
+        une nouvelle PKI et on la persiste dans le dépôt.
+        """
+        if self._mdoc_pki is not None:
+            return self._mdoc_pki
+        repository = self._mdoc_pki_repository
+        if repository is None:
+            generated = generate_mdoc_pki(self._issuer)
+            self._mdoc_pki = generated
+            return generated
+        loaded = repository.load()
+        if loaded is not None:
+            self._mdoc_pki = loaded
+            return loaded
+        generated = generate_mdoc_pki(self._issuer)
+        repository.save(generated)
+        self._mdoc_pki = generated
+        return generated
 
     def issuer_metadata(self) -> dict[str, Any]:
         """Renvoie les métadonnées non signées de l'émetteur.
