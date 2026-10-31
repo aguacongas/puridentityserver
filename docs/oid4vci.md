@@ -155,8 +155,11 @@ La PKI mdoc (IACA auto-signee + document signer) est generee a la volee, en
 memoire, a la premiere emission ; le certificat de l IACA est publie dans
 les metadonnees sous la cle `mdoc_iaca_certificates` (x5c base64 DER sans
 padding) pour servir d ancre de confiance aux verifiers externes. La
-configuration mdoc annonce le seul algorithme de preuve EC `ES256`
-(cose_key) : une cle de preuve non EC P-256 est refusee (`invalid_proof`).
+configuration mdoc annonce :
+- `credential_signing_alg_values_supported` : identifiant COSE `-7` (ES256) -
+  entier COSE requis par le schema OIDF ;
+- preuve de liaison EC P-256 via `proof_types_supported.jwt` (`ES256`).
+Une cle de preuve non EC P-256 est refusee (`invalid_proof`).
 
 Un sample pas-a-pas est disponible dans `samples/oid4vci-mdoc-client/`.
 
