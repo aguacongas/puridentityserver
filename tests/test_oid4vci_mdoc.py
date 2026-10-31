@@ -82,6 +82,7 @@ def test_metadata_publishes_mdoc_configuration() -> None:
     assert mdoc["format"] == MDOC_FORMAT
     assert mdoc["doctype"] == MDOC_DOCTYPE
     assert mdoc["cryptographic_binding_methods_supported"] == ["cose_key"]
+    assert mdoc["credential_signing_alg_values_supported"] == [-7]
     # La configuration SD-JWT reste publiée par défaut.
     assert CREDENTIAL_CONFIGURATION_ID in configurations
 
