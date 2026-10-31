@@ -10,7 +10,7 @@
 # `federation` (OpenID Federation 1.1) - HORS programme officiel, mais joues
 # dans les deux workflows a la demande du maintainer (les plans sont publies
 # par la suite dans les deux cas).
-CERTIFICATION_PLANS=(basic implicit hybrid formpost dynamic ciba fapi1 fapi2 fapi2-message-signing ekyc federation oid4vci)
+CERTIFICATION_PLANS=(basic implicit hybrid formpost dynamic ciba fapi1 fapi2 fapi2-message-signing ekyc federation oid4vci oid4vci-mdoc)
 
 # Retourne le selecteur de variante d'un plan sur stdout ; code retour 1 si le
 # plan est inconnu (appelant : message d'erreur + sortie securisee).
@@ -77,6 +77,12 @@ selector_for() {
     # doivent etre explicites, sinon la creation du plan echoue.
     # Variante wallet-initiated (authorization_code) avec SD-JWT VC.
     oid4vci) echo 'oid4vci-1_0-issuer-test-plan[fapi_profile=vci][client_auth_type=private_key_jwt][sender_constrain=dpop][fapi_request_method=unsigned][openid=plain_oauth][fapi_response_mode=plain_response][credential_format=sd_jwt_vc][vci_grant_type=authorization_code][vci_authorization_code_flow_variant=wallet_initiated]' ;;
+    # OID4VCI mdoc (issue #273, tranche 4 de #255) : meme plan issuer alpha
+    # que `oid4vci` avec la variante credential_format=mdoc (mso_mdoc, ISO
+    # 18013-5). La configuration `credential.vical`/`trust_anchor_pem` (checks
+    # VICAL mdoc) reste vide : la suite saute ces controles via
+    # `skipIfStringsMissing`, ce ne sont pas des skips de module.
+    oid4vci-mdoc) echo 'oid4vci-1_0-issuer-test-plan[fapi_profile=vci][client_auth_type=private_key_jwt][sender_constrain=dpop][fapi_request_method=unsigned][openid=plain_oauth][fapi_response_mode=plain_response][credential_format=mdoc][vci_grant_type=authorization_code][vci_authorization_code_flow_variant=wallet_initiated]' ;;
     # OID4VP (issue #172 / #224) : plan HAIP verifier.
     oid4vp) echo 'oid4vp-1final-verifier-haip-test-plan[credential_format=sd_jwt_vc][response_mode=direct_post.jwt]' ;;
     *) return 1 ;;

@@ -74,6 +74,7 @@ on:
           - ekyc
           - federation
           - oid4vci
+          - oid4vci-mdoc
           
 permissions:
   contents: read
