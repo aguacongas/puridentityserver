@@ -13,7 +13,6 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from puridentityserver.application.authorize import (
-    SUPPORTED_ACR_VALUES,
     AuthorizeError,
     AuthorizeRedirect,
     AuthorizeRequest,
@@ -938,7 +937,9 @@ def _unsupported_acr(auth_request: AuthorizeRequest) -> bool:
     aucun relogin ne la rendrait atteignable.
     """
     acr = first_acr_value(auth_request.acr_values)
-    return bool(acr) and acr not in SUPPORTED_ACR_VALUES
+    import puridentityserver.application.authorize as _authorize
+
+    return bool(acr) and acr not in _authorize.SUPPORTED_ACR_VALUES
 
 
 def _login_redirect(request: Request, base_url: str) -> RedirectResponse:

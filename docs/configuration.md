@@ -421,3 +421,9 @@ et l'administration par-dessus les mêmes stores.
   (`PURIDENTITYSERVER_USERS_SEED`).
 - Toutes les opérations sont asynchrones (`async/await`), compatibles avec l'event loop
   de FastAPI.
+
+
+## ACR values supportes
+
+- cr_values_supported: valeurs publiees dans /.well-known/openid-configuration.
+  Public: PURIDENTITYSERVER_ACR_VALUES_SUPPORTED (csv).

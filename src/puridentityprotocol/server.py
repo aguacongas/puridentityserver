@@ -195,9 +195,13 @@ def _discovery_config(
     ``federation_registration_endpoint`` ne sont renseignés que si le support
     OpenID Federation est activé (§12.1.2).
     """
+    import puridentityserver.application.authorize as _authorize
+
+    _authorize.SUPPORTED_ACR_VALUES = settings.acr_values_supported
     return DiscoveryConfig(
         issuer=settings.issuer,
         base_url=settings.base_url,
+        acr_values_supported=settings.acr_values_supported,
         registration_enabled=settings.registration_enabled,
         par_enabled=settings.par_enabled,
         par_required=settings.par_required,
