@@ -313,6 +313,8 @@ client_id = "puridentityserver-oid4vci-client"
 redirect_uris = [
     "https://www.certification.openid.net/test/a/puridentityserver-oid4vci/callback",
     "https://www.certification.openid.net/test/a/puridentityserver-oid4vci/callback?dummy1=lorem&dummy2=ipsum",
+    "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-mdoc/callback",
+    "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-mdoc/callback?dummy1=lorem&dummy2=ipsum",
 ]
 scopes = "openid openid4vci"
 client_type = "confidential"
@@ -325,6 +327,8 @@ client_id = "puridentityserver-oid4vci-client2"
 redirect_uris = [
     "https://www.certification.openid.net/test/a/puridentityserver-oid4vci/callback",
     "https://www.certification.openid.net/test/a/puridentityserver-oid4vci/callback?dummy1=lorem&dummy2=ipsum",
+    "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-mdoc/callback",
+    "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-mdoc/callback?dummy1=lorem&dummy2=ipsum",
 ]
 scopes = "openid openid4vci"
 client_type = "confidential"
