@@ -427,3 +427,4 @@ et l'administration par-dessus les mêmes stores.
 
 - cr_values_supported: valeurs publiees dans /.well-known/openid-configuration.
   Public: PURIDENTITYSERVER_ACR_VALUES_SUPPORTED (csv).
+\n\n\n### Semantique ACR\n- Choix de la premiere valeur ACR satisfiable (pas EAP non implementee ici):\n  on ignore les valeurs non publiees pour ne pas emettre un acr trompeur.\n

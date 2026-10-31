@@ -916,7 +916,7 @@ class AuthorizeUseCase:
         rien n'est à ajouter, pour ne pas altérer le payload standard.
         """
         additional: dict[str, object] = {}
-        acr = first_acr_value(request.acr_values)
+        acr = first_supported_acr(request.acr_values)
         if acr:
             additional["acr"] = acr
         if claims_request is not None:
@@ -1216,3 +1216,11 @@ def first_acr_value(acr_values: str) -> str:
     alors émis.
     """
     return next(iter(acr_values.split()), "")
+
+
+def first_supported_acr(acr_values: str) -> str:
+    """Premiere valeur ACRA ATT ?"""
+    for value in acr_values.split():
+        if value in SUPPORTED_ACR_VALUES:
+            return value
+    return ""
