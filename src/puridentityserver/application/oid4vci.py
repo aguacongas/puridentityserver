@@ -123,7 +123,7 @@ def issuer_metadata_payload(issuer: str) -> dict[str, Any]:
                 "scope": "openid4vci",
                 "doctype": MDOC_DOCTYPE,
                 "cryptographic_binding_methods_supported": ["cose_key"],
-                "credential_signing_alg_values_supported": ["ES256"],
+                "credential_signing_alg_values_supported": [-7],
                 "proof_types_supported": {
                     "jwt": {
                         "proof_signing_alg_values_supported": ["ES256"],
