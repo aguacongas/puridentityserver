@@ -73,8 +73,8 @@ on:
           - fapi2-message-signing
           - ekyc
           - federation
+          - federation
           - oid4vci
-          - oid4vci-mdoc
           
 permissions:
   contents: read
