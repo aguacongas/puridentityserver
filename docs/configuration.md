@@ -427,4 +427,11 @@ et l'administration par-dessus les mêmes stores.
 
 - cr_values_supported: valeurs publiees dans /.well-known/openid-configuration.
   Public: PURIDENTITYSERVER_ACR_VALUES_SUPPORTED (csv).
-\n\n\n### Semantique ACR\n- Choix de la premiere valeur ACR satisfiable (pas EAP non implementee ici):\n  on ignore les valeurs non publiees pour ne pas emettre un acr trompeur.\n
+
+
+### Semantique ACR
+- Choix de la premiere valeur ACR satisfiable parmi les valeurs
+  publiees `acr_values_supported` : on ignore les valeurs non publiees
+  pour ne pas emettre un `acr` trompeur. Le niveau EAP `loa1`
+  (mechanisme password) est publie par defaut ; `loa2`/`loa3` ne le sont
+  que s'ils sont effectivement atteignables (EAP ACR Values 1.0).

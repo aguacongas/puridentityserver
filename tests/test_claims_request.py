@@ -606,7 +606,7 @@ class TestClaimsParameterApiSurface:
                     "redirect_uri": _REDIRECT_URI,
                     "scope": "openid profile",
                     "state": "xyz",
-                    "acr_values": "1 2",
+                    "acr_values": f"{SUPPORTED_ACR_VALUES[0]} unsupported",
                     "claims": json.dumps({"userinfo": {"name": {"essential": True}}}),
                     "code_challenge": _s256_challenge(verifier),
                     "code_challenge_method": "S256",
@@ -626,5 +626,5 @@ class TestClaimsParameterApiSurface:
                 },
             ).json()
 
-        assert _decode(payload["id_token"])["acr"] == "1"
+        assert _decode(payload["id_token"])["acr"] == SUPPORTED_ACR_VALUES[0]
         assert _decode(payload["access_token"])["claims"] == {"userinfo": ["name"]}
