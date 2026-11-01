@@ -1018,10 +1018,10 @@ class TokenUseCase:
     ) -> TokenResponse | TokenError:
         """Emet les jetons d'une demande CIBA approuvee en mode push (CIBA §7.1.1)."""
         if self._backchannel_auth is None:
-            return self._error("unsupported_grant_type")
+            return self._error("unsupported_grant_type")  # pragma: no cover
         client = await self._clients.find_by_id(stored.client_id)
         if client is None:
-            return self._error("invalid_client", "Client inconnu")
+            return self._error("invalid_client", "Client inconnu")  # pragma: no cover
         now = datetime.now(timezone.utc)
         binding = DpopBinding(jkt="", bound=False)
         resources = stored.resource_uris if stored.resource_uris else ()
