@@ -263,6 +263,7 @@ def _store_request(
     interval: int = 5,
     notification_token: str = "",
     notification_endpoint: str = "",
+    user_code: str = "",
 ) -> BackchannelAuthenticationRequest:
     stored = BackchannelAuthenticationRequest(
         auth_req_id_hash=token_hash(auth_req_id),
@@ -273,6 +274,7 @@ def _store_request(
         delivery_mode=delivery_mode,
         client_notification_token=notification_token,
         client_notification_endpoint=notification_endpoint,
+        user_code=user_code,
         interval=interval,
         expires_at=datetime.now(timezone.utc) + timedelta(seconds=expires_in),
     )
@@ -883,6 +885,18 @@ class TestCibaApprovalUseCase:
         approval = CibaApprovalUseCase(requests, ping_notifier=notifier)
         run(approval.execute("req-1", allow=True))
         assert notifier.calls == []
+
+    def test_approval_rejects_invalid_user_code(self) -> None:
+        _, requests, *_ = _make_usecase()
+        _store_request(requests, user_code="ABCD-EFGH")
+        approval = CibaApprovalUseCase(requests)
+        assert run(approval.execute("req-1", allow=True, user_code="WRON-GZZZ")) is False
+
+    def test_approval_accepts_valid_user_code(self) -> None:
+        _, requests, *_ = _make_usecase()
+        _store_request(requests, user_code="ABCD-EFGH")
+        approval = CibaApprovalUseCase(requests)
+        assert run(approval.execute("req-1", allow=True, user_code="ABCD-EFGH")) is True
 
 
 class TestCibaGrant:
