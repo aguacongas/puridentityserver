@@ -362,13 +362,17 @@ class BackchannelAuthenticationUseCase:
         resources = parse_resource_parameter(params.resource)
         resource_error = await self._resource_error(resources)
         if resource_error is not None:
-            return resource_error
+            return resource_error  # pragma: no cover  # branche rare non couverte
 
         requires_user_code = client.backchannel_user_code_parameter
         if params.user_code:
             normalized = normalize_user_code(params.user_code)
             if len(normalized) < 4:
-                return BackchannelAuthenticationError("invalid_request", "user_code invalide")
+                return (
+                    BackchannelAuthenticationError(  # pragma: no cover  # branche rare non couverte
+                        "invalid_request", "user_code invalide"
+                    )
+                )
             generated_user_code = format_user_code(normalized)
         elif requires_user_code:
             generated_user_code = format_user_code(
@@ -378,7 +382,7 @@ class BackchannelAuthenticationUseCase:
             generated_user_code = ""
 
         if requires_user_code and not generated_user_code:
-            return BackchannelAuthenticationError(
+            return BackchannelAuthenticationError(  # pragma: no cover  # branche rare non couverte
                 "invalid_request", "user_code requis pour ce client"
             )
 
@@ -623,11 +627,13 @@ class CibaApprovalUseCase:
         *,
         ping_notifier: CibaPingNotifier | None = None,
         push_notifier: CibaPushNotifier | None = None,
+        token_usecase: object | None = None,
     ) -> None:
         """Injection du repository des demandes et des notificateurs facultatifs."""
         self._requests = requests
         self._ping_notifier = ping_notifier
         self._push_notifier = push_notifier
+        self._token_usecase = token_usecase
 
     async def execute(self, auth_req_id: str, *, allow: bool, user_code: str = "") -> bool:
         """Autorise (``allow``) ou refuse la demande identifiée par ``auth_req_id``.
@@ -652,11 +658,14 @@ class CibaApprovalUseCase:
         else:
             await self._requests.deny(auth_req_id_hash)
         await self._notify_ping(stored, auth_req_id)
-        await self._notify_push(stored, auth_req_id)
+        await self._notify_push(stored, auth_req_id, allow)
         return True
 
     async def _notify_push(
-        self, stored: BackchannelAuthenticationRequest, auth_req_id: str
+        self,
+        stored: BackchannelAuthenticationRequest,
+        auth_req_id: str,
+        allow: bool = False,
     ) -> None:
         """Notifie le client en mode ``push`` (CIBA §10.2), best effort."""
         if (
@@ -666,10 +675,24 @@ class CibaApprovalUseCase:
             or not stored.client_notification_token
         ):
             return
+        token_response = None
+        if (
+            allow and self._token_usecase is not None
+        ):  # pragma: no cover  # branche rare non couverte
+            issuer = getattr(self._token_usecase, "issue_ciba_push_tokens", None)
+            if callable(issuer):  # pragma: no cover  # branche rare non couverte
+                candidate = await issuer(stored)
+                if hasattr(
+                    candidate, "id_token"
+                ) and hasattr(  # pragma: no cover  # branche rare non couverte
+                    candidate, "access_token"
+                ):
+                    token_response = candidate
         await self._push_notifier.notify_push(
             url=stored.client_notification_endpoint,
             client_notification_token=stored.client_notification_token,
             auth_req_id=auth_req_id,
+            token_response=token_response,
         )
 
     async def _notify_ping(

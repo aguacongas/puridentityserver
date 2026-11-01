@@ -878,6 +878,29 @@ class TestCibaApprovalUseCase:
         run(approval.execute("req-1", allow=True))
         assert notifier.calls == []
 
+    def test_notifies_push_client_with_tokens(self) -> None:
+        _, requests, *_ = _make_usecase()
+        _store_request(
+            requests,
+            delivery_mode="push",
+            notification_token="ntok-1",
+            notification_endpoint=_NOTIFY_ENDPOINT,
+        )
+        notifier = _RecordingPushNotifier()
+        approval = CibaApprovalUseCase(
+            requests,
+            push_notifier=notifier,
+            token_usecase=_FakePushIssuer(),
+        )
+        assert run(approval.execute("req-1", allow=True)) is True
+        assert len(notifier.calls) == 1
+        url, token, auth_req_id, issued = notifier.calls[0]
+        assert url == _NOTIFY_ENDPOINT
+        assert token == "ntok-1"
+        assert auth_req_id == "req-1"
+        assert getattr(issued, "id_token", None) == "id-token-push"
+        assert getattr(issued, "access_token", None) == "access-token-push"
+
     def test_skips_notification_without_endpoint(self) -> None:
         _, requests, *_ = _make_usecase()
         _store_request(requests, delivery_mode="ping", notification_token="ntok-1")
@@ -908,6 +931,13 @@ class TestCibaApprovalUseCase:
         stored = run(requests.find_by_auth_req_id_hash(token_hash(result.auth_req_id)))
         assert stored is not None
         assert stored.user_code == "ABCD-EFGH"
+
+
+class _FakePushIssuer:
+    async def issue_ciba_push_tokens(
+        self, stored: BackchannelAuthenticationRequest
+    ) -> TokenResponse:
+        return TokenResponse(access_token="access-token-push", id_token="id-token-push")
 
 
 class TestCibaGrant:
@@ -1099,6 +1129,21 @@ class TestCibaGrant:
                 f"/ciba/approve?token={ack['auth_req_id']}&type=allow&user_code=WRON-GZZZ"
             )
             assert wrong.status_code == 404
+
+    def test_issues_ciba_push_tokens(self) -> None:
+        _uc, requests, token_uc, _approval = _make_usecase()
+        stored = _store_request(
+            requests,
+            delivery_mode="push",
+            notification_token="ntok-1",
+            notification_endpoint=_NOTIFY_ENDPOINT,
+            status=BackchannelAuthenticationStatus.APPROVED,
+        )
+        response = run(token_uc.issue_ciba_push_tokens(stored))
+        assert isinstance(response, TokenResponse)
+        assert response.id_token != ""
+        assert response.access_token != ""
+        assert response.token_type == "Bearer"
 
 
 class TestBackchannelRepositories:
@@ -1311,6 +1356,123 @@ class TestCibaPushNotifier:
                 auth_req_id="req-abc",
             )
         )
+
+    def test_posts_tokens_in_push_payload(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from puridentityserver.application.token import TokenResponse
+        from puridentityserver.infrastructure.backchannel import HTTPCibaPushNotifier
+
+        monkeypatch.setattr(_PingCaptureHandler, "received", [])
+        monkeypatch.setattr(_PingCaptureHandler, "redirect", False)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _PingCaptureHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            port = server.server_address[1]
+            notifier = HTTPCibaPushNotifier()
+            run(
+                notifier.notify_push(
+                    url=f"http://127.0.0.1:{port}/notify",
+                    client_notification_token="ntok-1",
+                    auth_req_id="req-abc",
+                    token_response=TokenResponse(
+                        access_token="access-token-push",
+                        id_token="id-token-push",
+                        token_type="Bearer",
+                        expires_in=120,
+                    ),
+                )
+            )
+        finally:
+            server.shutdown()
+        assert len(_PingCaptureHandler.received) == 1
+        _path, _authorization, body = _PingCaptureHandler.received[0]
+        assert b'"auth_req_id":"req-abc"' in body
+        assert b'"id_token":"id-token-push"' in body
+        assert b'"access_token":"access-token-push"' in body
+        assert b'"token_type":"Bearer"' in body
+        assert b'"expires_in":120' in body
+
+    def test_posts_tokens_skipping_none_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from puridentityserver.application.token import TokenResponse
+        from puridentityserver.infrastructure.backchannel import HTTPCibaPushNotifier
+
+        monkeypatch.setattr(_PingCaptureHandler, "received", [])
+        monkeypatch.setattr(_PingCaptureHandler, "redirect", False)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _PingCaptureHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            port = server.server_address[1]
+            notifier = HTTPCibaPushNotifier()
+            run(
+                notifier.notify_push(
+                    url=f"http://127.0.0.1:{port}/notify",
+                    client_notification_token="ntok-1",
+                    auth_req_id="req-abc",
+                    token_response=TokenResponse(
+                        access_token="access-token-push",
+                        id_token="id-token-push",
+                        expires_in=None,
+                    ),
+                )
+            )
+        finally:
+            server.shutdown()
+        assert len(_PingCaptureHandler.received) == 1
+        _path, _authorization, body = _PingCaptureHandler.received[0]
+        assert b'"auth_req_id":"req-abc"' in body
+        assert b'"id_token":"id-token-push"' in body
+        assert b'"access_token":"access-token-push"' in body
+        assert b'"expires_in"' not in body
+
+
+class _FakePushTokenIssuer:
+    async def issue_ciba_push_tokens(
+        self, stored: BackchannelAuthenticationRequest
+    ) -> TokenResponse:
+        return TokenResponse(access_token="access-token-push", id_token="id-token-push")
+
+
+class _RecordingPushNotifier:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str, object]] = []
+
+    async def notify_push(
+        self,
+        *,
+        url: str,
+        client_notification_token: str,
+        auth_req_id: str,
+        token_response: object | None = None,
+    ) -> None:
+        self.calls.append((url, client_notification_token, auth_req_id, token_response))
+
+
+class TestCibaPushApproval:
+    """Couvre la notification push avec jetons (issue #175)."""
+
+    def test_approval_notifies_push_client_with_tokens(self) -> None:
+        _, requests, *_ = _make_usecase()
+        _store_request(
+            requests,
+            delivery_mode="push",
+            notification_token="ntok-1",
+            notification_endpoint=_NOTIFY_ENDPOINT,
+        )
+        notifier = _RecordingPushNotifier()
+        approval = CibaApprovalUseCase(
+            requests,
+            push_notifier=notifier,
+            token_usecase=_FakePushTokenIssuer(),
+        )
+        assert run(approval.execute("req-1", allow=True)) is True
+        assert len(notifier.calls) == 1
+        url, token, auth_req_id, issued = notifier.calls[0]
+        assert url == _NOTIFY_ENDPOINT
+        assert token == "ntok-1"
+        assert auth_req_id == "req-1"
+        assert getattr(issued, "id_token", None) == "id-token-push"
+        assert getattr(issued, "access_token", None) == "access-token-push"
 
 
 class TestCibaIntegrationHTTP:

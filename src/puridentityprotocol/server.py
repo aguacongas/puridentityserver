@@ -567,6 +567,7 @@ class ProtocolDependencies:
             stores.backchannel,
             ping_notifier=HTTPCibaPingNotifier(),
             push_notifier=HTTPCibaPushNotifier(),
+            token_usecase=self.token_usecase,
         )
         self.userinfo_usecase = UserInfoUseCase(
             UserInfoConfig(issuer=settings.issuer, subject_seed=settings.subject_pairwise_seed),

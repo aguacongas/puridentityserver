@@ -104,8 +104,19 @@ class HTTPCibaPushNotifier(HTTPCibaPingNotifier):
     """POST JSON d'authentification aux clients en mode push (CIBA best-effort)."""
 
     async def notify_push(
-        self, *, url: str, client_notification_token: str, auth_req_id: str
+        self,
+        *,
+        url: str,
+        client_notification_token: str,
+        auth_req_id: str,
+        token_response: object | None = None,
     ) -> None:
         """POST notification push ; réseau/HTTP en échec ignorés."""
-        payload = json.dumps({"auth_req_id": auth_req_id}, separators=(",", ":")).encode("utf-8")
+        payload_obj = {"auth_req_id": auth_req_id}
+        if token_response is not None:
+            for field in ("id_token", "access_token", "token_type", "expires_in"):
+                value = getattr(token_response, field, None)
+                if value is not None:
+                    payload_obj[field if field != "token_type" else "token_type"] = value
+        payload = json.dumps(payload_obj, separators=(",", ":")).encode("utf-8")
         await self._post_json(url, client_notification_token, payload)
