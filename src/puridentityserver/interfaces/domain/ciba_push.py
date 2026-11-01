@@ -19,7 +19,7 @@ class CibaPushNotifier(Protocol):
         url: str,
         client_notification_token: str,
         auth_req_id: str,
-        token_response: object | None = None,
+        notification: str | None = None,
     ) -> None:
         """POST ``{"auth_req_id": ...}`` avec ``Authorization: Bearer``.
 
