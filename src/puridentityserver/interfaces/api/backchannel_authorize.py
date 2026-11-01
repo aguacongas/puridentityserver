@@ -106,9 +106,7 @@ def ciba_approval_router(usecase: CibaApprovalUseCase) -> APIRouter:
                 media_type=_JSON_MEDIA_TYPE,
                 status_code=400,
             )
-        if not await usecase.execute(
-            token, allow=decision == "allow", user_code=user_code
-        ):
+        if not await usecase.execute(token, allow=decision == "allow", user_code=user_code):
             return Response(
                 content=_json_error("invalid_request", "auth_req_id inconnu ou user_code invalide"),
                 media_type=_JSON_MEDIA_TYPE,
