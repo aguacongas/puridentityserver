@@ -70,9 +70,7 @@ class HTTPCibaPingNotifier:
     toléré, le client conserve le mode poll pour récupérer le résultat.
     """
 
-    async def _post_json(
-        self, url: str, client_notification_token: str, payload: bytes
-    ) -> None:
+    async def _post_json(self, url: str, client_notification_token: str, payload: bytes) -> None:
         """Envoie un payload JSON avec bearer ; échecs ignorés."""
 
         def _post() -> None:
