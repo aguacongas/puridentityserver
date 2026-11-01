@@ -185,3 +185,41 @@ claims = jwt.decode(  # clé du JWKS portant le même kid
 
 Sans la métadonnée à l'enregistrement, la réponse reste le JSON non signé
 historique : la signature n'est imposée que si le client la demande.
+
+## Grants étendus et profils FAPI via DCR (#176)
+
+Avec `PURIDENTITYSERVER_DCR_ALLOW_FULL_GRANTS=true` (défaut strict : `false`),
+l'enregistrement dynamique accepte les grants supplémentaires et les profils
+FAPI, sous réserve d'une authentification client forte.
+
+```bash
+# Activation côté serveur (pour cet exemple uniquement)
+PURIDENTITYSERVER_DCR_ALLOW_FULL_GRANTS=true \
+  uv run python -m puridentityserver
+```
+
+Grants étendus (client_credentials, device_code, jwt-bearer) :
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/register   -H "Authorization: Bearer dev-registrar-token"   -H "Content-Type: application/json"   -d '{"redirect_uris": ["http://127.0.0.1:5173/callback"],
+       "scope": "openid",
+       "token_endpoint_auth_method": "private_key_jwt",
+       "grant_types": ["client_credentials", "urn:ietf:params:oauth:grant-type:jwt-bearer"],
+       "jwks": {"keys": [{"kty":"RSA","n":"...","e":"AQAB","kid":"k1","use":"sig","alg":"RS256"}]}}'
+# -> 201 si l'authentification est forte ; 400 invalid_client_metadata sinon
+```
+
+Profil FAPI 2.0 via DCR (authentification forte requise) :
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/register   -H "Authorization: Bearer dev-registrar-token"   -H "Content-Type: application/json"   -d '{"redirect_uris": ["http://127.0.0.1:5173/callback"],
+       "scope": "openid",
+       "token_endpoint_auth_method": "private_key_jwt",
+       "fapi2_enabled": true,
+       "jwks": {"keys": [{"kty":"RSA","n":"...","e":"AQAB","kid":"k1","use":"sig","alg":"RS256"}]}}'
+# -> 201 avec "fapi2_enabled": true dans la reponse
+# (fapi_enabled et fapi2_enabled sont mutuellement exclusifs)
+```
+
+Note : la même configuration fonctionne tel quel avec le serveur par défaut,
+pourvu que `PURIDENTITYSERVER_DCR_ALLOW_FULL_GRANTS=true` soit positionné.

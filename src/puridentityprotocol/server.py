@@ -609,6 +609,7 @@ class ProtocolDependencies:
                 initial_access_token_hashes=settings.registration_initial_access_token_hashes,
                 initial_access_token_mode=settings.registration_initial_access_token_mode,
                 subject_seed=settings.subject_pairwise_seed,
+                dcr_allow_full_grants=settings.dcr_allow_full_grants,
             ),
             stores.client,
             self.scope_registry,

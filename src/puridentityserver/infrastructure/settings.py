@@ -514,6 +514,10 @@ class Settings(BaseSettings):
     registration_enabled: bool = False
     registration_requires_initial_access_token: bool = True
     registration_initial_access_tokens: Annotated[tuple[str, ...], NoDecode] = ()
+    # Issue #176 : autorise les grants étendus (client_credentials,
+    # device_code, jwt-bearer) et les profils FAPI en DCR quand actif
+    # (défaut strict : false).
+    dcr_allow_full_grants: bool = False
 
     # Secrets des méthodes HMAC (``client_secret_jwt`` et grant
     # ``jwt-bearer`` signés secret partagé) : chiffrement **au repos** avec

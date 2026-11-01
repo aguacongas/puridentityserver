@@ -63,4 +63,6 @@ et réponse d'autorisation en fragment (jamais de `code` en query). Le profil
 d'autorisation au client, vie courte des codes et interdiction de réutiliser
 une `request_uri`. Le mode FAPI se configure **par client**
 (`fapi_enabled = true` dans `config.toml`, ou champs `fapi_*` à
-l'enregistrement dynamique).
+l'enregistrement dynamique, sous réserve d'une authentification forte
+`private_key_jwt` / `tls_client_auth`).
+

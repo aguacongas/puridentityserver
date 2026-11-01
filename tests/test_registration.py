@@ -67,6 +67,7 @@ def run(awaitable: Awaitable[_T]) -> _T:
 def _usecase(
     *,
     requires_initial_access_token: bool = True,
+    dcr_allow_full_grants: bool = False,
 ) -> RegistrationUseCase:
     """Construit un RegistrationUseCase avec un registre clients en mémoire."""
     config = RegistrationConfig(
@@ -74,6 +75,7 @@ def _usecase(
         base_url=_ISSUER,
         requires_initial_access_token=requires_initial_access_token,
         initial_access_token_hashes=frozenset({hash_secret(_INITIAL_TOKEN)}),
+        dcr_allow_full_grants=dcr_allow_full_grants,
     )
     return RegistrationUseCase(config, InMemoryClientRepository())
 
@@ -874,3 +876,173 @@ class TestRegistrationEndpoint:
             metadata = client.get("/.well-known/openid-configuration").json()
 
         assert metadata.get("registration_endpoint") is None
+
+
+class TestRegistrationDcrFullGrants:
+    """Couvre les grants étendus et les profils FAPI en DCR (issue #176)."""
+
+    def _metadata(
+        self,
+        usecase: RegistrationUseCase,
+        metadata: dict[str, object],
+    ) -> RegistrationError | object:
+        return run(usecase.register(RegisterRequest(metadata, initial_access_token=_INITIAL_TOKEN)))
+
+    def test_rejects_extended_grants_when_flag_disabled(self) -> None:
+        usecase = _usecase(dcr_allow_full_grants=False)
+        result = self._metadata(
+            usecase,
+            {**_REGISTRATION, "grant_types": ["client_credentials"]},
+        )
+        assert isinstance(result, RegistrationError)
+        assert result.error == "invalid_client_metadata"
+
+    def test_rejects_extended_grants_with_weak_auth(self) -> None:
+        usecase = _usecase(dcr_allow_full_grants=True)
+        result = self._metadata(
+            usecase,
+            {
+                **_REGISTRATION,
+                "token_endpoint_auth_method": "client_secret_post",
+                "grant_types": ["client_credentials"],
+            },
+        )
+        assert isinstance(result, RegistrationError)
+        assert result.error == "invalid_client_metadata"
+
+    def test_accepts_extended_grants_with_flag_and_strong_auth(self) -> None:
+        usecase = _usecase(dcr_allow_full_grants=True)
+        result = self._metadata(
+            usecase,
+            {
+                **_REGISTRATION,
+                "token_endpoint_auth_method": "client_secret_basic",
+                "grant_types": ["client_credentials"],
+            },
+        )
+        assert isinstance(result, ClientRegistration)
+
+    def test_fapi_flags_mutually_exclusive(self) -> None:
+        usecase = _usecase(dcr_allow_full_grants=True)
+        result = self._metadata(
+            usecase,
+            {
+                **_REGISTRATION,
+                "token_endpoint_auth_method": "private_key_jwt",
+                "jwks": {"keys": []},
+                "fapi_enabled": True,
+                "fapi2_enabled": True,
+            },
+        )
+        assert isinstance(result, RegistrationError)
+        assert result.error == "invalid_client_metadata"
+
+    def test_fapi_profile_requires_strong_auth(self) -> None:
+        usecase = _usecase(dcr_allow_full_grants=True)
+        result = self._metadata(
+            usecase,
+            {
+                **_REGISTRATION,
+                "token_endpoint_auth_method": "client_secret_basic",
+                "fapi2_enabled": True,
+            },
+        )
+        assert isinstance(result, RegistrationError)
+        assert result.error == "invalid_client_metadata"
+
+    def test_fapi_profile_accepted_with_strong_auth(self) -> None:
+        usecase = _usecase(dcr_allow_full_grants=True)
+        result = self._metadata(
+            usecase,
+            {
+                **_REGISTRATION,
+                "token_endpoint_auth_method": "tls_client_auth",
+                "tls_client_auth_subject_dn": "CN=client",
+                "fapi2_enabled": True,
+            },
+        )
+        assert isinstance(result, ClientRegistration)
+        assert result.fapi2_enabled is True
+        assert result.fapi_enabled is False
+
+    def test_extended_grants_with_private_key_jwt(self) -> None:
+        usecase = _usecase(dcr_allow_full_grants=True)
+        result = self._metadata(
+            usecase,
+            {
+                **_REGISTRATION,
+                "token_endpoint_auth_method": "tls_client_auth",
+                "tls_client_auth_subject_dn": "CN=client",
+                "grant_types": ["urn:ietf:params:oauth:grant-type:jwt-bearer"],
+            },
+        )
+        assert isinstance(result, ClientRegistration)
+
+    def test_fapi1_profile_echoed(self) -> None:
+        usecase = _usecase(dcr_allow_full_grants=True)
+        result = self._metadata(
+            usecase,
+            {
+                **_REGISTRATION,
+                "token_endpoint_auth_method": "tls_client_auth",
+                "tls_client_auth_subject_dn": "CN=client",
+                "fapi_enabled": True,
+            },
+        )
+        assert isinstance(result, ClientRegistration)
+        assert result.fapi_enabled is True
+        assert result.fapi2_enabled is False
+
+
+class TestRegistrationDcrFullGrantsMatrix:
+    """Matrice de couverture supplémentaire pour SonarCloud (issue #176)."""
+
+    def test_grants_and_fapi_combinations(self) -> None:
+        cases = (
+            ({"grant_types": ["authorization_code"]}, ClientRegistration),
+            (
+                {
+                    "grant_types": ["client_credentials"],
+                    "token_endpoint_auth_method": "client_secret_basic",
+                },
+                ClientRegistration,
+            ),
+            (
+                {
+                    "grant_types": ["client_credentials"],
+                    "token_endpoint_auth_method": "client_secret_post",
+                },
+                RegistrationError,
+            ),
+            (
+                {
+                    "fapi_enabled": True,
+                    "token_endpoint_auth_method": "tls_client_auth",
+                    "tls_client_auth_subject_dn": "CN=client",
+                },
+                ClientRegistration,
+            ),
+            (
+                {"fapi2_enabled": True, "token_endpoint_auth_method": "client_secret_basic"},
+                RegistrationError,
+            ),
+            (
+                {
+                    "fapi_enabled": True,
+                    "fapi2_enabled": False,
+                    "token_endpoint_auth_method": "private_key_jwt",
+                    "jwks": {"keys": [{"kty": "RSA", "n": "AQAB", "e": "AQAB", "kid": "k1"}]},
+                },
+                RegistrationError,
+            ),
+        )
+        for extra, expected in cases:
+            usecase = _usecase(
+                dcr_allow_full_grants=True,
+                requires_initial_access_token=True,
+            )
+            metadata = {**_REGISTRATION, **extra}
+            result = run(
+                usecase.register(RegisterRequest(metadata, initial_access_token=_INITIAL_TOKEN))
+            )
+            assert isinstance(result, expected), (extra, type(result))

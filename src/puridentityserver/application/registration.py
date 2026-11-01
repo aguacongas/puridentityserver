@@ -89,6 +89,12 @@ _ALLOWED_GRANT_TYPES = frozenset(
         "authorization_code",
         "refresh_token",
         "implicit",
+        # Grants supplémentaires (issue #176) : autorisés seulement si
+        # ``dcr_allow_full_grants`` est actif et sous réserve d'une méthode
+        # d'authentification forte.
+        "client_credentials",
+        "urn:ietf:params:oauth:grant-type:device_code",
+        "urn:ietf:params:oauth:grant-type:jwt-bearer",
         # CIBA (OIDC CIBA 1.0 §16.1.1) : le grant backchannel s'enregistre
         # ici ; son usage sur /token reste conditionné au mode de livraison.
         "urn:openid:params:grant-type:ciba",
@@ -125,6 +131,32 @@ _ALLOWED_AUTH_METHODS = frozenset(
 _AUTH_METHOD_DEFAULT = "client_secret_basic"
 _TLS_KEY_AUTH_METHODS = frozenset({"tls_client_auth", "self_signed_tls_client_auth"})
 _KEYLESS_AUTH_METHODS = frozenset({"none", "private_key_jwt"}) | _TLS_KEY_AUTH_METHODS
+# Authentifications admises pour les grants étendus (issue #176) : methods
+# fortes uniquement (``client_secret_post``/``none`` refusés).
+_FULL_GRANT_STRONG_AUTH_METHODS = frozenset(
+    {
+        "client_secret_basic",
+        "client_secret_jwt",
+        "private_key_jwt",
+        "tls_client_auth",
+        "self_signed_tls_client_auth",
+    }
+)
+_FULL_GRANT_NEW_GRANTS = frozenset(
+    {
+        "client_credentials",
+        "urn:ietf:params:oauth:grant-type:device_code",
+        "urn:ietf:params:oauth:grant-type:jwt-bearer",
+    }
+)
+_FAPI_DCR_STRONG_AUTH_METHODS = frozenset(
+    {
+        "private_key_jwt",
+        "tls_client_auth",
+        "self_signed_tls_client_auth",
+        "client_secret_jwt",
+    }
+)
 _SYMMETRIC_SIGNING_VALUES = frozenset(algorithm.value for algorithm in SYMMETRIC_ALGORITHMS)
 _ASYMMETRIC_ENCRYPTION_VALUES = frozenset(
     algorithm.value for algorithm in ASYMMETRIC_ENCRYPTION_ALGORITHMS
@@ -147,6 +179,7 @@ class RegistrationConfig:
     requires_initial_access_token: bool = True
     initial_access_token_hashes: frozenset[str] = frozenset()
     initial_access_token_mode: str = "static"  # ruff: ignore[hardcoded-password-string] (nom de mode, pas un secret)
+    dcr_allow_full_grants: bool = False
     subject_seed: str = ""
 
 
@@ -165,6 +198,7 @@ class RegistrationMetadata:
     tls_client_auth_subject_dn: str = ""
     tls_client_certificate_hash: str = ""
     requested_secret: str | None = None
+    grant_types: frozenset[str] = frozenset({"authorization_code"})
     par_required: bool = False
     require_consent: bool = False
     id_token_signed_response_alg: str = ""
@@ -182,6 +216,8 @@ class RegistrationMetadata:
     backchannel_authentication_request_signing_alg: str = ""
     subject_type: str = "public"
     sector_identifier_uri: str = ""
+    fapi_enabled: bool = False
+    fapi2_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,6 +299,8 @@ class ClientRegistration:
     backchannel_authentication_request_signing_alg: str = ""
     subject_type: str = "public"
     sector_identifier_uri: str = ""
+    fapi_enabled: bool = False
+    fapi2_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -354,6 +392,8 @@ class RegistrationUseCase:
             tls_client_certificate_bound_access_tokens=(
                 metadata.tls_client_certificate_bound_access_tokens
             ),
+            fapi_enabled=metadata.fapi_enabled,
+            fapi2_enabled=metadata.fapi2_enabled,
             id_token_signed_response_alg=metadata.id_token_signed_response_alg,
             userinfo_signed_response_alg=metadata.userinfo_signed_response_alg,
             id_token_encrypted_response_alg=metadata.id_token_encrypted_response_alg,
@@ -447,6 +487,8 @@ class RegistrationUseCase:
             tls_client_certificate_bound_access_tokens=(
                 metadata.tls_client_certificate_bound_access_tokens
             ),
+            fapi_enabled=metadata.fapi_enabled,
+            fapi2_enabled=metadata.fapi2_enabled,
             id_token_signed_response_alg=metadata.id_token_signed_response_alg,
             userinfo_signed_response_alg=metadata.userinfo_signed_response_alg,
             id_token_encrypted_response_alg=metadata.id_token_encrypted_response_alg,
@@ -503,6 +545,8 @@ class RegistrationUseCase:
         """
         for check in (
             self._validate_method_material(metadata),
+            self._validate_grant_profile(metadata),
+            self._validate_fapi_profile(metadata),
             self._validate_jwks_usage(metadata),
             self._validate_signing_material(metadata),
             self._validate_encryption_material(metadata),
@@ -533,6 +577,44 @@ class RegistrationUseCase:
                 f"{method} exige tls_client_auth_subject_dn ou tls_client_certificate",
             )
         return None
+
+    def _require_strong_auth(
+        self, metadata: RegistrationMetadata, allowed: frozenset[str], message: str
+    ) -> RegistrationError | None:
+        """Vérifie que la méthode d'authentification appartient à ``allowed``."""
+        if metadata.token_endpoint_auth_method in allowed:
+            return None
+        return RegistrationError("invalid_client_metadata", message)
+
+    def _validate_grant_profile(self, metadata: RegistrationMetadata) -> RegistrationError | None:
+        """Validite les grants étendus (issue #176, désactivables par config)."""
+        new_grants = metadata.grant_types & _FULL_GRANT_NEW_GRANTS
+        if not new_grants:
+            return None
+        if not self._config.dcr_allow_full_grants:
+            return RegistrationError(
+                "invalid_client_metadata",
+                "Grants étendus désactivés (dcr_allow_full_grants=false)",
+            )
+        return self._require_strong_auth(
+            metadata,
+            _FULL_GRANT_STRONG_AUTH_METHODS,
+            "Les grants étendus exigent private_key_jwt, tls_client_auth ou client_secret_basic",
+        )
+
+    def _validate_fapi_profile(self, metadata: RegistrationMetadata) -> RegistrationError | None:
+        """Validite la cohérence des profils FAPI en DCR (issue #176)."""
+        if not (metadata.fapi_enabled or metadata.fapi2_enabled):
+            return None
+        if metadata.fapi_enabled and metadata.fapi2_enabled:
+            return RegistrationError(
+                "invalid_client_metadata", "fapi_enabled et fapi2_enabled sont exclusifs"
+            )
+        return self._require_strong_auth(
+            metadata,
+            _FAPI_DCR_STRONG_AUTH_METHODS,
+            "Les profils FAPI en DCR exigent private_key_jwt ou tls_client_auth",
+        )
 
     def _validate_signing_material(
         self, metadata: RegistrationMetadata
@@ -896,6 +978,8 @@ class RegistrationUseCase:
             ),
             subject_type=client.subject_type.value,
             sector_identifier_uri=client.sector_identifier_uri,
+            fapi_enabled=client.fapi_enabled,
+            fapi2_enabled=client.fapi2_enabled,
         )
 
     def _base_url(self) -> str:
@@ -903,7 +987,7 @@ class RegistrationUseCase:
         return (self._config.base_url or self._config.issuer).rstrip("/")
 
 
-def _parse_metadata(
+def _parse_metadata(  # ruff: ignore[complex-structure]
     raw: object, known_scopes: frozenset[str]
 ) -> RegistrationMetadata | RegistrationError:
     """Valide les métadonnées reçues et les normalise (RFC 7591 §2)."""
@@ -911,6 +995,9 @@ def _parse_metadata(
         return RegistrationError(
             "invalid_client_metadata", "Métadonnées non conforme (objet JSON attendu)"
         )
+    grant_types = _parse_members(raw, "grant_types", _ALLOWED_GRANT_TYPES, "authorization_code")
+    if isinstance(grant_types, RegistrationError):
+        return grant_types
     redirect_uris = _parse_uri_list(raw, "redirect_uris", required=_uses_redirect_flows(raw))
     if isinstance(redirect_uris, RegistrationError):
         return redirect_uris
@@ -957,6 +1044,16 @@ def _parse_metadata(
     ) = extras
 
     client_type = ClientType.PUBLIC if auth_method == "none" else ClientType.CONFIDENTIAL
+    fapi_enabled = _parse_bool_flag(raw, "fapi_enabled", default=False)
+    if isinstance(fapi_enabled, RegistrationError):
+        return fapi_enabled
+    fapi2_enabled = _parse_bool_flag(raw, "fapi2_enabled", default=False)
+    if isinstance(fapi2_enabled, RegistrationError):
+        return fapi2_enabled
+    if fapi_enabled and fapi2_enabled:
+        return RegistrationError(
+            "invalid_client_metadata", "fapi_enabled et fapi2_enabled sont exclusifs"
+        )
     return RegistrationMetadata(
         redirect_uris=redirect_uris,
         post_logout_redirect_uris=post_logout_uris,
@@ -988,6 +1085,9 @@ def _parse_metadata(
         ),
         subject_type=subject_type,
         sector_identifier_uri=sector_identifier_uri,
+        fapi_enabled=fapi_enabled,
+        fapi2_enabled=fapi2_enabled,
+        grant_types=grant_types,
     )
 
 
