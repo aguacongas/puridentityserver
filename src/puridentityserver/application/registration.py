@@ -578,6 +578,14 @@ class RegistrationUseCase:
             )
         return None
 
+    def _require_strong_auth(
+        self, metadata: RegistrationMetadata, allowed: frozenset[str], message: str
+    ) -> RegistrationError | None:
+        """Vérifie que la méthode d'authentification appartient à ``allowed``."""
+        if metadata.token_endpoint_auth_method in allowed:
+            return None
+        return RegistrationError("invalid_client_metadata", message)
+
     def _validate_grant_profile(self, metadata: RegistrationMetadata) -> RegistrationError | None:
         """Validite les grants étendus (issue #176, désactivables par config)."""
         new_grants = metadata.grant_types & _FULL_GRANT_NEW_GRANTS
@@ -588,14 +596,11 @@ class RegistrationUseCase:
                 "invalid_client_metadata",
                 "Grants étendus désactivés (dcr_allow_full_grants=false)",
             )
-        method = metadata.token_endpoint_auth_method
-        if method not in _FULL_GRANT_STRONG_AUTH_METHODS:
-            return RegistrationError(
-                "invalid_client_metadata",
-                "Les grants étendus exigent private_key_jwt, "
-                "tls_client_auth ou client_secret_basic",
-            )
-        return None
+        return self._require_strong_auth(
+            metadata,
+            _FULL_GRANT_STRONG_AUTH_METHODS,
+            "Les grants étendus exigent private_key_jwt, tls_client_auth ou client_secret_basic",
+        )
 
     def _validate_fapi_profile(self, metadata: RegistrationMetadata) -> RegistrationError | None:
         """Validite la cohérence des profils FAPI en DCR (issue #176)."""
@@ -605,13 +610,11 @@ class RegistrationUseCase:
             return RegistrationError(
                 "invalid_client_metadata", "fapi_enabled et fapi2_enabled sont exclusifs"
             )
-        method = metadata.token_endpoint_auth_method
-        if method not in _FAPI_DCR_STRONG_AUTH_METHODS:
-            return RegistrationError(
-                "invalid_client_metadata",
-                "Les profils FAPI en DCR exigent private_key_jwt ou tls_client_auth",
-            )
-        return None
+        return self._require_strong_auth(
+            metadata,
+            _FAPI_DCR_STRONG_AUTH_METHODS,
+            "Les profils FAPI en DCR exigent private_key_jwt ou tls_client_auth",
+        )
 
     def _validate_signing_material(
         self, metadata: RegistrationMetadata
