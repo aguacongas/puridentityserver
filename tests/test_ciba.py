@@ -1022,6 +1022,44 @@ class TestCibaGrant:
         assert isinstance(result, TokenError)
         assert result.error == "unsupported_grant_type"
 
+    def test_user_code_integration(self) -> None:
+        values: dict[str, object] = {
+            "issuer": _ISSUER,
+            "base_url": _ISSUER,
+            "jwks_algorithms": ("RS256",),
+            "ciba_enabled": True,
+            "ciba_approval_enabled": True,
+            "clients_seed": (
+                {
+                    "client_id": _CLIENT_ID,
+                    "client_secret": _CLIENT_SECRET,
+                    "scopes": "openid profile offline_access",
+                    "client_type": "confidential",
+                    "backchannel_token_delivery_mode": "poll",
+                    "backchannel_user_code_parameter": True,
+                },
+            ),
+        }
+        with TestClient(create_app(Settings(**values))) as client:  # type: ignore[arg-type]
+            ack_resp = client.post(
+                "/bc-authorize",
+                data={"scope": "openid profile", "login_hint": _DEMO_HINT_EMAIL},
+                auth=(_CLIENT_ID, _CLIENT_SECRET),
+            )
+            assert ack_resp.status_code == 200
+            ack = ack_resp.json()
+            assert ack["user_code"] != ""
+            approval = client.post(
+                f"/ciba/approve?token={ack['auth_req_id']}&type=allow&user_code={ack['user_code']}"
+            )
+            assert approval.status_code == 200
+            token = client.post(
+                "/token",
+                data={"grant_type": CIBA_GRANT_TYPE, "auth_req_id": ack["auth_req_id"]},
+                auth=(_CLIENT_ID, _CLIENT_SECRET),
+            )
+            assert token.status_code == 200
+
 
 class TestBackchannelRepositories:
     """Round-trip mémoire et SQL du repository des demandes CIBA."""
