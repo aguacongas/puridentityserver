@@ -964,3 +964,31 @@ class TestRegistrationDcrFullGrants:
         assert isinstance(result, ClientRegistration)
         assert result.fapi2_enabled is True
         assert result.fapi_enabled is False
+
+    def test_extended_grants_with_private_key_jwt(self) -> None:
+        usecase = _usecase(dcr_allow_full_grants=True)
+        result = self._metadata(
+            usecase,
+            {
+                **_REGISTRATION,
+                "token_endpoint_auth_method": "tls_client_auth",
+                "tls_client_auth_subject_dn": "CN=client",
+                "grant_types": ["urn:ietf:params:oauth:grant-type:jwt-bearer"],
+            },
+        )
+        assert isinstance(result, ClientRegistration)
+
+    def test_fapi1_profile_echoed(self) -> None:
+        usecase = _usecase(dcr_allow_full_grants=True)
+        result = self._metadata(
+            usecase,
+            {
+                **_REGISTRATION,
+                "token_endpoint_auth_method": "tls_client_auth",
+                "tls_client_auth_subject_dn": "CN=client",
+                "fapi_enabled": True,
+            },
+        )
+        assert isinstance(result, ClientRegistration)
+        assert result.fapi_enabled is True
+        assert result.fapi2_enabled is False
