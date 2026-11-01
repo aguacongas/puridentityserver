@@ -362,15 +362,17 @@ class BackchannelAuthenticationUseCase:
         resources = parse_resource_parameter(params.resource)
         resource_error = await self._resource_error(resources)
         if resource_error is not None:
-            return resource_error  # pragma: no cover  # rare safety branch)
+            return resource_error  # pragma: no cover  # branche rare non couverte
 
         requires_user_code = client.backchannel_user_code_parameter
         if params.user_code:
             normalized = normalize_user_code(params.user_code)
             if len(normalized) < 4:
-                return BackchannelAuthenticationError(
-                    "invalid_request", "user_code invalide"
-                )  # pragma: no cover  # rare safety branch)
+                return (
+                    BackchannelAuthenticationError(  # pragma: no cover  # branche rare non couverte
+                        "invalid_request", "user_code invalide"
+                    )
+                )
             generated_user_code = format_user_code(normalized)
         elif requires_user_code:
             generated_user_code = format_user_code(
@@ -380,7 +382,7 @@ class BackchannelAuthenticationUseCase:
             generated_user_code = ""
 
         if requires_user_code and not generated_user_code:
-            return BackchannelAuthenticationError(  # pragma: no cover  # rare safety branch)
+            return BackchannelAuthenticationError(  # pragma: no cover  # branche rare non couverte
                 "invalid_request", "user_code requis pour ce client"
             )
 
@@ -674,15 +676,19 @@ class CibaApprovalUseCase:
         ):
             return
         token_response = None
-        if allow and self._token_usecase is not None:  # pragma: no cover  # rare safety branch)
+        if (
+            allow and self._token_usecase is not None
+        ):  # pragma: no cover  # branche rare non couverte
             issuer = getattr(self._token_usecase, "issue_ciba_push_tokens", None)
-            if callable(issuer):  # pragma: no cover  # rare safety branch)
+            if callable(issuer):  # pragma: no cover  # branche rare non couverte
                 candidate = await issuer(stored)
-                if hasattr(candidate, "id_token") and hasattr(
+                if hasattr(
+                    candidate, "id_token"
+                ) and hasattr(  # pragma: no cover  # branche rare non couverte
                     candidate, "access_token"
-                ):  # pragma: no cover  # rare safety branch)
+                ):
                     token_response = candidate
-        await self._push_notifier.notify_push(  # pragma: no cover  # rare safety branch)
+        await self._push_notifier.notify_push(
             url=stored.client_notification_endpoint,
             client_notification_token=stored.client_notification_token,
             auth_req_id=auth_req_id,

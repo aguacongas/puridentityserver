@@ -1358,8 +1358,8 @@ class TestCibaPushNotifier:
         )
 
     def test_posts_tokens_in_push_payload(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from puridentityserver.infrastructure.backchannel import HTTPCibaPushNotifier
         from puridentityserver.application.token import TokenResponse
+        from puridentityserver.infrastructure.backchannel import HTTPCibaPushNotifier
 
         monkeypatch.setattr(_PingCaptureHandler, "received", [])
         monkeypatch.setattr(_PingCaptureHandler, "redirect", False)
@@ -1393,8 +1393,8 @@ class TestCibaPushNotifier:
         assert b'"expires_in":120' in body
 
     def test_posts_tokens_skipping_none_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from puridentityserver.infrastructure.backchannel import HTTPCibaPushNotifier
         from puridentityserver.application.token import TokenResponse
+        from puridentityserver.infrastructure.backchannel import HTTPCibaPushNotifier
 
         monkeypatch.setattr(_PingCaptureHandler, "received", [])
         monkeypatch.setattr(_PingCaptureHandler, "redirect", False)
