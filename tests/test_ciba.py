@@ -1357,6 +1357,74 @@ class TestCibaPushNotifier:
             )
         )
 
+    def test_posts_tokens_in_push_payload(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from puridentityserver.infrastructure.backchannel import HTTPCibaPushNotifier
+        from puridentityserver.application.token import TokenResponse
+
+        monkeypatch.setattr(_PingCaptureHandler, "received", [])
+        monkeypatch.setattr(_PingCaptureHandler, "redirect", False)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _PingCaptureHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            port = server.server_address[1]
+            notifier = HTTPCibaPushNotifier()
+            run(
+                notifier.notify_push(
+                    url=f"http://127.0.0.1:{port}/notify",
+                    client_notification_token="ntok-1",
+                    auth_req_id="req-abc",
+                    token_response=TokenResponse(
+                        access_token="access-token-push",
+                        id_token="id-token-push",
+                        token_type="Bearer",
+                        expires_in=120,
+                    ),
+                )
+            )
+        finally:
+            server.shutdown()
+        assert len(_PingCaptureHandler.received) == 1
+        _path, _authorization, body = _PingCaptureHandler.received[0]
+        assert b'"auth_req_id":"req-abc"' in body
+        assert b'"id_token":"id-token-push"' in body
+        assert b'"access_token":"access-token-push"' in body
+        assert b'"token_type":"Bearer"' in body
+        assert b'"expires_in":120' in body
+
+    def test_posts_tokens_skipping_none_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from puridentityserver.infrastructure.backchannel import HTTPCibaPushNotifier
+        from puridentityserver.application.token import TokenResponse
+
+        monkeypatch.setattr(_PingCaptureHandler, "received", [])
+        monkeypatch.setattr(_PingCaptureHandler, "redirect", False)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _PingCaptureHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            port = server.server_address[1]
+            notifier = HTTPCibaPushNotifier()
+            run(
+                notifier.notify_push(
+                    url=f"http://127.0.0.1:{port}/notify",
+                    client_notification_token="ntok-1",
+                    auth_req_id="req-abc",
+                    token_response=TokenResponse(
+                        access_token="access-token-push",
+                        id_token="id-token-push",
+                        expires_in=None,
+                    ),
+                )
+            )
+        finally:
+            server.shutdown()
+        assert len(_PingCaptureHandler.received) == 1
+        _path, _authorization, body = _PingCaptureHandler.received[0]
+        assert b'"auth_req_id":"req-abc"' in body
+        assert b'"id_token":"id-token-push"' in body
+        assert b'"access_token":"access-token-push"' in body
+        assert b'"expires_in"' not in body
+
 
 class _FakePushTokenIssuer:
     async def issue_ciba_push_tokens(
