@@ -649,7 +649,6 @@ class CibaApprovalUseCase:
         else:
             await self._requests.deny(auth_req_id_hash)
         await self._notify_ping(stored, auth_req_id)
-        # TODO: notification push pour les clients en mode push (slice C)
         return True
 
     async def _notify_ping(
