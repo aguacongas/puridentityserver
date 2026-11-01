@@ -322,6 +322,7 @@ class Client:
     backchannel_token_delivery_mode: str = ""
     backchannel_client_notification_endpoint: str = ""
     backchannel_authentication_request_signing_alg: str = ""
+    backchannel_user_code_parameter: bool = False
     binding_message_max_length: int | None = None
     #: Surcharge partielle de la politique de mots de passe (clés absentes =
     #: valeurs de ``[settings.password_policy]``) appliquée aux flows
@@ -621,6 +622,7 @@ class BackchannelAuthenticationRequest:
     client_notification_endpoint: str = ""
     binding_message: str = ""
     acr: str = ""
+    user_code: str = ""
     interval: int = 5
     last_polled_at: datetime | None = None
     expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))

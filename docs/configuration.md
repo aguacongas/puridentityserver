@@ -455,3 +455,16 @@ défaut).
   sont admis qu'avec `private_key_jwt` ou `tls_client_auth`. Les profils FAPI
   1/2 activent ensuite les mêmes exigences que pour les clients seedés
   (JAR, PKCE `S256`, PAR obligatoire selon le profil).
+
+
+## CIBA — mode push et user_code (issue #175)
+
+La metadata `backchannel_user_code_parameter_supported` et le traitement
+complet du `user_code` restent pour les tranches suivantes. À ce stade, le
+serveur tolère l'enregistrement d'un client en mode **push** et publie les
+modes `poll`, `ping` et `push` dans
+`backchannel_token_delivery_modes_supported`. Les clients enregistrés en
+`push` ne peuvent pas retirer de jetons sur `/token`
+(`unauthorized_client`) : le résultat est délivré directement à leur
+`backchannel_client_notification_endpoint` (notification à implémenter dans
+la tranche push complète).

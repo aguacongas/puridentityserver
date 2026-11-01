@@ -69,6 +69,7 @@ def backchannel_authorization_router(
             resource=encode_resource_parameter([str(v) for v in form.getlist("resource")]),
             client_notification_token=_form_value(form, "client_notification_token"),
             requested_expiry=_form_value(form, "requested_expiry"),
+            user_code=_form_value(form, "user_code"),
             client_secret=_form_value(form, "client_secret") or header_secret,
             client_assertion_type=_form_value(form, "client_assertion_type"),
             client_assertion=_form_value(form, "client_assertion"),
@@ -96,6 +97,7 @@ def ciba_approval_router(usecase: CibaApprovalUseCase) -> APIRouter:
     async def ciba_approval(
         token: Annotated[str, Query()] = "",
         decision: Annotated[str, Query(alias="type")] = "allow",
+        user_code: Annotated[str, Query()] = "",
     ) -> Response:
         """Applique ``type=allow|deny`` sur l'``auth_req_id`` ``token`` (2xx vide)."""
         if decision not in ("allow", "deny"):
@@ -104,9 +106,9 @@ def ciba_approval_router(usecase: CibaApprovalUseCase) -> APIRouter:
                 media_type=_JSON_MEDIA_TYPE,
                 status_code=400,
             )
-        if not await usecase.execute(token, allow=decision == "allow"):
+        if not await usecase.execute(token, allow=decision == "allow", user_code=user_code):
             return Response(
-                content=_json_error("invalid_request", "auth_req_id inconnu"),
+                content=_json_error("invalid_request", "auth_req_id inconnu ou user_code invalide"),
                 media_type=_JSON_MEDIA_TYPE,
                 status_code=404,
             )
@@ -125,15 +127,15 @@ def _form_value(form: FormData, name: str) -> str:
 
 def _ack_response(result: AuthenticationAck) -> Response:
     """Sérialise l'acquittement ``/bc-authorize`` (CIBA §7.3)."""
+    payload: dict[str, object] = {
+        "auth_req_id": result.auth_req_id,
+        "expires_in": result.expires_in,
+        "interval": result.interval,
+    }
+    if result.user_code:
+        payload["user_code"] = result.user_code
     return Response(
-        content=json.dumps(
-            {
-                "auth_req_id": result.auth_req_id,
-                "expires_in": result.expires_in,
-                "interval": result.interval,
-            },
-            separators=(",", ":"),
-        ),
+        content=json.dumps(payload, separators=(",", ":")),
         media_type=_JSON_MEDIA_TYPE,
         headers={"Cache-Control": "no-store"},
     )

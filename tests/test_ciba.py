@@ -263,6 +263,7 @@ def _store_request(
     interval: int = 5,
     notification_token: str = "",
     notification_endpoint: str = "",
+    user_code: str = "",
 ) -> BackchannelAuthenticationRequest:
     stored = BackchannelAuthenticationRequest(
         auth_req_id_hash=token_hash(auth_req_id),
@@ -273,6 +274,7 @@ def _store_request(
         delivery_mode=delivery_mode,
         client_notification_token=notification_token,
         client_notification_endpoint=notification_endpoint,
+        user_code=user_code,
         interval=interval,
         expires_at=datetime.now(timezone.utc) + timedelta(seconds=expires_in),
     )
@@ -382,11 +384,12 @@ class TestBackchannelAuthorizeUseCase:
         assert isinstance(result, BackchannelAuthenticationError)
         assert result.error == "unauthorized_client"
 
-    def test_rejects_push_delivery_mode(self) -> None:
+    def test_accepts_push_delivery_mode(self) -> None:
         uc, *_ = _make_usecase(replace(_CIBA_CLIENT, backchannel_token_delivery_mode="push"))
-        result = run(uc.execute(_params()))
-        assert isinstance(result, BackchannelAuthenticationError)
-        assert result.error == "unauthorized_client"
+        result = run(
+            uc.execute(_params(login_hint=_USER_EMAIL, client_notification_token="notify-token"))
+        )
+        assert isinstance(result, AuthenticationAck)
 
     def test_rejects_missing_scope(self) -> None:
         uc, *_ = _make_usecase()
@@ -883,6 +886,29 @@ class TestCibaApprovalUseCase:
         run(approval.execute("req-1", allow=True))
         assert notifier.calls == []
 
+    def test_approval_rejects_invalid_user_code(self) -> None:
+        _, requests, *_ = _make_usecase()
+        _store_request(requests, user_code="ABCD-EFGH")
+        approval = CibaApprovalUseCase(requests)
+        assert run(approval.execute("req-1", allow=True, user_code="WRON-GZZZ")) is False
+
+    def test_approval_accepts_valid_user_code(self) -> None:
+        _, requests, *_ = _make_usecase()
+        _store_request(requests, user_code="ABCD-EFGH")
+        approval = CibaApprovalUseCase(requests)
+        assert run(approval.execute("req-1", allow=True, user_code="ABCD-EFGH")) is True
+
+    def test_accepts_supplied_user_code(self) -> None:
+        uc, requests, _token_uc, _approval = _make_usecase(
+            replace(_CIBA_CLIENT, backchannel_user_code_parameter=True)
+        )
+        result = run(uc.execute(_params(login_hint=_USER_EMAIL, user_code="abcd efgh")))
+        assert isinstance(result, AuthenticationAck)
+        assert result.user_code == "ABCD-EFGH"
+        stored = run(requests.find_by_auth_req_id_hash(token_hash(result.auth_req_id)))
+        assert stored is not None
+        assert stored.user_code == "ABCD-EFGH"
+
 
 class TestCibaGrant:
     """Tests du poll CIBA dans TokenUseCase (grant ``urn:openid:params:grant-type:ciba``)."""
@@ -1006,6 +1032,73 @@ class TestCibaGrant:
         )
         assert isinstance(result, TokenError)
         assert result.error == "unsupported_grant_type"
+
+    def test_user_code_integration(self) -> None:
+        values: dict[str, object] = {
+            "issuer": _ISSUER,
+            "base_url": _ISSUER,
+            "jwks_algorithms": ("RS256",),
+            "ciba_enabled": True,
+            "ciba_approval_enabled": True,
+            "clients_seed": (
+                {
+                    "client_id": _CLIENT_ID,
+                    "client_secret": _CLIENT_SECRET,
+                    "scopes": "openid profile offline_access",
+                    "client_type": "confidential",
+                    "backchannel_token_delivery_mode": "poll",
+                    "backchannel_user_code_parameter": True,
+                },
+            ),
+        }
+        with TestClient(create_app(Settings(**values))) as client:  # type: ignore[arg-type]
+            ack_resp = client.post(
+                "/bc-authorize",
+                data={"scope": "openid profile", "login_hint": _DEMO_HINT_EMAIL},
+                auth=(_CLIENT_ID, _CLIENT_SECRET),
+            )
+            assert ack_resp.status_code == 200
+            ack = ack_resp.json()
+            assert ack["user_code"] != ""
+            approval = client.post(
+                f"/ciba/approve?token={ack['auth_req_id']}&type=allow&user_code={ack['user_code']}"
+            )
+            assert approval.status_code == 200
+            token = client.post(
+                "/token",
+                data={"grant_type": CIBA_GRANT_TYPE, "auth_req_id": ack["auth_req_id"]},
+                auth=(_CLIENT_ID, _CLIENT_SECRET),
+            )
+            assert token.status_code == 200
+
+    def test_user_code_invalid_http(self) -> None:
+        values: dict[str, object] = {
+            "issuer": _ISSUER,
+            "base_url": _ISSUER,
+            "jwks_algorithms": ("RS256",),
+            "ciba_enabled": True,
+            "ciba_approval_enabled": True,
+            "clients_seed": (
+                {
+                    "client_id": _CLIENT_ID,
+                    "client_secret": _CLIENT_SECRET,
+                    "scopes": "openid profile offline_access",
+                    "client_type": "confidential",
+                    "backchannel_token_delivery_mode": "poll",
+                    "backchannel_user_code_parameter": True,
+                },
+            ),
+        }
+        with TestClient(create_app(Settings(**values))) as client:  # type: ignore[arg-type]
+            ack = client.post(
+                "/bc-authorize",
+                data={"scope": "openid profile", "login_hint": _DEMO_HINT_EMAIL},
+                auth=(_CLIENT_ID, _CLIENT_SECRET),
+            ).json()
+            wrong = client.post(
+                f"/ciba/approve?token={ack['auth_req_id']}&type=allow&user_code=WRON-GZZZ"
+            )
+            assert wrong.status_code == 404
 
 
 class TestBackchannelRepositories:
@@ -1318,8 +1411,8 @@ class TestCibaIntegrationHTTP:
         with TestClient(_app()) as client:
             doc = client.get("/.well-known/openid-configuration").json()
             assert doc["backchannel_authentication_endpoint"] == f"{_ISSUER}/bc-authorize"
-            assert doc["backchannel_token_delivery_modes_supported"] == ["poll", "ping"]
-            assert doc["backchannel_user_code_parameter_supported"] is False
+            assert doc["backchannel_token_delivery_modes_supported"] == ["poll", "ping", "push"]
+            assert doc["backchannel_user_code_parameter_supported"] is True
             assert doc["backchannel_authentication_request_signing_alg_values_supported"] == [
                 "PS256",
                 "ES256",
@@ -1428,20 +1521,23 @@ class TestCibaRegistrationMetadata:
             assert body["backchannel_token_delivery_mode"] == "ping"
             assert body["backchannel_client_notification_endpoint"] == ("https://rp.example/notify")
 
-    def test_rejects_push_delivery_mode(self) -> None:
+    def test_registers_push_delivery_mode(self) -> None:
         with TestClient(self._app()) as client:
             resp = client.post(
                 "/register",
                 json={
                     "redirect_uris": ["https://rp.example/cb"],
                     "backchannel_token_delivery_mode": "push",
+                    "backchannel_client_notification_endpoint": "https://rp.example/notify",
                 },
                 headers=self._HEADERS,
             )
-            assert resp.status_code == 400
-            assert resp.json()["error"] == "invalid_client_metadata"
+            assert resp.status_code == 201, resp.text
+            body = resp.json()
+            assert body["backchannel_token_delivery_mode"] == "push"
+            assert body["backchannel_client_notification_endpoint"] == ("https://rp.example/notify")
 
-    def test_rejects_user_code_parameter(self) -> None:
+    def test_registers_user_code_parameter(self) -> None:
         with TestClient(self._app()) as client:
             resp = client.post(
                 "/register",
@@ -1452,8 +1548,7 @@ class TestCibaRegistrationMetadata:
                 },
                 headers=self._HEADERS,
             )
-            assert resp.status_code == 400
-            assert resp.json()["error"] == "invalid_client_metadata"
+            assert resp.status_code == 201, resp.text
 
     def test_rejects_invalid_notification_endpoint(self) -> None:
         with TestClient(self._app()) as client:
@@ -1537,3 +1632,34 @@ class TestSignedRequestObjectVerifier:
         verifier = _jar_verifier()
         assert verifier.issuer_of(token) == _CLIENT_ID
         assert verifier.issuer_of("not.a-jwt") == ""
+
+
+class TestCibaUserCode:
+    """Couvre la génération et la validation du user_code (issue #175)."""
+
+    def test_generates_user_code_when_client_requires_it(self) -> None:
+        uc, requests, _token_uc, _approval = _make_usecase(
+            replace(_CIBA_CLIENT, backchannel_user_code_parameter=True)
+        )
+        result = run(uc.execute(_params(login_hint=_USER_EMAIL)))
+        assert isinstance(result, AuthenticationAck)
+        assert result.user_code != ""
+        stored = run(requests.find_by_auth_req_id_hash(token_hash(result.auth_req_id)))
+        assert stored is not None
+        assert stored.user_code == result.user_code
+
+    def test_approval_rejects_missing_user_code(self) -> None:
+        uc, _requests, _token_uc, approval = _make_usecase(
+            replace(_CIBA_CLIENT, backchannel_user_code_parameter=True)
+        )
+        ack = run(uc.execute(_params(login_hint=_USER_EMAIL)))
+        assert isinstance(ack, AuthenticationAck)
+        assert run(approval.execute(ack.auth_req_id, allow=True, user_code="")) is False
+
+    def test_approval_accepts_matching_user_code(self) -> None:
+        uc, _requests, _token_uc, approval = _make_usecase(
+            replace(_CIBA_CLIENT, backchannel_user_code_parameter=True)
+        )
+        ack = run(uc.execute(_params(login_hint=_USER_EMAIL)))
+        assert isinstance(ack, AuthenticationAck)
+        assert run(approval.execute(ack.auth_req_id, allow=True, user_code=ack.user_code)) is True

@@ -102,7 +102,7 @@ _ALLOWED_GRANT_TYPES = frozenset(
 )
 # Modes de livraison CIBA admissibles (CIBA §16.1.1). ``push`` n'est pas
 # livré par le serveur : il est explicitement refusé à l'enregistrement.
-_CIBA_DELIVERY_MODES = frozenset({"poll", "ping"})
+_CIBA_DELIVERY_MODES = frozenset({"poll", "ping", "push"})
 # Miroir des sept ``response_type`` émis par ``application/authorize.py``
 # (``_VALID_RESPONSE_TYPES``) : le registre accepte exactement ce que
 # l'endpoint d'autorisation sait produire.
@@ -218,6 +218,7 @@ class RegistrationMetadata:
     sector_identifier_uri: str = ""
     fapi_enabled: bool = False
     fapi2_enabled: bool = False
+    backchannel_user_code_parameter: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -394,6 +395,7 @@ class RegistrationUseCase:
             ),
             fapi_enabled=metadata.fapi_enabled,
             fapi2_enabled=metadata.fapi2_enabled,
+            backchannel_user_code_parameter=metadata.backchannel_user_code_parameter,
             id_token_signed_response_alg=metadata.id_token_signed_response_alg,
             userinfo_signed_response_alg=metadata.userinfo_signed_response_alg,
             id_token_encrypted_response_alg=metadata.id_token_encrypted_response_alg,
@@ -489,6 +491,7 @@ class RegistrationUseCase:
             ),
             fapi_enabled=metadata.fapi_enabled,
             fapi2_enabled=metadata.fapi2_enabled,
+            backchannel_user_code_parameter=metadata.backchannel_user_code_parameter,
             id_token_signed_response_alg=metadata.id_token_signed_response_alg,
             userinfo_signed_response_alg=metadata.userinfo_signed_response_alg,
             id_token_encrypted_response_alg=metadata.id_token_encrypted_response_alg,
@@ -1054,6 +1057,11 @@ def _parse_metadata(  # ruff: ignore[complex-structure]
         return RegistrationError(
             "invalid_client_metadata", "fapi_enabled et fapi2_enabled sont exclusifs"
         )
+    backchannel_user_code_parameter = _parse_bool_flag(
+        raw, "backchannel_user_code_parameter", default=False
+    )
+    if isinstance(backchannel_user_code_parameter, RegistrationError):
+        return backchannel_user_code_parameter
     return RegistrationMetadata(
         redirect_uris=redirect_uris,
         post_logout_redirect_uris=post_logout_uris,
@@ -1088,6 +1096,7 @@ def _parse_metadata(  # ruff: ignore[complex-structure]
         fapi_enabled=fapi_enabled,
         fapi2_enabled=fapi2_enabled,
         grant_types=grant_types,
+        backchannel_user_code_parameter=backchannel_user_code_parameter,
     )
 
 
@@ -1602,10 +1611,10 @@ def _parse_tls_bound(raw: dict[str, object]) -> bool | RegistrationError:
 
 
 def _parse_ciba_delivery_mode(raw: dict[str, object]) -> str | RegistrationError:
-    """Lit ``backchannel_token_delivery_mode`` (CIBA §16.1.1) : poll ou ping.
+    """Lit ``backchannel_token_delivery_mode`` (CIBA §16.1.1) : poll, ping ou push.
 
-    Absent ou vide : le client n'est pas inscrit pour CIBA. ``push`` (et
-    toute autre valeur) est refusé — le serveur ne livre pas ce mode.
+    Absent ou vide : le client n'est pas inscrit pour CIBA. Toute autre
+    valeur est refusée — le serveur ne livre pas ce mode.
     """
     value = raw.get("backchannel_token_delivery_mode")
     if value is None or value == "":
@@ -1613,7 +1622,7 @@ def _parse_ciba_delivery_mode(raw: dict[str, object]) -> str | RegistrationError
     if not isinstance(value, str) or value not in _CIBA_DELIVERY_MODES:
         return RegistrationError(
             "invalid_client_metadata",
-            "backchannel_token_delivery_mode doit être poll ou ping (push non supporté)",
+            "backchannel_token_delivery_mode doit être poll, ping ou push",
         )
     return value
 
@@ -1637,16 +1646,8 @@ def _parse_ciba_notification_endpoint(raw: dict[str, object]) -> str | Registrat
 
 
 def _parse_ciba_user_code(raw: dict[str, object]) -> bool | RegistrationError:
-    """Valide ``backchannel_user_code_parameter`` (CIBA §16.1.1) : ``user_code`` non supporté."""
-    value = _parse_bool_flag(raw, "backchannel_user_code_parameter", default=False)
-    if isinstance(value, RegistrationError):
-        return value
-    if value:
-        return RegistrationError(
-            "invalid_client_metadata",
-            "backchannel_user_code_parameter : user_code non supporté",
-        )
-    return False
+    """Lit ``backchannel_user_code_parameter`` (CIBA §16.1.1)."""
+    return _parse_bool_flag(raw, "backchannel_user_code_parameter", default=False)
 
 
 def _parse_ciba_request_signing_alg(raw: dict[str, object]) -> str | RegistrationError:
