@@ -992,3 +992,57 @@ class TestRegistrationDcrFullGrants:
         assert isinstance(result, ClientRegistration)
         assert result.fapi_enabled is True
         assert result.fapi2_enabled is False
+
+
+class TestRegistrationDcrFullGrantsMatrix:
+    """Matrice de couverture supplémentaire pour SonarCloud (issue #176)."""
+
+    def test_grants_and_fapi_combinations(self) -> None:
+        cases = (
+            ({"grant_types": ["authorization_code"]}, ClientRegistration),
+            (
+                {
+                    "grant_types": ["client_credentials"],
+                    "token_endpoint_auth_method": "client_secret_basic",
+                },
+                ClientRegistration,
+            ),
+            (
+                {
+                    "grant_types": ["client_credentials"],
+                    "token_endpoint_auth_method": "client_secret_post",
+                },
+                RegistrationError,
+            ),
+            (
+                {
+                    "fapi_enabled": True,
+                    "token_endpoint_auth_method": "tls_client_auth",
+                    "tls_client_auth_subject_dn": "CN=client",
+                },
+                ClientRegistration,
+            ),
+            (
+                {"fapi2_enabled": True, "token_endpoint_auth_method": "client_secret_basic"},
+                RegistrationError,
+            ),
+            (
+                {
+                    "fapi_enabled": True,
+                    "fapi2_enabled": False,
+                    "token_endpoint_auth_method": "private_key_jwt",
+                    "jwks": {"keys": [{"kty": "RSA", "n": "AQAB", "e": "AQAB", "kid": "k1"}]},
+                },
+                RegistrationError,
+            ),
+        )
+        for extra, expected in cases:
+            usecase = _usecase(
+                dcr_allow_full_grants=True,
+                requires_initial_access_token=True,
+            )
+            metadata = {**_REGISTRATION, **extra}
+            result = run(
+                usecase.register(RegisterRequest(metadata, initial_access_token=_INITIAL_TOKEN))
+            )
+            assert isinstance(result, expected), (extra, type(result))
