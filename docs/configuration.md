@@ -435,3 +435,23 @@ et l'administration par-dessus les mêmes stores.
   pour ne pas emettre un `acr` trompeur. Le niveau EAP `loa1`
   (mechanisme password) est publie par defaut ; `loa2`/`loa3` ne le sont
   que s'ils sont effectivement atteignables (EAP ACR Values 1.0).
+
+
+## DCR — grants étendus et profils FAPI (#176)
+
+Variable d'environnement : `PURIDENTITYSERVER_DCR_ALLOW_FULL_GRANTS` (`false` par
+défaut).
+
+- Par défaut, `/register` reste strict : seuls les grants historiques
+  (`authorization_code`, `refresh_token`, `implicit`,
+  `urn:openid:params:grant-type:ciba`) sont acceptés.
+- Avec `PURIDENTITYSERVER_DCR_ALLOW_FULL_GRANTS=true`, les grants
+  `client_credentials`, `urn:ietf:params:oauth:grant-type:device_code` et
+  `urn:ietf:params:oauth:grant-type:jwt-bearer` sont autorisés, à condition
+  d'une authentification client forte (`private_key_jwt`, `tls_client_auth` ou
+  `client_secret_basic` — `client_secret_post` et `none` restent refusés).
+- Champs DCR supplémentaires acceptés pour les profils FAPI :
+  `fapi_enabled` et `fapi2_enabled` (booléens, mutuellement exclusifs), qui ne
+  sont admis qu'avec `private_key_jwt` ou `tls_client_auth`. Les profils FAPI
+  1/2 activent ensuite les mêmes exigences que pour les clients seedés
+  (JAR, PKCE `S256`, PAR obligatoire selon le profil).

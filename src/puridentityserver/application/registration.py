@@ -975,8 +975,8 @@ class RegistrationUseCase:
             ),
             subject_type=client.subject_type.value,
             sector_identifier_uri=client.sector_identifier_uri,
-        fapi_enabled=client.fapi_enabled,
-        fapi2_enabled=client.fapi2_enabled,
+            fapi_enabled=client.fapi_enabled,
+            fapi2_enabled=client.fapi2_enabled,
         )
 
     def _base_url(self) -> str:
@@ -1085,7 +1085,7 @@ def _parse_metadata(  # ruff: ignore[complex-structure]
         fapi_enabled=fapi_enabled,
         fapi2_enabled=fapi2_enabled,
         grant_types=grant_types,
-)
+    )
 
 
 _MetadataParser = Callable[[dict[str, object], frozenset[str]], object]
