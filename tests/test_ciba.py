@@ -898,6 +898,17 @@ class TestCibaApprovalUseCase:
         approval = CibaApprovalUseCase(requests)
         assert run(approval.execute("req-1", allow=True, user_code="ABCD-EFGH")) is True
 
+    def test_accepts_supplied_user_code(self) -> None:
+        uc, requests, _token_uc, _approval = _make_usecase(
+            replace(_CIBA_CLIENT, backchannel_user_code_parameter=True)
+        )
+        result = run(uc.execute(_params(login_hint=_USER_EMAIL, user_code="abcd efgh")))
+        assert isinstance(result, AuthenticationAck)
+        assert result.user_code == "ABCD-EFGH"
+        stored = run(requests.find_by_auth_req_id_hash(token_hash(result.auth_req_id)))
+        assert stored is not None
+        assert stored.user_code == "ABCD-EFGH"
+
 
 class TestCibaGrant:
     """Tests du poll CIBA dans TokenUseCase (grant ``urn:openid:params:grant-type:ciba``)."""
