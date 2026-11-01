@@ -136,7 +136,8 @@ def test_mdoc_binds_device_key_from_proof() -> None:
         usecase_pki = usecase._mdoc_pki  # type: ignore[attr-defined]
         message = Sign1Message.from_cose_obj(list(outer["issuerAuth"].value), True)
         message.key = _private_cose_key(usecase_pki.signer_private_key)
-        mso = cbor2.loads(message.payload)
+        loaded = cbor2.loads(message.payload)
+        mso = cbor2.loads(loaded.value) if isinstance(loaded, cbor2.CBORTag) else loaded
         device_key = mso["deviceKeyInfo"]["deviceKey"]
         # Les coordonnées COSE correspondent à la JWK de la preuve.
         expected_x = base64.urlsafe_b64decode(proof_jwk["x"] + "=" * (-len(proof_jwk["x"]) % 4))

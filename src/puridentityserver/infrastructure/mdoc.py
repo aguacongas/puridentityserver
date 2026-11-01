@@ -30,7 +30,7 @@ from cryptography.hazmat.primitives.serialization import Encoding
 from cryptography.x509.oid import NameOID
 
 #: Algorithme de digest et de signature MSO (ES256 / SHA-256), encodé ``-7``.
-DIGEST_ALGORITHM = "-7"
+DIGEST_ALGORITHM = -16
 
 #: Namespace du nom personnel (ISO 18013-5.1 §4.1).
 PERSONAL_NAME_NAMESPACE = "org.iso.18013.5.1"
@@ -240,7 +240,7 @@ def _issuer_signed_item(
 def _item_digest(encoded_item: cbor2.CBORTag, digest_algorithm: hashes.HashAlgorithm) -> bytes:
     """Digest SHA-256 de l'``IssuerSignedItem`` encodé (ISO 18013-5 §9.1.2.1)."""
     digest = hashes.Hash(digest_algorithm)
-    digest.update(cbor2.dumps(encoded_item.value))
+    digest.update(cbor2.dumps(encoded_item))
     return digest.finalize()
 
 
@@ -282,9 +282,9 @@ def _sign_mso(mso: dict[str, Any], pki: MdocIssuerPKI) -> cbor2.CBORTag:
     """Signe la MSO en COSE ``Sign1`` avec la chaîne ``x5chain`` du signer."""
     message = Sign1Message(
         phdr={_HEADER_ALG: _ALG_ES256},
-        payload=cbor2.dumps(mso),
+        payload=cbor2.dumps(cbor2.CBORTag(24, cbor2.dumps(mso))),
     )
-    message.phdr_update(
+    message.uhdr_update(
         {
             _X5CHAIN_LABEL: [
                 pki.signer_certificate.public_bytes(cast(Encoding, Encoding.DER)),
