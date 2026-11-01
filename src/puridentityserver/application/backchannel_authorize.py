@@ -368,7 +368,9 @@ class BackchannelAuthenticationUseCase:
         if params.user_code:
             normalized = normalize_user_code(params.user_code)
             if len(normalized) < 4:
-                return BackchannelAuthenticationError("invalid_request", "user_code invalide")  # pragma: no cover
+                return BackchannelAuthenticationError(
+                    "invalid_request", "user_code invalide"
+                )  # pragma: no cover
             generated_user_code = format_user_code(normalized)
         elif requires_user_code:
             generated_user_code = format_user_code(
@@ -676,7 +678,9 @@ class CibaApprovalUseCase:
             issuer = getattr(self._token_usecase, "issue_ciba_push_tokens", None)
             if callable(issuer):  # pragma: no cover
                 candidate = await issuer(stored)
-                if hasattr(candidate, "id_token") and hasattr(candidate, "access_token"):  # pragma: no cover
+                if hasattr(candidate, "id_token") and hasattr(
+                    candidate, "access_token"
+                ):  # pragma: no cover
                     token_response = candidate
         await self._push_notifier.notify_push(  # pragma: no cover
             url=stored.client_notification_endpoint,
