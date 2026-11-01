@@ -1100,6 +1100,21 @@ class TestCibaGrant:
             )
             assert wrong.status_code == 404
 
+    def test_issues_ciba_push_tokens(self) -> None:
+        _uc, requests, token_uc, _approval = _make_usecase()
+        stored = _store_request(
+            requests,
+            delivery_mode="push",
+            notification_token="ntok-1",
+            notification_endpoint=_NOTIFY_ENDPOINT,
+            status=BackchannelAuthenticationStatus.APPROVED,
+        )
+        response = run(token_uc.issue_ciba_push_tokens(stored))
+        assert isinstance(response, TokenResponse)
+        assert response.id_token != ""
+        assert response.access_token != ""
+        assert response.token_type == "Bearer"
+
 
 class TestBackchannelRepositories:
     """Round-trip mémoire et SQL du repository des demandes CIBA."""
