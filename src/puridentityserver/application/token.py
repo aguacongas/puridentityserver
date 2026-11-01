@@ -1031,6 +1031,34 @@ class TokenUseCase:
         resources = stored.resource_uris if stored.resource_uris else ()
         return await self._ciba_approved_flow(client, stored, now, binding, resources)
 
+    async def create_ciba_push_notification(
+        self,
+        stored: BackchannelAuthenticationRequest,
+        auth_req_id: str,
+        token_response: object | None = None,
+    ) -> str:
+        """Signe la notification push CIBA (JWT, CIBA §7.1.1)."""
+        if token_response is None:
+            issued = await self.issue_ciba_push_tokens(stored)
+            token_response = issued if isinstance(issued, TokenResponse) else None
+        now = datetime.now(timezone.utc)
+        claims: dict[str, object] = {
+            "auth_req_id": auth_req_id,
+            "exp": int((now + timedelta(minutes=5)).timestamp()),
+            "jti": token_urlsafe(16),
+        }
+        if token_response is not None:
+            for field in ("id_token", "access_token", "token_type", "expires_in", "refresh_token"):
+                value = getattr(token_response, field, None)
+                if value is not None:
+                    claims[field] = value
+        return await self._token_manager.create_userinfo_jwt(
+            issuer=self._config.issuer,
+            audience=stored.client_id,
+            algorithm=self._config.signing_algorithm,
+            claims=claims,
+        )
+
     async def _effective_scope(
         self, client: Client, requested: str, *, default: frozenset[Scope]
     ) -> frozenset[Scope] | TokenError:

@@ -70,7 +70,14 @@ class HTTPCibaPingNotifier:
     toléré, le client conserve le mode poll pour récupérer le résultat.
     """
 
-    async def _post_json(self, url: str, client_notification_token: str, payload: bytes) -> None:
+    async def _post(
+        self,
+        url: str,
+        client_notification_token: str,
+        payload: bytes,
+        *,
+        content_type: str = "application/json",
+) -> None:
         """Envoie un payload JSON avec bearer ; échecs ignorés."""
 
         def _post() -> None:
@@ -79,7 +86,7 @@ class HTTPCibaPingNotifier:
                 data=payload,
                 method="POST",
                 headers={
-                    "Content-Type": "application/json",
+                    "Content-Type": content_type,
                     "Authorization": f"Bearer {client_notification_token}",
                 },
             )
@@ -97,7 +104,7 @@ class HTTPCibaPingNotifier:
     ) -> None:
         """Envoie la notification ``ping`` ; réseau et HTTP en échec ignorés."""
         payload = json.dumps({"auth_req_id": auth_req_id}, separators=(",", ":")).encode("utf-8")
-        await self._post_json(url, client_notification_token, payload)
+        await self._post(url, client_notification_token, payload)
 
 
 class HTTPCibaPushNotifier(HTTPCibaPingNotifier):
@@ -109,14 +116,15 @@ class HTTPCibaPushNotifier(HTTPCibaPingNotifier):
         url: str,
         client_notification_token: str,
         auth_req_id: str,
-        token_response: object | None = None,
+        notification: str | None = None,
     ) -> None:
-        """POST notification push ; réseau/HTTP en échec ignorés."""
-        payload_obj = {"auth_req_id": auth_req_id}
-        if token_response is not None:
-            for field in ("id_token", "access_token", "token_type", "expires_in"):
-                value = getattr(token_response, field, None)
-                if value is not None:
-                    payload_obj[field if field != "token_type" else "token_type"] = value
-        payload = json.dumps(payload_obj, separators=(",", ":")).encode("utf-8")
-        await self._post_json(url, client_notification_token, payload)
+        """POST la notification push (JWT signé) ; réseau/HTTP en échec ignorés."""
+        payload = (
+            notification.encode("utf-8")
+            if notification is not None
+            else json.dumps({"auth_req_id": auth_req_id}, separators=(",", ":")).encode("utf-8")
+        )
+        content_type = "application/jwt" if notification is not None else "application/json"
+        await self._post(
+            url, client_notification_token, payload, content_type=content_type
+        )

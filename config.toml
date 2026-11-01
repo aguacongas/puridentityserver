@@ -755,6 +755,11 @@ client_type = "confidential"
 backchannel_token_delivery_mode = "ping"
 backchannel_client_notification_endpoint = "http://127.0.0.1:8118/notify"
 
+[[settings.clients_seed]]
+client_id = "sample-ciba-push-client"
+client_secret = "ciba-push-demo-secret"
+scopes = "openid profile email"
+
 # client du sample JARM (JARM Final 1.0 §3 — échantillon
 # samples/jarm-client/) : flow Authorization Code avec
 # response_mode=jwt — succès comme erreur redirigeable sont signés dans
