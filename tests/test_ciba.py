@@ -1318,7 +1318,7 @@ class TestCibaIntegrationHTTP:
         with TestClient(_app()) as client:
             doc = client.get("/.well-known/openid-configuration").json()
             assert doc["backchannel_authentication_endpoint"] == f"{_ISSUER}/bc-authorize"
-            assert doc["backchannel_token_delivery_modes_supported"] == ["poll", "ping"]
+            assert doc["backchannel_token_delivery_modes_supported"] == ["poll", "ping", "push"]
             assert doc["backchannel_user_code_parameter_supported"] is False
             assert doc["backchannel_authentication_request_signing_alg_values_supported"] == [
                 "PS256",
@@ -1428,18 +1428,21 @@ class TestCibaRegistrationMetadata:
             assert body["backchannel_token_delivery_mode"] == "ping"
             assert body["backchannel_client_notification_endpoint"] == ("https://rp.example/notify")
 
-    def test_rejects_push_delivery_mode(self) -> None:
+    def test_registers_push_delivery_mode(self) -> None:
         with TestClient(self._app()) as client:
             resp = client.post(
                 "/register",
                 json={
                     "redirect_uris": ["https://rp.example/cb"],
                     "backchannel_token_delivery_mode": "push",
+                    "backchannel_client_notification_endpoint": "https://rp.example/notify",
                 },
                 headers=self._HEADERS,
             )
-            assert resp.status_code == 400
-            assert resp.json()["error"] == "invalid_client_metadata"
+            assert resp.status_code == 201, resp.text
+            body = resp.json()
+            assert body["backchannel_token_delivery_mode"] == "push"
+            assert body["backchannel_client_notification_endpoint"] == ("https://rp.example/notify")
 
     def test_rejects_user_code_parameter(self) -> None:
         with TestClient(self._app()) as client:

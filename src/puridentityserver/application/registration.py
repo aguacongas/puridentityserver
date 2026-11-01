@@ -102,7 +102,7 @@ _ALLOWED_GRANT_TYPES = frozenset(
 )
 # Modes de livraison CIBA admissibles (CIBA §16.1.1). ``push`` n'est pas
 # livré par le serveur : il est explicitement refusé à l'enregistrement.
-_CIBA_DELIVERY_MODES = frozenset({"poll", "ping"})
+_CIBA_DELIVERY_MODES = frozenset({"poll", "ping", "push"})
 # Miroir des sept ``response_type`` émis par ``application/authorize.py``
 # (``_VALID_RESPONSE_TYPES``) : le registre accepte exactement ce que
 # l'endpoint d'autorisation sait produire.
@@ -1602,10 +1602,10 @@ def _parse_tls_bound(raw: dict[str, object]) -> bool | RegistrationError:
 
 
 def _parse_ciba_delivery_mode(raw: dict[str, object]) -> str | RegistrationError:
-    """Lit ``backchannel_token_delivery_mode`` (CIBA §16.1.1) : poll ou ping.
+    """Lit ``backchannel_token_delivery_mode`` (CIBA §16.1.1) : poll, ping ou push.
 
-    Absent ou vide : le client n'est pas inscrit pour CIBA. ``push`` (et
-    toute autre valeur) est refusé — le serveur ne livre pas ce mode.
+    Absent ou vide : le client n'est pas inscrit pour CIBA. Toute autre
+    valeur est refusée — le serveur ne livre pas ce mode.
     """
     value = raw.get("backchannel_token_delivery_mode")
     if value is None or value == "":
@@ -1613,7 +1613,7 @@ def _parse_ciba_delivery_mode(raw: dict[str, object]) -> str | RegistrationError
     if not isinstance(value, str) or value not in _CIBA_DELIVERY_MODES:
         return RegistrationError(
             "invalid_client_metadata",
-            "backchannel_token_delivery_mode doit être poll ou ping (push non supporté)",
+            "backchannel_token_delivery_mode doit être poll, ping ou push",
         )
     return value
 
