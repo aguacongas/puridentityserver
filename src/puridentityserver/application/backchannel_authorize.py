@@ -623,11 +623,13 @@ class CibaApprovalUseCase:
         *,
         ping_notifier: CibaPingNotifier | None = None,
         push_notifier: CibaPushNotifier | None = None,
+        token_usecase: object | None = None,
     ) -> None:
         """Injection du repository des demandes et des notificateurs facultatifs."""
         self._requests = requests
         self._ping_notifier = ping_notifier
         self._push_notifier = push_notifier
+        self._token_usecase = token_usecase
 
     async def execute(self, auth_req_id: str, *, allow: bool, user_code: str = "") -> bool:
         """Autorise (``allow``) ou refuse la demande identifiée par ``auth_req_id``.
@@ -652,11 +654,14 @@ class CibaApprovalUseCase:
         else:
             await self._requests.deny(auth_req_id_hash)
         await self._notify_ping(stored, auth_req_id)
-        await self._notify_push(stored, auth_req_id)
+        await self._notify_push(stored, auth_req_id, allow)
         return True
 
     async def _notify_push(
-        self, stored: BackchannelAuthenticationRequest, auth_req_id: str
+        self,
+        stored: BackchannelAuthenticationRequest,
+        auth_req_id: str,
+        allow: bool = False,
     ) -> None:
         """Notifie le client en mode ``push`` (CIBA §10.2), best effort."""
         if (
@@ -666,10 +671,18 @@ class CibaApprovalUseCase:
             or not stored.client_notification_token
         ):
             return
+        token_response = None
+        if allow and self._token_usecase is not None:
+            issuer = getattr(self._token_usecase, "issue_ciba_push_tokens", None)
+            if callable(issuer):
+                candidate = await issuer(stored)
+                if hasattr(candidate, "id_token") and hasattr(candidate, "access_token"):
+                    token_response = candidate
         await self._push_notifier.notify_push(
             url=stored.client_notification_endpoint,
             client_notification_token=stored.client_notification_token,
             auth_req_id=auth_req_id,
+            token_response=token_response,
         )
 
     async def _notify_ping(

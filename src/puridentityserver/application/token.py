@@ -1013,6 +1013,20 @@ class TokenUseCase:
             dpop_bound=binding.bound,
         )
 
+    async def issue_ciba_push_tokens(
+        self, stored: BackchannelAuthenticationRequest
+    ) -> TokenResponse | TokenError:
+        """Emet les jetons d'une demande CIBA approuvee en mode push (CIBA §7.1.1)."""
+        if self._backchannel_auth is None:
+            return self._error("unsupported_grant_type")
+        client = await self._clients.find_by_id(stored.client_id)
+        if client is None:
+            return self._error("invalid_client", "Client inconnu")
+        now = datetime.now(timezone.utc)
+        binding = DpopBinding(jkt="", bound=False)
+        resources = stored.resource_uris if stored.resource_uris else ()
+        return await self._ciba_approved_flow(client, stored, now, binding, resources)
+
     async def _effective_scope(
         self, client: Client, requested: str, *, default: frozenset[Scope]
     ) -> frozenset[Scope] | TokenError:

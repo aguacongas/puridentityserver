@@ -14,7 +14,12 @@ class CibaPushNotifier(Protocol):
     """
 
     async def notify_push(
-        self, *, url: str, client_notification_token: str, auth_req_id: str
+        self,
+        *,
+        url: str,
+        client_notification_token: str,
+        auth_req_id: str,
+        token_response: object | None = None,
     ) -> None:
         """POST ``{"auth_req_id": ...}`` avec ``Authorization: Bearer``.
 

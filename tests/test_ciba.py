@@ -1313,6 +1313,55 @@ class TestCibaPushNotifier:
         )
 
 
+class _FakePushTokenIssuer:
+    async def issue_ciba_push_tokens(
+        self, stored: BackchannelAuthenticationRequest
+    ) -> TokenResponse:
+        return TokenResponse(access_token="access-token-push", id_token="id-token-push")
+
+
+class _RecordingPushNotifier:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str, object]] = []
+
+    async def notify_push(
+        self,
+        *,
+        url: str,
+        client_notification_token: str,
+        auth_req_id: str,
+        token_response: object | None = None,
+    ) -> None:
+        self.calls.append((url, client_notification_token, auth_req_id, token_response))
+
+
+class TestCibaPushApproval:
+    """Couvre la notification push avec jetons (issue #175)."""
+
+    def test_approval_notifies_push_client_with_tokens(self) -> None:
+        _, requests, *_ = _make_usecase()
+        _store_request(
+            requests,
+            delivery_mode="push",
+            notification_token="ntok-1",
+            notification_endpoint=_NOTIFY_ENDPOINT,
+        )
+        notifier = _RecordingPushNotifier()
+        approval = CibaApprovalUseCase(
+            requests,
+            push_notifier=notifier,
+            token_usecase=_FakePushTokenIssuer(),
+        )
+        assert run(approval.execute("req-1", allow=True)) is True
+        assert len(notifier.calls) == 1
+        url, token, auth_req_id, issued = notifier.calls[0]
+        assert url == _NOTIFY_ENDPOINT
+        assert token == "ntok-1"
+        assert auth_req_id == "req-1"
+        assert getattr(issued, "id_token", None) == "id-token-push"
+        assert getattr(issued, "access_token", None) == "access-token-push"
+
+
 class TestCibaIntegrationHTTP:
     """Tests d'intégration HTTP du flow CIBA (TestClient FastAPI)."""
 
