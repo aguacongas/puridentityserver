@@ -429,9 +429,16 @@ class Settings(BaseSettings):
     federation_enabled: bool = False
 
     # ACR valeurs atteignables par l'OP (OIDC Discovery 1.0 §2). Default :
-    # uniquement le niveau password. Extension via config.toml / env :
-    # PURIDENTITYSERVER_ACR_VALUES_SUPPORTED=...
-    acr_values_supported: Annotated[tuple[str, ...], NoDecode] = ("puridentityserver:pwd",)
+    # niveau password + le premier niveau EAP atteignable (EAP ACR Values
+    # 1.0, mecanisme password = loa1). Les niveaux superieurs (`loa2`,
+    # `loa3`) ne sont publies que si un mecanisme d'authentification
+    # correspondant est configure : les inclure sans capacite reelle
+    # produirait un `acr` trompeur (issue #177, EAP ACR Values 1.0).
+    # Extension via config.toml / env : PURIDENTITYSERVER_ACR_VALUES_SUPPORTED=...
+    acr_values_supported: Annotated[tuple[str, ...], NoDecode] = (
+        "puridentityserver:pwd",
+        "urn:openid:eap:loa1",
+    )
 
     # Feature flags OpenID for Verifiable Credentials (issue #172) :
     # desactives par defaut. `oid4vci_enabled` monte l'endpoint

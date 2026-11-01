@@ -777,7 +777,7 @@ class AuthorizeUseCase:
             code_challenge_method=request.code_challenge_method,
             nonce=request.nonce,
             auth_time=request.auth_time,
-            acr=first_acr_value(request.acr_values),
+            acr=first_supported_acr(request.acr_values),
             claims=request.claims,
             openid2_realm=request.openid2_realm,
             dpop_jkt=request.dpop_jkt,
@@ -1200,9 +1200,14 @@ def parse_max_age(value: str) -> int:
 
 
 #: ACR atteignables par l'OP (OIDC Discovery 1.0 §2, ``acr_values_supported``).
-#: L'authentification se fait par identifiants : ce niveau unique est la base
-#: du contrôle ``unmet_authentication_requirements`` (RFC 9470 §2).
-SUPPORTED_ACR_VALUES: tuple[str, ...] = ("puridentityserver:pwd",)
+#: Authentification par identifiants : le niveau applicatif ``puridentityserver:pwd``
+#: et le premier niveau EAP atteignable (EAP ACR Values 1.0, loa1) sont la base
+#: du controle ``unmet_authentication_requirements`` (RFC 9470 §2). Les niveaux
+#: EAP superieurs ne sont publies que s'ils sont effectivement atteignables.
+SUPPORTED_ACR_VALUES: tuple[str, ...] = (
+    "puridentityserver:pwd",
+    "urn:openid:eap:loa1",
+)
 
 
 def first_acr_value(acr_values: str) -> str:
