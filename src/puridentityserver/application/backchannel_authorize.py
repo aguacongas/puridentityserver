@@ -49,6 +49,7 @@ from puridentityserver.domain.authorization import (
 from puridentityserver.domain.jwks import CIBA_REQUEST_SIGNING_ALGORITHMS
 from puridentityserver.domain.revocation import token_hash
 from puridentityserver.interfaces.domain.backchannel import CibaPingNotifier
+from puridentityserver.interfaces.domain.ciba_push import CibaPushNotifier
 from puridentityserver.interfaces.domain.client_assertions import ClientAssertionVerifier
 from puridentityserver.interfaces.domain.request_object import SignedRequestObjectVerifier
 from puridentityserver.interfaces.domain.tokens import TokenManager
@@ -621,10 +622,12 @@ class CibaApprovalUseCase:
         requests: BackchannelAuthenticationRepository,
         *,
         ping_notifier: CibaPingNotifier | None = None,
+        push_notifier: CibaPushNotifier | None = None,
     ) -> None:
-        """Injection du repository des demandes et du notificateur ping facultatif."""
+        """Injection du repository des demandes et des notificateurs facultatifs."""
         self._requests = requests
         self._ping_notifier = ping_notifier
+        self._push_notifier = push_notifier
 
     async def execute(self, auth_req_id: str, *, allow: bool, user_code: str = "") -> bool:
         """Autorise (``allow``) ou refuse la demande identifiée par ``auth_req_id``.
@@ -649,12 +652,29 @@ class CibaApprovalUseCase:
         else:
             await self._requests.deny(auth_req_id_hash)
         await self._notify_ping(stored, auth_req_id)
+        await self._notify_push(stored, auth_req_id)
         return True
+
+    async def _notify_push(
+        self, stored: BackchannelAuthenticationRequest, auth_req_id: str
+    ) -> None:
+        """Notifie le client en mode ``push`` (CIBA §10.2), best effort."""
+        if (
+            self._push_notifier is None
+            or stored.delivery_mode != "push"
+            or not stored.client_notification_endpoint
+            or not stored.client_notification_token
+        ):
+            return
+        await self._push_notifier.notify_push(
+            url=stored.client_notification_endpoint,
+            client_notification_token=stored.client_notification_token,
+            auth_req_id=auth_req_id,
+        )
 
     async def _notify_ping(
         self, stored: BackchannelAuthenticationRequest, auth_req_id: str
     ) -> None:
-        """Notifie le client en mode ``ping`` (CIBA §10.2), best effort."""
         if (
             self._ping_notifier is None
             or stored.delivery_mode != "ping"

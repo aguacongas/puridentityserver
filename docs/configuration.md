@@ -468,3 +468,14 @@ modes `poll`, `ping` et `push` dans
 (`unauthorized_client`) : le résultat est délivré directement à leur
 `backchannel_client_notification_endpoint` (notification à implémenter dans
 la tranche push complète).
+
+
+## CIBA — mode push (notification, issue #175, tranche C)
+
+La notification en mode push est déléguée à `HTTPCibaPushNotifier` côté
+composition root (`puridentityprotocol/server.py`). Lors de l'approbation d'une
+demande d'un client enregistré en mode `push`, l'OP tente un POST
+best-effort vers `backchannel_client_notification_endpoint` avec
+`Authorization: Bearer <client_notification_token>` et le payload JSON
+`{"auth_req_id": ...}`. Un échec réseau ou HTTP n'annule jamais la
+décision ; le client peut toujours récupérer le résultat selon sa stratégie.

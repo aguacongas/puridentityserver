@@ -94,3 +94,32 @@ class HTTPCibaPingNotifier:
             await asyncio.to_thread(_post)
         except OSError:
             return None
+
+
+class HTTPCibaPushNotifier:
+    """POST JSON d'authentification aux clients en mode push (CIBA best-effort)."""
+
+    async def notify_push(
+        self, *, url: str, client_notification_token: str, auth_req_id: str
+    ) -> None:
+        """POST notification push ; réseau/HTTP en échec ignorés."""
+        payload = json.dumps({"auth_req_id": auth_req_id}, separators=(",", ":")).encode("utf-8")
+
+        def _post() -> None:
+            request = urllib.request.Request(
+                url,
+                data=payload,
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {client_notification_token}",
+                },
+            )
+            opener = urllib.request.build_opener(_NoRedirectHandler)
+            with opener.open(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
+                response.read()
+
+        try:
+            await asyncio.to_thread(_post)
+        except OSError:
+            return None
