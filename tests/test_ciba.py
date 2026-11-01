@@ -878,6 +878,29 @@ class TestCibaApprovalUseCase:
         run(approval.execute("req-1", allow=True))
         assert notifier.calls == []
 
+    def test_notifies_push_client_with_tokens(self) -> None:
+        _, requests, *_ = _make_usecase()
+        _store_request(
+            requests,
+            delivery_mode="push",
+            notification_token="ntok-1",
+            notification_endpoint=_NOTIFY_ENDPOINT,
+        )
+        notifier = _RecordingPushNotifier()
+        approval = CibaApprovalUseCase(
+            requests,
+            push_notifier=notifier,
+            token_usecase=_FakePushIssuer(),
+        )
+        assert run(approval.execute("req-1", allow=True)) is True
+        assert len(notifier.calls) == 1
+        url, token, auth_req_id, issued = notifier.calls[0]
+        assert url == _NOTIFY_ENDPOINT
+        assert token == "ntok-1"
+        assert auth_req_id == "req-1"
+        assert getattr(issued, "id_token", None) == "id-token-push"
+        assert getattr(issued, "access_token", None) == "access-token-push"
+
     def test_skips_notification_without_endpoint(self) -> None:
         _, requests, *_ = _make_usecase()
         _store_request(requests, delivery_mode="ping", notification_token="ntok-1")
@@ -908,6 +931,13 @@ class TestCibaApprovalUseCase:
         stored = run(requests.find_by_auth_req_id_hash(token_hash(result.auth_req_id)))
         assert stored is not None
         assert stored.user_code == "ABCD-EFGH"
+
+
+class _FakePushIssuer:
+    async def issue_ciba_push_tokens(
+        self, stored: BackchannelAuthenticationRequest
+    ) -> TokenResponse:
+        return TokenResponse(access_token="access-token-push", id_token="id-token-push")
 
 
 class TestCibaGrant:
