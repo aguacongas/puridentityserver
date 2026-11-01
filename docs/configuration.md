@@ -479,3 +479,11 @@ best-effort vers `backchannel_client_notification_endpoint` avec
 `Authorization: Bearer <client_notification_token>` et le payload JSON
 `{"auth_req_id": ...}`. Un échec réseau ou HTTP n'annule jamais la
 décision ; le client peut toujours récupérer le résultat selon sa stratégie.
+
+
+## CIBA — mode push : délivrance directe des jetons (#175)
+
+En mode `push`, l'OP émet désormais les jetons à l'approbation et les pousse au
+`backchannel_client_notification_endpoint` (en plus de l'acquittement JSON), avec
+la contrainte habituelle d'authentification client forte. Le polling sur
+`/token` reste refusé pour ces clients (`unauthorized_client`).
