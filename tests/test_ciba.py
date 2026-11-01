@@ -1319,7 +1319,7 @@ class TestCibaIntegrationHTTP:
             doc = client.get("/.well-known/openid-configuration").json()
             assert doc["backchannel_authentication_endpoint"] == f"{_ISSUER}/bc-authorize"
             assert doc["backchannel_token_delivery_modes_supported"] == ["poll", "ping", "push"]
-            assert doc["backchannel_user_code_parameter_supported"] is False
+            assert doc["backchannel_user_code_parameter_supported"] is True
             assert doc["backchannel_authentication_request_signing_alg_values_supported"] == [
                 "PS256",
                 "ES256",
@@ -1444,7 +1444,7 @@ class TestCibaRegistrationMetadata:
             assert body["backchannel_token_delivery_mode"] == "push"
             assert body["backchannel_client_notification_endpoint"] == ("https://rp.example/notify")
 
-    def test_rejects_user_code_parameter(self) -> None:
+    def test_registers_user_code_parameter(self) -> None:
         with TestClient(self._app()) as client:
             resp = client.post(
                 "/register",
@@ -1455,8 +1455,7 @@ class TestCibaRegistrationMetadata:
                 },
                 headers=self._HEADERS,
             )
-            assert resp.status_code == 400
-            assert resp.json()["error"] == "invalid_client_metadata"
+            assert resp.status_code == 201, resp.text
 
     def test_rejects_invalid_notification_endpoint(self) -> None:
         with TestClient(self._app()) as client:

@@ -241,7 +241,7 @@ class DiscoveryUseCase:
         if self._config.ciba_enabled:
             metadata["backchannel_token_delivery_modes_supported"] = ["poll", "ping", "push"]
             metadata["backchannel_authentication_endpoint"] = f"{base}/bc-authorize"
-            metadata["backchannel_user_code_parameter_supported"] = False
+            metadata["backchannel_user_code_parameter_supported"] = True
             metadata["backchannel_authentication_request_signing_alg_values_supported"] = list(
                 self._config.ciba_request_signing_algorithms
             )

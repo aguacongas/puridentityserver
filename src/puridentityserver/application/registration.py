@@ -1637,16 +1637,8 @@ def _parse_ciba_notification_endpoint(raw: dict[str, object]) -> str | Registrat
 
 
 def _parse_ciba_user_code(raw: dict[str, object]) -> bool | RegistrationError:
-    """Valide ``backchannel_user_code_parameter`` (CIBA §16.1.1) : ``user_code`` non supporté."""
-    value = _parse_bool_flag(raw, "backchannel_user_code_parameter", default=False)
-    if isinstance(value, RegistrationError):
-        return value
-    if value:
-        return RegistrationError(
-            "invalid_client_metadata",
-            "backchannel_user_code_parameter : user_code non supporté",
-        )
-    return False
+    """Lit ``backchannel_user_code_parameter`` (CIBA §16.1.1)."""
+    return _parse_bool_flag(raw, "backchannel_user_code_parameter", default=False)
 
 
 def _parse_ciba_request_signing_alg(raw: dict[str, object]) -> str | RegistrationError:
