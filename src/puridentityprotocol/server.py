@@ -80,6 +80,7 @@ from puridentityserver.identity.config import (
 from puridentityserver.infrastructure.backchannel import (
     HTTPBackchannelNotifier,
     HTTPCibaPingNotifier,
+    HTTPCibaPushNotifier,
 )
 from puridentityserver.infrastructure.bearer import build_bearer_verifier
 from puridentityserver.infrastructure.claims import UserStoreClaimsProvider
@@ -563,7 +564,9 @@ class ProtocolDependencies:
             request_objects=self.signed_request_objects,
         )
         self.ciba_approval_usecase = CibaApprovalUseCase(
-            stores.backchannel, ping_notifier=HTTPCibaPingNotifier()
+            stores.backchannel,
+            ping_notifier=HTTPCibaPingNotifier(),
+            push_notifier=HTTPCibaPushNotifier(),
         )
         self.userinfo_usecase = UserInfoUseCase(
             UserInfoConfig(issuer=settings.issuer, subject_seed=settings.subject_pairwise_seed),

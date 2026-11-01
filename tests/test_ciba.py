@@ -1271,6 +1271,48 @@ class TestCibaPingNotifier:
         )
 
 
+class TestCibaPushNotifier:
+    """Tests de HTTPCibaPushNotifier contre un serveur local (CIBA §10.2)."""
+
+    def test_posts_json_with_bearer_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from puridentityserver.infrastructure.backchannel import HTTPCibaPushNotifier
+
+        monkeypatch.setattr(_PingCaptureHandler, "received", [])
+        monkeypatch.setattr(_PingCaptureHandler, "redirect", False)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _PingCaptureHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            port = server.server_address[1]
+            notifier = HTTPCibaPushNotifier()
+            run(
+                notifier.notify_push(
+                    url=f"http://127.0.0.1:{port}/notify",
+                    client_notification_token="ntok-1",
+                    auth_req_id="req-abc",
+                )
+            )
+        finally:
+            server.shutdown()
+        assert len(_PingCaptureHandler.received) == 1
+        path, authorization, body = _PingCaptureHandler.received[0]
+        assert path == "/notify"
+        assert authorization == "Bearer ntok-1"
+        assert body == b'{"auth_req_id":"req-abc"}'
+
+    def test_swallows_network_errors(self) -> None:
+        from puridentityserver.infrastructure.backchannel import HTTPCibaPushNotifier
+
+        notifier = HTTPCibaPushNotifier()
+        run(
+            notifier.notify_push(
+                url="http://127.0.0.1:1/notify",
+                client_notification_token="ntok-1",
+                auth_req_id="req-abc",
+            )
+        )
+
+
 class TestCibaIntegrationHTTP:
     """Tests d'intégration HTTP du flow CIBA (TestClient FastAPI)."""
 

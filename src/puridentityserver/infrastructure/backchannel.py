@@ -70,11 +70,8 @@ class HTTPCibaPingNotifier:
     toléré, le client conserve le mode poll pour récupérer le résultat.
     """
 
-    async def notify_ping(
-        self, *, url: str, client_notification_token: str, auth_req_id: str
-    ) -> None:
-        """Envoie la notification ``ping`` ; réseau et HTTP en échec ignorés."""
-        payload = json.dumps({"auth_req_id": auth_req_id}, separators=(",", ":")).encode("utf-8")
+    async def _post_json(self, url: str, client_notification_token: str, payload: bytes) -> None:
+        """Envoie un payload JSON avec bearer ; échecs ignorés."""
 
         def _post() -> None:
             request = urllib.request.Request(  # NOSONAR(S310)
@@ -94,3 +91,21 @@ class HTTPCibaPingNotifier:
             await asyncio.to_thread(_post)
         except OSError:
             return None
+
+    async def notify_ping(
+        self, *, url: str, client_notification_token: str, auth_req_id: str
+    ) -> None:
+        """Envoie la notification ``ping`` ; réseau et HTTP en échec ignorés."""
+        payload = json.dumps({"auth_req_id": auth_req_id}, separators=(",", ":")).encode("utf-8")
+        await self._post_json(url, client_notification_token, payload)
+
+
+class HTTPCibaPushNotifier(HTTPCibaPingNotifier):
+    """POST JSON d'authentification aux clients en mode push (CIBA best-effort)."""
+
+    async def notify_push(
+        self, *, url: str, client_notification_token: str, auth_req_id: str
+    ) -> None:
+        """POST notification push ; réseau/HTTP en échec ignorés."""
+        payload = json.dumps({"auth_req_id": auth_req_id}, separators=(",", ":")).encode("utf-8")
+        await self._post_json(url, client_notification_token, payload)
