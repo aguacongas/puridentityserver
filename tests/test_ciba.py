@@ -1540,3 +1540,34 @@ class TestSignedRequestObjectVerifier:
         verifier = _jar_verifier()
         assert verifier.issuer_of(token) == _CLIENT_ID
         assert verifier.issuer_of("not.a-jwt") == ""
+
+
+class TestCibaUserCode:
+    """Couvre la génération et la validation du user_code (issue #175)."""
+
+    def test_generates_user_code_when_client_requires_it(self) -> None:
+        uc, requests, _token_uc, _approval = _make_usecase(
+            replace(_CIBA_CLIENT, backchannel_user_code_parameter=True)
+        )
+        result = run(uc.execute(_params(login_hint=_USER_EMAIL)))
+        assert isinstance(result, AuthenticationAck)
+        assert result.user_code != ""
+        stored = run(requests.find_by_auth_req_id_hash(token_hash(result.auth_req_id)))
+        assert stored is not None
+        assert stored.user_code == result.user_code
+
+    def test_approval_rejects_missing_user_code(self) -> None:
+        uc, _requests, _token_uc, approval = _make_usecase(
+            replace(_CIBA_CLIENT, backchannel_user_code_parameter=True)
+        )
+        ack = run(uc.execute(_params(login_hint=_USER_EMAIL)))
+        assert isinstance(ack, AuthenticationAck)
+        assert run(approval.execute(ack.auth_req_id, allow=True, user_code="")) is False
+
+    def test_approval_accepts_matching_user_code(self) -> None:
+        uc, _requests, _token_uc, approval = _make_usecase(
+            replace(_CIBA_CLIENT, backchannel_user_code_parameter=True)
+        )
+        ack = run(uc.execute(_params(login_hint=_USER_EMAIL)))
+        assert isinstance(ack, AuthenticationAck)
+        assert run(approval.execute(ack.auth_req_id, allow=True, user_code=ack.user_code)) is True
