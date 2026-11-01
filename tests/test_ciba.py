@@ -382,11 +382,12 @@ class TestBackchannelAuthorizeUseCase:
         assert isinstance(result, BackchannelAuthenticationError)
         assert result.error == "unauthorized_client"
 
-    def test_rejects_push_delivery_mode(self) -> None:
+    def test_accepts_push_delivery_mode(self) -> None:
         uc, *_ = _make_usecase(replace(_CIBA_CLIENT, backchannel_token_delivery_mode="push"))
-        result = run(uc.execute(_params()))
-        assert isinstance(result, BackchannelAuthenticationError)
-        assert result.error == "unauthorized_client"
+        result = run(
+            uc.execute(_params(login_hint=_USER_EMAIL, client_notification_token="notify-token"))
+        )
+        assert isinstance(result, AuthenticationAck)
 
     def test_rejects_missing_scope(self) -> None:
         uc, *_ = _make_usecase()

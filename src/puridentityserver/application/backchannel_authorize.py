@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
@@ -36,11 +37,14 @@ from puridentityserver.application.resource_indicators import (
 )
 from puridentityserver.application.scope_registry import ScopeRegistry
 from puridentityserver.domain.authorization import (
+    _USER_CODE_ALPHABET,
     BackchannelAuthenticationRequest,
     BackchannelAuthenticationStatus,
     Client,
     ClientCertificate,
     Scope,
+    format_user_code,
+    normalize_user_code,
 )
 from puridentityserver.domain.jwks import CIBA_REQUEST_SIGNING_ALGORITHMS
 from puridentityserver.domain.revocation import token_hash
@@ -118,6 +122,7 @@ class BackchannelAuthenticationParams:
     id_token_hint: str = ""
     binding_message: str = ""
     acr_values: str = ""
+    user_code: str = ""
     resource: str = ""
     client_notification_token: str = ""
     requested_expiry: str = ""
@@ -136,6 +141,7 @@ class AuthenticationAck:
     auth_req_id: str
     expires_in: int
     interval: int
+    user_code: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,16 +327,16 @@ class BackchannelAuthenticationUseCase:
             return client.binding_message_max_length
         return self._config.binding_message_max_length
 
-    async def _accept(
+    async def _accept(  # ruff: ignore[complex-structure]
         self, client: Client, params: BackchannelAuthenticationParams
     ) -> AuthenticationAck | BackchannelAuthenticationError:
         """Valide les paramètres, résout le hint et persiste la demande (§7.2)."""
         mode = client.backchannel_token_delivery_mode
-        if mode not in ("poll", "ping"):
+        if mode not in ("poll", "ping", "push"):
             return BackchannelAuthenticationError(
                 "unauthorized_client",
                 "Ce client n'est pas enregistré pour CIBA "
-                "(backchannel_token_delivery_mode poll ou ping attendu)",
+                "(backchannel_token_delivery_mode poll, ping ou push attendu)",
             )
         scopes = await self._validate_scopes(client, params.scope)
         if isinstance(scopes, BackchannelAuthenticationError):
@@ -357,6 +363,24 @@ class BackchannelAuthenticationUseCase:
         if resource_error is not None:
             return resource_error
 
+        requires_user_code = client.backchannel_user_code_parameter
+        if params.user_code:
+            normalized = normalize_user_code(params.user_code)
+            if len(normalized) < 4:
+                return BackchannelAuthenticationError("invalid_request", "user_code invalide")
+            generated_user_code = format_user_code(normalized)
+        elif requires_user_code:
+            generated_user_code = format_user_code(
+                "".join(secrets.choice(_USER_CODE_ALPHABET) for _ in range(8))
+            )
+        else:
+            generated_user_code = ""
+
+        if requires_user_code and not generated_user_code:
+            return BackchannelAuthenticationError(
+                "invalid_request", "user_code requis pour ce client"
+            )
+
         auth_req_id = token_urlsafe(32)
         now = datetime.now(timezone.utc)
         await self._requests.save(
@@ -370,6 +394,7 @@ class BackchannelAuthenticationUseCase:
                 client_notification_endpoint=client.backchannel_client_notification_endpoint,
                 binding_message=params.binding_message,
                 acr=params.acr_values.split()[0] if params.acr_values.split() else "",
+                user_code=generated_user_code,
                 interval=self._config.interval_seconds,
                 expires_at=now + timedelta(seconds=ttl),
                 resource_uris=resources,
@@ -379,6 +404,7 @@ class BackchannelAuthenticationUseCase:
             auth_req_id=auth_req_id,
             expires_in=ttl,
             interval=self._config.interval_seconds,
+            user_code=generated_user_code,
         )
 
     async def _resource_error(
@@ -600,11 +626,11 @@ class CibaApprovalUseCase:
         self._requests = requests
         self._ping_notifier = ping_notifier
 
-    async def execute(self, auth_req_id: str, *, allow: bool) -> bool:
+    async def execute(self, auth_req_id: str, *, allow: bool, user_code: str = "") -> bool:
         """Autorise (``allow``) ou refuse la demande identifiée par ``auth_req_id``.
 
-        Retourne ``False`` si l'``auth_req_id`` est inconnu (404 côté route),
-        ``True`` sinon — y compris si la décision avait déjà été rendue.
+        Retourne ``False`` si l'``auth_req_id`` est inconnu ou si un
+        ``user_code`` requis est absent/invalide.
         """
         if not auth_req_id:
             return False
@@ -614,11 +640,16 @@ class CibaApprovalUseCase:
             return False
         if stored.status is not BackchannelAuthenticationStatus.PENDING:
             return True
+        if stored.user_code and normalize_user_code(user_code or "") != normalize_user_code(
+            stored.user_code
+        ):
+            return False
         if allow:
             await self._requests.approve(auth_req_id_hash)
         else:
             await self._requests.deny(auth_req_id_hash)
         await self._notify_ping(stored, auth_req_id)
+        # TODO: notification push pour les clients en mode push (slice C)
         return True
 
     async def _notify_ping(

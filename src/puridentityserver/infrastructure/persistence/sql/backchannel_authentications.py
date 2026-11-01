@@ -41,6 +41,7 @@ class BackchannelAuthenticationRow(PersistenceBase):
     client_notification_endpoint: Mapped[str] = mapped_column(String(512), default="")
     binding_message: Mapped[str] = mapped_column(String(512), default="")
     acr: Mapped[str] = mapped_column(String(256), default="")
+    user_code: Mapped[str] = mapped_column(String(32), default="")
     interval: Mapped[int] = mapped_column(Integer, default=5)
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -125,6 +126,7 @@ def _to_row(request: BackchannelAuthenticationRequest) -> BackchannelAuthenticat
         client_notification_endpoint=request.client_notification_endpoint,
         binding_message=request.binding_message,
         acr=request.acr,
+        user_code=request.user_code,
         interval=request.interval,
         last_polled_at=request.last_polled_at,
         expires_at=request.expires_at,
@@ -151,6 +153,7 @@ def _from_row(row: BackchannelAuthenticationRow) -> BackchannelAuthenticationReq
         client_notification_endpoint=row.client_notification_endpoint,
         binding_message=row.binding_message,
         acr=row.acr,
+        user_code=row.user_code or "",
         interval=row.interval,
         last_polled_at=last_polled_at,
         expires_at=expires_at,

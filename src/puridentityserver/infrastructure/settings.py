@@ -174,6 +174,7 @@ def _parse_client(raw: dict[str, object]) -> Client:
         backchannel_authentication_request_signing_alg=str(
             raw.get("backchannel_authentication_request_signing_alg", "")
         ),
+        backchannel_user_code_parameter=bool(raw.get("backchannel_user_code_parameter")),
         binding_message_max_length=_optional_int(raw, "binding_message_max_length"),
         password_policy=_parse_password_policy_patch(raw.get("password_policy")),
         par_required=bool(raw.get("par_required")),
