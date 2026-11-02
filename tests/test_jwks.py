@@ -292,6 +292,7 @@ def test_settings_client_seed_reads_defaults_from_config_toml(
         "sample-dpop-client",
         "sample-ciba-client",
         "sample-ciba-ping-client",
+        "sample-ciba-push-client",
         "sample-jarm-client",
         "sample-form-post-client",
         "sample-prompt-create-client",
@@ -312,6 +313,9 @@ def test_settings_client_seed_reads_defaults_from_config_toml(
     ping_client = next(c for c in settings.seed_clients if c.client_id == "sample-ciba-ping-client")
     assert ping_client.backchannel_token_delivery_mode == "ping"
     assert ping_client.backchannel_client_notification_endpoint == "http://127.0.0.1:8118/notify"
+    push_client = next(c for c in settings.seed_clients if c.client_id == "sample-ciba-push-client")
+    assert push_client.backchannel_token_delivery_mode == "push"
+    assert push_client.backchannel_client_notification_endpoint == "http://127.0.0.1:8119/notify"
     jarm_client = next(c for c in settings.seed_clients if c.client_id == "sample-jarm-client")
     assert jarm_client.authorization_signed_response_alg == "PS256"
     form_post_client = next(
