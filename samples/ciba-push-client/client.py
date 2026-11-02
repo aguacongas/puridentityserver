@@ -10,12 +10,10 @@ Usage:
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 import sys
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
@@ -45,7 +43,7 @@ def _start_listener(port: int, received: dict) -> ThreadingHTTPServer:
                 print(json.dumps(claims, indent=2))
                 received["notification"] = claims
                 received["raw"] = text
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 print(f"       Corps brut : {body!r}")
                 print(f"       Erreur de decodage : {exc}")
                 received["raw"] = body.decode("utf-8", "replace")
@@ -62,7 +60,9 @@ def _start_listener(port: int, received: dict) -> ThreadingHTTPServer:
 
 
 def main() -> int:
-    issuer = (sys.argv[1] if len(sys.argv) > 1 else _env("CIBA_ISSUER", _DEFAULT_ISSUER)).rstrip("/")
+    """Point d'entree du sample : demande, attente de la notification push."""
+    issuer_raw = sys.argv[1] if len(sys.argv) > 1 else _env("CIBA_ISSUER", _DEFAULT_ISSUER)
+    issuer = issuer_raw.rstrip("/")
     client_id = _env("CIBA_CLIENT_ID", "sample-ciba-push-client")
     client_secret = _env("CIBA_CLIENT_SECRET", "ciba-push-demo-secret")
     login_hint = _env("CIBA_LOGIN_HINT", "alice.martin@example.com")
@@ -100,9 +100,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-"""
-path = pathlib.Path(r"C:\Projects\Perso\PurIdentityServer\samples\ciba-push-client\client.py")
-path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(content, encoding="utf-8")
-print("done")
-EOF

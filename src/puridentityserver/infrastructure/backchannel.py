@@ -77,7 +77,7 @@ class HTTPCibaPingNotifier:
         payload: bytes,
         *,
         content_type: str = "application/json",
-) -> None:
+    ) -> None:
         """Envoie un payload JSON avec bearer ; échecs ignorés."""
 
         def _post() -> None:
@@ -125,6 +125,4 @@ class HTTPCibaPushNotifier(HTTPCibaPingNotifier):
             else json.dumps({"auth_req_id": auth_req_id}, separators=(",", ":")).encode("utf-8")
         )
         content_type = "application/jwt" if notification is not None else "application/json"
-        await self._post(
-            url, client_notification_token, payload, content_type=content_type
-        )
+        await self._post(url, client_notification_token, payload, content_type=content_type)

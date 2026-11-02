@@ -34,8 +34,4 @@ jetons y figurent.
 
 > Variables d'environnement : `CIBA_ISSUER`, `CIBA_CLIENT_ID`,
 > `CIBA_CLIENT_SECRET`, `CIBA_LOGIN_HINT`, `CIBA_NOTIFY_PORT`.
-"""
-path = pathlib.Path(r"C:\Projects\Perso\PurIdentityServer\samples\ciba-push-client\README.md")
-path.write_text(content, encoding="utf-8")
-print("done")
-EOF
+
