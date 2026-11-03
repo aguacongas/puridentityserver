@@ -487,3 +487,6 @@ En mode `push`, l'OP émet désormais les jetons à l'approbation et les pousse 
 `backchannel_client_notification_endpoint` (en plus de l'acquittement JSON), avec
 la contrainte habituelle d'authentification client forte. Le polling sur
 `/token` reste refusé pour ces clients (`unauthorized_client`).
+
+
+Note CIBA (issue #175) : en mode push, la notification envoyee au client_notification_endpoint est desormais un JWT signe par l OP (CIBA 1.0 §7.1.1), portant auth_req_id et les jetons emis.

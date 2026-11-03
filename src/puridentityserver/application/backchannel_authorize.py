@@ -675,24 +675,22 @@ class CibaApprovalUseCase:
             or not stored.client_notification_token
         ):
             return
-        token_response = None
-        if (
-            allow and self._token_usecase is not None
-        ):  # pragma: no cover  # branche rare non couverte
+        notification = None
+        if allow and self._token_usecase is not None:
             issuer = getattr(self._token_usecase, "issue_ciba_push_tokens", None)
-            if callable(issuer):  # pragma: no cover  # branche rare non couverte
+            token_response = None
+            if callable(issuer):
                 candidate = await issuer(stored)
-                if hasattr(
-                    candidate, "id_token"
-                ) and hasattr(  # pragma: no cover  # branche rare non couverte
-                    candidate, "access_token"
-                ):
+                if hasattr(candidate, "id_token") and hasattr(candidate, "access_token"):
                     token_response = candidate
+            creator = getattr(self._token_usecase, "create_ciba_push_notification", None)
+            if callable(creator):
+                notification = await creator(stored, auth_req_id, token_response)
         await self._push_notifier.notify_push(
             url=stored.client_notification_endpoint,
             client_notification_token=stored.client_notification_token,
             auth_req_id=auth_req_id,
-            token_response=token_response,
+            notification=notification,
         )
 
     async def _notify_ping(
