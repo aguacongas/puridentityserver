@@ -17,7 +17,7 @@
 #      les zip du run courant sont comptes), + chemins log/export.
 #
 # Usage : bash certification/local/run-plan.sh <plan> [--export-dir <dir>]
-#   plans : basic | implicit | hybrid | formpost | dynamic | ciba | fapi1 | fapi2 |
+#   plans : basic | implicit | hybrid | formpost | dynamic | ciba | ciba-ping | fapi1 | fapi2 |
 #           fapi2-message-signing | ekyc | federation | oid4vci | oid4vci-mdoc
 #
 # Variables d'environnement (defauts en accord avec setup.sh) :
@@ -47,7 +47,7 @@ log() { printf '[run-plan] %s\n' "$*"; }
 
 usage() {
   echo "Usage : bash certification/local/run-plan.sh <plan> [--export-dir <dir>]" >&2
-  echo "  plans : basic | implicit | hybrid | formpost | dynamic | ciba | fapi1 | fapi2 |" >&2
+  echo "  plans : basic | implicit | hybrid | formpost | dynamic | ciba | ciba-ping | fapi1 | fapi2 |" >&2
   echo "          fapi2-message-signing | ekyc | federation | oid4vci | oid4vci-mdoc" >&2  exit 2
 }
 

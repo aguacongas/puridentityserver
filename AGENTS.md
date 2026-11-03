@@ -25,9 +25,9 @@ uv run python -m pytest -p no:cacheprovider -q   # tests + couverture >= 80 % (9
 
 - **Harness local (mode courant)** : la suite de conformance OIDF tourne en docker
   sur le runner, OP local derrière un nginx mTLS — workflow
-  `.github/workflows/certification-local.yml`, matrix des 11 plans (basic,
-  implicit, hybrid, formpost, dynamic, ciba, fapi1, fapi2, fapi2-message-signing,
-  ekyc, federation), mode *witness*
+  `.github/workflows/certification-local.yml`, matrix des 13 plans (basic,
+  implicit, hybrid, formpost, dynamic, ciba, ciba-ping, fapi1, fapi2,
+  fapi2-message-signing, ekyc, federation, oid4vci), mode *witness*
   (les gaps module ne
   bloquent pas), déclenché sur chaque PR vers `main` touchant `certification/**`
   ou à la demande (`workflow_dispatch`, filtre de plan).
@@ -35,19 +35,20 @@ uv run python -m pytest -p no:cacheprovider -q   # tests + couverture >= 80 % (9
   défaut vit dans `SUITE_VERSION` (`certification/local/setup.sh`) ; avant chaque
   usage/rejeu, vérifier qu'une release plus récente n'est pas publiée et bumper
   `SUITE_VERSION` + la doc (`certification/README.md`) en conséquence, puis
-  rejouer les 11 plans pour valider le bump. Ne jamais fixer une version
+  rejouer les 13 plans pour valider le bump. Ne jamais fixer une version
   périmée dans la doc ou les scripts.
 - **Run hébergé officiel OIDF** : `.github/workflows/certification.yml` (secret
   `CONFORMANCE_TOKEN`, publication GitHub Pages) — reste la référence finale de
-  certification. Il joue les **11 plans** : les 9 du programme officiel **plus**
-  `ekyc` (identité assurance) et `federation` (OpenID Federation 1.1), hors
+  certification. Il joue les **13 plans** : les 9 du programme officiel **plus**
+  `ekyc` (identité assurance), `federation` (OpenID Federation 1.1) et
+  `oid4vci` (hors
   programme officiel — choix du
   maintainer : l'assurance conformité vaut aussi pour la spec de niche) —
   en **mode strict** (seuls les modules SUCCESS/REVIEW sont acceptés ; tout
   autre module met le job en échec) et en **deux vagues** : `dynamic` seul
   d'abord (il est seul à déclencher la rotation des clés de signature de
   l'OP partagé, qui casserait les validations des autres plans en cours),
-  puis les 10 autres plans en parallèle.
+  puis les 12 autres plans en parallèle.
 - L'ancien rejeu pytest `tests/conformance/` a été supprimé ; le mini-RP client
   (harness de parcours) vit dans `samples/oidc_harness/` et sert les smoke
   tests `samples/fapi1-client/` et `samples/fapi2-client/`.
