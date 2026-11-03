@@ -1446,6 +1446,75 @@ class TestCibaPushApproval:
         assert auth_req_id == "req-1"
         assert notification == "signed-jwt-push"
 
+    def test_create_push_notification_signs_provided_tokens(self) -> None:
+        _uc, requests, token_uc, _approval = _make_usecase()
+        stored = _store_request(
+            requests,
+            delivery_mode="push",
+            notification_token="ntok-1",
+            notification_endpoint=_NOTIFY_ENDPOINT,
+            status=BackchannelAuthenticationStatus.APPROVED,
+        )
+        notification = run(
+            token_uc.create_ciba_push_notification(
+                stored,
+                "req-1",
+                TokenResponse(
+                    access_token="at-push",
+                    id_token="it-push",
+                    refresh_token="rt-push",
+                ),
+            )
+        )
+        claims = pyjwt.decode(notification, options={"verify_signature": False})
+        assert claims["auth_req_id"] == "req-1"
+        assert claims["aud"] == _CLIENT_ID
+        assert claims["access_token"] == "at-push"
+        assert claims["id_token"] == "it-push"
+        assert claims["refresh_token"] == "rt-push"
+        assert claims["token_type"] == "Bearer"
+        assert claims["jti"]
+
+    def test_create_push_notification_issues_tokens_when_absent(self) -> None:
+        _uc, requests, token_uc, _approval = _make_usecase()
+        stored = _store_request(
+            requests,
+            delivery_mode="push",
+            notification_token="ntok-1",
+            notification_endpoint=_NOTIFY_ENDPOINT,
+            status=BackchannelAuthenticationStatus.APPROVED,
+        )
+        notification = run(token_uc.create_ciba_push_notification(stored, "req-1"))
+        claims = pyjwt.decode(notification, options={"verify_signature": False})
+        assert claims["auth_req_id"] == "req-1"
+        assert claims["id_token"]
+        assert claims["access_token"]
+
+    def test_approval_notifies_push_with_real_token_usecase(self) -> None:
+        _uc, requests, token_uc, _approval = _make_usecase()
+        _store_request(
+            requests,
+            delivery_mode="push",
+            notification_token="ntok-1",
+            notification_endpoint=_NOTIFY_ENDPOINT,
+        )
+        notifier = _RecordingPushNotifier()
+        approval = CibaApprovalUseCase(
+            requests,
+            push_notifier=notifier,
+            token_usecase=token_uc,
+        )
+        assert run(approval.execute("req-1", allow=True)) is True
+        assert len(notifier.calls) == 1
+        url, token, auth_req_id, notification = notifier.calls[0]
+        assert url == _NOTIFY_ENDPOINT
+        assert token == "ntok-1"
+        assert auth_req_id == "req-1"
+        assert isinstance(notification, str)
+        claims = pyjwt.decode(notification, options={"verify_signature": False})
+        assert claims["auth_req_id"] == "req-1"
+        assert claims["access_token"]
+
 
 class TestCibaIntegrationHTTP:
     """Tests d'intégration HTTP du flow CIBA (TestClient FastAPI)."""

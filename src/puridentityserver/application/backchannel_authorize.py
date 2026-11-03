@@ -676,18 +676,12 @@ class CibaApprovalUseCase:
         ):
             return
         notification = None
-        if (
-            allow and self._token_usecase is not None
-        ):  # pragma: no cover  # branche rare non couverte
+        if allow and self._token_usecase is not None:
             issuer = getattr(self._token_usecase, "issue_ciba_push_tokens", None)
             token_response = None
-            if callable(issuer):  # pragma: no cover  # branche rare non couverte
+            if callable(issuer):
                 candidate = await issuer(stored)
-                if hasattr(
-                    candidate, "id_token"
-                ) and hasattr(  # pragma: no cover  # branche rare non couverte
-                    candidate, "access_token"
-                ):
+                if hasattr(candidate, "id_token") and hasattr(candidate, "access_token"):
                     token_response = candidate
             creator = getattr(self._token_usecase, "create_ciba_push_notification", None)
             if callable(creator):
