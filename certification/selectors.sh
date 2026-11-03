@@ -10,7 +10,7 @@
 # `federation` (OpenID Federation 1.1) - HORS programme officiel, mais joues
 # dans les deux workflows a la demande du maintainer (les plans sont publies
 # par la suite dans les deux cas).
-CERTIFICATION_PLANS=(basic implicit hybrid formpost dynamic ciba fapi1 fapi2 fapi2-message-signing ekyc federation oid4vci)
+CERTIFICATION_PLANS=(basic implicit hybrid formpost dynamic ciba ciba-ping fapi1 fapi2 fapi2-message-signing ekyc federation oid4vci)
 
 # Retourne le selecteur de variante d'un plan sur stdout ; code retour 1 si le
 # plan est inconnu (appelant : message d'erreur + sortie securisee).
@@ -32,6 +32,12 @@ selector_for() {
     # pas des variants valides pour ce plan : private_key_jwt exigé,
     # JAR signé hors périmètre — issues dédiées).
     ciba) echo 'fapi-ciba-id1-test-plan[client_registration=dynamic_client][client_auth_type=private_key_jwt][ciba_mode=poll][fapi_ciba_profile=plain_fapi]' ;;
+    # CIBA Ping (issue #293) : meme socle que ciba avec la variante
+    # ciba_mode=ping — l'OP notifie le client au notification endpoint
+    # (Bearer client_notification_token, corps {auth_req_id}) avant le
+    # token endpoint. La suite joue en plus ses modules « Ping specific
+    # » (notification 401/403/redirect/body, no-retry).
+    ciba-ping) echo 'fapi-ciba-id1-test-plan[client_registration=dynamic_client][client_auth_type=private_key_jwt][ciba_mode=ping][fapi_ciba_profile=plain_fapi]' ;;
     # FAPI1 Advanced Final (issue #113) : plain_fapi + private_key_jwt,
     # request object by_value (défaut conseillé par la suite — l'OP
     # expose aussi PAR, à valider en certification) + réponse plain.

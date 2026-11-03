@@ -36,7 +36,8 @@ retenue :
 
 - Le workflow `Certification OIDC (Local)` se termine avec, pour chaque plan
   (`oidcc-basic-`, `oidcc-implicit-`, `oidcc-hybrid-`, `oidcc-formpost-basic-`,
-  `oidcc-dynamic-certification-test-plan`, `fapi-ciba-id1-test-plan`,
+  `oidcc-dynamic-certification-test-plan`, `fapi-ciba-id1-test-plan`
+  (poll **et** ping, plans `ciba` / `ciba-ping`),
   `fapi1-advanced-final-test-plan`, `fapi2-security-profile-final-test-plan`,
   `fapi2-message-signing-final-test-plan`, `ekyc-test-plan-oidccore`,
   `openid-federation-entity-joined-to-test-federation-op-test-plan`),
@@ -90,16 +91,17 @@ retenue :
   photographie les `kid` du JWKS, déclenche le deploy hook puis patiente
   (15 min max) jusqu'à ce que les `kid` changent — preuve que le build est
   terminé **et** que le disque éphémère (donc l'état) a été recréé avant le
-  premier enregistrement de client ; joue ensuite les **onze plans** en
+  premier enregistrement de client ; joue ensuite les **treize plans** en
   **deux vagues** : `dynamic` seul d'abord (vague 1, isolée car c'est le seul
   plan qui déclenche la rotation des clés de signature de l'OP partagé — une
   rotation pendant un module des autres plans ferait échouer leurs
-  validations), puis les **dix autres en parallèle** (vague 2 : 10 jobs
+  validations), puis les **douze autres en parallèle** (vague 2 : 12 jobs
   matrix, `fail-fast: false` — ~40 min au lieu de ~3 h
   séquentielles, issue #122, isolation de la rotation en issue #219 ; les plans FAPI1 Advanced, FAPI2 Security
   Profile, FAPI2 Message Signing (JARM, issue #164), Form Post
-  (issue #165), Dynamic (issue #168) et Federation (issue #170) ont été
-  ajoutés par les issues #113, #164, #165, #168 et #170), chaque
+  (issue #165), Dynamic (issue #168), Federation (issue #170) et CIBA Ping
+  (issue #293) ont été
+  ajoutés par les issues #113, #164, #165, #168, #170 et #293), chaque
   plan exportant son propre
   artefact, puis un job final fusionne les exports et téléverse le rapport
   consolidé en artefact.
@@ -187,7 +189,7 @@ redémarrage, les conteneurs sont réutilisés).
 bash certification/local/setup.sh
 
 # 2. rejouer un plan en une commande (même séquence stricte que la CI)
-bash certification/local/run-plan.sh fapi2   # basic | implicit | hybrid | formpost | dynamic | ciba | fapi1 | fapi2 | fapi2-message-signing | ekyc | federation | oid4vci
+bash certification/local/run-plan.sh fapi2   # basic | implicit | hybrid | formpost | dynamic | ciba | ciba-ping | fapi1 | fapi2 | fapi2-message-signing | ekyc | federation | oid4vci
 
 # 3. arrêter / nettoyer
 bash certification/local/down.sh             # OP + op-mtls + conteneurs de la suite
@@ -469,7 +471,7 @@ stricts verts — 475 modules, 0 hors `PASSED`/`REVIEW`/`SKIPPED`.
 | --- | --- |
 | `render.yaml` / `Dockerfile` / `.dockerignore` | déploiement de l'OP sur Render (SQLite, disque éphémère) |
 | `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`, `subject_pairwise_seed` pour les modules sector du plan dynamic, 4 clients statiques FAPI `private_key_jwt` + JWKS public pour les plans fapi1/fapi2) |
-| `plans/basic|implicit|hybrid|formpost|dynamic|ciba|fapi1|fapi2|fapi2-message-signing|ekyc|federation.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; fapi1/fapi2/fapi2-message-signing portent aussi `client`/`client2` en clé privée et `resource` ; `ekyc` porte la configuration eKYC `ekyc.verified_claims_request_list` ; `federation` porte l'Entity Identifier de l'OP, l'ancre de confiance `{SUITEURL}test/a/puridentityserver-federation/trust-anchor` et les clés de test RP/ancre du template officiel) |
+| `plans/basic|implicit|hybrid|formpost|dynamic|ciba|ciba-ping|fapi1|fapi2|fapi2-message-signing|ekyc|federation.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; `ciba`/`ciba-ping` partagent le plan `fapi-ciba-id1-test-plan` en variantes `ciba_mode=poll` / `ciba_mode=ping` — alias distincts ; fapi1/fapi2/fapi2-message-signing portent aussi `client`/`client2` en clé privée et `resource` ; `ekyc` porte la configuration eKYC `ekyc.verified_claims_request_list` ; `federation` porte l'Entity Identifier de l'OP, l'ancre de confiance `{SUITEURL}test/a/puridentityserver-federation/trust-anchor` et les clés de test RP/ancre du template officiel) |
 | `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) — avec `SCREENSHOTS_DIR` défini (CI), un fichier absent/vide/trop lourd lève une erreur fatale (captures obligatoires, issue #161) ; sans variable (exécution manuelle), le PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode hébergé) |
 | `capture_screenshots.py` | rejoue les scénarios de relecture (4 Core, 6 dynamic, 2 FAPI1 « page », 1 fédéré — 13 PNG, issue #214) contre l'OP (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver — `--base-url` = OP, `--suite-url` = base des callbacks de la suite (hébergée par défaut, `https://localhost.emobix.co.uk:8443` en local) |
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |

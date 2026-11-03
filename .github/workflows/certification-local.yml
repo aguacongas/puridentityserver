@@ -53,6 +53,7 @@ on:
           - formpost
           - dynamic
           - ciba
+          - ciba-ping
           - fapi1
           - fapi2
           - fapi2-message-signing
