@@ -2,7 +2,8 @@
 
 Ce module construit la structure ``IssuerSigned`` d'un mobile mdoc conforme
 ISO/IEC 18013-5 : une ``MobileSecurityObject`` (MSO) signée en COSE ``Sign1``
-(tag CBOR 18), portant les digests des éléments émis, l'intervalle de validité
+(portée par un ``issuerAuth`` en tableau COSE de 4 éléments, sans tag CBOR 18),
+portant les digests des éléments émis, l'intervalle de validité
 et la clé device du wallet, avec la chaîne de certificats du document signer
 dans l'en-tête ``x5chain`` (RFC 9360).
 
@@ -29,8 +30,9 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding
 from cryptography.x509.oid import NameOID
 
-#: Algorithme de digest et de signature MSO (ES256 / SHA-256), encodé ``-7``.
-DIGEST_ALGORITHM = -16
+#: Algorithme de digest de la MSO, en texte (ISO 18013-5 §9.1.2.1 ; valeurs
+#: admises par les parseurs mdoc : ``SHA-256``, ``SHA-384``, ``SHA-512``).
+DIGEST_ALGORITHM = "SHA-256"
 
 #: Namespace du nom personnel (ISO 18013-5.1 §4.1).
 PERSONAL_NAME_NAMESPACE = "org.iso.18013.5.1"
@@ -88,6 +90,7 @@ class MdocIssuerPKI:
         *,
         device_jwk: Mapping[str, Any],
         claims: Mapping[str, Any],
+        doc_type: str,
         now: datetime | None = None,
     ) -> bytes:
         """Émet un ``IssuerSigned`` CBOR lié à la clé device du wallet.
@@ -95,6 +98,8 @@ class MdocIssuerPKI:
         Args:
             device_jwk: clé publique du wallet (``kty: EC``, ``crv: P-256``).
             claims: éléments à émettre, par identifiant d'élément.
+            doc_type: type de document ISO 18013-5 (doctype de la
+                configuration d'émetteur publiée en metadata).
             now: instant de signature, défaut : UTC courant.
 
         Returns:
@@ -104,6 +109,7 @@ class MdocIssuerPKI:
         digest_algorithm = hashes.SHA256()
         name_spaces, value_digests = _signed_name_spaces(claims, digest_algorithm)
         mso = _mobile_security_object(
+            doc_type=doc_type,
             device_cose_key=_device_cose_key(device_jwk),
             value_digests=value_digests,
             signed_at=signed_at,
@@ -293,40 +299,61 @@ def _item_digest(encoded_item: cbor2.CBORTag, digest_algorithm: hashes.HashAlgor
 
 def _signed_name_spaces(
     claims: Mapping[str, Any], digest_algorithm: hashes.HashAlgorithm
-) -> tuple[dict[str, list[cbor2.CBORTag]], dict[str, dict[str, bytes]]]:
-    """Encode les éléments émis et calcule leurs digests par namespace."""
+) -> tuple[dict[str, list[cbor2.CBORTag]], dict[str, dict[int, bytes]]]:
+    """Encode les éléments émis et calcule leurs digests par namespace.
+
+    Les digests sont indexés par ``digestId`` (entier non signé), la clé
+    attendue par les parseurs mdoc pour ``valueDigests`` (ISO 18013-5 §9.1.2.1).
+    """
     items: list[cbor2.CBORTag] = []
-    digests: dict[str, bytes] = {}
+    digests: dict[int, bytes] = {}
     for digest_id, (element_identifier, element_value) in enumerate(claims.items()):
         encoded_item = _issuer_signed_item(element_identifier, element_value, digest_id)
         items.append(encoded_item)
-        digests[element_identifier] = _item_digest(encoded_item, digest_algorithm)
+        digests[digest_id] = _item_digest(encoded_item, digest_algorithm)
     return {PERSONAL_NAME_NAMESPACE: items}, {PERSONAL_NAME_NAMESPACE: digests}
+
+
+def _rfc3339_instant(value: datetime) -> cbor2.CBORTag:
+    """Encode un instant en tag CBOR 0 sur texte RFC 3339 à la seconde entière.
+
+    Les parseurs mdoc exigent un tag 0 (date/time string) et refusent les
+    fractions de seconde dans ``validityInfo`` (ISO 18013-5 §9.1.2.1).
+    """
+    whole = value.astimezone(timezone.utc).replace(microsecond=0)
+    return cbor2.CBORTag(0, whole.strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
 def _mobile_security_object(
     *,
+    doc_type: str,
     device_cose_key: dict[int, Any],
-    value_digests: dict[str, dict[str, bytes]],
+    value_digests: dict[str, dict[int, bytes]],
     signed_at: datetime,
 ) -> dict[str, Any]:
     """Construit la MSO (ISO 18013-5 §9.1.2.1) hors signature."""
     valid_until = signed_at + timedelta(days=MDoc_LIFETIME_DAYS)
     return {
         "version": "1.0",
+        "docType": doc_type,
         "digestAlgorithm": DIGEST_ALGORITHM,
         "valueDigests": value_digests,
         "validityInfo": {
-            "signed": signed_at.isoformat(),
-            "validFrom": signed_at.isoformat(),
-            "validUntil": valid_until.isoformat(),
+            "signed": _rfc3339_instant(signed_at),
+            "validFrom": _rfc3339_instant(signed_at),
+            "validUntil": _rfc3339_instant(valid_until),
         },
         "deviceKeyInfo": {"deviceKey": device_cose_key},
     }
 
 
-def _sign_mso(mso: dict[str, Any], pki: MdocIssuerPKI) -> cbor2.CBORTag:
-    """Signe la MSO en COSE ``Sign1`` avec la chaîne ``x5chain`` du signer."""
+def _sign_mso(mso: dict[str, Any], pki: MdocIssuerPKI) -> list[Any]:
+    """Signe la MSO en COSE ``Sign1`` avec la chaîne ``x5chain`` du signer.
+
+    Le tableau COSE est encodé **sans tag CBOR 18** : les parseurs mdoc
+    (dont ``CoseSign1.fromDataItem`` de la suite OIDF) exigent un tableau
+    de 4 éléments nu et rejettent un élément tagué.
+    """
     message = Sign1Message(
         phdr={_HEADER_ALG: _ALG_ES256},
         payload=cbor2.dumps(cbor2.CBORTag(24, cbor2.dumps(mso))),
@@ -340,6 +367,4 @@ def _sign_mso(mso: dict[str, Any], pki: MdocIssuerPKI) -> cbor2.CBORTag:
         }
     )
     message.key = _private_cose_key(pki.signer_private_key)
-    encoded = message.encode(sign=True, tag=True)
-    tagged = cbor2.loads(encoded)
-    return cbor2.CBORTag(tagged.tag, tagged.value)
+    return cast(list[Any], cbor2.loads(message.encode(sign=True, tag=False)))

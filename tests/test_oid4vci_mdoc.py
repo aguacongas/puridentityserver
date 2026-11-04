@@ -105,11 +105,13 @@ def test_mdoc_credential_is_verifiable_issuer_signed() -> None:
         outer = cbor2.loads(blob)
         assert set(outer) == {"issuerAuth", "nameSpaces"}
         assert PERSONAL_NAME_NAMESPACE in outer["nameSpaces"]
-        # issuerAuth : COSE Sign1 vérifiable par la clé du signer.
+        # issuerAuth : COSE Sign1 en tableau nu (sans tag CBOR 18), vérifiable
+        # par la clé du signer.
         auth = outer["issuerAuth"]
-        assert auth.tag == 18
+        assert isinstance(auth, list)
+        assert len(auth) == 4
         usecase_pki = usecase._mdoc_pki  # type: ignore[attr-defined]
-        message = Sign1Message.from_cose_obj(list(auth.value), True)
+        message = Sign1Message.from_cose_obj(list(auth), True)
         message.key = _private_cose_key(usecase_pki.signer_private_key)
         assert message.verify_signature() is True
         # Le notification_id est joint (OID4VCI 1.0 §10).
@@ -134,7 +136,7 @@ def test_mdoc_binds_device_key_from_proof() -> None:
         blob = base64.urlsafe_b64decode(credential + "=" * (-len(credential) % 4))  # type: ignore[arg-type]
         outer = cbor2.loads(blob)
         usecase_pki = usecase._mdoc_pki  # type: ignore[attr-defined]
-        message = Sign1Message.from_cose_obj(list(outer["issuerAuth"].value), True)
+        message = Sign1Message.from_cose_obj(list(outer["issuerAuth"]), True)
         message.key = _private_cose_key(usecase_pki.signer_private_key)
         loaded = cbor2.loads(message.payload)
         mso = cbor2.loads(loaded.value) if isinstance(loaded, cbor2.CBORTag) else loaded

@@ -24,19 +24,20 @@ def _build_ec_key() -> CoseKey:
     )
 
 
-def test_cose_sign1_tagged_roundtrip() -> None:
-    """Un COSE Sign1 tague CBOR 18 peut etre produit puis relu et verifie."""
+def test_cose_sign1_untagged_roundtrip() -> None:
+    """Un COSE Sign1 sans tag (encodage issuerAuth retenu) peut etre relu et verifie."""
     key = _build_ec_key()
     payload = b"mdoc issuerAuth placeholder (MSO would live here)"
 
     message = Sign1Message(phdr={1: -7}, payload=payload)
     message.key = key
-    encoded = message.encode(sign=True, tag=True)
+    encoded = message.encode(sign=True, tag=False)
 
-    tagged = cbor2.loads(encoded)
-    assert tagged.tag == 18
+    decoded_obj = cbor2.loads(encoded)
+    assert isinstance(decoded_obj, list)
+    assert len(decoded_obj) == 4
 
-    decoded = Sign1Message.from_cose_obj(list(tagged.value), True)
+    decoded = Sign1Message.from_cose_obj(list(decoded_obj), True)
     decoded.key = key
     assert decoded.payload == payload
     assert decoded.verify_signature() is True

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import cbor2
 import pytest
+from cose.headers import X5chain
 from cose.messages import Sign1Message
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
@@ -14,6 +15,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding
 from cryptography.x509.oid import NameOID
 
+from puridentityserver.application.oid4vci import MDOC_DOCTYPE
 from puridentityserver.infrastructure.mdoc import (
     PERSONAL_NAME_NAMESPACE,
     MdocBindingError,
@@ -115,7 +117,9 @@ def test_issuer_common_name_falls_back_to_rfc4514_subject() -> None:
 
 def test_issue_produces_verifiable_issuer_signed() -> None:
     pki = generate_mdoc_pki("https://op.example.com")
-    blob = pki.issue(device_jwk=_device_jwk(), claims={"given_name": "Alice"})
+    blob = pki.issue(
+        device_jwk=_device_jwk(), claims={"given_name": "Alice"}, doc_type=MDOC_DOCTYPE
+    )
 
     outer = cbor2.loads(blob)
     assert set(outer) == {"issuerAuth", "nameSpaces"}
@@ -125,22 +129,27 @@ def test_issue_produces_verifiable_issuer_signed() -> None:
     assert item[2] == "given_name"
     assert item[3] == "Alice"
 
-    # issuerAuth : COSE Sign1 (tag 18), signature vérifiable, x5chain de deux.
+    # issuerAuth : COSE Sign1 en tableau nu (sans tag CBOR 18, exigence des
+    # parseurs mdoc dont CoseSign1.fromDataItem), signature vérifiable,
+    # x5chain de deux en unprotected.
     auth = outer["issuerAuth"]
-    assert auth.tag == 18
-    message = Sign1Message.from_cose_obj(list(auth.value), True)
+    assert isinstance(auth, list)
+    assert len(auth) == 4
+    message = Sign1Message.from_cose_obj(list(auth), True)
     message.key = _private_cose_key(pki.signer_private_key)
     assert message.verify_signature() is True
     protected = cbor2.loads(message.phdr_encoded)
     assert protected[1] == -7
-    assert len(message.uhdr_encoded[33]) == 2
+    assert len(message.uhdr_encoded[X5chain]) == 2
 
 
 def test_issue_embeds_device_key_and_validity() -> None:
     pki = generate_mdoc_pki("https://op.example.com")
-    blob = pki.issue(device_jwk=_device_jwk(), claims={"given_name": "Alice"})
+    blob = pki.issue(
+        device_jwk=_device_jwk(), claims={"given_name": "Alice"}, doc_type=MDOC_DOCTYPE
+    )
     outer = cbor2.loads(blob)
-    message = Sign1Message.from_cose_obj(list(outer["issuerAuth"].value), True)
+    message = Sign1Message.from_cose_obj(list(outer["issuerAuth"]), True)
     message.key = _private_cose_key(pki.signer_private_key)
     loaded = cbor2.loads(message.payload)
     mso = cbor2.loads(loaded.value) if isinstance(loaded, cbor2.CBORTag) else loaded
@@ -149,27 +158,88 @@ def test_issue_embeds_device_key_and_validity() -> None:
     assert device_key[1] == 2  # kty: EC2
     assert device_key[3] == -7  # alg: ES256
     assert device_key[-1] == 1  # crv: P-256
-    assert mso["digestAlgorithm"] == -16
+    assert mso["docType"] == MDOC_DOCTYPE
+    assert mso["digestAlgorithm"] == "SHA-256"
     assert mso["version"] == "1.0"
-    assert "signed" in mso["validityInfo"]
-    assert "validUntil" in mso["validityInfo"]
+    # validityInfo : tag CBOR 0 (décodé en datetime par cbor2) à la seconde
+    # entière, UTC — les parseurs mdoc refusent les fractions de seconde.
+    for key in ("signed", "validFrom", "validUntil"):
+        stamp = mso["validityInfo"][key]
+        assert isinstance(stamp, datetime)
+        assert stamp.microsecond == 0
+        assert stamp.utcoffset() == timedelta(0)
+
+
+def test_issue_mso_matches_mdoc_parser_requirements() -> None:
+    """Régression encodage : chaque exigence des parseurs mdoc (suite OIDF).
+
+    Les cinq points vérifiés ici ont causé l'échec ``ParseMdocCredentialFromVCIIssuance
+    : Failed requirement.`` (issue #255) : tableau COSE nu, digests indexés par
+    ``digestId`` entier, ``docType`` présent, ``digestAlgorithm`` en texte,
+    dates en tag CBOR 0 sans fraction de seconde.
+    """
+    pki = generate_mdoc_pki("https://op.example.com")
+    blob = pki.issue(
+        device_jwk=_device_jwk(),
+        claims={"given_name": "Alice", "family_name": "Martin"},
+        doc_type=MDOC_DOCTYPE,
+    )
+    outer = cbor2.loads(blob)
+
+    # 1. issuerAuth = tableau COSE [protected, unprotected, payload, signature].
+    auth = outer["issuerAuth"]
+    assert isinstance(auth, list) and len(auth) == 4
+
+    # Le payload est un tag CBOR 24 portant l'octet CBOR de la MSO.
+    payload = cbor2.loads(auth[2])
+    assert isinstance(payload, cbor2.CBORTag) and payload.tag == 24
+    mso = cbor2.loads(payload.value)
+    assert not isinstance(mso, cbor2.CBORTag)
+
+    # 2. valueDigests indexé par digestId (uint), pas par identifiant d'élément.
+    digests = mso["valueDigests"][PERSONAL_NAME_NAMESPACE]
+    assert sorted(digests) == [0, 1]
+
+    # 3-4. docType requis et digestAlgorithm en texte admis.
+    assert mso["docType"] == MDOC_DOCTYPE
+    assert mso["digestAlgorithm"] in {"SHA-256", "SHA-384", "SHA-512"}
+
+    # 5. validityInfo : tstr RFC 3339 tagué 0 (cbor2 le rend en datetime),
+    # sans microsecondes, en UTC.
+    validity = mso["validityInfo"]
+    for key in ("signed", "validFrom", "validUntil"):
+        stamp = validity[key]
+        assert isinstance(stamp, datetime)
+        assert stamp.microsecond == 0
+        assert stamp.utcoffset() == timedelta(0)
 
 
 def test_issue_covers_each_claim_with_digest() -> None:
     pki = generate_mdoc_pki("https://op.example.com")
-    blob = pki.issue(device_jwk=_device_jwk(), claims={"given_name": "Alice", "age": 42})
+    blob = pki.issue(
+        device_jwk=_device_jwk(),
+        claims={"given_name": "Alice", "age": 42},
+        doc_type=MDOC_DOCTYPE,
+    )
     outer = cbor2.loads(blob)
-    payload = cbor2.loads(Sign1Message.from_cose_obj(list(outer["issuerAuth"].value), True).payload)
+    payload = cbor2.loads(Sign1Message.from_cose_obj(list(outer["issuerAuth"]), True).payload)
     if isinstance(payload, cbor2.CBORTag):
         payload = cbor2.loads(payload.value)
-    digests = {k: list(v) for k, v in payload["valueDigests"].items()}
-    assert digests == {PERSONAL_NAME_NAMESPACE: ["given_name", "age"]}
+    digests = payload["valueDigests"][PERSONAL_NAME_NAMESPACE]
+    # Clés = digestId uint, alignées sur le champ digestId des IssuerSignedItem.
+    assert sorted(digests) == [0, 1]
+    items = outer["nameSpaces"][PERSONAL_NAME_NAMESPACE]
+    assert [cbor2.loads(item.value)[0] for item in items] == [0, 1]
 
 
 def test_issue_rejects_non_ec_binding_key() -> None:
     pki = generate_mdoc_pki("https://op.example.com")
     with pytest.raises(MdocBindingError, match="non EC"):
-        pki.issue(device_jwk={"kty": "RSA"}, claims={"given_name": "Alice"})
+        pki.issue(
+            device_jwk={"kty": "RSA"},
+            claims={"given_name": "Alice"},
+            doc_type=MDOC_DOCTYPE,
+        )
 
 
 def test_issue_rejects_non_p256_curve() -> None:
@@ -177,13 +247,17 @@ def test_issue_rejects_non_p256_curve() -> None:
     jwk = _device_jwk()
     jwk["crv"] = "P-384"
     with pytest.raises(MdocBindingError, match="P-256"):
-        pki.issue(device_jwk=jwk, claims={"given_name": "Alice"})
+        pki.issue(device_jwk=jwk, claims={"given_name": "Alice"}, doc_type=MDOC_DOCTYPE)
 
 
 def test_issue_rejects_missing_coordinates() -> None:
     pki = generate_mdoc_pki("https://op.example.com")
     with pytest.raises(MdocBindingError, match="coordonnees"):
-        pki.issue(device_jwk={"kty": "EC", "crv": "P-256"}, claims={"given_name": "Alice"})
+        pki.issue(
+            device_jwk={"kty": "EC", "crv": "P-256"},
+            claims={"given_name": "Alice"},
+            doc_type=MDOC_DOCTYPE,
+        )
 
 
 def test_signer_certificate_der_round_trip() -> None:

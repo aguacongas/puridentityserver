@@ -108,9 +108,9 @@ def _decode_mdoc(credential: str) -> dict[str, object]:
 
 
 def _verify_signature(outer: dict[str, object]) -> bool:
-    """Verifie la signature COSE Sign1 de l issuerAuth (sans chaîne de confiance)."""
+    """Verifie la structure COSE Sign1 de l issuerAuth (sans cle de confiance)."""
     auth = outer["issuerAuth"]
-    message = Sign1Message.from_cose_obj(list(auth.value), True)
+    message = Sign1Message.from_cose_obj(list(auth), True)
     # Cle de verification quelconque : on ne teste que l integrité de la structure.
     message.key = CoseKey.from_dict({1: 2, 3: -7, -1: 1, -2: b"\x00" * 32, -3: b"\x00" * 32})
     try:
@@ -181,8 +181,7 @@ def main() -> int:
     outer = _decode_mdoc(issued)
     name_spaces = outer["nameSpaces"][PERSONAL_NAME_NAMESPACE]
     elements = {cbor2.loads(item.value)[2] for item in name_spaces}
-    auth = outer["issuerAuth"]
-    print(f"5. mdoc emis : issuerAuth tag={auth.tag} elements={sorted(elements)}")
+    print(f"5. mdoc emis : issuerAuth en tableau COSE non tague, elements={sorted(elements)}")
     print(f"   signature COSE structurellement valide : {_verify_signature(outer)}")
     print(f"   device key liee : {public_jwk.get('kty')}/{public_jwk.get('crv')}")
     return 0

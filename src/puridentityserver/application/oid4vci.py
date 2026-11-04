@@ -684,7 +684,7 @@ class OID4VCIIssuerUseCase:
         credentials: list[dict[str, str]] = []
         for binding_jwk in binding_jwks or []:
             try:
-                issued = pki.issue(device_jwk=binding_jwk, claims=elements)
+                issued = pki.issue(device_jwk=binding_jwk, claims=elements, doc_type=MDOC_DOCTYPE)
             except MdocBindingError as error:
                 return CredentialError("invalid_proof", str(error))
             credentials.append(
