@@ -83,6 +83,25 @@ def test_signed_issuer_metadata_served_when_accepted() -> None:
     assert "iat" in claims
 
 
+def test_signed_issuer_metadata_served_with_long_issuer() -> None:
+    """L'issuer public long de l'instance hébergée ne casse pas la PKI mdoc.
+
+    Régression issue #295 : la génération de la PKI mdoc dépassait la
+    limite X.509 (64) sur le CN et la route renvoyait un 500.
+    """
+    settings = Settings(
+        oid4vci_enabled=True,
+        issuer="https://puridentity-op-cert.duckdns.org",
+    )
+    client = TestClient(create_app(settings=settings))
+    response = client.get(
+        "/.well-known/openid-credential-issuer",
+        headers={"Accept": "application/jwt"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/jwt")
+
+
 def test_metadata_served_with_trailing_slash() -> None:
     client = TestClient(create_app(settings=Settings(oid4vci_enabled=True)))
     response = client.get("/.well-known/openid-credential-issuer/")

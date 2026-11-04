@@ -142,11 +142,53 @@ def generate_mdoc_pki(issuer: str, now: datetime | None = None) -> MdocIssuerPKI
     )
 
 
+#: Limite de longueur d'un ``Common Name`` X.509 (RFC 5280 §4.2.1.6).
+_COMMON_NAME_MAX_LENGTH = 64
+
+
+def _capped_common_name(base: str, suffix: str) -> str:
+    """Compose un CN en conservant le suffixe sous la limite X.509 (64).
+
+    Un issuer long (URL publique de l'instance de certification) ferait
+    dépasser la limite si le CN était concaténé sans troncature :
+    ``cryptography`` lèverait alors ``ValueError`` et la metadata signée
+    de l'émetteur OID4VCI renverrait un 500.
+
+    Args:
+        base: partie variable du CN (URL de l'émetteur, CN de l'IACA).
+        suffix: suffixe sémantique (``" IACA"``, ``" document signer"``).
+
+    Returns:
+        Le CN composé, tronqué si nécessaire pour tenir sous 64 caractères.
+    """
+    available = _COMMON_NAME_MAX_LENGTH - len(suffix)
+    if available <= 0:
+        return suffix[:_COMMON_NAME_MAX_LENGTH]
+    return f"{base[:available]}{suffix}"
+
+
+def _issuer_common_name(issuer_certificate: x509.Certificate) -> str:
+    """CN porté par le sujet de l'IACA, ou le sujet RFC 4514 à défaut.
+
+    Args:
+        issuer_certificate: certificat IACA dont on lit le ``commonName``.
+
+    Returns:
+        La valeur du ``commonName``, ou le sujet RFC 4514 si absent.
+    """
+    attributes = issuer_certificate.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+    if len(attributes) == 1:
+        return str(attributes[0].value)
+    return issuer_certificate.subject.rfc4514_string()
+
+
 def _self_signed_issuer_certificate(
     private_key: ec.EllipticCurvePrivateKey, issuer: str, generated_at: datetime
 ) -> x509.Certificate:
     """Construit le certificat auto-signé de l'IACA (``ca=True``)."""
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"{issuer} IACA")])
+    name = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, _capped_common_name(issuer, " IACA"))]
+    )
     return (
         x509.CertificateBuilder()
         .subject_name(name)
@@ -168,7 +210,12 @@ def _document_signer_certificate(
 ) -> x509.Certificate:
     """Construit le certificat du document signer émis par l'IACA."""
     name = x509.Name(
-        [x509.NameAttribute(NameOID.COMMON_NAME, f"{issuer_certificate.subject} document signer")]
+        [
+            x509.NameAttribute(
+                NameOID.COMMON_NAME,
+                _capped_common_name(_issuer_common_name(issuer_certificate), " document signer"),
+            )
+        ]
     )
     return (
         x509.CertificateBuilder()
