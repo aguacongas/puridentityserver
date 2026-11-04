@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime, timedelta, timezone
 
 import cbor2
 import pytest
 from cose.messages import Sign1Message
 from cryptography import x509
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding
+from cryptography.x509.oid import NameOID
 
 from puridentityserver.infrastructure.mdoc import (
     PERSONAL_NAME_NAMESPACE,
     MdocBindingError,
+    _capped_common_name,
+    _issuer_common_name,
     _private_cose_key,
     generate_mdoc_pki,
 )
@@ -42,6 +47,70 @@ def test_generate_mdoc_pki_builds_iaca_and_signer() -> None:
     )
     # Le signer est émis par l'IACA (issuer = sujet de l'IACA).
     assert pki.signer_certificate.issuer == pki.issuer_certificate.subject
+
+
+def test_generate_mdoc_pki_caps_common_names_at_x509_limit() -> None:
+    """Les CN restent sous la limite X.509 (64) pour un issuer long.
+
+    Régression issue #295 : l'URL publique de l'instance hébergée
+    dépassait la limite et la metadata signée OID4VCI renvoyait un 500.
+    """
+    issuer = "https://puridentity-op-cert.duckdns.org"
+    pki = generate_mdoc_pki(issuer)
+
+    iaca_names = pki.issuer_certificate.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+    signer_names = pki.signer_certificate.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+    assert len(iaca_names) == 1
+    assert len(signer_names) == 1
+    iaca_common_name = iaca_names[0].value
+    signer_common_name = signer_names[0].value
+    assert iaca_common_name == f"{issuer} IACA"
+    assert signer_common_name.endswith(" document signer")
+    assert len(iaca_common_name) <= 64
+    assert len(signer_common_name) <= 64
+
+    # Issuer si long que le CN de l'IACA atteint la limite : la troncature
+    # conserve le suffixe du document signer.
+    long_issuer = "https://example.com/tenant/" + "a" * 120
+    long_pki = generate_mdoc_pki(long_issuer)
+    long_iaca_names = long_pki.issuer_certificate.subject.get_attributes_for_oid(
+        NameOID.COMMON_NAME
+    )
+    long_signer_names = long_pki.signer_certificate.subject.get_attributes_for_oid(
+        NameOID.COMMON_NAME
+    )
+    assert len(long_iaca_names) == 1
+    assert len(long_signer_names) == 1
+    assert long_iaca_names[0].value.endswith(" IACA")
+    assert long_signer_names[0].value.endswith(" document signer")
+    assert len(long_iaca_names[0].value) <= 64
+    assert len(long_signer_names[0].value) <= 64
+
+
+def test_capped_common_name_keeps_suffix_under_x509_limit() -> None:
+    """La base est tronquée pour conserver le suffixe sous la limite (64)."""
+    common_name = _capped_common_name("a" * 100, " IACA")
+    assert common_name == "a" * 59 + " IACA"
+    assert len(common_name) == 64
+    # Suffixe lui-même au-delà de la limite : on ne garde que le suffixe tronqué.
+    assert _capped_common_name("base", "s" * 70) == "s" * 64
+
+
+def test_issuer_common_name_falls_back_to_rfc4514_subject() -> None:
+    """Sans ``commonName`` dans le sujet, on retombe sur le sujet RFC 4514."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Example Corp")])
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(timezone.utc) - timedelta(minutes=1))
+        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=1))
+        .sign(key, hashes.SHA256())
+    )
+    assert _issuer_common_name(certificate) == name.rfc4514_string()
 
 
 def test_issue_produces_verifiable_issuer_signed() -> None:
