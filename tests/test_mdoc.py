@@ -105,7 +105,8 @@ def test_document_signer_certificate_obeys_iso_18013_table_b3() -> None:
     point = points[0]
     assert point.full_name is not None
     assert [name.value for name in point.full_name] == [f"{issuer}/crl/mdoc.crl"]
-    assert point.reasons is None and point.crl_issuer is None
+    assert point.reasons is None
+    assert point.crl_issuer is None
 
     # basicConstraints ca=False, non critique (Table B.3 n'autorise que
     # keyUsage et extendedKeyUsage en extension critique).
@@ -265,11 +266,13 @@ def test_issue_mso_matches_mdoc_parser_requirements() -> None:
 
     # 1. issuerAuth = tableau COSE [protected, unprotected, payload, signature].
     auth = outer["issuerAuth"]
-    assert isinstance(auth, list) and len(auth) == 4
+    assert isinstance(auth, list)
+    assert len(auth) == 4
 
     # Le payload est un tag CBOR 24 portant l'octet CBOR de la MSO.
     payload = cbor2.loads(auth[2])
-    assert isinstance(payload, cbor2.CBORTag) and payload.tag == 24
+    assert isinstance(payload, cbor2.CBORTag)
+    assert payload.tag == 24
     mso = cbor2.loads(payload.value)
     assert not isinstance(mso, cbor2.CBORTag)
 

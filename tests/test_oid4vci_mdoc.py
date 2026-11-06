@@ -167,11 +167,13 @@ def test_mdoc_emits_the_eleven_mandatory_mdl_elements() -> None:
         # Les dates sont des full-dates CBOR tag 1004 (date au décodage,
         # et non datetime qui correspondrait au tag 0 des tdate).
         birth_date = decoded["birth_date"]
-        assert isinstance(birth_date, date) and not isinstance(birth_date, datetime)
+        assert isinstance(birth_date, date)
+        assert not isinstance(birth_date, datetime)
         assert birth_date == date(1985, 6, 15)
         for element in ("issue_date", "expiry_date"):
             value = decoded[element]
-            assert isinstance(value, date) and not isinstance(value, datetime)
+            assert isinstance(value, date)
+            assert not isinstance(value, datetime)
 
         # portrait en bstr, issuing_country en alpha-2 aligné sur le
         # countryName du certificat document signer.
@@ -189,7 +191,8 @@ def test_mdoc_emits_the_eleven_mandatory_mdl_elements() -> None:
         assert privilege["vehicle_category_code"] == "B"
         for element in ("issue_date", "expiry_date"):
             value = privilege[element]
-            assert isinstance(value, date) and not isinstance(value, datetime)
+            assert isinstance(value, date)
+            assert not isinstance(value, datetime)
         assert privilege["codes"] == [{"code": "01"}]
 
         # Textes : latin-1 et 150 caractères au plus (table 20).

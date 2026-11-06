@@ -14,6 +14,7 @@ from puridentityserver.application.oid4vci import (
     credential_vct,
     issuer_metadata_payload,
 )
+from puridentityserver.infrastructure.mdoc import generate_mdoc_crl
 from puridentityserver.interfaces.api.forwarded import public_url
 
 if TYPE_CHECKING:
@@ -48,6 +49,7 @@ def oid4vci_router(
     _mount_credential_offers(router, offer_usecase)
     _mount_deferred(router, usecase)
     _mount_notification(router, usecase)
+    _mount_crl(router, oid4vci_usecase)
     return router
 
 
@@ -261,6 +263,30 @@ def _mount_notification(
         if err is not None:
             return _error(err.status_code, err.error, err.error_description)
         return Response(status_code=204)
+
+
+def _mount_crl(
+    router: APIRouter,
+    oid4vci_usecase: OID4VCIIssuerUseCase | None,
+) -> None:
+    @router.get(
+        "/crl/mdoc.crl",
+        tags=["oid4vci", "revocation"],
+        response_model=None,
+    )
+    async def mdoc_crl() -> Response:
+        # L'émetteur doit être initialisé pour accéder à la PKI
+        if oid4vci_usecase is None:
+            return _error(501, "not_implemented", "CRL pas disponible.")
+
+        pki = oid4vci_usecase._ensure_mdoc_pki()
+        crl_der = generate_mdoc_crl(pki)
+
+        return Response(
+            content=crl_der,
+            media_type="application/pkix-crl",
+            headers={"Cache-Control": "no-cache"},  # nextUpdate ≤ 90j gère le refresh
+        )
 
 
 async def _json_object(request: Request) -> dict[str, object]:
