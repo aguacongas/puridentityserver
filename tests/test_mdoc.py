@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 import cbor2
@@ -12,12 +13,15 @@ from cose.messages import Sign1Message
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.serialization import Encoding
-from cryptography.x509.oid import NameOID
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from cryptography.x509.oid import ExtensionOID, NameOID
 
 from puridentityserver.application.oid4vci import MDOC_DOCTYPE
 from puridentityserver.infrastructure.mdoc import (
+    MDOC_ISSUING_COUNTRY,
+    MDOC_SIGNER_LIFETIME_DAYS,
     PERSONAL_NAME_NAMESPACE,
+    MDoc_LIFETIME_DAYS,
     MdocBindingError,
     _capped_common_name,
     _issuer_common_name,
@@ -49,6 +53,77 @@ def test_generate_mdoc_pki_builds_iaca_and_signer() -> None:
     )
     # Le signer est émis par l'IACA (issuer = sujet de l'IACA).
     assert pki.signer_certificate.issuer == pki.issuer_certificate.subject
+
+
+def test_document_signer_certificate_obeys_iso_18013_table_b3() -> None:
+    """Profil ISO 18013-5 Table B.3 du certificat document signer.
+
+    Régression issue #255 : la suite de conformance OIDF classe ces
+    écarts en WARNING inattendu, ce qui fait échouer le plan
+    ``oid4vci-mdoc`` même sans aucun module FAILED.
+    """
+    issuer = "https://op.example.com"
+    generated = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    pki = generate_mdoc_pki(issuer, generated)
+    ds = pki.signer_certificate
+    iaca = pki.issuer_certificate
+    critical = {ext.oid for ext in ds.extensions if ext.critical}
+
+    # countryName obligatoire (PrintableString, [A-Z]{2}) et aligné sur
+    # l'élément issuing_country émis.
+    countries = ds.subject.get_attributes_for_oid(NameOID.COUNTRY_NAME)
+    assert [attribute.value for attribute in countries] == [MDOC_ISSUING_COUNTRY]
+    # Seuls keyUsage et extendedKeyUsage peuvent être critiques.
+    assert critical == {ExtensionOID.KEY_USAGE, ExtensionOID.EXTENDED_KEY_USAGE}
+
+    key_usage = ds.extensions.get_extension_for_class(x509.KeyUsage).value
+    assert key_usage.digital_signature
+    assert not any(
+        (
+            key_usage.content_commitment,
+            key_usage.key_encipherment,
+            key_usage.data_encipherment,
+            key_usage.key_agreement,
+            key_usage.key_cert_sign,
+            key_usage.crl_sign,
+        )
+    )
+    eku = ds.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+    assert [oid.dotted_string for oid in eku] == ["1.0.18013.5.1.2"]
+
+    # SKI présent, AKI identique au SKI de l'IACA émettrice.
+    iaca_ski = iaca.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value
+    aki = ds.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value
+    assert aki.key_identifier == iaca_ski.digest
+
+    # Contact de l'émetteur et CRL en URI (la suite exige la présence d'une
+    # distribution point URI sans raison ni cRLIssuer, sans la télécharger).
+    ian = ds.extensions.get_extension_for_class(x509.IssuerAlternativeName).value
+    assert [name.value for name in ian] == [issuer]
+    points = ds.extensions.get_extension_for_class(x509.CRLDistributionPoints).value
+    assert len(points) == 1
+    point = points[0]
+    assert point.full_name is not None
+    assert [name.value for name in point.full_name] == [f"{issuer}/crl/mdoc.crl"]
+    assert point.reasons is None and point.crl_issuer is None
+
+    # basicConstraints ca=False, non critique (Table B.3 n'autorise que
+    # keyUsage et extendedKeyUsage en extension critique).
+    constraints = ds.extensions.get_extension_for_class(x509.BasicConstraints).value
+    assert constraints.ca is False
+    assert ExtensionOID.BASIC_CONSTRAINTS not in critical
+
+    # Validité : plafond Table B.3 (457 j) respectée, et couverture du
+    # validUntil du MSO émis à MDoc_LIFETIME_DAYS (ISO 18013-5 §9.3.1).
+    validity = ds.not_valid_after_utc - ds.not_valid_before_utc
+    assert validity <= timedelta(days=457)
+    assert MDOC_SIGNER_LIFETIME_DAYS < 457
+    assert generated + timedelta(days=MDoc_LIFETIME_DAYS) < ds.not_valid_after_utc
+
+    # Le SKI est le SHA-1 du BIT STRING de la clé publique (RFC 5280 §4.2.1.2).
+    ski = ds.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value
+    spki = ds.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    assert ski.digest == hashlib.sha1(spki[-65:]).digest()
 
 
 def test_generate_mdoc_pki_caps_common_names_at_x509_limit() -> None:
@@ -126,8 +201,10 @@ def test_issue_produces_verifiable_issuer_signed() -> None:
     items = outer["nameSpaces"][PERSONAL_NAME_NAMESPACE]
     assert len(items) == 1
     item = cbor2.loads(items[0].value)
-    assert item[2] == "given_name"
-    assert item[3] == "Alice"
+    assert item["elementIdentifier"] == "given_name"
+    assert item["elementValue"] == "Alice"
+    assert isinstance(item["digestID"], int)
+    assert isinstance(item["random"], bytes)
 
     # issuerAuth : COSE Sign1 en tableau nu (sans tag CBOR 18, exigence des
     # parseurs mdoc dont CoseSign1.fromDataItem), signature vérifiable,
@@ -229,7 +306,7 @@ def test_issue_covers_each_claim_with_digest() -> None:
     # Clés = digestId uint, alignées sur le champ digestId des IssuerSignedItem.
     assert sorted(digests) == [0, 1]
     items = outer["nameSpaces"][PERSONAL_NAME_NAMESPACE]
-    assert [cbor2.loads(item.value)[0] for item in items] == [0, 1]
+    assert [cbor2.loads(item.value)["digestID"] for item in items] == [0, 1]
 
 
 def test_issue_rejects_non_ec_binding_key() -> None:

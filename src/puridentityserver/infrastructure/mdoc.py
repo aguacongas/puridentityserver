@@ -18,7 +18,7 @@ import base64
 import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, cast
 
 import cbor2
@@ -28,6 +28,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding
+from cryptography.x509 import ObjectIdentifier
 from cryptography.x509.oid import NameOID
 
 #: Algorithme de digest de la MSO, en texte (ISO 18013-5 §9.1.2.1 ; valeurs
@@ -39,6 +40,55 @@ PERSONAL_NAME_NAMESPACE = "org.iso.18013.5.1"
 
 #: Durée de validité d'un mdoc émis, en jours.
 MDoc_LIFETIME_DAYS = 365
+
+#: Durée de validité du certificat document signer, en jours. ISO 18013-5
+#: Table B.3 plafonne cette validité à 457 jours ; 456 laisse une marge sur
+#: le ``validUntil`` du MSO émis à J+365 depuis la génération de la PKI,
+#: exigence de ISO 18013-5 §9.3.1 (un lecteur peut rejeter un MSO qui
+#: survit à son certificat).
+MDOC_SIGNER_LIFETIME_DAYS = 456
+
+#: Pays ISO 3166-1 alpha-2 porté par les sujets des certificats mdoc et par
+#: l'élément ``issuing_country`` émis : ISO 18013-5 Table B.3 impose que le
+#: ``countryName`` du document signer soit identique à cette valeur.
+MDOC_ISSUING_COUNTRY = "FR"
+
+#: OID de la clé de signature de document mdoc (``mdlDS``), exigée par
+#: ISO 18013-5 Table B.3 dans l'``extendedKeyUsage`` d'un document signer
+#: de doctype mDL.
+_OID_MDL_DS_EKU = ObjectIdentifier("1.0.18013.5.1.2")
+
+#: Éléments obligatoires d'un mdoc mDL (ISO 18013-5 §13.4.2, table 20,
+#: présence « M »), avec les valeurs de démonstration de l'instance : le
+#: doctype ``org.iso.18013.5.1.mDL`` impose ces 11 éléments dans le
+#: namespace ``org.iso.18013.5.1``. Les dates sont des ``datetime.date``
+#: pour que cbor2 les encode en CBOR tag 1004 (full-date) et le portrait
+#: en ``bytes`` pour un bstr, formats exigés par les contraintes de la
+#: table 20 (tstr latin-1 ≤ 150 pour les textes, alpha-2 pour le pays).
+#: L'ensemble est en lecture seule : il est copié à chaque émission.
+MDL_MANDATORY_ELEMENTS: dict[str, object] = {
+    "family_name": "Martin",
+    "given_name": "Alice",
+    "birth_date": date(1985, 6, 15),
+    "issue_date": date(2025, 6, 1),
+    "expiry_date": date(2030, 6, 1),
+    "issuing_country": MDOC_ISSUING_COUNTRY,
+    "issuing_authority": "Ministere de l'Interieur",
+    "document_number": "12AB34567",
+    "portrait": base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+        "AAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    ),
+    "driving_privileges": [
+        {
+            "vehicle_category_code": "B",
+            "issue_date": date(2025, 6, 1),
+            "expiry_date": date(2030, 6, 1),
+            "codes": [{"code": "01"}],
+        }
+    ],
+    "un_distinguishing_sign": "SIGN-DEMO-0001",
+}
 
 #: Tag CBOR d'un ``IssuerSignedItem`` encodé (ISO 18013-5 §9.1.2.1).
 _ISSUER_SIGNED_ITEM_TAG = 24
@@ -100,12 +150,23 @@ class MdocIssuerPKI:
             claims: éléments à émettre, par identifiant d'élément.
             doc_type: type de document ISO 18013-5 (doctype de la
                 configuration d'émetteur publiée en metadata).
-            now: instant de signature, défaut : UTC courant.
+            now: instant de signature, défaut : UTC courant. S'il est
+                antérieur à la validité du certificat du document signer
+                (cas d'un MSO arrondi à l'heure émis peu après la
+                génération de la PKI), il est relevé à cette borne :
+                ISO 18013-5 §9.3.1 interdit un ``signed`` hors de la
+                validité du signer.
 
         Returns:
             Le ``IssuerSigned`` encodé en CBOR (à transmettre en base64url).
         """
-        signed_at = now or datetime.now(timezone.utc)
+        signed_at = (now or datetime.now(timezone.utc)).replace(microsecond=0)
+        # ``not_valid_before`` est naïf (UTC), convention de ``cryptography``.
+        not_before = self.signer_certificate.not_valid_before.replace(
+            tzinfo=timezone.utc, microsecond=0
+        )
+        if signed_at < not_before:
+            signed_at = not_before
         digest_algorithm = hashes.SHA256()
         name_spaces, value_digests = _signed_name_spaces(claims, digest_algorithm)
         mso = _mobile_security_object(
@@ -138,7 +199,7 @@ def generate_mdoc_pki(issuer: str, now: datetime | None = None) -> MdocIssuerPKI
     issuer_certificate = _self_signed_issuer_certificate(issuer_key, issuer, generated_at)
     signer_key = ec.generate_private_key(ec.SECP256R1())
     signer_certificate = _document_signer_certificate(
-        signer_key, issuer_certificate, issuer_key, generated_at
+        signer_key, issuer_certificate, issuer_key, generated_at, issuer
     )
     return MdocIssuerPKI(
         issuer_private_key=issuer_key,
@@ -193,7 +254,10 @@ def _self_signed_issuer_certificate(
 ) -> x509.Certificate:
     """Construit le certificat auto-signé de l'IACA (``ca=True``)."""
     name = x509.Name(
-        [x509.NameAttribute(NameOID.COMMON_NAME, _capped_common_name(issuer, " IACA"))]
+        [
+            x509.NameAttribute(NameOID.COUNTRY_NAME, MDOC_ISSUING_COUNTRY),
+            x509.NameAttribute(NameOID.COMMON_NAME, _capped_common_name(issuer, " IACA")),
+        ]
     )
     return (
         x509.CertificateBuilder()
@@ -204,6 +268,9 @@ def _self_signed_issuer_certificate(
         .not_valid_before(generated_at - timedelta(minutes=5))
         .not_valid_after(generated_at + timedelta(days=MDoc_LIFETIME_DAYS * 10))
         .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(private_key.public_key()), critical=False
+        )
         .sign(private_key, hashes.SHA256())
     )
 
@@ -213,14 +280,38 @@ def _document_signer_certificate(
     issuer_certificate: x509.Certificate,
     issuer_key: ec.EllipticCurvePrivateKey,
     generated_at: datetime,
+    issuer: str,
 ) -> x509.Certificate:
-    """Construit le certificat du document signer émis par l'IACA."""
+    """Construit le certificat du document signer émis par l'IACA.
+
+    Le certificat suit le profil ISO 18013-5 Table B.3 exigé par les
+    lecteurs stricts et par la suite de conformance : ``countryName``
+    identique à l'élément ``issuing_country``, ``keyUsage`` critique
+    limité à ``digitalSignature``, ``extendedKeyUsage`` critique portant
+    l'OID ``mdlDS``, identifiants de clé (SKI/AKI), nom alternatif de
+    l'émetteur et point de distribution de CRL, ``basicConstraints``
+    non critique (seuls ``keyUsage`` et ``EKU`` peuvent l'être).
+
+    Args:
+        private_key: clé privée EC du document signer.
+        issuer_certificate: certificat IACA émetteur.
+        issuer_key: clé privée de l'IACA qui signe ce certificat.
+        generated_at: instant de génération (validité bornée à -1 h 05 pour
+            couvrir le MSO arrondi à l'heure).
+        issuer: URL de l'émetteur, contact du nom alternatif et base de
+            l'URI du point de distribution de CRL.
+
+    Returns:
+        Le certificat document signer signé par l'IACA.
+    """
+    contact = issuer.rstrip("/")
     name = x509.Name(
         [
+            x509.NameAttribute(NameOID.COUNTRY_NAME, MDOC_ISSUING_COUNTRY),
             x509.NameAttribute(
                 NameOID.COMMON_NAME,
                 _capped_common_name(_issuer_common_name(issuer_certificate), " document signer"),
-            )
+            ),
         ]
     )
     return (
@@ -229,9 +320,51 @@ def _document_signer_certificate(
         .issuer_name(issuer_certificate.subject)
         .public_key(private_key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(generated_at - timedelta(minutes=5))
-        .not_valid_after(generated_at + timedelta(days=MDoc_LIFETIME_DAYS))
-        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        # marge d'une heure : le ``signed`` du MSO est arrondi à l'heure
+        # (RFC 9901 §10.1, anti-linkabilité) et doit rester dans la
+        # validité du signer (ISO 18013-5 §9.3.1)
+        .not_valid_before(generated_at - timedelta(hours=1, minutes=5))
+        .not_valid_after(generated_at + timedelta(days=MDOC_SIGNER_LIFETIME_DAYS))
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=False)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=False,
+                crl_sign=False,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .add_extension(x509.ExtendedKeyUsage([_OID_MDL_DS_EKU]), critical=True)
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(private_key.public_key()), critical=False
+        )
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(issuer_certificate.public_key()),
+            critical=False,
+        )
+        .add_extension(
+            x509.IssuerAlternativeName([x509.UniformResourceIdentifier(contact)]),
+            critical=False,
+        )
+        .add_extension(
+            x509.CRLDistributionPoints(
+                [
+                    x509.DistributionPoint(
+                        full_name=[x509.UniformResourceIdentifier(f"{contact}/crl/mdoc.crl")],
+                        relative_name=None,
+                        reasons=None,
+                        crl_issuer=None,
+                    )
+                ]
+            ),
+            critical=False,
+        )
         .sign(issuer_key, hashes.SHA256())
     )
 
@@ -279,13 +412,19 @@ def _private_cose_key(private_key: ec.EllipticCurvePrivateKey) -> CoseKey:
 def _issuer_signed_item(
     element_identifier: str, element_value: object, digest_id: int
 ) -> cbor2.CBORTag:
-    """Construit un ``IssuerSignedItem`` encodé (tag CBOR 24)."""
+    """Construit un ``IssuerSignedItem`` encodé (tag CBOR 24).
+
+    La carte est à clés texte (``digestID``, ``random``, ``elementIdentifier``,
+    ``elementValue``) : c'est l'encodage qu'émet la librairie multipaz, de
+    référence dans l'écosystème mdoc, et celui que lit la suite de
+    conformance OIDF.
+    """
     random_bytes = secrets.token_bytes(16)
     item = {
-        0: digest_id,
-        1: random_bytes,
-        2: element_identifier,
-        3: element_value,
+        "digestID": digest_id,
+        "random": random_bytes,
+        "elementIdentifier": element_identifier,
+        "elementValue": element_value,
     }
     return cbor2.CBORTag(_ISSUER_SIGNED_ITEM_TAG, cbor2.dumps(item))
 

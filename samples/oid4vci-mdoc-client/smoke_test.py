@@ -18,8 +18,10 @@ import urllib.request
 
 import cbor2
 import jwt
+from cose.headers import X5chain
 from cose.keys import CoseKey
 from cose.messages import Sign1Message
+from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import ec
 
 BASE_URL = os.environ.get("BASE_URL", "http://127.0.0.1:8000").rstrip("/")
@@ -108,11 +110,25 @@ def _decode_mdoc(credential: str) -> dict[str, object]:
 
 
 def _verify_signature(outer: dict[str, object]) -> bool:
-    """Verifie la structure COSE Sign1 de l issuerAuth (sans cle de confiance)."""
+    """Verifie la signature COSE Sign1 de l issuerAuth contre le x5chain.
+
+    La cle publique est extraite du certificat document signer en tete de la
+    chaine embarquee dans l en-tete (RFC 9360) : aucune ancre de confiance
+    n est validee, seulement l integrite de la signature.
+    """
     auth = outer["issuerAuth"]
     message = Sign1Message.from_cose_obj(list(auth), True)
-    # Cle de verification quelconque : on ne teste que l integrité de la structure.
-    message.key = CoseKey.from_dict({1: 2, 3: -7, -1: 1, -2: b"\x00" * 32, -3: b"\x00" * 32})
+    chain = message.uhdr.get(X5chain)
+    if not chain:
+        return False
+    try:
+        leaf = x509.load_der_x509_certificate(chain[0])
+        numbers = leaf.public_key().public_numbers()
+    except (ValueError, TypeError):
+        return False
+    message.key = CoseKey.from_dict(
+        {1: 2, 3: -7, -1: 1, -2: numbers.x.to_bytes(32, "big"), -3: numbers.y.to_bytes(32, "big")}
+    )
     try:
         return bool(message.verify_signature())
     except Exception:
@@ -180,7 +196,7 @@ def main() -> int:
 
     outer = _decode_mdoc(issued)
     name_spaces = outer["nameSpaces"][PERSONAL_NAME_NAMESPACE]
-    elements = {cbor2.loads(item.value)[2] for item in name_spaces}
+    elements = {cbor2.loads(item.value)["elementIdentifier"] for item in name_spaces}
     print(f"5. mdoc emis : issuerAuth en tableau COSE non tague, elements={sorted(elements)}")
     print(f"   signature COSE structurellement valide : {_verify_signature(outer)}")
     print(f"   device key liee : {public_jwk.get('kty')}/{public_jwk.get('crv')}")

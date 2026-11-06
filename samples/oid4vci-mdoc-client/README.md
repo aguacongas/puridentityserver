@@ -33,8 +33,11 @@ C'est le pendant mdoc du sample `oid4vci-preauth-client` (SD-JWT VC).
 
 Le script affiche, à l'étape 5 :
 
-- `issuerAuth tag=18` (COSE Sign1 CBOR-tagué),
-- les éléments émis (ex. `['family_name', 'given_name']`),
+- `issuerAuth en tableau COSE non tagué` (COSE Sign1 sans tag CBOR 18),
+- les **11 éléments obligatoires du mDL** émis (`['birth_date',
+  'document_number', 'driving_privileges', 'expiry_date', 'family_name',
+  'given_name', 'issuing_authority', 'issuing_country', 'issue_date',
+  'portrait', 'un_distinguishing_sign']`),
 - `signature COSE structurellement valide : True`,
 - la clé device liée (`EC/P-256`).
 
@@ -43,9 +46,13 @@ Le script affiche, à l'étape 5 :
 - La configuration `puridentityserver-mso-mdoc` est publiée dans les
   métadonnées de l'émetteur (`/.well-known/openid-credential-issuer`).
 - La réponse `/credential` contient un CBOR base64url sans padding.
-- L'``issuerAuth`` est un COSE Sign1 (tag 18) dont la signature est vérifiable.
+- L'``issuerAuth`` est un COSE Sign1 en tableau de 4 éléments **sans tag
+  CBOR 18** (exigence des parseurs mdoc), dont la signature est vérifiable.
 - La clé device du wallet (proof EC P-256) est embarquée dans la MSO
   (``deviceKeyInfo``).
+- Les 11 éléments obligatoires du mDL (ISO 18013-5 table 20) sont présents,
+  aux bons encodages : dates en tag CBOR 1004, `portrait` en bstr,
+  `issuing_country` en alpha-2 aligné sur le certificat document signer.
 
 ## Limites (tranche 1)
 
