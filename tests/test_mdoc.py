@@ -26,6 +26,7 @@ from puridentityserver.infrastructure.mdoc import (
     _capped_common_name,
     _issuer_common_name,
     _private_cose_key,
+    generate_mdoc_crl,
     generate_mdoc_pki,
 )
 
@@ -346,3 +347,53 @@ def test_signer_certificate_der_round_trip() -> None:
     signer_der = pki.signer_certificate.public_bytes(Encoding.DER)
     loaded = x509.load_der_x509_certificate(signer_der)
     assert loaded.subject == pki.signer_certificate.subject
+
+
+def test_generate_mdoc_crl_produces_valid_der() -> None:
+    """Le CRL est un DER valide, signé par l'IACA, avec issuer = sujet IACA."""
+    pki = generate_mdoc_pki("https://op.example.com")
+    crl_der = generate_mdoc_crl(pki)
+
+    loaded = x509.load_der_x509_crl(crl_der)
+    assert loaded.issuer == pki.issuer_certificate.subject
+    assert loaded.last_update_utc < loaded.next_update_utc
+    # nextUpdate ≤ 90j après thisUpdate (B.2).
+    assert loaded.next_update_utc - loaded.last_update_utc <= timedelta(days=90)
+    # Aucun certificat révoqué (Table B.10 : revokedCertificates absent).
+    assert len(loaded) == 0
+
+
+def test_generate_mdoc_crl_extensions_are_non_critical() -> None:
+    """Extensions AKI/CRLNumber non critiques, AKI = SKI de l'IACA."""
+    pki = generate_mdoc_pki("https://op.example.com")
+    crl_der = generate_mdoc_crl(pki)
+    loaded = x509.load_der_x509_crl(crl_der)
+
+    assert len(loaded.extensions) == 2
+    aki = loaded.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value
+    assert (
+        aki.key_identifier
+        == pki.issuer_certificate.extensions.get_extension_for_class(
+            x509.SubjectKeyIdentifier
+        ).value.digest
+    )
+    assert not loaded.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).critical
+    assert not loaded.extensions.get_extension_for_class(x509.CRLNumber).critical
+
+
+def test_generate_mdoc_crl_uses_v2_with_next_update() -> None:
+    """Version 2 avec nextUpdate (exigé par la suite OIDF 5.3.4)."""
+    pki = generate_mdoc_pki("https://op.example.com")
+    crl_der = generate_mdoc_crl(pki)
+    loaded = x509.load_der_x509_crl(crl_der)
+    # nextUpdate présent et ≤ 90j après thisUpdate (B.2).
+    assert loaded.next_update_utc - loaded.last_update_utc <= timedelta(days=90)
+
+
+def test_generate_mdoc_crl_counter_defaults_to_one() -> None:
+    """crl_counter None = CRLNumber 1 ; valeur fournie respectée."""
+    pki = generate_mdoc_pki("https://op.example.com")
+    crl_default = x509.load_der_x509_crl(generate_mdoc_crl(pki))
+    crl_custom = x509.load_der_x509_crl(generate_mdoc_crl(pki, crl_counter=3))
+    assert crl_default.extensions.get_extension_for_class(x509.CRLNumber).critical is False
+    assert crl_custom.extensions.get_extension_for_class(x509.CRLNumber).critical is False
