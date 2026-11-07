@@ -46,20 +46,21 @@ MTLS_PORT="9443"
 log() { printf '[run-plan] %s\n' "$*"; }
 
 usage() {
-  echo "Usage : bash certification/local/run-plan.sh <plan> [--export-dir <dir>]" >&2
-  echo "  plans : basic | implicit | hybrid | formpost | dynamic | ciba | ciba-ping | fapi1 | fapi2 |" >&2
-  echo "          fapi2-message-signing | ekyc | federation | oid4vci | oid4vci-mdoc" >&2  exit 2
+  echo "Usage : bash certification/local/run-plan.sh <plan> [--export-dir <dir>]"
+  echo "  plans : basic | implicit | hybrid | formpost | dynamic | ciba | ciba-ping | fapi1 | fapi2 |"
+  echo "          fapi2-message-signing | ekyc | federation | oid4vci | oid4vci-mdoc"
 }
 
-if [ $# -lt 1 ]; then usage; fi
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then usage; exit 0; fi
+if [ $# -lt 1 ]; then usage >&2; exit 2; fi
 plan="$1"
 shift
 export_dir=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --export-dir) export_dir="${2:-}"; [ -n "$export_dir" ] || usage; shift 2 ;;
-    -h|--help) usage ;;
-    *) echo "option inconnue : $1" >&2; usage ;;
+    --export-dir) export_dir="${2:-}"; [ -n "$export_dir" ] || { usage >&2; exit 2; }; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "option inconnue : $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 

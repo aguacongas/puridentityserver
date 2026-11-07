@@ -38,6 +38,7 @@ from puridentityserver.domain.dpop import access_token_hash
 from puridentityserver.domain.jwks import JWTAlgorithm, KeyPair
 from puridentityserver.infrastructure.jwks import DefaultKeyManager, first_active_key
 from puridentityserver.infrastructure.mdoc import (
+    MDL_MANDATORY_ELEMENTS,
     MdocBindingError,
     MdocIssuerPKI,
     generate_mdoc_pki,
@@ -127,6 +128,10 @@ def issuer_metadata_payload(issuer: str) -> dict[str, Any]:
                 "proof_types_supported": {
                     "jwt": {
                         "proof_signing_alg_values_supported": ["ES256"],
+                    },
+                    "attestation": {
+                        "proof_signing_alg_values_supported": ["ES256"],
+                        "key_attestations_required": {},
                     },
                 },
             },
@@ -678,13 +683,26 @@ class OID4VCIIssuerUseCase:
         base64url sans padding (OID4VCI 1.0 s8.5.1). Une cle non EC P-256
         est refusee (``invalid_proof``) : elle ne peut pas servir de device
         key ISO 18013-5.
+
+        Les 11 elements obligatoires du mDL (ISO 18013-5 table 20) sont
+        emis dans le namespace ``org.iso.18013.5.1``. Les timestamps du
+        MSO sont arrondis a l'heure, comme sur le chemin SD-JWT, pour que
+        deux credentials d un meme lot ne soient pas correlables par leurs
+        dates (RFC 9901 s10.1).
         """
         pki = self._ensure_mdoc_pki()
-        elements = dict(self._SELECTIVE_CLAIMS)
+        elements = dict(MDL_MANDATORY_ELEMENTS)
+        now = int(datetime.now(timezone.utc).timestamp())
+        rounded_now = datetime.fromtimestamp((now // 3600) * 3600, tz=timezone.utc)
         credentials: list[dict[str, str]] = []
         for binding_jwk in binding_jwks or []:
             try:
-                issued = pki.issue(device_jwk=binding_jwk, claims=elements)
+                issued = pki.issue(
+                    device_jwk=binding_jwk,
+                    claims=elements,
+                    doc_type=MDOC_DOCTYPE,
+                    now=rounded_now,
+                )
             except MdocBindingError as error:
                 return CredentialError("invalid_proof", str(error))
             credentials.append(

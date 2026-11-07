@@ -40,7 +40,9 @@ retenue :
   (poll **et** ping, plans `ciba` / `ciba-ping`),
   `fapi1-advanced-final-test-plan`, `fapi2-security-profile-final-test-plan`,
   `fapi2-message-signing-final-test-plan`, `ekyc-test-plan-oidccore`,
-  `openid-federation-entity-joined-to-test-federation-op-test-plan`),
+  `openid-federation-entity-joined-to-test-federation-op-test-plan`,
+  `oid4vci-1_0-issuer-test-plan` (plans `oid4vci`, format SD-JWT VC, et
+  `oid4vci-mdoc`, variante mdoc `credential_format=mdoc`)),
   le détail des modules testés et leur verdict (PASSED / FAILED / WARNING /
   REVIEW / SKIPPED) dans le résumé du run ;
 - les artefacts `certification-local-results-<plan>` (un par plan) contiennent
@@ -189,7 +191,7 @@ redémarrage, les conteneurs sont réutilisés).
 bash certification/local/setup.sh
 
 # 2. rejouer un plan en une commande (même séquence stricte que la CI)
-bash certification/local/run-plan.sh fapi2   # basic | implicit | hybrid | formpost | dynamic | ciba | ciba-ping | fapi1 | fapi2 | fapi2-message-signing | ekyc | federation | oid4vci
+bash certification/local/run-plan.sh fapi2   # basic | implicit | hybrid | formpost | dynamic | ciba | ciba-ping | fapi1 | fapi2 | fapi2-message-signing | ekyc | federation | oid4vci | oid4vci-mdoc
 
 # 3. arrêter / nettoyer
 bash certification/local/down.sh             # OP + op-mtls + conteneurs de la suite
@@ -263,7 +265,7 @@ mécanisme, sans churn du JWKS sur les plans qui ne portent pas le module.
 les conditions de modules connues et non résolues. Son pendant
 `certification/expected-failures/<plan>-skips.json` (`--expected-skips-file`,
 même format) déclare les modules que l'OP **saute** faute de capacité. Aucun
-fichier n'est actuellement déclaré : les onze plans locaux sont sans saut ni
+fichier n'est actuellement déclaré : les quatorze plans locaux sont sans saut ni
 écart (la rotation des clés de signature de l'OP est livrée — issue #189, le
 module `oidcc-server-rotate-keys` passe ; le chiffrement des request objects
 est livré — issue #204, le module
@@ -293,6 +295,26 @@ PR). Les modules REVIEW restent tolérés (verdicts de relecture), leur preuve
 étant fournie par les captures réelles obligatoires (issue #161). Les
 lacunes d'enforcement mTLS CIBA sont corrigées (#147, #149) : le plan ciba
 est à 35/35 PASSED (run 38575847610).
+
+### Plan `oid4vci-mdoc` : format `mso_mdoc` (issue #273)
+
+Plan dédié au format mdoc ISO 18013-5 de l'émetteur : même plan OIDF que
+`oid4vci` (`oid4vci-1_0-issuer-test-plan`) avec la variante
+`credential_format=mdoc`, et une configuration pointant sur la configuration
+mdoc de l'OP (`vci.credential_configuration_id =
+puridentityserver-mso-mdoc`). Fichiers : `certification/plans/oid4vci-mdoc.json`,
+sélecteur `oid4vci-mdoc` (`certification/selectors.sh`), écarts
+`certification/expected-failures/oid4vci-mdoc.json` (et `-skips.json`).
+
+Les champs de configuration VICAL (`credential.vical`, `credential.vical_url`,
+`credential.trust_anchor_pem`), affichés par la suite quand
+`credential_format=mdoc`, restent vides : les contrôles d'ancre de confiance
+qui les consomment sont court-circuités par `skipIfStringsMissing` (contrôle
+interne de séquence, pas un saut de module — aucun module n'est ignoré).
+
+Rejeu : `bash certification/local/run-plan.sh oid4vci-mdoc`, ou
+`workflow_dispatch` avec le filtre de plan `oid4vci-mdoc`.
+
 ## Rejeu local pytest (supprimé)
 
 L'ancien rejeu « sans docker » (`tests/conformance/`, 435 scénarios rejoués
@@ -453,7 +475,7 @@ flag ON :
 
 1. Basculer le flag dans `certification/config.render.toml`
    (`openid20_migration_enabled = true`).
-2. Rejouer **les 11 plans en matrix** (workflow `Certification OIDC (Local)` sur
+2. Rejouer **les 14 plans en matrix** (workflow `Certification OIDC (Local)` sur
    une branche de test, `plan=all`, sortie stricte) — ou en séquentiel via
    `certification/local/run-plan.sh` — avec les captures REVIEW obligatoires.
 3. Comparer par plan les compteurs `PASSED`/`REVIEW` et vérifier **0 FAILED
@@ -480,8 +502,8 @@ stricts verts — 475 modules, 0 hors `PASSED`/`REVIEW`/`SKIPPED`.
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés ; recopie les captures réelles dans `_site/screenshots/` (`--screenshots`) et les affiche dans la section du module correspondant |
 | `local/setup.sh` | bootstrap du harness **auto-hébergé** : alias réseau, clone + déploiement docker de la suite, cert auto-signé + nginx mTLS `op`, config OP locale (issuer `https://op:9443`), OP uvicorn, attente de disponibilité |
 | `local/nginx-mtls.conf` | nginx de terminaison mTLS devant l'OP local : certificat client optionnel (`optional_no_ca`), extraction `$ssl_client_escaped_cert` → `X-SSL-Client-Cert` (pas de newline brute), proxy vers l'OP uvicorn de l'hôte |
-| `../.github/workflows/certification.yml` | workflow hébergé à la demande (`workflow_dispatch` uniquement) : `prepare` (deploy + captures, une fois), `plan` (les 11 plans en **deux vagues** — `dynamic` seul puis les 10 autres en parallèle, cf. le déroulé du workflow ci-dessus ; les 9 du programme officiel **plus** `ekyc` (identité assurance) et `federation` (OpenID Federation 1.1), hors programme officiel — un job matrix chacun, **mode strict** : tout module hors SUCCESS/REVIEW met le job en échec), `report` (fusion des exports en artefact - publication OIDC des résultats à venir) |
-| `../.github/workflows/certification-local.yml` | workflow **auto-hébergé strict** : déclenché à chaque merge sur `main`, sur les PR (`certification/**`) et à la demande ; 11 plans en matrix (les 10 de l'hébergé, `ekyc` et `federation` étant hors programme officiel de certification), code non nul du driver = job en échec, job `capture` **bloquant** (Playwright, artefact `certification-local-screenshots`, #158/#161 : captures REVIEW obligatoires), **publication GitHub Pages** (sauf sur les PR) |
+| `../.github/workflows/certification.yml` | workflow hébergé à la demande (`workflow_dispatch` uniquement) : `prepare` (deploy + captures, une fois), `plan` (les 14 plans en **deux vagues** — `dynamic` seul puis les 13 autres en parallèle, cf. le déroulé du workflow ci-dessous ; les 9 du programme officiel **plus** `ciba-ping`, `ekyc` (identité assurance), `federation` (OpenID Federation 1.1) et les plans `oid4vci` / `oid4vci-mdoc` (émetteur VCI, formats SD-JWT VC et mdoc), hors programme officiel — un job matrix chacun, **mode strict** : tout module hors SUCCESS/REVIEW met le job en échec), `report` (fusion des exports en artefact - publication OIDC des résultats à venir) |
+| `../.github/workflows/certification-local.yml` | workflow **auto-hébergé strict** : déclenché à chaque merge sur `main`, sur les PR (`certification/**`) et à la demande ; 14 plans en matrix (les 10 de l'hébergé, `ekyc` et `federation` étant hors programme officiel de certification), code non nul du driver = job en échec, job `capture` **bloquant** (Playwright, artefact `certification-local-screenshots`, #158/#161 : captures REVIEW obligatoires), **publication GitHub Pages** (sauf sur les PR) |
 
 ## Captures d'écran des modules de relecture (modes hébergé et local)
 

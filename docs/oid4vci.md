@@ -145,21 +145,51 @@ metadonnees d'emetteur, avec le format `mso_mdoc`, le doctype
 Quand le wallet cible cette configuration sur `/credential`, l'OP delivre un
 `IssuerSigned` CBOR (encode en base64url sans padding) dont :
 
-- l'`issuerAuth` est un COSE Sign1 (tag CBOR 18) portant la MobileSecurityObject
-  (digests des elements, validityInfo, deviceKeyInfo) ;
+- l'`issuerAuth` est un COSE Sign1 en tableau COSE de 4 éléments **sans tag
+  CBOR 18** (exigence des parseurs mdoc, dont `CoseSign1.fromDataItem`),
+  portant la MobileSecurityObject (docType, digestAlgorithm `SHA-256`,
+  digests des éléments indexés par `digestId`, validityInfo en tag CBOR 0,
+  deviceKeyInfo) ;
 - la chaine `x5chain` (RFC 9360) embarque le document signer puis l'IACA ;
 - le device key du wallet (proof EC P-256) est converti en cle COSE publique et
-  lie au mdoc via `deviceKeyInfo.deviceKey`.
+  lie au mdoc via `deviceKeyInfo.deviceKey` ;
+- chaque élément est porté par un `IssuerSignedItem` (tag CBOR 24) en carte
+  CBOR **à clés texte** (`digestID`, `random`, `elementIdentifier`,
+  `elementValue`) : l'encodage de la librairie multipaz, celui que lit la
+  suite de conformance OIDF ;
+- les **11 éléments obligatoires du mDL** (ISO 18013-5 §13.4.2, table 20,
+  présence « M ») sont émis dans le namespace `org.iso.18013.5.1` :
+  `family_name`, `given_name`, `birth_date`, `issue_date`, `expiry_date`,
+  `issuing_country` (aligné sur le `countryName` du document signer),
+  `issuing_authority`, `document_number`, `portrait` (bstr),
+  `driving_privileges` (tableau de maps avec `vehicle_category_code`
+  obligatoire, dates full-date et `codes`) et `un_distinguishing_sign` ;
+  les dates sont encodées en **tag CBOR 1004** (full-date RFC 3339) et les
+  textes respectent les contraintes de la table 20 (latin-1, 150 caractères
+  au plus, pays en alpha-2).
 
 La PKI mdoc (IACA auto-signee + document signer) est generee a la volee, en
 memoire, a la premiere emission ; le certificat de l IACA est publie dans
 les metadonnees sous la cle `mdoc_iaca_certificates` (x5c base64 DER sans
-padding) pour servir d ancre de confiance aux verifiers externes. La
+padding) pour servir d ancre de confiance aux verifiers externes. Le
+certificat du document signer suit le profil ISO 18013-5 Table B.3 :
+`countryName` `FR`, `keyUsage` critique limité à `digitalSignature`,
+`extendedKeyUsage` critique avec l'OID `mdlDS` (`1.0.18013.5.1.2`),
+identifiants de clé SKI/AKI, nom alternatif de l'émetteur et point de
+distribution de CRL, `basicConstraints` non critique, validité de 456 jours
+(plafond 457) supérieure au `validUntil` du MSO. Les timestamps du MSO
+(`signed`, `validFrom`, `validUntil`) sont arrondis à l'heure comme sur le
+chemin SD-JWT, pour que deux credentials d'un même lot ne soient pas
+corrélables par leurs dates (RFC 9901 §10.1). La
 configuration mdoc annonce :
 - `credential_signing_alg_values_supported` : identifiant COSE `-7` (ES256) -
   entier COSE requis par le schema OIDF ;
 - preuve de liaison EC P-256 via `proof_types_supported.jwt` (`ES256`).
 Une cle de preuve non EC P-256 est refusee (`invalid_proof`).
+- proof type `attestation` annoncé avec `key_attestations_required` (parité
+  avec la configuration SD-JWT) : une key attestation transportée par la
+  preuve est validée (signature, couverture de la clé de liaison) et une
+  attestation invalide est rejetée (`invalid_proof`).
 
 Un sample pas-a-pas est disponible dans `samples/oid4vci-mdoc-client/`.
 
