@@ -25,7 +25,7 @@ import cbor2
 from cose.keys import CoseKey  # type: ignore[import-untyped]
 from cose.messages import Sign1Message  # type: ignore[import-untyped]
 from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding
 from cryptography.x509 import ObjectIdentifier
@@ -229,7 +229,8 @@ def generate_mdoc_crl(pki: MdocIssuerPKI, crl_counter: int | None = None) -> byt
     Returns:
         Le CRL encodé en DER (pour être servi tel quel à ``/crl/mdoc.crl``).
     """
-    from cryptography.x509 import crl
+    from cryptography import x509 as x509_mod
+    from cryptography.hazmat.primitives.serialization import Encoding as SerializationEncoding
 
     # thisUpdate : UTC, encodage UTCTime ou GeneralizedTime selon la date (<2050 ou ≥2050)
     now_utc = datetime.now(timezone.utc).replace(microsecond=0)
@@ -238,15 +239,12 @@ def generate_mdoc_crl(pki: MdocIssuerPKI, crl_counter: int | None = None) -> byt
     # nextUpdate : ≤ 90j après thisUpdate (exigence de la suite 5.3.4)
     next_update = this_update + timedelta(days=7)  # 7 jours, largement sous les 90j B.2
 
-    issuer_dn_str = pki.issuer_certificate.subject.rfc4514_string()
-
     # SKI de l'IACA (keyIdentifier pour AKI, Table B.10)
     ski = x509.SubjectKeyIdentifier.from_public_key(pki.issuer_certificate.public_key())
 
-    builder = crl.CertificateRevocationListBuilder()
-    issuer_name_str = x509.Name(
-        [x509.RDNAttribute(x509.ObjectIdentifier("2.5.4.5"), issuer_dn_str)]
-    )
+    builder = x509_mod.CertificateRevocationListBuilder()
+    # Issuer = subject du certificat IACA (même DN binaire)
+    issuer_name_str = pki.issuer_certificate.subject
     builder = builder.issuer_name(issuer_name_str)
     builder = builder.last_update(this_update)
     builder = builder.next_update(next_update)
@@ -258,16 +256,17 @@ def generate_mdoc_crl(pki: MdocIssuerPKI, crl_counter: int | None = None) -> byt
     builder = builder.add_extension(aki_extension, critical=False)
 
     # CRLNumber (RFC 5280 : entier non-négatif, ici ≤ 20 octets), non critique
-    crl_number_ext = x509.CRLNumber(crl_counter)
+    crl_number_value = crl_counter if crl_counter is not None else 1
+    crl_number_ext = x509_mod.CRLNumber(crl_number_value)
     builder = builder.add_extension(crl_number_ext, critical=False)
 
     # Signature IACA SHA-256
     signer_key = pki.issuer_private_key
-    crl = builder.sign(private_key=signer_key, hash_algorithm=hashes.SHA256())
+    crl = builder.sign(private_key=signer_key, algorithm=hashes.SHA256())
 
     from typing import cast
 
-    return cast(bytes, crl.public_bytes(encoding=serialization.Encoding.DER))
+    return crl.public_bytes(encoding=cast(SerializationEncoding, SerializationEncoding.DER))
 
 
 #: Limite de longueur d'un ``Common Name`` X.509 (RFC 5280 §4.2.1.6).
