@@ -59,6 +59,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -694,7 +695,7 @@ def _resolve_issuer(request: APIRequestContext, base_url: str) -> str:
 #: Scénario OID4VP du plan HAIP laissé en REVIEW (issue #230).
 
 # Le verifier OID4VP doit afficher une page d'erreur 400 "presentation_request_required"
-# quand on appelle /vp_response sans vp_token validé. L'attendu correspond à la 
+# quand on appelle /vp_response sans vp_token validé. L'attendu correspond à la
 # validation cryptographique du request object signé (RFC 9160 §2) et l'émetteur
 # n'a pas accès au secret verifier : le OP refuse donc avec une page d'erreur HTML.
 
@@ -716,17 +717,16 @@ def _capture_oid4vp_scenarios(page: Page, base_url: str, out: Path) -> None:
         # /vp_response sans request object valide (pas de bearer ou token invalide)
         url = f"{base_url.rstrip('/')}/vp_response"
         response = page.goto(url)
-        
+
         _assert_status(page, str(response.url), 400)
-        
-        # Marqueur attendus dans la page d'erreur (RFC 9160 §2) : 
-        # erreur "presentation_required" ou "invalid_request_object"
-        marker = '<code>presentation_required</code>' or '<code>invalid_request_object</code>'
-        if marker not in page.content():
-            raise RuntimeError(
-                f"marqueur OID4VP {marker!r} absent de la page d'erreur {response.url}"
-            )
-        
+
+        # Marqueur attendus dans la page d'erreur (RFC 9160 §2) :
+        # erreur "presentation_required" ou "invalid_request_object".
+        # On cherche l'un des deux marqueurs HTML dans le contenu.
+        pattern = "<code>(?:presentation_required|invalid_request_object)</code>"
+        if not re.search(pattern, page.content()):
+            raise RuntimeError(f"marqueur OID4VP absents de la page d'erreur {response.url}")
+
         _screenshot(page, out / f"{_OID4VP_PAGE_TEST_NAME}.png")
     except Exception as error:
         _LOGGER.error("Captures OID4VP impossibles : %s", error)
