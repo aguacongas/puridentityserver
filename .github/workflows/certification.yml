@@ -56,7 +56,7 @@ on:
         # `ekyc` de `CERTIFICATION_PLANS` (certification/selectors.sh) — le
         # workflow local, lui, épingle la dernière release et n'est pas
         # concerné.
-        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + Dynamic + CIBA + CIBA Ping + FAPI1 + FAPI2 + FAPI2 Message Signing + ekyc + federation + oid4vci + oid4vci-mdoc ; ekyc = identité assurance, federation = OpenID Federation, hors programme officiel)"
+        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + Dynamic + CIBA + CIBA Ping + FAPI1 + FAPI2 + FAPI2 Message Signing + ekyc + federation + oid4vci + oid4vci-mdoc + oid4vp ; ekyc = identité assurance, federation = OpenID Federation, hors programme officiel)"
         type: choice
         required: false
         default: all
@@ -76,7 +76,7 @@ on:
           - federation
           - oid4vci
           - oid4vci-mdoc
-          
+          - oid4vp
 permissions:
   contents: read
   # Lecture des jobs du run courant : le step « vague 1 » attend la fin du
