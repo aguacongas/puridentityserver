@@ -691,6 +691,48 @@ def _resolve_issuer(request: APIRequestContext, base_url: str) -> str:
     return base_url.rstrip("/")
 
 
+#: Scénario OID4VP du plan HAIP laissé en REVIEW (issue #230).
+
+# Le verifier OID4VP doit afficher une page d'erreur 400 "presentation_request_required"
+# quand on appelle /vp_response sans vp_token validé. L'attendu correspond à la 
+# validation cryptographique du request object signé (RFC 9160 §2) et l'émetteur
+# n'a pas accès au secret verifier : le OP refuse donc avec une page d'erreur HTML.
+
+_OID4VP_PAGE_TEST_NAME = "oid4vp-1final-verifier-happy-flow"
+
+
+def _capture_oid4vp_scenarios(page: Page, base_url: str, out: Path) -> None:
+    """Rejoue le scénario OID4VP verifier (issue #230).
+
+    L'OP doit refuser une réponse sans vp_token ou avec un vp_token invalide :
+    - absence de request object signé par l'émetteur → refus 400 "presentation_required"
+    - vp_token valide mais audience incorrecte → refus 400 "invalid_request_object"
+
+    Ce scénario vérifie que le verifier OID4VP est correctement implémenté :
+      - pas de skip pour ce test (contrairement aux autres plans alpha)
+      - capture REVIEW authentique de la page d'erreur
+    """
+    try:
+        # /vp_response sans request object valide (pas de bearer ou token invalide)
+        url = f"{base_url.rstrip('/')}/vp_response"
+        response = page.goto(url)
+        
+        _assert_status(page, str(response.url), 400)
+        
+        # Marqueur attendus dans la page d'erreur (RFC 9160 §2) : 
+        # erreur "presentation_required" ou "invalid_request_object"
+        marker = '<code>presentation_required</code>' or '<code>invalid_request_object</code>'
+        if marker not in page.content():
+            raise RuntimeError(
+                f"marqueur OID4VP {marker!r} absent de la page d'erreur {response.url}"
+            )
+        
+        _screenshot(page, out / f"{_OID4VP_PAGE_TEST_NAME}.png")
+    except Exception as error:
+        _LOGGER.error("Captures OID4VP impossibles : %s", error)
+        raise
+
+
 def capture_all(
     playwright: Playwright,
     base_url: str,
@@ -730,6 +772,10 @@ def capture_all(
             _capture_federation_scenarios(page, base_url, suite_base, out)
         except Exception as error:
             _LOGGER.error("Captures fédération impossibles : %s", error)
+        try:
+            _capture_oid4vp_scenarios(page, base_url, out)
+        except Exception as error:
+            _LOGGER.error("Captures OID4VP impossibles : %s", error)
         # En dernier : les scénarios login vident les cookies du contexte,
         # sans effet sur les familles déjà jouées.
         try:
@@ -775,6 +821,7 @@ def main(argv: list[str] | None = None) -> int:
     expected |= {f"{name}.png" for name in _DYNAMIC_TEST_NAMES}
     expected |= {f"{name}.png" for name, _mode, _error in _FAPI1_PAGE_SCENARIOS}
     expected |= {f"{_FEDERATION_PAGE_TEST_NAME}.png"}
+    expected |= {f"{_OID4VP_PAGE_TEST_NAME}.png"}
     try:
         with sync_playwright() as playwright:
             produced = capture_all(

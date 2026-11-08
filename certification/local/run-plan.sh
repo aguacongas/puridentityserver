@@ -18,7 +18,7 @@
 #
 # Usage : bash certification/local/run-plan.sh <plan> [--export-dir <dir>]
 #   plans : basic | implicit | hybrid | formpost | dynamic | ciba | ciba-ping | fapi1 | fapi2 |
-#           fapi2-message-signing | ekyc | federation | oid4vci | oid4vci-mdoc
+#           fapi2-message-signing | ekyc | federation | oid4vci | oid4vci-mdoc | oid4vp (verifier)
 #
 # Variables d'environnement (defauts en accord avec setup.sh) :
 #   REPO_ROOT, SUITE_DIR, LOCAL_DIR  chemins racine du depot / clone suite /
@@ -48,7 +48,7 @@ log() { printf '[run-plan] %s\n' "$*"; }
 usage() {
   echo "Usage : bash certification/local/run-plan.sh <plan> [--export-dir <dir>]"
   echo "  plans : basic | implicit | hybrid | formpost | dynamic | ciba | ciba-ping | fapi1 | fapi2 |"
-  echo "          fapi2-message-signing | ekyc | federation | oid4vci | oid4vci-mdoc"
+  echo "          fapi2-message-signing | ekyc | federation | oid4vci | oid4vci-mdoc | oid4vp"
 }
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then usage; exit 0; fi
