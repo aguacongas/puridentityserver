@@ -44,7 +44,7 @@ class _RedirectHandler(BaseHTTPRequestHandler):
         """Supprime le journal stderr du serveur de test."""
 
 
-@pytest.fixture()
+@pytest.fixture
 def serve_status_list() -> Iterator[Callable[[type[BaseHTTPRequestHandler]], str]]:
     """Démarre un serveur local pour ``handler`` et rend l'URL de la status list."""
     servers: list[ThreadingHTTPServer] = []

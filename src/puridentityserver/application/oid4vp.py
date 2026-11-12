@@ -678,7 +678,7 @@ def _status_list_header(token: str) -> dict[str, Any]:
         PresentationRejectedError: si le jeton n'est pas un JWT lisible.
     """
     try:
-        header = pyjwt.get_unverified_header(token)
+        header = pyjwt.get_unverified_header(token)  # NOSONAR(S5659)
     except pyjwt.PyJWTError as exc:
         raise PresentationRejectedError("status list token illisible") from exc
     if not isinstance(header, dict):
@@ -809,8 +809,9 @@ def _unverified_payload(jwt_value: str, *, label: str) -> dict[str, Any]:
         PresentationRejectedError: si le document n'est pas un objet JSON lisible.
     """
     try:
-        payload = pyjwt.decode(  # NOSONAR(S5659) — lecture seule, vérification ensuite
-            jwt_value, options={"verify_signature": False}
+        payload = pyjwt.decode(
+            jwt_value,
+            options={"verify_signature": False},  # NOSONAR(S5659) — lecture seule
         )
     except pyjwt.PyJWTError as exc:
         raise PresentationRejectedError(f"{label} illisible") from exc
@@ -830,8 +831,9 @@ def _read_key_binding(key_binding: str) -> dict[str, Any]:
     """
     try:
         header = pyjwt.get_unverified_header(key_binding)
-        claims = pyjwt.decode(  # NOSONAR(S5659) — lecture seule, vérification ensuite
-            key_binding, options={"verify_signature": False}
+        claims = pyjwt.decode(
+            key_binding,
+            options={"verify_signature": False},  # NOSONAR(S5659) — lecture seule
         )
     except pyjwt.PyJWTError as exc:
         raise PresentationRejectedError("kb-jwt illisible") from exc
