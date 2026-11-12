@@ -12,21 +12,27 @@ Implémente le profil de vérification OpenID4VP 1.0 Final en ``direct_post.jwt`
   idempotent, ou re-signé avec le ``wallet_nonce`` en POST) ;
 - ``validate_presentation_response`` : déchiffre le JWE ``ECDH-ES`` de la
   réponse, contrôle le SD-JWT présenté (signatures du credential et du
-  ``kb+jwt``, ``nonce``, ``aud``, ``sd_hash``, ``iat``) et rend le verdict de
+  ``kb+jwt``, ``nonce``, ``aud``, ``sd_hash``, ``iat``, ``vct`` demandé par la
+  DCQL query et révocation via la status list référencée) et rend le verdict de
   la section 8.2 (200 ``{"redirect_uri": ...}`` ou 4xx motivé).
 
 Les vérifications de signature du credential ne s'appliquent que si un JWKS
 public de confiance est configuré (``oid4vp_credential_jwks``) : sans lui, la
-présentation est acceptée sans contrôle de l'émetteur (mode witness).
+présentation est acceptée sans contrôle de l'émetteur (mode witness). Un
+credential portant le claim ``status`` est rejeté si sa status list n'est pas
+lisible ou inaccessible (échec du fetch = rejet : un verifier qui ne peut pas
+constater l'absence de révocation n'accepte pas le credential).
 """
 
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import secrets
 import time
 import uuid
+import zlib
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -40,6 +46,7 @@ from jwt.api_jwk import PyJWK
 from puridentityserver.domain.jwe import ECDH_ES
 from puridentityserver.infrastructure.jwe import (
     b64u,
+    b64u_decode,
     decrypt_compact_ecdh_es,
     ec_jwk,
     ec_public_key,
@@ -50,6 +57,7 @@ from puridentityserver.infrastructure.oid4vp_pki import (
     VerifierPKIRepository,
     generate_verifier_pki,
 )
+from puridentityserver.infrastructure.status_list import StatusListFetcher
 
 #: Media type du request object servi au ``request_uri`` (RFC 9101 §4.4).
 REQUEST_OBJECT_MEDIA_TYPE = "application/oauth-authz-req+jwt"
@@ -97,6 +105,13 @@ KEY_BINDING_CLAIMS = frozenset({"iat", "aud", "nonce", "sd_hash"})
 #: Algorithmes acceptés pour la signature du credential (EC par défaut de la
 #: suite, RSA toléré si le seed de configuration change de type de clé).
 CREDENTIAL_SIGNATURE_ALGORITHMS = ("ES256", "RS256")
+
+#: Valeur de ``typ`` exigée sur le Status List Token (OTSL §5.1).
+STATUS_LIST_TYP = "statuslist+jwt"
+
+#: Taille maximale du bitstring décompressé (64 Ko = 524 288 entrées) : borne
+#: anti-bombe de décompression, très au-dessus des status list réalistes.
+_MAX_STATUS_LIST_BYTES = 64 * 1024
 
 
 class PresentationRejectedError(ValueError):
@@ -169,6 +184,7 @@ class _PendingRequest:
     encryption_key: ec.EllipticCurvePrivateKey
     encryption_kid: str
     created_at: datetime
+    vct_values: tuple[str, ...] = ()
     outcome: VerificationOutcome | None = None
 
 
@@ -186,6 +202,7 @@ class OID4VPVerifierUseCase:
         issuer: str,
         pki_repository: VerifierPKIRepository,
         credential_jwks: tuple[dict[str, Any], ...] = (),
+        status_list_fetcher: StatusListFetcher | None = None,
     ) -> None:
         """Initialise le verifier.
 
@@ -194,10 +211,14 @@ class OID4VPVerifierUseCase:
             pki_repository: dépôt de la PKI (CA + leaf de signature).
             credential_jwks: JWKS public de confiance pour la signature des
                 credentials ; vide = signature non contrôlée (mode witness).
+            status_list_fetcher: fetcher de la status list référencée par un
+                credential (OTSL) ; ``None`` = tout credential portant le claim
+                ``status`` est rejeté (échec de contrôle de révocation).
         """
         self._issuer = issuer.rstrip("/")
         self._pki_repository = pki_repository
         self._credential_jwks = credential_jwks
+        self._status_list_fetcher = status_list_fetcher
         self._pki_cache: VerifierPKI | None = None
         self._pending: OrderedDict[str, _PendingRequest] = OrderedDict()
 
@@ -252,6 +273,7 @@ class OID4VPVerifierUseCase:
             encryption_key=encryption_key,
             encryption_kid=kid,
             created_at=datetime.now(timezone.utc),
+            vct_values=_requested_vct_values(claims["dcql_query"]),
         )
         self._register(pending)
         return PresentationRequestCreated(
@@ -357,11 +379,17 @@ class OID4VPVerifierUseCase:
             title, detail = "Presentation refusee", reason
         else:
             title, detail = "Presentation acceptee", "La credential a ete verifiee avec succes."
+        # Échappement HTML de toute valeur portée par la requête (request_id)
+        # ou par le wallet (motif de rejet) : la page de résultat est servie
+        # telle quelle par le navigateur (anti-XSS, règle Sonar S5131).
+        safe_title = html.escape(title)
+        safe_detail = html.escape(detail)
+        safe_request_id = html.escape(request_id)
         return (
             '<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">'
-            f"<title>{title}</title></head><body>"
-            f"<h1>{title}</h1><p>{detail}</p>"
-            f"<p>Demande : {request_id}</p>"
+            f"<title>{safe_title}</title></head><body>"
+            f"<h1>{safe_title}</h1><p>{safe_detail}</p>"
+            f"<p>Demande : {safe_request_id}</p>"
             "</body></html>"
         )
 
@@ -476,13 +504,19 @@ class OID4VPVerifierUseCase:
         _verify_binding_iat(kb_claims["iat"])
         issuer_payload = _unverified_payload(issuer_jwt, label="credential")
         _verify_key_binding_signature(key_binding, issuer_payload)
-        self._verify_issuer_signature(issuer_jwt)
+        self._verify_issuer_signature(issuer_jwt, label="credential")
+        _verify_vct(pending.vct_values, issuer_payload)
+        self._verify_status(issuer_payload)
 
-    def _verify_issuer_signature(self, issuer_jwt: str) -> None:
-        """Vérifie la signature du credential contre le JWKS de confiance.
+    def _verify_issuer_signature(self, issuer_jwt: str, *, label: str) -> None:
+        """Vérifie la signature d'un JWT signé par l'émetteur (credential, status list).
 
         Sans ``oid4vp_credential_jwks``, le contrôle est escamoté (le rejet
         des modules ``InvalidCredentialSignature`` repose sur ce réglage).
+
+        Args:
+            issuer_jwt: JWT compact à vérifier.
+            label: nom du jeton, repris dans les motifs de rejet.
 
         Raises:
             PresentationRejectedError: si aucune clé de confiance ne valide la
@@ -508,9 +542,62 @@ class OID4VPVerifierUseCase:
                 continue
             except (pyjwt.PyJWTError, TypeError, ValueError) as exc:
                 # Type de clé inattendu (RSA/oct contre un ES256) ou JWK malformée.
-                raise PresentationRejectedError("credential illisible") from exc
+                raise PresentationRejectedError(f"{label} illisible") from exc
             return
-        raise PresentationRejectedError("signature du credential non appariee au JWKS de confiance")
+        raise PresentationRejectedError(f"signature du {label} non appariee au JWKS de confiance")
+
+    def _verify_status(self, payload: Mapping[str, Any]) -> None:
+        """Contrôle que le credential référencé n'est pas révoqué (OTSL §8.3).
+
+        Un credential sans claim ``status`` n'est pas concerné. Tout autre
+        écart — référence illisible, fetch impossible, token invalide, index
+        hors bornes, bit ``INVALID`` — rejette la présentation : sans lecture
+        du statut, le verifier ne peut pas constater l'absence de révocation.
+
+        Raises:
+            PresentationRejectedError: dès le premier écart détecté.
+        """
+        status = payload.get("status")
+        if status is None:
+            return
+        uri, index = _status_list_reference(status)
+        token = self._fetch_status_list(uri)
+        bits = self._status_list_bits(token, uri)
+        if _status_at(bits, index):
+            raise PresentationRejectedError("credential revoque (status list)")
+
+    def _fetch_status_list(self, uri: str) -> str:
+        """Récupère le Status List Token publié à ``uri`` (OTSL §8.1).
+
+        Raises:
+            PresentationRejectedError: si le fetcher n'est pas configuré ou si
+                le token est inaccessible (échec de fetch = rejet).
+        """
+        if self._status_list_fetcher is None:
+            raise PresentationRejectedError("status list non configuree (fetch impossible)")
+        token = self._status_list_fetcher.fetch(uri)
+        if token is None:
+            raise PresentationRejectedError("status list inaccessible (fetch impossible)")
+        return token
+
+    def _status_list_bits(self, token: str, uri: str) -> bytes:
+        """Contrôle le Status List Token et en décompresse le bitstring ``lst``.
+
+        Les contrôles reprennent ceux du credential : ``typ``, signature de
+        l'émetteur (même JWKS de confiance), plus l'identité du token
+        (``sub`` = ``uri`` demandée, OTSL §5.1).
+
+        Raises:
+            PresentationRejectedError: sur tout écart.
+        """
+        header = _status_list_header(token)
+        if header.get("typ") != STATUS_LIST_TYP:
+            raise PresentationRejectedError(f"typ du status list token attendu {STATUS_LIST_TYP}")
+        payload = _unverified_payload(token, label="status list")
+        if payload.get("sub") != uri:
+            raise PresentationRejectedError("sub du status list token incoherent avec l'uri")
+        self._verify_issuer_signature(token, label="status list")
+        return _status_list_lst(payload)
 
 
 def _default_dcql_query() -> dict[str, Any]:
@@ -524,6 +611,136 @@ def _default_dcql_query() -> dict[str, Any]:
             }
         ]
     }
+
+
+def _requested_vct_values(dcql_query: object) -> tuple[str, ...]:
+    """Union des ``vct_values`` de toutes les credentials de la DCQL query.
+
+    Une query sans ``meta.vct_values`` ne contraint pas le type du credential
+    présenté : la contrôle du ``vct`` est alors sans objet.
+    """
+    if not isinstance(dcql_query, dict):
+        return ()
+    credentials = dcql_query.get("credentials")
+    if not isinstance(credentials, list):
+        return ()
+    values: list[str] = []
+    for credential in credentials:
+        if not isinstance(credential, dict):
+            continue
+        meta = credential.get("meta")
+        if not isinstance(meta, dict):
+            continue
+        vct_values = meta.get("vct_values")
+        if isinstance(vct_values, list):
+            values.extend(vct for vct in vct_values if isinstance(vct, str))
+    return tuple(values)
+
+
+def _verify_vct(vct_values: tuple[str, ...], payload: Mapping[str, Any]) -> None:
+    """Contrôle que le ``vct`` présenté appartient aux types demandés (DCQL).
+
+    Raises:
+        PresentationRejectedError: si le credential est d'un type non demandé
+            ou ne revendique aucun ``vct``.
+    """
+    if not vct_values:
+        return
+    vct = payload.get("vct")
+    if not isinstance(vct, str) or vct not in vct_values:
+        raise PresentationRejectedError("vct du credential non demande par la DCQL query")
+
+
+def _status_list_reference(status: object) -> tuple[str, int]:
+    """Extrait ``uri`` et ``idx`` de la référence ``status.status_list`` (OTSL §6.2).
+
+    Raises:
+        PresentationRejectedError: si la référence est absente ou illisible.
+    """
+    if not isinstance(status, dict):
+        raise PresentationRejectedError("claim status attendu comme objet JSON")
+    reference = status.get("status_list")
+    if not isinstance(reference, dict):
+        raise PresentationRejectedError("status.status_list absent du credential")
+    uri = reference.get("uri")
+    index = reference.get("idx")
+    if not isinstance(uri, str) or not uri:
+        raise PresentationRejectedError("uri de la status list absente")
+    if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+        raise PresentationRejectedError("idx de la status list invalide")
+    return uri, index
+
+
+def _status_list_header(token: str) -> dict[str, Any]:
+    """Lit l'en-tête unprotected du Status List Token (sans rien vérifier).
+
+    Raises:
+        PresentationRejectedError: si le jeton n'est pas un JWT lisible.
+    """
+    try:
+        header = pyjwt.get_unverified_header(token)
+    except pyjwt.PyJWTError as exc:
+        raise PresentationRejectedError("status list token illisible") from exc
+    if not isinstance(header, dict):
+        raise PresentationRejectedError("en-tête du status list token attendu comme objet JSON")
+    return header
+
+
+def _status_list_lst(payload: Mapping[str, Any]) -> bytes:
+    """Décompresse le bitstring ``lst`` du Status List Token (OTSL §5.1).
+
+    Seul ``bits = 1`` est géré : chaque entrée du status list correspond alors
+    à un bit du ``lst`` décompressé.
+
+    Raises:
+        PresentationRejectedError: si le claim ``status_list`` est incomplet,
+            si ``bits`` n'est pas géré ou si le bitstring est illisible.
+    """
+    status_list = payload.get("status_list")
+    if not isinstance(status_list, dict):
+        raise PresentationRejectedError("claim status_list absent du status list token")
+    if status_list.get("bits") != 1:
+        raise PresentationRejectedError("bits du status list token non géré (1 attendu)")
+    encoded = status_list.get("lst")
+    if not isinstance(encoded, str):
+        raise PresentationRejectedError("lst du status list token absent")
+    return _decompress_status_list(encoded)
+
+
+def _decompress_status_list(encoded: str) -> bytes:
+    """Décode le ``lst`` base64url puis le décompresse, sortie bornée.
+
+    La borne de décompression protège contre un ``lst`` compressé qui se
+    déplierait en mémoire sans fin (bombes de décompression).
+
+    Raises:
+        PresentationRejectedError: si le contenu est illisible ou dépasse la
+            taille maximale.
+    """
+    try:
+        compressed = b64u_decode(encoded)
+        inflater = zlib.decompressobj()
+        raw = inflater.decompress(compressed, _MAX_STATUS_LIST_BYTES + 1)
+        complete = inflater.eof
+    except (ValueError, zlib.error) as exc:
+        raise PresentationRejectedError("lst du status list token illisible") from exc
+    if not complete or len(raw) > _MAX_STATUS_LIST_BYTES:
+        raise PresentationRejectedError("lst du status list token hors bornes")
+    return raw
+
+
+def _status_at(bits: bytes, index: int) -> int:
+    """Retourne le statut de l'entrée ``index`` (1 = INVALID, OTSL §5.1).
+
+    Le ``lst`` est un bitstring ordonné ``lsb-first`` : le bit de poids faible
+    de chaque octet porte l'entrée la moins significative (OTSL §5.1).
+
+    Raises:
+        PresentationRejectedError: si ``index`` est hors bornes du bitstring.
+    """
+    if index >= len(bits) * 8:
+        raise PresentationRejectedError("index hors bornes de la status list")
+    return (bits[index // 8] >> (index % 8)) & 1
 
 
 def _client_metadata(kid: str, encryption_public: ec.EllipticCurvePublicKey) -> dict[str, Any]:
@@ -592,7 +809,9 @@ def _unverified_payload(jwt_value: str, *, label: str) -> dict[str, Any]:
         PresentationRejectedError: si le document n'est pas un objet JSON lisible.
     """
     try:
-        payload = pyjwt.decode(jwt_value, options={"verify_signature": False})
+        payload = pyjwt.decode(  # NOSONAR(S5659) — lecture seule, vérification ensuite
+            jwt_value, options={"verify_signature": False}
+        )
     except pyjwt.PyJWTError as exc:
         raise PresentationRejectedError(f"{label} illisible") from exc
     if not isinstance(payload, dict):
@@ -611,7 +830,9 @@ def _read_key_binding(key_binding: str) -> dict[str, Any]:
     """
     try:
         header = pyjwt.get_unverified_header(key_binding)
-        claims = pyjwt.decode(key_binding, options={"verify_signature": False})
+        claims = pyjwt.decode(  # NOSONAR(S5659) — lecture seule, vérification ensuite
+            key_binding, options={"verify_signature": False}
+        )
     except pyjwt.PyJWTError as exc:
         raise PresentationRejectedError("kb-jwt illisible") from exc
     if header.get("typ") != KEY_BINDING_TYP:

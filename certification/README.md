@@ -116,7 +116,7 @@ retenue :
   # 2. cloner et démarrer la suite, comme le workflow (release-vX.Y.Z = dernière
   #    release publiée : les workflows la résolvent à l'exécution via
   #    git ls-remote, cf. issue #150 ; l'exemple ci-dessous la pinne) :
-  git clone --depth 1 --branch release-v5.3.3 https://gitlab.com/openid/conformance-suite.git
+  git clone --depth 1 --branch release-v5.3.4 https://gitlab.com/openid/conformance-suite.git
   cd conformance-suite && docker compose -f docker-compose-prebuilt.yml up -d
   # 3. substituer {OPURL} et {SUITEURL} dans les plans puis jouer un plan :
   export CONFORMANCE_SERVER=https://localhost.emobix.co.uk:8443/
@@ -148,7 +148,7 @@ driver (hôte) --API--> suite docker nginx :8443 (alias localhost.emobix.co.uk)
                      OP uvicorn (hôte :8000)
 ```
 
-- la **suite** (dernière release publiée, ex. `release-v5.3.3`) tourne en docker (mongodb + server + nginx) ;
+- la **suite** (dernière release publiée, ex. `release-v5.3.4`) tourne en docker (mongodb + server + nginx) ;
 - l'**OP local** tourne sur l'hôte (uvicorn), avec une config générée à partir de
   `config.render.toml` (issuer `https://op:9443`, `redirect_uris` = callbacks de
   la **suite locale**, SQLite éphémère) ;
@@ -319,13 +319,18 @@ Rejeu : `bash certification/local/run-plan.sh oid4vci-mdoc`, ou
 ### Plan `oid4vp` : verifier OpenID4VP 1.0 Final / HAIP (issue #224)
 
 Plan `oid4vp-1final-verifier-haip-test-plan` (alias `puridentityserver-oid4vp`),
-**hors programme officiel** de certification, 11 modules joués — 4 positifs
-(`happy-flow`, `minimal-cnf-jwk`, `request-uri-method-post`,
-`request-uri-fetched-twice`) laissés en **REVIEW** par la suite (placeholder
-« capture d'écran » : page « Presentation acceptee » du verifier) et 7 négatifs
-(`invalid-credential-signature`, `invalid-kb-jwt-{nonce,aud,signature}`,
-`invalid-sd-hash`, `kb-jwt-iat-{in-past,in-future}`) terminant **PASSED** sur
-le 4xx immédiat du `response_uri`. Le module `invalid-session-transcript` est
+**hors programme officiel** de certification, 14 modules joués — 5 positifs
+(`happy-flow`, `minimal-cnf-jwk`, `present-credential-without-status`,
+`request-uri-method-post`, `request-uri-fetched-twice`) laissés en **REVIEW**
+par la suite (placeholder « capture d'écran » : page « Presentation acceptee »
+du verifier) et 9 négatifs (`invalid-credential-signature`,
+`invalid-kb-jwt-{nonce,aud,signature}`, `invalid-sd-hash`,
+`kb-jwt-iat-{in-past,in-future}`, `wrong-vct`, `present-revoked-credential`)
+terminant **PASSED** sur le 4xx immédiat du `response_uri` — `wrong-vct` exige
+le contrôle du `vct` présenté contre les `vct_values` de la DCQL query,
+`present-revoked-credential` le fetch de la status list référencée
+(draft-ietf-oauth-status-list), les deux vérifiés par le verifier. Le module
+`invalid-session-transcript` est
 exclu du plan par `@VariantNotApplicable(sd_jwt_vc)` : il n'apparaît ni comme
 module ni comme saut attendu.
 
@@ -343,15 +348,23 @@ Le verifier doit être activé côté OP : `oid4vp_enabled = true`,
 `credential.signing_jwk`) dans `certification/config.render.toml`. Sans
 `oid4vp_credential_jwks`, le contrôle de signature du credential est escamoté
 (mode witness) et le module `invalid-credential-signature` échouerait en
-conditions réelles. Les deux workflows exportent `OID4VP_INITIATOR` (chemin
+conditions réelles. Le module `present-revoked-credential` exige en plus le
+fetch de la status list : en local, `setup.sh` exporte
+`PURIDENTITYSERVER_OID4VP_STATUS_LIST_ALLOW_LOCAL_TARGETS=true` (la suite la
+publie sur `localhost.emobix.co.uk`, destination loopback refusée par défaut
+par la garde anti-SSRF) — en mode hébergé, la suite est sur une URL publique
+et le réglage reste à `false`. Les deux workflows exportent `OID4VP_INITIATOR` (chemin
 absolu, converti par `cygpath -m` sous git-bash) et
 `OID4VP_INITIATOR_OP_URL` sur le step Lancement du driver.
 
-Aucun `expected-failures` déclaré : le plan est sans écart (premier rejeu
-local du 2026-11-12 : 7 PASSED / 4 REVIEW, 0 FAILURE, 0 WARNING). Rejeu :
+Aucun `expected-failures` déclaré : le plan est sans écart (rejeu local du
+2026-11-12 après le contrôle du `vct` et de la status list : 9 PASSED /
+5 REVIEW, 0 FAILURE, 0 WARNING — `present-revoked-credential` exige le fetch
+réel de la liste, `wrong-vct` le contrôle du type présenté). Rejeu :
 `bash certification/local/run-plan.sh oid4vp`, avec captures réelles via
 `python certification/capture_screenshots.py --base-url https://localhost:9443
---out <dir>` puis `SCREENSHOTS_DIR=<dir> bash certification/local/run-plan.sh
+--suite-url https://localhost.emobix.co.uk:8443 --out <dir>` puis
+`SCREENSHOTS_DIR=<dir> bash certification/local/run-plan.sh
 oid4vp` — sans `SCREENSHOTS_DIR`, la suite retombe sur le PNG de secours
 (mode witness).
 
@@ -535,7 +548,7 @@ stricts verts — 475 modules, 0 hors `PASSED`/`REVIEW`/`SKIPPED`.
 | `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`, `subject_pairwise_seed` pour les modules sector du plan dynamic, 4 clients statiques FAPI `private_key_jwt` + JWKS public pour les plans fapi1/fapi2) |
 | `plans/basic|implicit|hybrid|formpost|dynamic|ciba|ciba-ping|fapi1|fapi2|fapi2-message-signing|ekyc|federation|oid4vci|oid4vci-mdoc|oid4vp.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; `ciba`/`ciba-ping` partagent le plan `fapi-ciba-id1-test-plan` en variantes `ciba_mode=poll` / `ciba_mode=ping` — alias distincts ; fapi1/fapi2/fapi2-message-signing portent aussi `client`/`client2` en clé privée et `resource` ; `ekyc` porte la configuration eKYC `ekyc.verified_claims_request_list` ; `federation` porte l'Entity Identifier de l'OP, l'ancre de confiance `{SUITEURL}test/a/puridentityserver-federation/trust-anchor` et les clés de test RP/ancre du template officiel ; `oid4vp` porte le `credential.signing_jwk` et l'ancre `client.request_object_trust_anchor_pem` du verifier) |
 | `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) — avec `SCREENSHOTS_DIR` défini (CI), un fichier absent/vide/trop lourd lève une erreur fatale (captures obligatoires, issue #161) ; sans variable (exécution manuelle), le PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode hébergé) |
-| `capture_screenshots.py` | rejoue les scénarios de relecture (4 Core, 6 dynamic, 2 FAPI1 « page », 1 fédéré, 4 positifs du plan `oid4vp` — 17 PNG, issues #214 et #224) contre l'OP (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver — `--base-url` = OP, `--suite-url` = base des callbacks de la suite (hébergée par défaut, `https://localhost.emobix.co.uk:8443` en local) |
+| `capture_screenshots.py` | rejoue les scénarios de relecture (4 Core, 6 dynamic, 2 FAPI1 « page », 1 fédéré, 5 positifs du plan `oid4vp` — 18 PNG, issues #214 et #224) contre l'OP (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver — `--base-url` = OP, `--suite-url` = base des callbacks de la suite (hébergée par défaut, `https://localhost.emobix.co.uk:8443` en local) |
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |
 | `conformance-interrupted-diagnostics.patch` | patch du driver : quand un module est interrompu ou dépasse le timeout, affiche dans la CI la cause réelle (statut, résultat + 10 dernières entrées du journal du test) au lieu d'un simple « has moved to INTERRUPTED » / « Timed out waiting » |
 | `prune_stale_plans.py` | purge en fin de run : `DELETE /api/plan/{id}` sur les plans non publies les plus anciens, regroupés par **alias** (`alias: puridentityserver-<plan>`, pas `planName` qui porte le type OIDF — le filtre `planName` ne matchait jamais, issue #132) ; conserve la dernière version non publiée par alias (défaut `KEEP_PLANS=1`), jamais les plans publiés (l'API refuse en 405) |
@@ -574,9 +587,9 @@ le retrait des 18 captures devenues inutiles est tracé en issue #214. Deux
    arbitrages de `redirect_uri` absente/supplémentaire/non concordante et pages
    de connexion des clients DCR porteurs d'un `logo_uri`/`policy_uri`/`tos_uri`,
    issue #168 —, les 2 modules FAPI1 servis en page HTML, le module fédéré
-   `invalid-client-id-in-request-object`, issue #212, et les 4 modules
+   `invalid-client-id-in-request-object`, issue #212, et les 5 modules
    positifs du plan `oid4vp` — round-trip wallet complet puis page «
-   Presentation acceptee » du verifier, issue #224 — 17 PNG au total) avec
+   Presentation acceptee » du verifier, issue #224 — 18 PNG au total) avec
    chromium headless contre l'OP (`--base-url`),
    **contrôle chaque page
    avant export** (statut 400 + marqueur `<code>` du motif — ou extrait « manquants
@@ -593,10 +606,10 @@ le retrait des 18 captures devenues inutiles est tracé en issue #214. Deux
    (installation du navigateur, OP indisponible, scène invalide…) fait échouer
    le run — plus aucun repli silencieux en CI. Les deux workflows l'exécutent :
    - **mode hébergé** : dans le job `prepare` contre l'instance Render, résultat
-     publié en artefact `certification-screenshots` (17 captures) ;
+     publié en artefact `certification-screenshots` (18 captures) ;
    - **mode local** (#158) : job `capture` de `certification-local.yml` contre
      l'OP local (`https://localhost:9443`, cert auto-signé), **une seule fois par
-     run** (17 captures), artefact
+     run** (18 captures), artefact
      `certification-local-screenshots` que les jobs `plan`
      téléchargent (env `SCREENSHOTS_DIR`, substitution du PNG de secours) et que
      le job `report` intègre au rapport.

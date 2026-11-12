@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import time
+import zlib
 from typing import Any
 
 import jwt as pyjwt
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from jwt.algorithms import RSAAlgorithm
 from oid4vp_wallet import SimulatedWallet, generate_key, public_jwk
 
@@ -20,10 +21,12 @@ from puridentityserver.application.oid4vp import (
     OID4VPVerifierUseCase,
     PresentationRequestCreated,
 )
+from puridentityserver.infrastructure.jwe import b64u
 from puridentityserver.infrastructure.oid4vp_pki import (
     InMemoryVerifierPKIRepository,
     VerifierPKIRepository,
 )
+from puridentityserver.infrastructure.status_list import StatusListFetcher
 
 ISSUER = "https://id.example"
 
@@ -31,12 +34,14 @@ ISSUER = "https://id.example"
 def _usecase(
     repository: VerifierPKIRepository | None = None,
     credential_jwks: tuple[dict[str, Any], ...] = (),
+    status_list_fetcher: StatusListFetcher | None = None,
 ) -> OID4VPVerifierUseCase:
     """Construit un verifier sur un depot de PKI donne (defaut : memoire)."""
     return OID4VPVerifierUseCase(
         issuer=ISSUER,
         pki_repository=repository if repository is not None else InMemoryVerifierPKIRepository(),
         credential_jwks=credential_jwks,
+        status_list_fetcher=status_list_fetcher,
     )
 
 
@@ -54,6 +59,67 @@ def _rsa_jwk() -> dict[str, Any]:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     jwk = RSAAlgorithm.to_jwk(key.public_key(), as_dict=True)  # type: ignore[attr-defined]
     return dict(jwk)
+
+
+#: URI de la status list referencee par les credentials de test (OTSL).
+STATUS_URI = "https://status.example/statuslists/1"
+
+
+class _StubStatusListFetcher:
+    """Fetcher de test : memorise les uris et rend un token fourni."""
+
+    def __init__(self, token: str | None) -> None:
+        """``token`` est le corps servi a chaque fetch (``None`` = echec)."""
+        self._token = token
+        self.urls: list[str] = []
+
+    def fetch(self, url: str) -> str | None:
+        """Memorise ``url`` puis rend le token configure."""
+        self.urls.append(url)
+        return self._token
+
+
+def _status_reference(index: int = 4) -> dict[str, Any]:
+    """Construit le claim ``status`` d'un credential (``uri`` + ``idx``, OTSL §6.2)."""
+    return {"status_list": {"uri": STATUS_URI, "idx": index}}
+
+
+def _status_list_token(
+    issuer_key: ec.EllipticCurvePrivateKey,
+    *,
+    revoked_index: int | None = None,
+    sub: str | None = None,
+    typ: str = "statuslist+jwt",
+    bits: int = 1,
+    lst: str | None = None,
+) -> str:
+    """Signe un Status List Token JWT au format de la suite (OTSL §5.1).
+
+    Args:
+        issuer_key: cle de l'emetteur du credential (meme cle que le JWKS).
+        revoked_index: index marque INVALID (1) dans le bitstring ; les autres
+            entrees restent VALID (0).
+        sub: claim ``sub`` (defaut : :data:`STATUS_URI`).
+        typ: valeur ``typ`` de l'en-tete.
+        bits: valeur ``bits`` du claim ``status_list``.
+        lst: remplace le bitstring compresse genere.
+
+    Returns:
+        Le JWT compact signe.
+    """
+    entries = bytearray(32)
+    if revoked_index is not None:
+        entries[revoked_index // 8] |= 1 << (revoked_index % 8)
+    encoded = b64u(zlib.compress(bytes(entries))) if lst is None else lst
+    now = int(time.time())
+    payload: dict[str, Any] = {
+        "sub": STATUS_URI if sub is None else sub,
+        "iat": now,
+        "exp": now + 300,
+        "ttl": 300,
+        "status_list": {"bits": bits, "lst": encoded},
+    }
+    return pyjwt.encode(payload, issuer_key, algorithm="ES256", headers={"typ": typ})
 
 
 def test_request_object_carries_exact_oid4vp_claims() -> None:
@@ -514,6 +580,266 @@ def test_rsa_trusted_key_cannot_verify_ec_credential() -> None:
     result = usecase.validate_presentation_response(created.request_id, response=response)
     assert result.status_code == 400
     assert result.detail == "credential illisible"
+
+
+def test_unrequested_vct_is_rejected() -> None:
+    """Un credential d'un type non demande par la DCQL est refuse."""
+    wallet = SimulatedWallet()
+    usecase = _usecase()
+    created = usecase.create_presentation_request()
+    credential = wallet.credential(vct="urn:conformance-suite:unrequested:credential:1")
+    response = wallet.respond(created.request_object, credential=credential)
+
+    result = usecase.validate_presentation_response(created.request_id, response=response)
+
+    assert result.status_code == 400
+    assert result.detail == "vct du credential non demande par la DCQL query"
+
+
+def test_unusable_vct_is_rejected_when_the_query_requests_one() -> None:
+    """Un credential sans ``vct`` exploitable est refuse."""
+    wallet = SimulatedWallet()
+    usecase = _usecase()
+    created = usecase.create_presentation_request()
+    credential = wallet.credential(extra_claims={"vct": None})
+    response = wallet.respond(created.request_object, credential=credential)
+
+    result = usecase.validate_presentation_response(created.request_id, response=response)
+
+    assert result.status_code == 400
+    assert result.detail == "vct du credential non demande par la DCQL query"
+
+
+def test_vct_is_not_checked_when_the_query_omits_vct_values() -> None:
+    """Une DCQL sans ``meta.vct_values`` n'impose aucun type au credential."""
+    wallet = SimulatedWallet()
+    usecase = _usecase()
+    created = usecase.create_presentation_request(
+        dcql_query={"credentials": [{"id": "pid", "format": "dc+sd-jwt"}]}
+    )
+    credential = wallet.credential(vct="urn:autre:type:1")
+    response = wallet.respond(created.request_object, credential=credential)
+
+    result = usecase.validate_presentation_response(created.request_id, response=response)
+
+    assert result.status_code == 200
+
+
+def test_credential_without_status_is_accepted_without_fetch() -> None:
+    """Sans claim ``status``, aucune status list n'est requise ni fetchee."""
+    wallet = SimulatedWallet()
+    fetcher = _StubStatusListFetcher(None)
+    usecase = _usecase(status_list_fetcher=fetcher)
+    created = usecase.create_presentation_request()
+    response = wallet.respond(created.request_object)
+
+    result = usecase.validate_presentation_response(created.request_id, response=response)
+
+    assert result.status_code == 200
+    assert fetcher.urls == []
+
+
+def test_valid_status_credential_is_accepted() -> None:
+    """Un credential dont la status list le marque valide est accepte."""
+    wallet = SimulatedWallet()
+    fetcher = _StubStatusListFetcher(_status_list_token(wallet.issuer_key))
+    usecase = _usecase(
+        credential_jwks=(public_jwk(wallet.issuer_key),), status_list_fetcher=fetcher
+    )
+    created = usecase.create_presentation_request()
+    credential = wallet.credential(extra_claims={"status": _status_reference()})
+    response = wallet.respond(created.request_object, credential=credential)
+
+    result = usecase.validate_presentation_response(created.request_id, response=response)
+
+    assert result.status_code == 200
+    assert fetcher.urls == [STATUS_URI]
+
+
+def test_revoked_credential_is_rejected() -> None:
+    """Un index INVALID de la status list rejette la presentation."""
+    wallet = SimulatedWallet()
+    fetcher = _StubStatusListFetcher(_status_list_token(wallet.issuer_key, revoked_index=5))
+    usecase = _usecase(
+        credential_jwks=(public_jwk(wallet.issuer_key),), status_list_fetcher=fetcher
+    )
+    created = usecase.create_presentation_request()
+    credential = wallet.credential(extra_claims={"status": _status_reference(index=5)})
+    response = wallet.respond(created.request_object, credential=credential)
+
+    result = usecase.validate_presentation_response(created.request_id, response=response)
+
+    assert result.status_code == 400
+    assert result.detail == "credential revoque (status list)"
+
+
+def test_status_without_fetcher_is_rejected() -> None:
+    """Sans fetcher configure, un credential portant ``status`` est refuse."""
+    wallet = SimulatedWallet()
+    usecase = _usecase()
+    created = usecase.create_presentation_request()
+    credential = wallet.credential(extra_claims={"status": _status_reference()})
+    response = wallet.respond(created.request_object, credential=credential)
+
+    result = usecase.validate_presentation_response(created.request_id, response=response)
+
+    assert result.status_code == 400
+    assert result.detail == "status list non configuree (fetch impossible)"
+
+
+def test_failed_status_fetch_is_rejected() -> None:
+    """L'echec du fetch rejette le credential (le statut n'a pu etre lu)."""
+    wallet = SimulatedWallet()
+    fetcher = _StubStatusListFetcher(None)
+    usecase = _usecase(
+        credential_jwks=(public_jwk(wallet.issuer_key),), status_list_fetcher=fetcher
+    )
+    created = usecase.create_presentation_request()
+    credential = wallet.credential(extra_claims={"status": _status_reference()})
+    response = wallet.respond(created.request_object, credential=credential)
+
+    result = usecase.validate_presentation_response(created.request_id, response=response)
+
+    assert result.status_code == 400
+    assert result.detail == "status list inaccessible (fetch impossible)"
+
+
+def test_unreadable_status_token_is_rejected() -> None:
+    """Un corps fetché qui n'est pas un JWT rejette la presentation."""
+    wallet = SimulatedWallet()
+    usecase = _usecase(
+        credential_jwks=(public_jwk(wallet.issuer_key),),
+        status_list_fetcher=_StubStatusListFetcher("pas-un-jwt"),
+    )
+    created = usecase.create_presentation_request()
+    credential = wallet.credential(extra_claims={"status": _status_reference()})
+    response = wallet.respond(created.request_object, credential=credential)
+
+    result = usecase.validate_presentation_response(created.request_id, response=response)
+
+    assert result.status_code == 400
+    assert result.detail == "status list token illisible"
+
+
+def test_status_token_with_wrong_typ_is_rejected() -> None:
+    """Le ``typ`` du Status List Token est controle (OTSL §5.1)."""
+    wallet = SimulatedWallet()
+    token = _status_list_token(wallet.issuer_key, typ="jwt")
+    usecase = _usecase(
+        credential_jwks=(public_jwk(wallet.issuer_key),),
+        status_list_fetcher=_StubStatusListFetcher(token),
+    )
+    created = usecase.create_presentation_request()
+    credential = wallet.credential(extra_claims={"status": _status_reference()})
+    response = wallet.respond(created.request_object, credential=credential)
+
+    result = usecase.validate_presentation_response(created.request_id, response=response)
+
+    assert result.status_code == 400
+    assert result.detail == "typ du status list token attendu statuslist+jwt"
+
+
+def test_status_token_with_wrong_sub_is_rejected() -> None:
+    """Le ``sub`` du token doit etre l'uri demandee (OTSL §5.1)."""
+    wallet = SimulatedWallet()
+    token = _status_list_token(wallet.issuer_key, sub="https://ailleurs.example/liste")
+    usecase = _usecase(
+        credential_jwks=(public_jwk(wallet.issuer_key),),
+        status_list_fetcher=_StubStatusListFetcher(token),
+    )
+    created = usecase.create_presentation_request()
+    credential = wallet.credential(extra_claims={"status": _status_reference()})
+    response = wallet.respond(created.request_object, credential=credential)
+
+    result = usecase.validate_presentation_response(created.request_id, response=response)
+
+    assert result.status_code == 400
+    assert result.detail == "sub du status list token incoherent avec l'uri"
+
+
+def test_status_token_signed_by_another_key_is_rejected() -> None:
+    """Le Status List Token doit etre signe par une cle de confiance."""
+    wallet = SimulatedWallet()
+    token = _status_list_token(generate_key())
+    usecase = _usecase(
+        credential_jwks=(public_jwk(wallet.issuer_key),),
+        status_list_fetcher=_StubStatusListFetcher(token),
+    )
+    created = usecase.create_presentation_request()
+    credential = wallet.credential(extra_claims={"status": _status_reference()})
+    response = wallet.respond(created.request_object, credential=credential)
+
+    result = usecase.validate_presentation_response(created.request_id, response=response)
+
+    assert result.status_code == 400
+    assert result.detail == "signature du status list non appariee au JWKS de confiance"
+
+
+def test_unsupported_status_list_bits_are_rejected() -> None:
+    """Seul ``bits = 1`` est géré : autre valeur = rejet motive."""
+    wallet = SimulatedWallet()
+    token = _status_list_token(wallet.issuer_key, bits=2)
+    usecase = _usecase(
+        credential_jwks=(public_jwk(wallet.issuer_key),),
+        status_list_fetcher=_StubStatusListFetcher(token),
+    )
+    created = usecase.create_presentation_request()
+    credential = wallet.credential(extra_claims={"status": _status_reference()})
+    response = wallet.respond(created.request_object, credential=credential)
+
+    result = usecase.validate_presentation_response(created.request_id, response=response)
+
+    assert result.status_code == 400
+    assert result.detail == "bits du status list token non géré (1 attendu)"
+
+
+def test_unreadable_status_list_bits_are_rejected() -> None:
+    """Un ``lst`` non décompressable rejette la presentation."""
+    wallet = SimulatedWallet()
+    token = _status_list_token(wallet.issuer_key, lst="!!!pas-du-base64!!!")
+    usecase = _usecase(
+        credential_jwks=(public_jwk(wallet.issuer_key),),
+        status_list_fetcher=_StubStatusListFetcher(token),
+    )
+    created = usecase.create_presentation_request()
+    credential = wallet.credential(extra_claims={"status": _status_reference()})
+    response = wallet.respond(created.request_object, credential=credential)
+
+    result = usecase.validate_presentation_response(created.request_id, response=response)
+
+    assert result.status_code == 400
+    assert result.detail == "lst du status list token illisible"
+
+
+def test_index_outside_status_list_is_rejected() -> None:
+    """Un index hors bornes du bitstring est rejete (jamais interprete)."""
+    wallet = SimulatedWallet()
+    fetcher = _StubStatusListFetcher(_status_list_token(wallet.issuer_key))
+    usecase = _usecase(
+        credential_jwks=(public_jwk(wallet.issuer_key),), status_list_fetcher=fetcher
+    )
+    created = usecase.create_presentation_request()
+    credential = wallet.credential(extra_claims={"status": _status_reference(index=10_000)})
+    response = wallet.respond(created.request_object, credential=credential)
+
+    result = usecase.validate_presentation_response(created.request_id, response=response)
+
+    assert result.status_code == 400
+    assert result.detail == "index hors bornes de la status list"
+
+
+def test_status_reference_without_status_list_is_rejected() -> None:
+    """Un claim ``status`` sans ``status_list`` exploitable est rejete."""
+    wallet = SimulatedWallet()
+    usecase = _usecase()
+    created = usecase.create_presentation_request()
+    credential = wallet.credential(extra_claims={"status": {"inconnu": True}})
+    response = wallet.respond(created.request_object, credential=credential)
+
+    result = usecase.validate_presentation_response(created.request_id, response=response)
+
+    assert result.status_code == 400
+    assert result.detail == "status.status_list absent du credential"
 
 
 def test_pending_registry_is_bounded_fifo() -> None:

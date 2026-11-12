@@ -17,7 +17,8 @@ Réglages complémentaires (voir `src/puridentityserver/infrastructure/settings.
 | Réglage | Rôle |
 | --- | --- |
 | `oid4vp_pki_path` | fichier JSON persistant de la PKI du verifier (CA + leaf). Absent = PKI éphémère générée en mémoire au premier usage. |
-| `oid4vp_credential_jwks` | JWKS public de confiance pour la signature des credentials SD-JWT. Vide = le contrôle de signature est **escamoté** (mode witness, seul cas où la suite peut rejeter `invalid-credential-signature`). |
+| `oid4vp_credential_jwks` | JWKS public de confiance pour la signature des credentials SD-JWT **et des Status List Tokens** qu'ils référencent. Vide = le contrôle de signature est **escamoté** (mode witness, seul cas où la suite peut rejeter `invalid-credential-signature`). |
+| `oid4vp_status_list_allow_local_targets` | ouvre le fetch de la status list (draft-ietf-oauth-status-list) aux destinations loopback/privées. `false` par défaut : un verifier déployé ne doit pas aller chercher un statut sur son propre réseau ; le harness de certification le passe à `true` (la suite publie la liste sur `localhost.emobix.co.uk`). |
 
 ## Routes (`/oid4vp/*`)
 
@@ -56,7 +57,17 @@ Toute anomalie produit un `400 invalid_request` motivé :
 7. `iat` du kb-jwt dans ± 5 minutes ;
 8. signature du kb-jwt vérifiée contre `cnf.jwk` du credential ;
 9. signature du credential vérifiée contre `oid4vp_credential_jwks` (si
-   configuré).
+   configuré) ;
+10. `vct` du credential appartenant aux `vct_values` de la DCQL query (si la
+   requête en porte — DCQL §6) ;
+11. révocation (draft-ietf-oauth-status-list) : un credential portant le
+   claim `status` déclenche le `GET` de `status.status_list.uri` (media type
+   `application/statuslist+jwt`, sans redirection, délai et taille bornés),
+   puis le contrôle du `typ`, du `sub`, de la signature (même JWKS de
+   confiance), de `bits = 1` et du bit de l'`idx` — `INVALID` ou
+   **échec de fetch = rejet** (le verifier n'accepte pas un credential dont
+   il n'a pu constater l'absence de révocation). Un credential sans claim
+   `status` n'est pas concerné.
 
 Les demandes vivent en mémoire (FIFO bornée à 32) : un `response_uri` déjà
 consommé ou inconnu répond `404`.
@@ -76,8 +87,8 @@ Le wallet simulé est `tests/oid4vp_wallet.py` pour les tests unitaires
 
 ## Certification
 
-Le plan `oid4vp-1final-verifier-haip-test-plan` (11 modules : 4 positifs en
-relecture, 7 négatifs) se rejoue contre la suite OIDF :
+Le plan `oid4vp-1final-verifier-haip-test-plan` (14 modules : 5 positifs en
+relecture, 9 négatifs) se rejoue contre la suite OIDF :
 
 ```bash
 bash certification/local/setup.sh

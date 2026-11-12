@@ -460,6 +460,12 @@ class Settings(BaseSettings):
     # InvalidCredentialSignature du plan de certification passe alors en
     # REVIEW au lieu de PASSED).
     oid4vp_credential_jwks: Annotated[tuple[dict[str, object], ...], NoDecode] = ()
+    # `oid4vp_status_list_allow_local_targets` : ouvre le fetch de la status
+    # list (draft-ietf-oauth-status-list) aux destinations loopback ou privees.
+    # Le harness de certification heberge la status list sur
+    # localhost.emobix.co.uk (issue #224) ; false partout ailleurs : un
+    # verifier ne doit pas aller chercher un statut sur son propre reseau.
+    oid4vp_status_list_allow_local_targets: bool = False
     # `federation_entity_identifier` est l'Entity Identifier de l'OP (une URL
     # https sans query ni fragment, spec 1.2) ; vide = l'issuer de l'OP.
     federation_entity_identifier: str = ""

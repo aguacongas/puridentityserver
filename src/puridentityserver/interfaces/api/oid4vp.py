@@ -12,6 +12,7 @@ Le préfixe ``/oid4vp`` isole la surface de présentation (issue #224) :
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -24,6 +25,9 @@ from puridentityserver.application.oid4vp import (
 )
 
 _JSON_MEDIA_TYPE = "application/json"
+
+#: Motif du 501 rendu par chaque route quand le verifier n'est pas monté.
+_DISABLED_DETAIL = "OpenID4VP non active"
 
 
 def oid4vp_router(
@@ -58,7 +62,7 @@ def _mount_presentation_requests(router: APIRouter, usecase: OID4VPVerifierUseCa
     )
     async def presentation_requests(request: Request) -> JSONResponse:
         if usecase is None:
-            return _error(501, "not_implemented", "OpenID4VP non active")
+            return _error(501, "not_implemented", _DISABLED_DETAIL)
         payload = await _json_body(request)
         if payload is None:
             return _error(400, "invalid_request", "corps JSON objet attendu")
@@ -88,7 +92,7 @@ def _mount_request_uri(router: APIRouter, usecase: OID4VPVerifierUseCase | None)
     )
     async def get_request_object(request_id: str) -> Response:
         if usecase is None:
-            return _error(501, "not_implemented", "OpenID4VP non active")
+            return _error(501, "not_implemented", _DISABLED_DETAIL)
         document = usecase.get_request_object(request_id)
         if document is None:
             return _error(404, "invalid_request", "demande de presentation inconnue")
@@ -101,7 +105,7 @@ def _mount_request_uri(router: APIRouter, usecase: OID4VPVerifierUseCase | None)
     )
     async def post_request_object(request: Request, request_id: str) -> Response:
         if usecase is None:
-            return _error(501, "not_implemented", "OpenID4VP non active")
+            return _error(501, "not_implemented", _DISABLED_DETAIL)
         form = await request.form()
         wallet_nonce = form.get("wallet_nonce")
         document = usecase.get_request_object(
@@ -123,12 +127,16 @@ def _mount_vp_response(router: APIRouter, usecase: OID4VPVerifierUseCase | None)
     )
     async def vp_response(request: Request, request_id: str) -> JSONResponse:
         if usecase is None:
-            return _error(501, "not_implemented", "OpenID4VP non active")
+            return _error(501, "not_implemented", _DISABLED_DETAIL)
         form = await request.form()
         response = form.get("response")
         if not isinstance(response, str) or not response:
             return _error(400, "invalid_request", "paramètre de formulaire response manquant")
-        result = usecase.validate_presentation_response(request_id, response=response)
+        # La validation peut fetcher la status list référencée par le
+        # credential (réseau bloquant) : hors de la boucle d'événements.
+        result = await asyncio.to_thread(
+            usecase.validate_presentation_response, request_id, response=response
+        )
         return JSONResponse(result.body, status_code=result.status_code)
 
 

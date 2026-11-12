@@ -3,7 +3,7 @@ r"""Capture les pages de relecture de l'OP pour la certification (issues #90, #1
 La suite officielle attend une capture d'écran pour 4 modules Core
 (``oidcc-response-type-missing``, ``oidcc-ensure-registered-redirect-uri``,
 ``oidcc-max-age-1``, ``oidcc-prompt-login``), 2 modules FAPI1 servis en page
-HTML, 6 modules propres au plan dynamic, 1 module fédéré et 4 modules
+HTML, 6 modules propres au plan dynamic, 1 module fédéré et 5 modules
 positifs du plan oid4vp (issue #224) : sans image, le
 mode witness remplit ces placeholders avec un PNG 1x1 de secours — le verdict
 tombe juste, mais la preuve est un artifice (issue #161).
@@ -17,7 +17,7 @@ l'affichage de la page de résultat du verifier (issue #224).
 
 Ce script rejoue les scénarios contre l'OP réellement déployé avec un
 navigateur headless (Playwright/chromium) et produit, pour chaque module,
-une capture authentique de la page servie par l'OP — 17 PNG au total :
+une capture authentique de la page servie par l'OP — 18 PNG au total :
 
 1. les 4 scénarios Core (paramètre absent, ``redirect_uri`` non enregistrée,
    second ``prompt=login``, second ``max_age=1``) ;
@@ -32,10 +32,12 @@ une capture authentique de la page servie par l'OP — 17 PNG au total :
 4. le scénario fédéré ``invalid-client-id-in-request-object`` (issue #212) :
    client_id d'Entity Identifier inconnu → trust chain injoignable → page
    400 ``invalid_client`` (RFC 6749 §4.1.2.1), rejouée sans request object ;
-5. les 4 scénarios positifs du plan oid4vp (issue #224) : le wallet de
+5. les 5 scénarios positifs du plan oid4vp (issue #224) : le wallet de
    capture rejoue le round-trip complet (création de la demande, credential
    SD-JWT signé, réponse ``direct_post.jwt`` chiffrée ECDH-ES) puis capture
-   la page de résultat « Presentation acceptee » du verifier.
+   la page de résultat « Presentation acceptee » du verifier — dont le
+   module ``present-credential-without-status`` (credential sans claim
+   ``status``, accepté sans contrôle de révocation).
 
 Chaque capture est validée (statut, marqueurs de la page) avant export : un
 échec logue l'erreur et le scénario suivant est tenté ; si un fichier attendu
@@ -165,11 +167,12 @@ _FEDERATION_SUITE_PATH = "/test/a/puridentityserver-federation"
 
 #: Modules positifs du plan oid4vp laissés en REVIEW par la suite (issue
 #: #224) : après avoir accepté la présentation, le verifier attend une
-#: capture de sa page de résultat. Les 7 modules négatifs terminent PASSED
+#: capture de sa page de résultat. Les 9 modules négatifs terminent PASSED
 #: sur le 4xx immédiat du ``response_uri`` et n'attendent aucune image.
 _OID4VP_TEST_NAMES = (
     "oid4vp-1final-verifier-happy-flow",
     "oid4vp-1final-verifier-minimal-cnf-jwk",
+    "oid4vp-1final-verifier-present-credential-without-status",
     "oid4vp-1final-verifier-request-uri-method-post",
     "oid4vp-1final-verifier-request-uri-fetched-twice",
 )
@@ -844,13 +847,15 @@ def _capture_oid4vp_scenarios(
     out: Path,
     plans_dir: Path,
 ) -> None:
-    """Rejoue les 4 scénarios positifs du plan oid4vp (issue #224).
+    """Rejoue les 5 scénarios positifs du plan oid4vp (issue #224).
 
     Pour chaque module, le wallet de capture rejoue le round-trip complet
     attendu du verifier : création de la demande, credential SD-JWT signé
     avec la clé du plan, key binding JWT lié au nonce, réponse
     ``direct_post.jwt`` chiffrée ECDH-ES, puis capture de la page de
-    résultat « Presentation acceptee ». Les 7 modules négatifs terminent
+    résultat « Presentation acceptee ». Le credential de capture ne porte
+    aucun claim ``status`` : le scénario vaut aussi pour le module
+    ``present-credential-without-status``. Les 9 modules négatifs terminent
     PASSED sur le 4xx immédiat du ``response_uri`` et n'attendent aucune
     image.
 

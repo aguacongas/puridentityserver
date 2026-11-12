@@ -26,7 +26,7 @@ set -euo pipefail
 # --- Configuration (surchargeable par env) ------------------------------------
 # Par défaut : dernière release connue. Les workflows la résolvent à
 # l'exécution (git ls-remote, cf. issue #150) et exportent SUITE_VERSION.
-SUITE_VERSION="${SUITE_VERSION:-release-v5.3.3}"
+SUITE_VERSION="${SUITE_VERSION:-release-v5.3.4}"
 REPO_ROOT="${REPO_ROOT:-$(pwd)}"
 SUITE_DIR="${SUITE_DIR:-$REPO_ROOT/conformance-suite}"
 LOCAL_DIR="${LOCAL_DIR:-$REPO_ROOT/.harness-local}"
@@ -273,12 +273,16 @@ export CERTIFICATION_ADMIN_CLIENT_SECRET="${CERTIFICATION_ADMIN_CLIENT_SECRET:-l
 # PURIDENTITYSERVER_FEDERATION_ALLOW_LOCAL_TARGETS : même garde pour le fetch
 # des entity statements de la fédération — l'ancre de confiance de la suite
 # est sur localhost.emobix.co.uk (issue #170).
+# PURIDENTITYSERVER_OID4VP_STATUS_LIST_ALLOW_LOCAL_TARGETS : même garde pour le
+# fetch de la status list référencée par les credentials présentés au
+# verifier OpenID4VP — la suite la publie sur localhost.emobix.co.uk (issue #224).
 # SSL_CERT_FILE : certificat SAN de la suite (étape 3.5) + bundle système.
 PURIDENTITYSERVER_SETTINGS_FILE="$(winpath "$LOCAL_DIR/op-config.toml")" \
 PURIDENTITYSERVER_HOST="$OP_HOST" \
 PURIDENTITYSERVER_PORT="$OP_PORT" \
 PURIDENTITYSERVER_REQUEST_URI_ALLOW_LOCAL_TARGETS=true \
 PURIDENTITYSERVER_FEDERATION_ALLOW_LOCAL_TARGETS=true \
+PURIDENTITYSERVER_OID4VP_STATUS_LIST_ALLOW_LOCAL_TARGETS=true \
 SSL_CERT_FILE="$(winpath "$SUITE_TRUST")" \
   nohup uv run python -m puridentityserver \
     >"$LOCAL_DIR/op.log" 2>&1 & echo $! > "$LOCAL_DIR/op.pid"

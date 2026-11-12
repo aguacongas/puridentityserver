@@ -428,7 +428,7 @@ def _decode_protected(protected: str) -> dict[str, Any]:
     """
     try:
         value = json.loads(b64u_decode(protected))
-    except (ValueError, UnicodeDecodeError) as exc:
+    except ValueError as exc:
         raise ValueError("en-tête protégé JWE non interprétable") from exc
     if not isinstance(value, dict):
         raise ValueError("en-tête protégé JWE attendu comme objet JSON")

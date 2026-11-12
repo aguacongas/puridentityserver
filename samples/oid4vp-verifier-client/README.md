@@ -70,7 +70,9 @@ Toute déviation fait échouer le script (code de sortie non nul).
   config générée -> l'étape 6 échoue (le verifier accepte : mode witness).
 - **Rejet de nonce** : le même wallet rejoue les modules négatifs du plan de
   certification (voir `tests/oid4vp_wallet.py`, qui couvre nonce, `aud`,
-  `sd_hash`, `iat`, signatures et `vp_token`).
+  `sd_hash`, `iat`, signatures et `vp_token`, et `tests/test_oid4vp_verifier.py`,
+  qui couvre le `vct` demandé par la DCQL et la révocation via la status
+  list référencée).
 
 ## Certification
 

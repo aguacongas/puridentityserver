@@ -119,6 +119,7 @@ from puridentityserver.infrastructure.settings import Settings
 from puridentityserver.infrastructure.signed_request_object import (
     PyJWTSignedRequestObjectVerifier,
 )
+from puridentityserver.infrastructure.status_list import StatusListFetcher
 from puridentityserver.infrastructure.tokens import PyJWTTokenManager
 from puridentityserver.interfaces.api.authorize import _TrustChainRedirectResolver, authorize_router
 from puridentityserver.interfaces.api.backchannel_authorize import (
@@ -208,6 +209,10 @@ def _oid4vp_usecase(settings: Settings) -> OID4VPVerifierUseCase | None:
         issuer=settings.issuer,
         pki_repository=repository,
         credential_jwks=settings.oid4vp_credential_jwks,
+        status_list_fetcher=StatusListFetcher(
+            allow_local_targets=loopback_bind(settings.host)
+            or settings.oid4vp_status_list_allow_local_targets
+        ),
     )
 
 
