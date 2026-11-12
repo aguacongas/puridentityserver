@@ -1,18 +1,27 @@
-"""Routes FastAPI minimales pour OpenID4VP (slice 0, issue #172/#223 et suivantes)."""
+"""Routes FastAPI OpenID4VP : initiation verifier et réception direct_post.jwt.
+
+Le préfixe ``/oid4vp`` isole la surface de présentation (issue #224) :
+
+- ``POST /oid4vp/presentation_requests`` : crée et signe une demande ;
+- ``GET|POST /oid4vp/request_uri/{request_id}`` : sert le request object
+  (le POST porte le ``wallet_nonce`` du mode ``request_uri_method=post``) ;
+- ``POST /oid4vp/vp_response/{request_id}`` : reçoit la présentation chiffrée
+  du wallet et renvoie le verdict de la section 8.2 ;
+- ``GET /oid4vp/result/{request_id}`` : page de résultat du ``redirect_uri``.
+"""
 
 from __future__ import annotations
 
-import contextlib
 import json
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
-if TYPE_CHECKING:
-    from puridentityserver.application.oid4vp import OID4VPVerifierUseCase
-
+from puridentityserver.application.oid4vp import (
+    REQUEST_OBJECT_MEDIA_TYPE,
+    OID4VPVerifierUseCase,
+)
 
 _JSON_MEDIA_TYPE = "application/json"
 
@@ -21,108 +30,139 @@ def oid4vp_router(
     *,
     oid4vp_usecase: OID4VPVerifierUseCase | None = None,
 ) -> APIRouter:
-    """Construit le routeur FastAPI de présentation OpenID4VP."""
+    """Construit le routeur FastAPI de présentation OpenID4VP.
+
+    Args:
+        oid4vp_usecase: cas d'utilisation du verifier, ``None`` si la
+            feature est désactivée (chaque route répond alors 501).
+
+    Returns:
+        Le routeur prêt à être monté sur l'application.
+    """
     router = APIRouter(tags=["oid4vp"])
-    usecase = oid4vp_usecase
+    _mount_presentation_requests(router, oid4vp_usecase)
+    _mount_request_uri(router, oid4vp_usecase)
+    _mount_vp_response(router, oid4vp_usecase)
+    _mount_result(router, oid4vp_usecase)
+    return router
+
+
+def _mount_presentation_requests(router: APIRouter, usecase: OID4VPVerifierUseCase | None) -> None:
+    """Monte ``POST /oid4vp/presentation_requests`` (création signée)."""
 
     @router.post(
-        "/presentation_requests",
+        "/oid4vp/presentation_requests",
         summary="Crée une demande de présentation signée (OID4VP)",
+        status_code=201,
         response_model=None,
     )
     async def presentation_requests(request: Request) -> JSONResponse:
         if usecase is None:
-            return _error(501, "not_implemented", "OID4VP désactivé")
-        try:
-            payload = await request.json()
-        except Exception:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
-        presentation_definition = payload.get("presentation_definition")
+            return _error(501, "not_implemented", "OpenID4VP non active")
+        payload = await _json_body(request)
+        if payload is None:
+            return _error(400, "invalid_request", "corps JSON objet attendu")
         dcql_query = payload.get("dcql_query")
-        response_mode = str(payload.get("response_mode") or "direct_post")
-        result = await usecase.create_presentation_request(
-            presentation_definition=presentation_definition
-            if isinstance(presentation_definition, dict)
-            else None,
-            dcql_query=dcql_query if isinstance(dcql_query, dict) else None,
-            response_mode=response_mode,
+        if dcql_query is not None and not isinstance(dcql_query, dict):
+            return _error(400, "invalid_request", "dcql_query attendu comme objet JSON")
+        created = usecase.create_presentation_request(dcql_query=dcql_query)
+        return JSONResponse(
+            {
+                "request_id": created.request_id,
+                "client_id": created.client_id,
+                "request_uri": created.request_uri,
+                "nonce": created.nonce,
+                "request_object": created.request_object,
+            },
+            status_code=201,
         )
-        return JSONResponse(result, media_type=_JSON_MEDIA_TYPE)
 
-    @router.post(
-        "/vp_response",
-        summary="Réception direct_post de la présentation (OID4VP)",
+
+def _mount_request_uri(router: APIRouter, usecase: OID4VPVerifierUseCase | None) -> None:
+    """Monte le ``request_uri`` du verifier (GET idempotent, POST wallet_nonce)."""
+
+    @router.get(
+        "/oid4vp/request_uri/{request_id}",
+        summary="Sert le request object signé (GET idempotent)",
         response_model=None,
     )
-    async def vp_response(request: Request) -> JSONResponse:
+    async def get_request_object(request_id: str) -> Response:
         if usecase is None:
-            return _error(501, "not_implemented", "OID4VP désactivé")
-        fields = await _read_fields(request)
-        vp_token = fields.get("vp_token")
-        result = usecase.validate_presentation_response(
-            vp_token=vp_token,
-        )
-        if isinstance(result, str):
-            return _error(400, result, "Réponse de présentation invalide.")
-        return JSONResponse(result, media_type=_JSON_MEDIA_TYPE)
+            return _error(501, "not_implemented", "OpenID4VP non active")
+        document = usecase.get_request_object(request_id)
+        if document is None:
+            return _error(404, "invalid_request", "demande de presentation inconnue")
+        return Response(content=document, media_type=REQUEST_OBJECT_MEDIA_TYPE)
 
-    return router
-
-
-async def _read_fields(request: Request) -> dict[str, Any]:
-    """Lit les champs direct_post (form ou JSON)."""
-    content_type = request.headers.get("content-type", "").lower()
-    if "application/json" in content_type:
-        return await _read_json_fields(request)
-    data = await _read_form_fields(request)
-    return _normalize_submission(data)
-
-
-async def _read_json_fields(request: Request) -> dict[str, Any]:
-    """Lit les champs d'un corps JSON."""
-    try:
-        payload = await request.json()
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
-async def _read_form_fields(request: Request) -> dict[str, Any]:
-    """Lit les champs d'un corps form-urlencoded."""
-    try:
+    @router.post(
+        "/oid4vp/request_uri/{request_id}",
+        summary="Sert le request object enrichi du wallet_nonce (POST)",
+        response_model=None,
+    )
+    async def post_request_object(request: Request, request_id: str) -> Response:
+        if usecase is None:
+            return _error(501, "not_implemented", "OpenID4VP non active")
         form = await request.form()
-    except Exception:
-        return {}
-    data: dict[str, Any] = {}
-    for key in form:
-        value = form.get(key)
-        if isinstance(value, str):
-            data[key] = value
-        else:
-            values = form.getlist(key)
-            data[key] = _collapse_form_values(values)
-    return data
+        wallet_nonce = form.get("wallet_nonce")
+        document = usecase.get_request_object(
+            request_id,
+            wallet_nonce=wallet_nonce if isinstance(wallet_nonce, str) else None,
+        )
+        if document is None:
+            return _error(404, "invalid_request", "demande de presentation inconnue")
+        return Response(content=document, media_type=REQUEST_OBJECT_MEDIA_TYPE)
 
 
-def _collapse_form_values(values: Sequence[object]) -> object:
-    """Réduit une liste form en scalaire ou en liste de chaînes."""
-    if len(values) == 1 and isinstance(values[0], str):
-        return values[0]
-    return [str(v) for v in values if isinstance(v, str)]
+def _mount_vp_response(router: APIRouter, usecase: OID4VPVerifierUseCase | None) -> None:
+    """Monte le ``response_uri`` qui reçoit la présentation chiffrée."""
+
+    @router.post(
+        "/oid4vp/vp_response/{request_id}",
+        summary="Reçoit la présentation chiffrée du wallet (direct_post.jwt)",
+        response_model=None,
+    )
+    async def vp_response(request: Request, request_id: str) -> JSONResponse:
+        if usecase is None:
+            return _error(501, "not_implemented", "OpenID4VP non active")
+        form = await request.form()
+        response = form.get("response")
+        if not isinstance(response, str) or not response:
+            return _error(400, "invalid_request", "paramètre de formulaire response manquant")
+        result = usecase.validate_presentation_response(request_id, response=response)
+        return JSONResponse(result.body, status_code=result.status_code)
 
 
-def _normalize_submission(data: dict[str, Any]) -> dict[str, Any]:
-    """Parse presentation_submission s'il est encodé en JSON textuel."""
-    value = data.get("presentation_submission")
-    if isinstance(value, str):
-        with contextlib.suppress(Exception):
-            data["presentation_submission"] = json.loads(value)
-    return data
+def _mount_result(router: APIRouter, usecase: OID4VPVerifierUseCase | None) -> None:
+    """Monte la page de résultat visitée via le ``redirect_uri``."""
+
+    @router.get(
+        "/oid4vp/result/{request_id}",
+        summary="Page de résultat visitée via le redirect_uri du verifier",
+        response_model=None,
+    )
+    async def result_page(request_id: str) -> HTMLResponse:
+        if usecase is None:
+            return HTMLResponse("<h1>OpenID4VP non active</h1>", status_code=501)
+        page = usecase.result_page(request_id)
+        if page is None:
+            return HTMLResponse("<h1>Demande inconnue</h1>", status_code=404)
+        return HTMLResponse(page)
+
+
+async def _json_body(request: Request) -> dict[str, Any] | None:
+    """Lit le corps JSON d'une requête ; ``{}`` si vide, ``None`` si invalide."""
+    try:
+        raw = await request.body()
+        if not raw.strip():
+            return {}
+        value = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def _error(status_code: int, error: str, description: str) -> JSONResponse:
+    """Réponse d'erreur OAuth 2.0 en JSON (RFC 6749 §5.2)."""
     return JSONResponse(
         {"error": error, "error_description": description},
         status_code=status_code,

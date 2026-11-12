@@ -25,9 +25,9 @@ uv run python -m pytest -p no:cacheprovider -q   # tests + couverture >= 80 % (9
 
 - **Harness local (mode courant)** : la suite de conformance OIDF tourne en docker
   sur le runner, OP local derrière un nginx mTLS — workflow
-  `.github/workflows/certification-local.yml`, matrix des 14 plans (basic,
+  `.github/workflows/certification-local.yml`, matrix des 15 plans (basic,
   implicit, hybrid, formpost, dynamic, ciba, ciba-ping, fapi1, fapi2,
-  fapi2-message-signing, ekyc, federation, oid4vci, oid4vci-mdoc), mode *witness*
+  fapi2-message-signing, ekyc, federation, oid4vci, oid4vci-mdoc, oid4vp), mode *witness*
   (les gaps module ne
   bloquent pas), déclenché sur chaque PR vers `main` touchant `certification/**`
   ou à la demande (`workflow_dispatch`, filtre de plan).
@@ -35,20 +35,21 @@ uv run python -m pytest -p no:cacheprovider -q   # tests + couverture >= 80 % (9
   défaut vit dans `SUITE_VERSION` (`certification/local/setup.sh`) ; avant chaque
   usage/rejeu, vérifier qu'une release plus récente n'est pas publiée et bumper
   `SUITE_VERSION` + la doc (`certification/README.md`) en conséquence, puis
-  rejouer les 14 plans pour valider le bump. Ne jamais fixer une version
+  rejouer les 15 plans pour valider le bump. Ne jamais fixer une version
   périmée dans la doc ou les scripts.
 - **Run hébergé officiel OIDF** : `.github/workflows/certification.yml` (secret
   `CONFORMANCE_TOKEN`, publication GitHub Pages) — reste la référence finale de
-  certification. Il joue les **14 plans** : les 9 du programme officiel **plus**
+  certification. Il joue les **15 plans** : les 9 du programme officiel **plus**
   `ciba-ping` (variante CIBA mode ping), `ekyc` (identité assurance),
-  `federation` (OpenID Federation 1.1) et les plans `oid4vci` / `oid4vci-mdoc`
-  (émetteur VCI, formats SD-JWT VC et mdoc), hors programme officiel — choix du
+  `federation` (OpenID Federation 1.1), les plans `oid4vci` / `oid4vci-mdoc`
+  (émetteur VCI, formats SD-JWT VC et mdoc) et le plan `oid4vp` (verifier
+  OpenID4VP 1.0 Final / HAIP), hors programme officiel — choix du
   maintainer : l'assurance conformité vaut aussi pour la spec de niche —
   en **mode strict** (seuls les modules SUCCESS/REVIEW sont acceptés ; tout
   autre module met le job en échec) et en **deux vagues** : `dynamic` seul
   d'abord (il est seul à déclencher la rotation des clés de signature de
   l'OP partagé, qui casserait les validations des autres plans en cours),
-  puis les 13 autres plans en parallèle.
+  puis les 14 autres plans en parallèle.
 - L'ancien rejeu pytest `tests/conformance/` a été supprimé ; le mini-RP client
   (harness de parcours) vit dans `samples/oidc_harness/` et sert les smoke
   tests `samples/fapi1-client/` et `samples/fapi2-client/`.
@@ -64,8 +65,8 @@ bash certification/local/run-plan.sh basic   # 1 plan en sortie stricte (log + e
 bash certification/local/down.sh             # arrêt du harness (--purge : conteneurs + clone)
 ```
 
-- Plans : `basic | implicit | hybrid | formpost | dynamic | ciba | ciba-ping | fapi1 | fapi2 | fapi2-message-signing | ekyc | federation | oid4vci | oid4vci-mdoc`. `run-plan.sh` fait la
-  readiness (bootstrap via `setup.sh` si le harness est absent), applique les 6 patches
+- Plans : `basic | implicit | hybrid | formpost | dynamic | ciba | ciba-ping | fapi1 | fapi2 | fapi2-message-signing | ekyc | federation | oid4vci | oid4vci-mdoc | oid4vp`. `run-plan.sh` fait la
+  readiness (bootstrap via `setup.sh` si le harness est absent), applique les 5 patches
   driver par `prepare-suite.sh` (idempotent), substitue les URLs locales puis joue le
   driver officiel en sortie stricte ; log : `.harness-local/last-<plan>.log`,
   exports : `.harness-local/results/<plan>` (ou `--export-dir`).

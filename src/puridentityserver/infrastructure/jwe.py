@@ -7,8 +7,9 @@ Implémente le format compact (RFC 7516 §7.1) :
 - gestion de la clé (RFC 7518 §4) : ``RSA-OAEP`` / ``RSA-OAEP-256``
   (clé publique RSA enregistrée dans le ``jwks`` du client),
   ``A128KW`` / ``A256KW`` (RFC 3394, clé d'enveloppe dérivée par
-  HKDF-SHA256 du secret partagé du client) et ``dir`` (la clé dérivée
-  sert directement de clé de contenu) ;
+  HKDF-SHA256 du secret partagé du client), ``dir`` (la clé dérivée
+  sert directement de clé de contenu) et ``ECDH-ES`` en mode Direct Key
+  Agreement (RFC 7518 §4.6, réservé aux réponses OpenID4VP chiffrées) ;
 - chiffrement du contenu (RFC 7518 §5) : ``A*CBC-HS*`` (AES-CBC +
   HMAC sur la moitié gauche/droite de la CEK, RFC 7518 §5.2) et
   ``A*GCM`` (AES-GCM, IV 96 bits, tag 128 bits).
@@ -25,10 +26,15 @@ import base64
 import json
 import os
 from hmac import compare_digest
-from typing import cast
+from typing import Any, cast
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes, hmac, keywrap
-from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.asymmetric import ec, padding
+from cryptography.hazmat.primitives.asymmetric.ec import (
+    EllipticCurvePrivateKey,
+    EllipticCurvePublicKey,
+)
 from cryptography.hazmat.primitives.asymmetric.padding import OAEP
 from cryptography.hazmat.primitives.asymmetric.rsa import (
     RSAPrivateKey,
@@ -37,6 +43,7 @@ from cryptography.hazmat.primitives.asymmetric.rsa import (
 )
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.concatkdf import ConcatKDFHash
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.padding import PKCS7
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
@@ -45,6 +52,7 @@ from puridentityserver.domain.authorization import Client
 from puridentityserver.domain.jwe import (
     ASYMMETRIC_ENCRYPTION_ALGORITHMS,
     DEFAULT_ENCRYPTION_METHOD,
+    ECDH_ES,
     GCM_ENCRYPTION_METHODS,
     JWEEncryptionMethod,
     JWEKeyManagementAlgorithm,
@@ -71,6 +79,13 @@ _KW_KEK_SIZE = {
 # Info HKDF de dérivation des clés d'enveloppe / de contenu depuis le
 # secret partagé du client (déterministe : le client rejoue la dérivation).
 _HKDF_INFO = b"puridentityserver:id-token-encryption"
+
+# Accord de clé ECDH-ES (RFC 7518 §4.6) : courbe P-256 uniquement, exigée
+# du wallet par la HAIP (§5, clé ``alg = ECDH-ES`` / ``crv = P-256``) ; la
+# Concat KDF utilise SHA-256 (RFC 7518 §4.6.2) et la taille de CEK dépend
+# de la méthode ``enc`` retenue.
+_ECDH_CURVE = ec.SECP256R1
+_ECDH_CRV = "P-256"
 
 
 def b64u(data: bytes) -> str:
@@ -181,6 +196,86 @@ def decrypt_compact(
         b64u_decode(encrypted_key),
         shared_kek=shared_kek,
         rsa_private_key=rsa_private_key,
+    )
+    return _decrypt_content(
+        method,
+        cek,
+        protected.encode("ascii"),
+        b64u_decode(iv),
+        b64u_decode(ciphertext),
+        b64u_decode(tag),
+    )
+
+
+def protected_header(token: str) -> dict[str, Any]:
+    """Décode l'en-tête protégé d'un JWE compact (RFC 7516 §4).
+
+    Permet de lire ``kid``/``alg``/``enc`` avant de choisir la clé de
+    déchiffrement, par exemple pour les réponses ``direct_post.jwt``
+    d'OpenID4VP. ``ValueError`` si le document n'est pas interprétable.
+    """
+    return _decode_protected(_split_compact(token)[0])
+
+
+def encrypt_compact_ecdh_es(
+    *,
+    method: JWEEncryptionMethod,
+    plaintext: bytes,
+    recipient_public_key: EllipticCurvePublicKey,
+    kid: str = "",
+    apu: bytes = b"",
+    apv: bytes = b"",
+) -> str:
+    """Chiffre ``plaintext`` en JWE compact par accord de clé ECDH-ES (RFC 7518 §4.6).
+
+    Mode Direct Key Agreement : une clé éphémère P-256 est générée pour
+    l'opération, publiée dans l'en-tête protégé (``epk``), et la CEK est la
+    sortie de la Concat KDF — l'``encrypted_key`` du document reste vide.
+    ``apu``/``apv`` (RFC 7518 §4.6.1.2/§4.6.1.3) sont encodés base64url dans
+    l'en-tête quand ils sont fournis.
+    """
+    ephemeral = ec.generate_private_key(_ECDH_CURVE())
+    header: dict[str, Any] = {
+        "alg": ECDH_ES,
+        "enc": method.value,
+        "epk": ec_jwk(ephemeral.public_key()),
+    }
+    if kid:
+        header["kid"] = kid
+    if apu:
+        header["apu"] = b64u(apu)
+    if apv:
+        header["apv"] = b64u(apv)
+    aad = _protected_b64(header)
+    cek = _concat_kdf(
+        ephemeral.exchange(ec.ECDH(), recipient_public_key),
+        method=method,
+        apu=header.get("apu", ""),
+        apv=header.get("apv", ""),
+    )
+    iv, ciphertext, tag = _encrypt_content(method, cek, aad.encode("ascii"), plaintext)
+    return ".".join((aad, "", b64u(iv), b64u(ciphertext), b64u(tag)))
+
+
+def decrypt_compact_ecdh_es(token: str, *, private_key: EllipticCurvePrivateKey) -> bytes:
+    """Déchiffre un JWE compact ECDH-ES et vérifie son intégrité (RFC 7516 §7.2).
+
+    L'en-tête protégé doit porter ``alg = ECDH-ES``, un ``enc`` supporté et
+    ``epk`` (clé éphémère P-256 du coéquipier) ; ``apu``/``apv``, présents
+    quand le wallet les émet, entrent dans la dérivation. Toute incohérence
+    — algorithme inattendu, ``encrypted_key`` non vide, courbe étrangère —
+    lève ``ValueError``, tout comme la violation d'intégrité du contenu.
+    """
+    protected, encrypted_key, iv, ciphertext, tag = _split_compact(token)
+    header = _decode_protected(protected)
+    method, apu, apv = _ecdh_es_header(header)
+    if encrypted_key:
+        raise ValueError("ECDH-ES en mode direct exige une encrypted_key vide")
+    cek = _concat_kdf(
+        private_key.exchange(ec.ECDH(), ec_public_key(header.get("epk"))),
+        method=method,
+        apu=apu,
+        apv=apv,
     )
     return _decrypt_content(
         method,
@@ -321,9 +416,126 @@ def _seal_id_token(
     )
 
 
-def _protected_b64(header: dict[str, str]) -> str:
+def _protected_b64(header: dict[str, Any]) -> str:
     """Encode l'en-tête protégé du JWE en base64url (RFC 7516 §4)."""
     return b64u(json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+
+
+def _decode_protected(protected: str) -> dict[str, Any]:
+    """Décode l'en-tête protégé base64url d'un JWE en objet JSON (RFC 7516 §4).
+
+    ``ValueError`` si le segment n'est pas un objet JSON.
+    """
+    try:
+        value = json.loads(b64u_decode(protected))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise ValueError("en-tête protégé JWE non interprétable") from exc
+    if not isinstance(value, dict):
+        raise ValueError("en-tête protégé JWE attendu comme objet JSON")
+    return cast(dict[str, Any], value)
+
+
+def _header_text(header: dict[str, Any], name: str) -> str:
+    """Lit un paramètre d'en-tête textuel, ``""`` s'il est absent.
+
+    ``ValueError`` si le paramètre existe mais n'est pas une chaîne.
+    """
+    value = header.get(name)
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"paramètre d'en-tête {name} attendu comme chaîne")
+    return value
+
+
+def _ecdh_es_header(header: dict[str, Any]) -> tuple[JWEEncryptionMethod, str, str]:
+    """Valide les paramètres d'en-tête d'un JWE ECDH-ES (RFC 7518 §4.6).
+
+    Retourne la méthode de chiffrement et les paramètres ``apu``/``apv``
+    encodés base64url (``""`` quand absents). ``ValueError`` sur ``alg``
+    inattendu ou ``enc`` non supporté.
+    """
+    if _header_text(header, "alg") != ECDH_ES:
+        raise ValueError("algorithme de gestion de clé inattendu pour un JWE ECDH-ES")
+    try:
+        method = JWEEncryptionMethod(_header_text(header, "enc"))
+    except ValueError as exc:
+        raise ValueError("méthode de chiffrement JWE non supportée") from exc
+    return method, _header_text(header, "apu"), _header_text(header, "apv")
+
+
+def ec_jwk(key: EllipticCurvePublicKey) -> dict[str, Any]:
+    """Encode une clé publique EC P-256 en JWK public (RFC 7518 §6.2).
+
+    Utilisé pour l'``epk`` d'un JWE ECDH-ES et pour publier la clé de
+    chiffrement éphémère d'un ``client_metadata`` OpenID4VP.
+
+    Args:
+        key: clé publique EC sur la courbe P-256.
+
+    Returns:
+        Le JWK ``kty = EC`` / ``crv = P-256`` de la clé.
+    """
+    numbers = key.public_numbers()
+    return {
+        "kty": "EC",
+        "crv": _ECDH_CRV,
+        "x": b64u(numbers.x.to_bytes(32, "big")),
+        "y": b64u(numbers.y.to_bytes(32, "big")),
+    }
+
+
+def ec_public_key(value: object) -> EllipticCurvePublicKey:
+    """Reconstruit la clé publique EC P-256 d'un JWK (RFC 7518 §6.2).
+
+    Utilisé pour l'``epk`` d'un JWE ECDH-ES comme pour la clé de
+    liaison (``cnf.jwk``) d'un credential OpenID4VP.
+
+    ``ValueError`` si le paramètre n'est pas un objet JWK ``kty = EC`` /
+    ``crv = P-256`` ou si le point curve n'est pas valide.
+    """
+    if not isinstance(value, dict):
+        raise ValueError("epk attendu comme objet JWK")
+    epk = cast(dict[str, Any], value)
+    if epk.get("kty") != "EC" or epk.get("crv") != _ECDH_CRV:
+        raise ValueError("epk attendu sur la courbe P-256")
+    try:
+        x = int.from_bytes(b64u_decode(_header_text(epk, "x")), "big")
+        y = int.from_bytes(b64u_decode(_header_text(epk, "y")), "big")
+        return ec.EllipticCurvePublicNumbers(x, y, _ECDH_CURVE()).public_key()
+    except (ValueError, TypeError) as exc:
+        raise ValueError("epk sans point de courbe valide") from exc
+
+
+def _concat_kdf(
+    shared_secret: bytes,
+    *,
+    method: JWEEncryptionMethod,
+    apu: str,
+    apv: str,
+) -> bytes:
+    """Dérive la CEK ECDH-ES par Concat KDF SHA-256 en mode direct (RFC 7518 §4.6.2).
+
+    L'``OtherInfo`` assemble ``AlgorithmID`` (la méthode ``enc``), les
+    ``PartyUInfo``/``PartyVInfo`` (décodés des paramètres ``apu``/``apv``
+    base64url, 0 octet quand absents) et ``SuppPubInfo`` (la taille de clé
+    demandée en bits, RFC 7518 §4.6.2) — chaque bloc de données portant sa
+    propre longueur sur 4 octets, hors ``SuppPubInfo``.
+    """
+    algorithm_id = method.value.encode("ascii")
+    party_u = b64u_decode(apu)
+    party_v = b64u_decode(apv)
+    other_info = (
+        len(algorithm_id).to_bytes(4, "big")
+        + algorithm_id
+        + len(party_u).to_bytes(4, "big")
+        + party_u
+        + len(party_v).to_bytes(4, "big")
+        + party_v
+        + (method.cek_size * 8).to_bytes(4, "big")
+    )
+    kdf = ConcatKDFHash(algorithm=hashes.SHA256(), length=method.cek_size, otherinfo=other_info)
+    return kdf.derive(shared_secret)
 
 
 def _algorithm(configured: str) -> JWEKeyManagementAlgorithm:
@@ -487,7 +699,10 @@ def _decrypt_content(
 ) -> bytes:
     """Déchiffre le contenu et vérifie le tag (rejet d'intégrité → ``ValueError``)."""
     if method in GCM_ENCRYPTION_METHODS:
-        return AESGCM(cek).decrypt(iv, ciphertext + tag, aad)
+        try:
+            return AESGCM(cek).decrypt(iv, ciphertext + tag, aad)
+        except InvalidTag as exc:
+            raise ValueError("tag JWE invalide (authentification rejetée)") from exc
     mac_key, enc_key = cek[: method.cek_size // 2], cek[method.cek_size // 2 :]
     expected = _cbc_hmac(mac_key, aad, iv, ciphertext, method)
     if not compare_digest(tag, expected):

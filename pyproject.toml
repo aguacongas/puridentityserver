@@ -90,6 +90,7 @@ max-complexity = 10
 "samples/oidc_harness/**" = ["assert", "undocumented-public-module", "undocumented-public-class", "undocumented-public-method", "undocumented-public-function", "hardcoded-password-string", "hardcoded-password-func-arg", "weak-cryptographic-key"]  # mini-RP de démonstration repris du rejeu conformance : asserts de flux, seeds client/user de référence, clé RSA 1024 bits volontaire (rejet prouvé côté OP)
 "samples/smoke_common.py" = ["print", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "try-except-in-loop"]  # helper des smoke tests : affiche l'état, lance le serveur en sous-processus (liste d'arguments, pas de shell), sonde le port
 "certification/proxy/**" = ["print", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "try-except-in-loop", "suspicious-url-open-usage", "hardcoded-password-string", "hardcoded-password-func-arg"]  # scripts d'outillage de provisioning OCI (CLI) : affichage, subprocess, polling, valeurs de référence
+"certification/local/oid4vp_initiator.py" = ["suspicious-url-open-usage"]  # initiateur de certification : urlopen limité aux endpoints OP (http(s) de l'environnement) et à la suite (CONFORMANCE_SERVER), sans schéma utilisateur
 "samples/**/client.py" = ["print", "weak-cryptographic-key"]  # démo CLI : affichage de résultats ; clé RSA 1024 bits volontaire pour prouver le rejet d'une clé courte
 
 [tool.ruff.format]

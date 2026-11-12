@@ -301,6 +301,13 @@ jobs:
           # (issue #161) : une capture absente ou invalide lève une erreur
           # fatale dans le driver et fait échouer le job.
           SCREENSHOTS_DIR: ${{ github.workspace }}/screenshots
+          # Initiateur OID4VP (issue #224) : livraison du request_uri aux
+          # modules oid4vp-1final-verifier-* (hook WAITING du driver, patch
+          # appliqué par prepare-suite.sh). Chemin absolu (cwd du driver =
+          # clone de la suite) ; inerte sur les autres plans. L'OP cible est
+          # l'instance locale (meme boucle que le jeton d'administration).
+          OID4VP_INITIATOR: ${{ github.workspace }}/certification/local/oid4vp_initiator.py
+          OID4VP_INITIATOR_OP_URL: http://127.0.0.1:8000
         run: |
           set +e
           mkdir -p results

@@ -1,0 +1,23 @@
+diff --git a/scripts/run-test-plan.py b/scripts/run-test-plan.py
+index 0b08efd..85335cf 100644
+--- a/scripts/run-test-plan.py
++++ b/scripts/run-test-plan.py
+@@ -333,6 +333,18 @@ async def run_test_module(moduledict, plan_id, test_info, test_time_taken, varia
+                 state = await conformance.wait_for_state(module_id, ["WAITING", "FINISHED"])
+ 
+             if state == "WAITING":
++                # OID4VP (issue #224) : la suite verifier attend la livraison du
++                # request_uri par l'initiateur, qui cree la demande cote OP puis
++                # livre le AR a l'endpoint emulated /test/a/{alias}/authorize.
++                # Sans OID4VP_INITIATOR dans l'environnement, le hook est inerte
++                # (le module reste WAITING jusqu'au timeout).
++                if re.match(r'oid4vp-1final-verifier-.*', module) and os.environ.get('OID4VP_INITIATOR'):
++                    oid4vp_rc = subprocess.call([sys.executable, os.environ['OID4VP_INITIATOR'],
++                                                 '--module', module,
++                                                 '--module-id', module_id,
++                                                 '--alias', parsed_config['alias']])
++                    if oid4vp_rc != 0:
++                        raise Exception('OID4VP initiator failed with exit code {} for {}'.format(oid4vp_rc, module_with_variants))
+                 # If it's a client test, we need to run the client.
+                 if op_plan is not None and len(op_plan) > 0:
+                     if op_plan["test_name"] == "sample-openid-client-nodejs":
