@@ -76,7 +76,7 @@ on:
           - federation
           - oid4vci
           - oid4vci-mdoc
-          
+          - oid4vp
 permissions:
   contents: read
   # Lecture des jobs du run courant : le step « vague 1 » attend la fin du
