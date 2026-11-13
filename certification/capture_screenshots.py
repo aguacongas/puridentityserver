@@ -35,7 +35,8 @@ une capture authentique de la page servie par l'OP — 18 PNG au total :
 5. les 5 scénarios positifs du plan oid4vp (issue #224) : le wallet de
    capture rejoue le round-trip complet (création de la demande, credential
    SD-JWT signé, réponse ``direct_post.jwt`` chiffrée ECDH-ES) puis capture
-   la page de résultat « Presentation acceptee » du verifier — dont le
+   la page de résultat « Presentation acceptee » du verifier (listant les
+   claims du credential présenté, issue #302) — dont le
    module ``present-credential-without-status`` (credential sans claim
    ``status``, accepté sans contrôle de révocation).
 

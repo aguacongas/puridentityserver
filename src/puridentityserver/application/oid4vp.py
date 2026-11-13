@@ -35,7 +35,7 @@ import uuid
 import zlib
 from collections import OrderedDict
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, cast
 
@@ -125,10 +125,14 @@ class VerificationOutcome:
     Attributes:
         accepted: ``True`` si la présentation a été acceptée (200).
         reason: motif du rejet, chaîne vide si acceptée.
+        claims: claims du payload issuer du credential accepté, rendus sur la
+            page de résultat ; vides en cas de rejet (aucun payload n'est
+            conservé, la page ne montre que le motif).
     """
 
     accepted: bool
     reason: str
+    claims: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -346,7 +350,7 @@ class OID4VPVerifierUseCase:
             )
         try:
             credential = self._presented_credential(pending, response)
-            self._verify_credential(pending, credential)
+            claims = self._verify_credential(pending, credential)
         except PresentationRejectedError as rejected:
             reason = str(rejected)
             pending.outcome = VerificationOutcome(accepted=False, reason=reason)
@@ -355,7 +359,7 @@ class OID4VPVerifierUseCase:
                 body={"error": "invalid_request", "error_description": reason},
                 detail=reason,
             )
-        pending.outcome = VerificationOutcome(accepted=True, reason="")
+        pending.outcome = VerificationOutcome(accepted=True, reason="", claims=claims)
         return PresentationResponseResult(
             status_code=200,
             body={"redirect_uri": f"{self._issuer}/oid4vp/result/{request_id}"},
@@ -364,6 +368,10 @@ class OID4VPVerifierUseCase:
 
     def result_page(self, request_id: str) -> str | None:
         """Construit la page HTML de résultat visitée via le ``redirect_uri``.
+
+        La page acceptée liste les claims du credential présenté (payload
+        issuer déjà vérifié) sous le titre ; la page refusée ne montre que
+        le motif, sans aucun claim.
 
         Args:
             request_id: identifiant de la demande.
@@ -377,11 +385,14 @@ class OID4VPVerifierUseCase:
         if pending.outcome is None or not pending.outcome.accepted:
             reason = pending.outcome.reason if pending.outcome else "réponse non reçue"
             title, detail = "Presentation refusee", reason
+            claims_html = ""
         else:
             title, detail = "Presentation acceptee", "La credential a ete verifiee avec succes."
-        # Échappement HTML de toute valeur portée par la requête (request_id)
-        # ou par le wallet (motif de rejet) : la page de résultat est servie
-        # telle quelle par le navigateur (anti-XSS, règle Sonar S5131).
+            claims_html = _claims_html(pending.outcome.claims)
+        # Échappement HTML de toute valeur portée par la requête (request_id),
+        # par le wallet (motif de rejet) ou par l'émetteur (claims) : la page
+        # de résultat est servie telle quelle par le navigateur (anti-XSS,
+        # règle Sonar S5131).
         safe_title = html.escape(title)
         safe_detail = html.escape(detail)
         safe_request_id = html.escape(request_id)
@@ -389,6 +400,7 @@ class OID4VPVerifierUseCase:
             '<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">'
             f"<title>{safe_title}</title></head><body>"
             f"<h1>{safe_title}</h1><p>{safe_detail}</p>"
+            f"{claims_html}"
             f"<p>Demande : {safe_request_id}</p>"
             "</body></html>"
         )
@@ -485,8 +497,16 @@ class OID4VPVerifierUseCase:
             raise PresentationRejectedError("payload de response attendu comme objet JSON")
         return payload
 
-    def _verify_credential(self, pending: _PendingRequest, credential: str) -> None:
+    def _verify_credential(self, pending: _PendingRequest, credential: str) -> Mapping[str, Any]:
         """Contrôle le SD-JWT présenté : structure, kb-jwt et signatures.
+
+        Args:
+            pending: demande à laquelle la présentation se rattache.
+            credential: chaîne SD-JWT présentée (credential + disclosures + kb-jwt).
+
+        Returns:
+            Le payload issuer du credential, une fois tous les contrôles
+            passés : ses claims alimentent la page de résultat.
 
         Raises:
             PresentationRejectedError: dès la première anomalie détectée.
@@ -507,6 +527,7 @@ class OID4VPVerifierUseCase:
         self._verify_issuer_signature(issuer_jwt, label="credential")
         _verify_vct(pending.vct_values, issuer_payload)
         self._verify_status(issuer_payload)
+        return issuer_payload
 
     def _verify_issuer_signature(self, issuer_jwt: str, *, label: str) -> None:
         """Vérifie la signature d'un JWT signé par l'émetteur (credential, status list).
@@ -598,6 +619,33 @@ class OID4VPVerifierUseCase:
             raise PresentationRejectedError("sub du status list token incoherent avec l'uri")
         self._verify_issuer_signature(token, label="status list")
         return _status_list_lst(payload)
+
+
+def _claims_html(claims: Mapping[str, Any]) -> str:
+    """Rend les claims du credential accepté en liste ``<dl>`` échappée HTML.
+
+    Chaque clé et chaque valeur est échappée (règle Sonar S5131) : les
+    claims proviennent de l'émetteur et la page de résultat est servie telle
+    quelle par le navigateur. Les valeurs non chaînes (objets comme ``cnf``,
+    nombres) sont sérialisées en JSON compact avant échappement.
+
+    Args:
+        claims: claims du payload issuer du credential accepté.
+
+    Returns:
+        Les balises ``<dl>`` avec une entrée par claim, chaîne vide s'il n'y
+        a aucune claim à afficher.
+    """
+    if not claims:
+        return ""
+    entries = []
+    for key, value in claims.items():
+        if isinstance(value, str):
+            text = value
+        else:
+            text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        entries.append(f"<dt>{html.escape(str(key))}</dt><dd>{html.escape(text)}</dd>")
+    return f"<dl>{''.join(entries)}</dl>"
 
 
 def _default_dcql_query() -> dict[str, Any]:
