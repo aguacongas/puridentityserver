@@ -1,57 +1,23 @@
 {
   "alias": "puridentityserver-oid4vp",
-  "description": "PurIdentityServer - OID4VP OP certification (CI)",
+  "description": "PurIdentityServer - OID4VP verifier certification (CI)",
   "browser_verbose": true,
   "server": {
     "discoveryUrl": "{OPURL}/.well-known/openid-configuration"
   },
-  "browser": [
-    {
-      "match": "{OPURL}/authorize*",
-      "tasks": [
-        {
-          "task": "Login",
-          "optional": true,
-          "match": "{OPURL}/login*",
-          "commands": [
-            ["text", "name", "username", "alice@example.com"],
-            ["text", "name", "password", "password"],
-            ["click", "css", "button[type=submit]"]
-          ]
-        },
-        {
-          "task": "Consent",
-          "optional": true,
-          "match": "{OPURL}/consent*",
-          "commands": [
-            ["click", "css", "button[name=action][value=authorize]"]
-          ]
-        },
-        {
-          "task": "Attente form_post",
-          "optional": true,
-          "match": "{SUITEURL}test/a/*/callback",
-          "commands": [
-            ["wait", "id", "submission_complete", 30]
-          ]
-        },
-        {
-          "task": "Attente de l'envoi implicite (query)",
-          "optional": true,
-          "match": "{SUITEURL}test/a/*/callback?*",
-          "commands": [
-            ["wait", "id", "submission_complete", 30]
-          ]
-        },
-        {
-          "task": "Attente de l'envoi implicite (fragment)",
-          "optional": true,
-          "match": "{SUITEURL}test/a/*/callback#*",
-          "commands": [
-            ["wait", "id", "submission_complete", 30]
-          ]
-        }
-      ]
+  "credential": {
+    "signing_jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "l-amZbOBy3FcN7ckUr6ggZnQio2foe6giifa6uzxU5E",
+      "y": "okaNP5lx9MmQ2e0k39p1qaRV3tY5qhGtHplZVZt0b_w",
+      "d": "7NG1fpK6QAxdPIRq01th3s-1vrlnsEzrU8-huRDW5ZI",
+      "kid": "puridentityserver-oid4vp-credential-20261110",
+      "alg": "ES256",
+      "use": "sig"
     }
-  ]
+  },
+  "client": {
+    "request_object_trust_anchor_pem": "-----BEGIN CERTIFICATE-----\nMIIBkjCCATmgAwIBAgIUU+iQH1xgEm05DNtxkKQKDuvtqjkwCgYIKoZIzj0EAwIw\nJjEkMCIGA1UEAwwbUHVySWRlbnRpdHlTZXJ2ZXIgT0lENFZQIENBMB4XDTI2MTEx\nMTE4MjczNFoXDTM2MTEwODE4MzIzNFowJjEkMCIGA1UEAwwbUHVySWRlbnRpdHlT\nZXJ2ZXIgT0lENFZQIENBMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEooh9+Qa9\nDPVXGr879/6u2a8CR+WCOFoMwaG3ux4Lzok+qVMvfwTyLY2/3yVvUFwOVKwRzQZj\nuYbvqvBduVEZOaNFMEMwEgYDVR0TAQH/BAgwBgEB/wIBADAOBgNVHQ8BAf8EBAMC\nAQYwHQYDVR0OBBYEFFa9TWqFYPaJYlkBRJiaws0RJvIjMAoGCCqGSM49BAMCA0cA\nMEQCIHnALv9gB36JkFtncfIpowQFFYhu8JrsdtsPQPvtadJIAiA7Wy8I/abBT1tb\nYfBqDAy5LKn3faxrZm5zbp4QupPi9Q==\n-----END CERTIFICATE-----\n"
+  }
 }

@@ -799,3 +799,33 @@ redirect_uris = ["http://127.0.0.1:8124/callback"]
 scopes = "openid profile email"
 client_type = "public"
 password_policy = { min_length = 16 }
+
+# OpenID4VP verifier (issue #224) : initiation et reception des presentations
+# montees sur /oid4vp/* quand `oid4vp_enabled = true`.
+#
+# ATTENTION : les champs Settings sont des cles PLATES sous `[settings]` — une
+# table imbriquee `[settings.oid4vp]` est ignoree par pydantic (elle creerait
+# un sous-objet inconnu). Declarer donc ci-dessous, sans en-tete de table :
+#
+# oid4vp_enabled = true
+# oid4vp_pki_path = "certification/oid4vp-pki.json"
+# oid4vp_credential_jwks = '{"keys": [{"kty": "EC", "crv": "P-256", "x": "...", "y": "...", "kid": "...", "alg": "ES256", "use": "sig"}]}'
+# oid4vp_status_list_allow_local_targets = false
+#
+# - `oid4vp_pki_path` : fichier JSON persistant de la PKI (CA + leaf EC
+#   P-256) : le `client_id` `x509_hash:` reste stable d'un redemarrage a
+#   l'autre. Vide = PKI ephemere (le client_id change a chaque demarrage,
+#   incompatible avec l'injection de l'ancre de confiance dans le plan de
+#   certification).
+# - `oid4vp_credential_jwks` : JWKS public de la cle qui signe les
+#   credentials SD-JWT presentes (et les Status List Tokens qu'ils
+#   referencent) ; vide = signature de l'emetteur non controlee (mode
+#   witness : `InvalidCredentialSignature` du plan passe en REVIEW au lieu
+#   de PASSED).
+# - `oid4vp_status_list_allow_local_targets` : ouvre le fetch de la status
+#   list (draft-ietf-oauth-status-list) aux destinations loopback/privees —
+#   un credential portant le claim `status` est refuse si la liste est
+#   inaccessible. false par defaut (harness de certification uniquement).
+# Desactives par defaut hors harness : voir certification/config.render.toml
+# pour l'activation en certification et samples/oid4vp-verifier-client/ pour
+# un exercice pas-a-pas.

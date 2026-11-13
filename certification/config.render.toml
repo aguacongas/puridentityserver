@@ -62,6 +62,22 @@ federation_enabled = true
 # OpenID4VCI (issue #172) : activation pour la certification locale.
 oid4vci_enabled = true
 
+# OpenID4VP verifier (issue #224) : activation des routes /oid4vp/* pour le
+# plan oid4vp de la suite (voir certification/plans/oid4vp.json).
+oid4vp_enabled = true
+# PKI du verifier commise dans le depot (CA auto-signee + leaf EC P-256) :
+# le `client_id` `x509_hash:` et l'ancre de confiance injectee dans le plan
+# restent stables d'un run a l'autre. Chemin relatif a la racine de travail
+# (/app dans l'image Docker, racine du depot pour le harness local).
+oid4vp_pki_path = "certification/oid4vp-pki.json"
+# JWKS public de la cle qui signe les credentials SD-JWT presents (memes
+# valeurs que `credential.signing_jwk` du plan, sans le prouve `d`) : sans
+# ce reglage le verifier ne controle pas la signature de l'emetteur et le
+# module InvalidCredentialSignature passe en REVIEW au lieu de PASSED.
+# Forme chaine (objet JWKS complet) ; la forme native
+# `[[settings.oid4vp_credential_jwks]]` est egalement acceptee.
+oid4vp_credential_jwks = '{"keys": [{"kty": "EC", "crv": "P-256", "x": "l-amZbOBy3FcN7ckUr6ggZnQio2foe6giifa6uzxU5E", "y": "okaNP5lx9MmQ2e0k39p1qaRV3tY5qhGtHplZVZt0b_w", "kid": "puridentityserver-oid4vp-credential-20261110", "alg": "ES256", "use": "sig"}]}'
+
 # OpenID 2.0 to OpenID Connect Migration 1.0 (issue #169/#201) :
 # validation du chemin flag ON en certification ; le default code reste OFF.
 openid20_migration_enabled = true

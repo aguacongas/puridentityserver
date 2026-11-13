@@ -448,6 +448,24 @@ class Settings(BaseSettings):
     oid4vci_enabled: bool = False
     oid4vp_enabled: bool = False
     mdoc_pki_path: str = ""
+    # `oid4vp_pki_path` : fichier JSON persistant de la PKI du verifier
+    # OpenID4VP (CA racine + leaf de signature, issue #224) ; vide = PKI
+    # ephemere regeneree a chaque demarrage, le `client_id` x509_hash change
+    # alors a chaque redemarrage (incompatible avec le harness de
+    # certification, qui injecte l'ancre de confiance dans son plan).
+    oid4vp_pki_path: str = ""
+    # `oid4vp_credential_jwks` : JWKS public de confiance (liste de JWKs)
+    # pour verifier la signature des credentials SD-JWT presentes ; vide =
+    # signature de l'emetteur non controlee (mode witness : le module
+    # InvalidCredentialSignature du plan de certification passe alors en
+    # REVIEW au lieu de PASSED).
+    oid4vp_credential_jwks: Annotated[tuple[dict[str, object], ...], NoDecode] = ()
+    # `oid4vp_status_list_allow_local_targets` : ouvre le fetch de la status
+    # list (draft-ietf-oauth-status-list) aux destinations loopback ou privees.
+    # Le harness de certification heberge la status list sur
+    # localhost.emobix.co.uk (issue #224) ; false partout ailleurs : un
+    # verifier ne doit pas aller chercher un statut sur son propre reseau.
+    oid4vp_status_list_allow_local_targets: bool = False
     # `federation_entity_identifier` est l'Entity Identifier de l'OP (une URL
     # https sans query ni fragment, spec 1.2) ; vide = l'issuer de l'OP.
     federation_entity_identifier: str = ""
@@ -730,6 +748,28 @@ class Settings(BaseSettings):
             if not isinstance(parsed, list):
                 raise ValueError("PURIDENTITYSERVER_CLIENTS doit être une liste JSON")
             return tuple(parsed)
+        return value
+
+    @field_validator("oid4vp_credential_jwks", mode="before")
+    @classmethod
+    def _parse_oid4vp_credential_jwks(cls, value: object) -> object:
+        """Transforme `PURIDENTITYSERVER_OID4VP_CREDENTIAL_JWKS` (JWKS JSON).
+
+        La valeur d'environnement porte l'objet JWKS complet
+        (`{"keys": [...]}`) ; seules ses clés en sont extraites. En TOML,
+        la forme native `[[oid4vp_credential_jwks]]` (tableau de tables,
+        une par JWK) est acceptée sans transformation.
+        """
+        if isinstance(value, str):
+            import json
+
+            parsed = json.loads(value)
+            if not isinstance(parsed, dict) or not isinstance(parsed.get("keys"), list):
+                raise ValueError(
+                    "PURIDENTITYSERVER_OID4VP_CREDENTIAL_JWKS doit être un objet JWKS "
+                    '({"keys": [...]})'
+                )
+            return tuple(parsed["keys"])
         return value
 
     @field_validator("identity_resources_seed", mode="before")

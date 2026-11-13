@@ -2,7 +2,7 @@
 # Application idempotente des patches du driver de la suite de certification.
 #
 # Reproduit a l'identique le step « Patch du driver » du workflow CI
-# (certification-local.yml) : 4 patches certification/*.patch dans l'ordre
+# (certification-local.yml) : 5 patches certification/*.patch dans l'ordre
 # de reference, puis le timeout de module rendu parametrable via
 # CONFORMANCE_MODULE_TIMEOUT. Rejouable sans dommage : chaque patch est detecte
 # par sa sentinelle (ligne ajoutee unique, testee par contenu — insensible a
@@ -34,6 +34,7 @@ sentinel_of() {
     conformance-alias-release) printf '%s' 'async def release_alias(self, alias, timeout=180):' ;;
     conformance-interrupted-diagnostics) printf '%s' 'async def describe_interruption(self, module_id):' ;;
     conformance-key-rotation) printf '%s' 'async def rotate_op_signing_keys():' ;;
+    conformance-oid4vp-initiator) printf '%s' 'oid4vp_rc = subprocess.call(' ;;
     *) return 1 ;;
   esac
 }
@@ -41,7 +42,7 @@ sentinel_of() {
 # Fichier cible de chaque patch (relatif a la racine du clone de la suite).
 target_of() {
   case "$1" in
-    conformance-key-rotation) printf '%s' 'scripts/run-test-plan.py' ;;
+    conformance-key-rotation|conformance-oid4vp-initiator) printf '%s' 'scripts/run-test-plan.py' ;;
     *) printf '%s' 'scripts/conformance.py' ;;
   esac
 }
@@ -49,11 +50,14 @@ target_of() {
 # conformance-reuse-plan et conformance-stale-plan-recovery retires (issue #132) :
 # chaque run cree ses plans frais (POST /api/plan). Leur purge en fin de run est
 # geree par certification/prune_stale_plans.py (DELETE /api/plan/{id}).
+# conformance-oid4vp-initiator en DERNIER : son contexte est calque sur le
+# run-test-plan.py deja modifie par conformance-key-rotation.
 for patch in \
   conformance-screenshots \
   conformance-alias-release \
   conformance-interrupted-diagnostics \
-  conformance-key-rotation; do
+  conformance-key-rotation \
+  conformance-oid4vp-initiator; do
   target="$SUITE_DIR/$(target_of "$patch")"
   file="$PATCH_DIR/$patch.patch"
   sentinel="$(sentinel_of "$patch")"

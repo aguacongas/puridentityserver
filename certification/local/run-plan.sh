@@ -18,7 +18,7 @@
 #
 # Usage : bash certification/local/run-plan.sh <plan> [--export-dir <dir>]
 #   plans : basic | implicit | hybrid | formpost | dynamic | ciba | ciba-ping | fapi1 | fapi2 |
-#           fapi2-message-signing | ekyc | federation | oid4vci | oid4vci-mdoc
+#           fapi2-message-signing | ekyc | federation | oid4vci | oid4vci-mdoc | oid4vp
 #
 # Variables d'environnement (defauts en accord avec setup.sh) :
 #   REPO_ROOT, SUITE_DIR, LOCAL_DIR  chemins racine du depot / clone suite /
@@ -48,7 +48,7 @@ log() { printf '[run-plan] %s\n' "$*"; }
 usage() {
   echo "Usage : bash certification/local/run-plan.sh <plan> [--export-dir <dir>]"
   echo "  plans : basic | implicit | hybrid | formpost | dynamic | ciba | ciba-ping | fapi1 | fapi2 |"
-  echo "          fapi2-message-signing | ekyc | federation | oid4vci | oid4vci-mdoc"
+  echo "          fapi2-message-signing | ekyc | federation | oid4vci | oid4vci-mdoc | oid4vp"
 }
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then usage; exit 0; fi
@@ -131,8 +131,19 @@ grep -h '"match"' "$gen" | sort -u || true
 export CONFORMANCE_DEV_MODE="1"
 export CONFORMANCE_TOKEN=""
 export DISABLE_SSL_VERIFY="1"
-export CONFORMANCE_MODULE_TIMEOUT="600"
+# Surchargeable par l'appelant (diagnostic rapide en local) ; defaut 600 s.
+export CONFORMANCE_MODULE_TIMEOUT="${CONFORMANCE_MODULE_TIMEOUT:-600}"
 export CONFORMANCE_SERVER="$SUITE_URL"
+# Initiateur OID4VP (issue #224) : appele par le hook WAITING du patch
+# conformance-oid4vp-initiator pour livrer le request_uri aux modules
+# oid4vp-1final-verifier-*. Chemin ABSOLU obligatoire : le driver tourne avec
+# pour cwd le clone de la suite. Forme Windows sous git-bash (cygpath) : le
+# Python natif qui lit cette variable d'environnement ne beneficie pas de la
+# conversion MSYS des arguments. Inerte pour tous les autres plans.
+oid4vp_initiator="$REPO_ROOT/certification/local/oid4vp_initiator.py"
+if command -v cygpath >/dev/null 2>&1; then oid4vp_initiator="$(cygpath -m "$oid4vp_initiator")"; fi
+export OID4VP_INITIATOR="$oid4vp_initiator"
+export OID4VP_INITIATOR_OP_URL="http://127.0.0.1:${OP_PORT:-8000}"
 [ -n "$export_dir" ] || export_dir="$LOCAL_DIR/results/$plan"
 mkdir -p "$export_dir"
 run_log="$LOCAL_DIR/last-$plan.log"

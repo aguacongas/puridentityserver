@@ -56,7 +56,7 @@ on:
         # `ekyc` de `CERTIFICATION_PLANS` (certification/selectors.sh) — le
         # workflow local, lui, épingle la dernière release et n'est pas
         # concerné.
-        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + Dynamic + CIBA + CIBA Ping + FAPI1 + FAPI2 + FAPI2 Message Signing + ekyc + federation + oid4vci + oid4vci-mdoc ; ekyc = identité assurance, federation = OpenID Federation, hors programme officiel)"
+        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + Dynamic + CIBA + CIBA Ping + FAPI1 + FAPI2 + FAPI2 Message Signing + ekyc + federation + oid4vci + oid4vci-mdoc + oid4vp ; ekyc = identité assurance, federation = OpenID Federation, oid4vp = vérificateur OpenID4VP, hors programme officiel)"
         type: choice
         required: false
         default: all
@@ -424,7 +424,7 @@ jobs:
       - name: Dépendances Python du driver officiel (httpx)
         run: python3 -m pip install --disable-pip-version-check --quiet httpx
 
-      - name: Patch du driver (captures de relecture + libération d'alias + diagnostic d'interruption + rotation des clés)
+      - name: Patch du driver (captures de relecture + libération d'alias + diagnostic d'interruption + rotation des clés + initiateur OID4VP)
         # Issue #132 : conformance-reuse-plan et conformance-stale-plan-recovery
         # retires -> chaque run cree ses plans frais (POST /api/plan).
         run: |
@@ -436,6 +436,8 @@ jobs:
           grep -n "describe_interruption" conformance-suite/scripts/conformance.py
           git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-key-rotation.patch"
           grep -n "rotate_op_signing_keys" conformance-suite/scripts/run-test-plan.py
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-oid4vp-initiator.patch"
+          grep -n "oid4vp_rc" conformance-suite/scripts/run-test-plan.py
       - name: Timeout par module piloté par CONFORMANCE_MODULE_TIMEOUT
         # Le driver upstream hardcode timeout=240 dans wait_for_state : on rend
         # cette valeur réglable sans dévier du script officiel (patch sémantique).
@@ -497,6 +499,12 @@ jobs:
           # redirection, issue #211) — le dossier est néanmoins fourni, une
           # régression en REVIEW se verrait donc en échec strict.
           SCREENSHOTS_DIR: ${{ format('{0}/screenshots', github.workspace) }}
+          # Initiateur OID4VP (issue #224) : livraison du request_uri aux
+          # modules oid4vp-1final-verifier-* (hook WAITING du driver). Chemin
+          # absolu (cwd du driver = clone de la suite) ; inerte sur les
+          # autres plans. L'OP cible est l'instance Render herbergee.
+          OID4VP_INITIATOR: ${{ format('{0}/certification/local/oid4vp_initiator.py', github.workspace) }}
+          OID4VP_INITIATOR_OP_URL: ${{ env.OP_URL }}
         run: |
           # Le driver écrit les exports (.zip) dans --export-dir : le créer
           # sinon chaque téléchargement échoue en FileNotFoundError.

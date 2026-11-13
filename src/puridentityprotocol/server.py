@@ -97,6 +97,10 @@ from puridentityserver.infrastructure.jarm import PyJarmEnvelopeSigner
 from puridentityserver.infrastructure.jwe import JWEIdTokenEncrypter, JWERequestObjectDecrypter
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
 from puridentityserver.infrastructure.mdoc_storage import FileMdocPKIRepository
+from puridentityserver.infrastructure.oid4vp_pki import (
+    FileVerifierPKIRepository,
+    InMemoryVerifierPKIRepository,
+)
 from puridentityserver.infrastructure.persistence.readers import build_readers_from_stores
 from puridentityserver.infrastructure.persistence.stores import (
     Stores,
@@ -115,6 +119,7 @@ from puridentityserver.infrastructure.settings import Settings
 from puridentityserver.infrastructure.signed_request_object import (
     PyJWTSignedRequestObjectVerifier,
 )
+from puridentityserver.infrastructure.status_list import StatusListFetcher
 from puridentityserver.infrastructure.tokens import PyJWTTokenManager
 from puridentityserver.interfaces.api.authorize import _TrustChainRedirectResolver, authorize_router
 from puridentityserver.interfaces.api.backchannel_authorize import (
@@ -184,6 +189,30 @@ def _oid4vci_usecase(
         token_manager=token_manager,
         dpop=dpop_validator,
         mdoc_pki_repository=_mdoc_pki_repository(settings),
+    )
+
+
+def _oid4vp_usecase(settings: Settings) -> OID4VPVerifierUseCase | None:
+    """Construit le verifier OpenID4VP si activé, ``None`` sinon.
+
+    La PKI du verifier (CA + leaf de signature du ``client_id`` x509_hash)
+    est persistée quand `oid4vp_pki_path` est renseigné, éphémère sinon.
+    """
+    if not settings.oid4vp_enabled:
+        return None
+    repository = (
+        FileVerifierPKIRepository(settings.oid4vp_pki_path)
+        if settings.oid4vp_pki_path
+        else InMemoryVerifierPKIRepository()
+    )
+    return OID4VPVerifierUseCase(
+        issuer=settings.issuer,
+        pki_repository=repository,
+        credential_jwks=settings.oid4vp_credential_jwks,
+        status_list_fetcher=StatusListFetcher(
+            allow_local_targets=loopback_bind(settings.host)
+            or settings.oid4vp_status_list_allow_local_targets
+        ),
     )
 
 
@@ -438,15 +467,7 @@ class ProtocolDependencies:
             if settings.oid4vci_enabled
             else None
         )
-        self.oid4vp_usecase = (
-            OID4VPVerifierUseCase(
-                issuer=settings.issuer,
-                key_manager=self.key_manager,
-                algorithm=_primary_algorithm(settings),
-            )
-            if settings.oid4vp_enabled
-            else None
-        )
+        self.oid4vp_usecase = _oid4vp_usecase(settings)
         self.session_management = SessionManagementUseCase()
         self.claims_provider = UserStoreClaimsProvider(self.readers.user)
         self.identity_assurance = IdentityAssuranceUseCase(self.claims_provider, self.readers.user)

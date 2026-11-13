@@ -3,19 +3,21 @@ r"""Capture les pages de relecture de l'OP pour la certification (issues #90, #1
 La suite officielle attend une capture d'écran pour 4 modules Core
 (``oidcc-response-type-missing``, ``oidcc-ensure-registered-redirect-uri``,
 ``oidcc-max-age-1``, ``oidcc-prompt-login``), 2 modules FAPI1 servis en page
-HTML, 6 modules propres au plan dynamic et 1 module fédéré : sans image, le
+HTML, 6 modules propres au plan dynamic, 1 module fédéré et 5 modules
+positifs du plan oid4vp (issue #224) : sans image, le
 mode witness remplit ces placeholders avec un PNG 1x1 de secours — le verdict
 tombe juste, mais la preuve est un artifice (issue #161).
 
-Un screenshot n'est utile **que** pour prouver l'affichage d'une page d'erreur
-quand l'OP ne renvoie pas l'erreur par redirection : les 14 autres modules
-FAPI1 et les 4 modules FAPI2 reçoivent leur erreur par 302 vers leur callback
-(issues #160/#178) et passent sans capture (retrait des 18 captures devenues
-inutiles, issue #214).
+Un screenshot sert à prouver l'affichage d'une page d'erreur quand l'OP ne
+renvoie pas l'erreur par redirection : les 14 autres modules FAPI1 et les
+4 modules FAPI2 reçoivent leur erreur par 302 vers leur callback (issues
+#160/#178) et passent sans capture (retrait des 18 captures devenues
+inutiles, issue #214). Les modules oid4vp positifs prouvent au contraire
+l'affichage de la page de résultat du verifier (issue #224).
 
 Ce script rejoue les scénarios contre l'OP réellement déployé avec un
 navigateur headless (Playwright/chromium) et produit, pour chaque module,
-une capture authentique de la page servie par l'OP — 13 PNG au total :
+une capture authentique de la page servie par l'OP — 18 PNG au total :
 
 1. les 4 scénarios Core (paramètre absent, ``redirect_uri`` non enregistrée,
    second ``prompt=login``, second ``max_age=1``) ;
@@ -29,7 +31,13 @@ une capture authentique de la page servie par l'OP — 13 PNG au total :
    dynamique ne crée pas de client ``fapi_enabled``) ;
 4. le scénario fédéré ``invalid-client-id-in-request-object`` (issue #212) :
    client_id d'Entity Identifier inconnu → trust chain injoignable → page
-   400 ``invalid_client`` (RFC 6749 §4.1.2.1), rejouée sans request object.
+   400 ``invalid_client`` (RFC 6749 §4.1.2.1), rejouée sans request object ;
+5. les 5 scénarios positifs du plan oid4vp (issue #224) : le wallet de
+   capture rejoue le round-trip complet (création de la demande, credential
+   SD-JWT signé, réponse ``direct_post.jwt`` chiffrée ECDH-ES) puis capture
+   la page de résultat « Presentation acceptee » du verifier — dont le
+   module ``present-credential-without-status`` (credential sans claim
+   ``status``, accepté sans contrôle de révocation).
 
 Chaque capture est validée (statut, marqueurs de la page) avant export : un
 échec logue l'erreur et le scénario suivant est tenté ; si un fichier attendu
@@ -57,14 +65,17 @@ du driver les lit ensuite via la variable ``SCREENSHOTS_DIR``.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import jwt as pyjwt
+from cryptography.hazmat.primitives.asymmetric import ec
 from jwt import PyJWK
 from playwright.sync_api import (
     APIRequestContext,
@@ -153,6 +164,18 @@ _FEDERATION_PAGE_TEST_NAME = (
 #: Alias du RP fédéré de la suite (.../test/a/<alias>), dont le chemin
 #: ``/INVALID`` est le client_id hors entité envoyé par le module.
 _FEDERATION_SUITE_PATH = "/test/a/puridentityserver-federation"
+
+#: Modules positifs du plan oid4vp laissés en REVIEW par la suite (issue
+#: #224) : après avoir accepté la présentation, le verifier attend une
+#: capture de sa page de résultat. Les 9 modules négatifs terminent PASSED
+#: sur le 4xx immédiat du ``response_uri`` et n'attendent aucune image.
+_OID4VP_TEST_NAMES = (
+    "oid4vp-1final-verifier-happy-flow",
+    "oid4vp-1final-verifier-minimal-cnf-jwk",
+    "oid4vp-1final-verifier-present-credential-without-status",
+    "oid4vp-1final-verifier-request-uri-method-post",
+    "oid4vp-1final-verifier-request-uri-fetched-twice",
+)
 
 
 @dataclass
@@ -269,6 +292,152 @@ def _load_plan_signing_client(plan_path: Path, redirect_uri: str) -> PlanSigning
         private_key=PyJWK.from_dict(key_data).key,
         kid=str(key_data.get("kid", "")),
         redirect_uri=redirect_uri,
+    )
+
+
+@dataclass
+class OID4VPCreatedRequest:
+    """Demande de présentation créée auprès de l'OP pour un scénario oid4vp."""
+
+    request_id: str
+    client_id: str
+    nonce: str
+    request_object: str
+
+
+def _load_oid4vp_credential_signer(plan_path: Path) -> tuple[object, str]:
+    """Charge la clé qui signe les credentials SD-JWT du plan oid4vp.
+
+    Le plan commetté porte le ``credential.signing_jwk`` complet (membre
+    privé ``d``) : c'est la clé dont le JWKS public est déclaré dans
+    ``oid4vp_credential_jwks`` de la config OP, sans laquelle le verifier
+    escamote le contrôle de signature de l'émetteur (mode witness).
+
+    Args:
+        plan_path: chemin du plan ``oid4vp.json``.
+
+    Returns:
+        La clé privée PyJWT et son ``kid``.
+    """
+    payload = json.loads(plan_path.read_text(encoding="utf-8"))
+    key_data = payload["credential"]["signing_jwk"]
+    return PyJWK.from_dict(key_data).key, str(key_data["kid"])
+
+
+def _oid4vp_create(context_request: APIRequestContext, base_url: str) -> OID4VPCreatedRequest:
+    """Crée une demande de présentation (POST /oid4vp/presentation_requests).
+
+    Args:
+        context_request: contexte HTTP du navigateur (cert auto-signé accepté).
+        base_url: URL publique de l'OP.
+
+    Returns:
+        Les identifiants, le nonce et le request object de la demande.
+
+    Raises:
+        RuntimeError: si l'OP refuse ou répond un corps inattendu.
+    """
+    response = context_request.post(
+        f"{base_url.rstrip('/')}/oid4vp/presentation_requests",
+        data=b"{}",
+        headers={"Content-Type": "application/json"},
+    )
+    if response.status != 201:
+        raise RuntimeError(
+            f"POST /oid4vp/presentation_requests : HTTP {response.status} {response.text()[:300]}"
+        )
+    payload = response.json()
+    names = ("request_id", "client_id", "nonce", "request_object")
+    values = [payload.get(name) for name in names]
+    if not all(isinstance(value, str) and value for value in values):
+        raise RuntimeError(f"champs de création inattendus : {payload}")
+    request_id, client_id, nonce, request_object = values
+    return OID4VPCreatedRequest(
+        request_id=request_id,
+        client_id=client_id,
+        nonce=nonce,
+        request_object=request_object,
+    )
+
+
+def _oid4vp_present(
+    created: OID4VPCreatedRequest,
+    credential_key: object,
+    credential_kid: str,
+) -> str:
+    """Rejoue la réponse chiffrée d'un wallet OpenID4VP (``direct_post.jwt``).
+
+    Construit le credential SD-JWT signé avec la clé du plan, le key binding
+    JWT lié au ``nonce`` de la demande, puis chiffle le ``vp_token`` en JWE
+    compact ``ECDH-ES``/``A128GCM`` vers la clé éphémère publiée dans le
+    ``client_metadata`` du request object (``kid`` = empreinte RFC 7638).
+
+    Args:
+        created: demande de présentation créée auprès de l'OP.
+        credential_key: clé privée qui signe les credentials SD-JWT.
+        credential_kid: ``kid`` de cette clé.
+
+    Returns:
+        Le JWE compact à poster au ``response_uri``.
+
+    Raises:
+        RuntimeError: si le request object ne porte aucune clé de
+            chiffrement exploitable.
+    """
+    # Le job de captures n'installe que Playwright + PyJWT : le JWE ECDH-ES
+    # du projet est importé depuis src/ sans installation du package.
+    src = Path(__file__).resolve().parent.parent / "src"
+    if str(src) not in sys.path:
+        sys.path.insert(0, str(src))
+    from puridentityserver.domain.jwe import JWEEncryptionMethod
+    from puridentityserver.infrastructure.jwe import (
+        b64u,
+        ec_jwk,
+        ec_public_key,
+        encrypt_compact_ecdh_es,
+    )
+
+    request_object = pyjwt.decode(created.request_object, options={"verify_signature": False})
+    try:
+        recipient_jwk = request_object["client_metadata"]["jwks"]["keys"][0]
+        recipient = ec_public_key(recipient_jwk)
+        recipient_kid = str(recipient_jwk["kid"])
+    except (KeyError, IndexError, TypeError, ValueError) as error:
+        raise RuntimeError(f"client_metadata sans clé de chiffrement : {error}") from error
+
+    holder = ec.generate_private_key(ec.SECP256R1())
+    now = _now()
+    credential = str(
+        pyjwt.encode(
+            {
+                "vct": "urn:eudi:pid:1",
+                "iat": now,
+                "exp": now + 600,
+                "cnf": {"jwk": ec_jwk(holder.public_key())},
+            },
+            credential_key,
+            algorithm="ES256",
+            headers={"typ": "dc+sd-jwt", "kid": credential_kid},
+        )
+    )
+    # sd_hash : SHA-256 du credential présenté jusqu'au dernier "~" inclus
+    # (RFC 9901 §3.2) — aucune disclosure dans ce scénario de capture.
+    prefix = f"{credential}~"
+    sd_hash = b64u(hashlib.sha256(prefix.encode("ascii")).digest())
+    key_binding = str(
+        pyjwt.encode(
+            {"iat": now, "aud": created.client_id, "nonce": created.nonce, "sd_hash": sd_hash},
+            holder,
+            algorithm="ES256",
+            headers={"typ": "kb+jwt"},
+        )
+    )
+    vp_token = json.dumps({"vp_token": {"pid": [f"{prefix}{key_binding}"]}})
+    return encrypt_compact_ecdh_es(
+        method=JWEEncryptionMethod.A128GCM,
+        plaintext=vp_token.encode("utf-8"),
+        recipient_public_key=recipient,
+        kid=recipient_kid,
     )
 
 
@@ -671,6 +840,58 @@ def _capture_fapi1_scenarios(
         _capture_error_page(page, url, error_code, out / f"{test_name}.png")
 
 
+def _capture_oid4vp_scenarios(
+    page: Page,
+    context_request: APIRequestContext,
+    base_url: str,
+    out: Path,
+    plans_dir: Path,
+) -> None:
+    """Rejoue les 5 scénarios positifs du plan oid4vp (issue #224).
+
+    Pour chaque module, le wallet de capture rejoue le round-trip complet
+    attendu du verifier : création de la demande, credential SD-JWT signé
+    avec la clé du plan, key binding JWT lié au nonce, réponse
+    ``direct_post.jwt`` chiffrée ECDH-ES, puis capture de la page de
+    résultat « Presentation acceptee ». Le credential de capture ne porte
+    aucun claim ``status`` : le scénario vaut aussi pour le module
+    ``present-credential-without-status``. Les 9 modules négatifs terminent
+    PASSED sur le 4xx immédiat du ``response_uri`` et n'attendent aucune
+    image.
+
+    Args:
+        page: page navigateur servant à afficher et capturer le résultat.
+        context_request: contexte HTTP du navigateur (cert auto-signé accepté).
+        base_url: URL publique de l'OP.
+        out: répertoire de sortie des PNG.
+        plans_dir: dossier des plans (clé qui signe les credentials).
+    """
+    credential_key, credential_kid = _load_oid4vp_credential_signer(plans_dir / "oid4vp.json")
+    base = base_url.rstrip("/")
+    for test_name in _OID4VP_TEST_NAMES:
+        created = _oid4vp_create(context_request, base)
+        response = context_request.post(
+            f"{base}/oid4vp/vp_response/{created.request_id}",
+            form={"response": _oid4vp_present(created, credential_key, credential_kid)},
+        )
+        if response.status != 200:
+            raise RuntimeError(
+                f"POST /oid4vp/vp_response : HTTP {response.status} pour {test_name} : "
+                f"{response.text()[:300]}"
+            )
+        redirect_uri = response.json().get("redirect_uri")
+        if not isinstance(redirect_uri, str) or not redirect_uri:
+            raise RuntimeError(f"redirect_uri absent de la réponse pour {test_name}")
+        # L'issuer configuré peut être un hôte interne (harness local :
+        # https://op:9443) : la page de résultat est rejouée sur base_url.
+        _assert_status(page, base + urlsplit(redirect_uri).path, 200)
+        if "<h1>Presentation acceptee</h1>" not in page.content():
+            raise RuntimeError(
+                f"page de résultat inattendue pour {test_name} : {page.content()[:300]}"
+            )
+        _screenshot(page, out / f"{test_name}.png")
+
+
 def _resolve_issuer(request: APIRequestContext, base_url: str) -> str:
     """Issuer OP lu dans le document de discovery, ``base_url`` en repli.
 
@@ -704,9 +925,10 @@ def capture_all(
 ) -> list[Path]:
     """Rejoue les scénarios et écrit les PNG nommés ``<testName>.png``.
 
-    Les familles Core, FAPI1, fédération et dynamic sont indépendantes :
-    l'échec d'une famille est logué sans interrompre les autres (la
-    certification retombe sur le PNG de secours pour les fichiers manquants).
+    Les familles Core, FAPI1, fédération, oid4vp et dynamic sont
+    indépendantes : l'échec d'une famille est logué sans interrompre les
+    autres (la certification retombe sur le PNG de secours pour les
+    fichiers manquants).
     """
     out.mkdir(parents=True, exist_ok=True)
     browser = playwright.chromium.launch()
@@ -730,6 +952,10 @@ def capture_all(
             _capture_federation_scenarios(page, base_url, suite_base, out)
         except Exception as error:
             _LOGGER.error("Captures fédération impossibles : %s", error)
+        try:
+            _capture_oid4vp_scenarios(page, context.request, base_url, out, plans_dir)
+        except Exception as error:
+            _LOGGER.error("Captures oid4vp impossibles : %s", error)
         # En dernier : les scénarios login vident les cookies du contexte,
         # sans effet sur les familles déjà jouées.
         try:
@@ -775,6 +1001,7 @@ def main(argv: list[str] | None = None) -> int:
     expected |= {f"{name}.png" for name in _DYNAMIC_TEST_NAMES}
     expected |= {f"{name}.png" for name, _mode, _error in _FAPI1_PAGE_SCENARIOS}
     expected |= {f"{_FEDERATION_PAGE_TEST_NAME}.png"}
+    expected |= {f"{name}.png" for name in _OID4VP_TEST_NAMES}
     try:
         with sync_playwright() as playwright:
             produced = capture_all(
