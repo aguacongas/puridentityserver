@@ -61,6 +61,7 @@ on:
           - federation
           - oid4vci
           - oid4vci-mdoc
+          - oid4vp
   pull_request:
     paths:
       - "certification/**"
