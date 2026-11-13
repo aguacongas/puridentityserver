@@ -57,7 +57,8 @@ Six étapes numérotées, puis `=== SCÉNARIO OK ===` :
    object **re-signé** portant le claim (OID4VP 1.0 Final §5.10) ;
 4. `POST /oid4vp/vp_response/{request_id}` avec le JWE du wallet -> `200`
    `{"redirect_uri": ".../oid4vp/result/<request_id>"}` ;
-5. `GET <redirect_uri>` -> page HTML `<h1>Presentation acceptee</h1>` ;
+5. `GET <redirect_uri>` -> page HTML `<h1>Presentation acceptee</h1>` listant
+   les claims du credential présenté (liste `<dl>` échappée) ;
 6. contre-épreuve : credential signé par une clé étrangère -> `400`
    `{"error": "invalid_request", "error_description": "signature du
    credential non appariee au JWKS de confiance"}`.

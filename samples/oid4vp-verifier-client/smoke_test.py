@@ -21,7 +21,8 @@ en mode witness) puis joue le round-trip wallet complet en ``direct_post.jwt`` :
 4. ``POST /oid4vp/vp_response/{request_id}`` avec le JWE ``ECDH-ES``/
    ``A128GCM`` du wallet (credential SD-JWT signé + kb-jwt lié au nonce) ->
    200 ``{"redirect_uri": ...}`` ;
-5. ``GET <redirect_uri>`` -> page ``Presentation acceptee`` ;
+5. ``GET <redirect_uri>`` -> page ``Presentation acceptee`` listant les
+   claims du credential présenté (issue #302) ;
 6. contre-épreuve : credential signé par une clé étrangère -> 400
    « signature du credential non appariee au JWKS de confiance ».
 
@@ -244,7 +245,9 @@ def _happy_flow(
     page = http.get(redirect_uri)
     assert page.status_code == 200, page.text
     assert "<h1>Presentation acceptee</h1>" in page.text, page.text
-    print("  [5/6] GET redirect_uri -> page « Presentation acceptee » OK")
+    # Les claims du credential présenté sont listés sur la page (issue #302).
+    assert f"<dd>{_VCT}</dd>" in page.text, page.text
+    print("  [5/6] GET redirect_uri -> page « Presentation acceptee » + claims OK")
 
 
 def _rejection(http: httpx.Client, holder_key: ec.EllipticCurvePrivateKey) -> None:

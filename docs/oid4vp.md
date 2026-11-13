@@ -28,7 +28,7 @@ Réglages complémentaires (voir `src/puridentityserver/infrastructure/settings.
 | `GET /oid4vp/request_uri/{request_id}` | sert le request object (`application/oauth-authz-req+jwt`), idempotent. |
 | `POST /oid4vp/request_uri/{request_id}` | variante `request_uri_method=post` : re-signé avec le `wallet_nonce` reçu en formulaire (OID4VP §5.10). |
 | `POST /oid4vp/vp_response/{request_id}` | reçoit le `response` (JWE compact) du wallet en `application/x-www-form-urlencoded` ; `200 {"redirect_uri": ...}` accepté, `400`/`404` motivé rejeté (RFC 6749 §5.2). |
-| `GET /oid4vp/result/{request_id}` | page HTML du `redirect_uri` : « Presentation acceptee » ou « Presentation refusee » + motif. |
+| `GET /oid4vp/result/{request_id}` | page HTML du `redirect_uri` : « Presentation acceptee » + les claims du credential présenté (liste `<dl>` échappée HTML), ou « Presentation refusee » + motif. |
 
 ## Demandes et réponses
 

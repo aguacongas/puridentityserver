@@ -201,6 +201,7 @@ def test_result_page_renders_outcomes() -> None:
     pending = client.get(f"/oid4vp/result/{created['request_id']}")
     assert pending.status_code == 200
     assert "Presentation refusee" in pending.text
+    assert "<dl>" not in pending.text
 
     wallet = SimulatedWallet()
     response = wallet.respond(created["request_object"])
@@ -209,6 +210,24 @@ def test_result_page_renders_outcomes() -> None:
     assert accepted.status_code == 200
     assert "Presentation acceptee" in accepted.text
     assert created["request_id"] in accepted.text
+    # Les claims du credential accepte sont rendus en liste echappee HTML.
+    assert "<dl>" in accepted.text
+    assert "<dt>vct</dt>" in accepted.text
+    assert "<dd>urn:eudi:pid:1</dd>" in accepted.text
+
+
+def test_result_page_escapes_claim_values() -> None:
+    """Les claims affiches sont echappes HTML (anti-XSS, regle S5131)."""
+    client = _client(_usecase())
+    created = client.post("/oid4vp/presentation_requests", json={}).json()
+    wallet = SimulatedWallet()
+    credential = wallet.credential(extra_claims={"evil": "<script>alert(1)</script>"})
+    response = wallet.respond(created["request_object"], credential=credential)
+    client.post(f"/oid4vp/vp_response/{created['request_id']}", data={"response": response})
+    page = client.get(f"/oid4vp/result/{created['request_id']}")
+    assert page.status_code == 200
+    assert "<script>" not in page.text
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page.text
 
 
 def test_result_page_unknown_request_is_404() -> None:

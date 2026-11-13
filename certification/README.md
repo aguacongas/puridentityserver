@@ -589,7 +589,8 @@ le retrait des 18 captures devenues inutiles est tracé en issue #214. Deux
    issue #168 —, les 2 modules FAPI1 servis en page HTML, le module fédéré
    `invalid-client-id-in-request-object`, issue #212, et les 5 modules
    positifs du plan `oid4vp` — round-trip wallet complet puis page «
-   Presentation acceptee » du verifier, issue #224 — 18 PNG au total) avec
+   Presentation acceptee » du verifier listant les claims du credential
+   présenté, issues #224 et #302 — 18 PNG au total) avec
    chromium headless contre l'OP (`--base-url`),
    **contrôle chaque page
    avant export** (statut 400 + marqueur `<code>` du motif — ou extrait « manquants

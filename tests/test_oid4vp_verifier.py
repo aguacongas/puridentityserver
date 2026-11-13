@@ -871,6 +871,8 @@ def test_result_page_reports_outcomes() -> None:
     assert rejected_page is not None
     assert "Presentation refusee" in rejected_page
     assert "nonce du kb-jwt invalide" in rejected_page
+    # Un rejet n'affiche aucun claim : seul le motif est servi.
+    assert "<dl>" not in rejected_page
 
     created = usecase.create_presentation_request()
     response = wallet.respond(created.request_object)
@@ -878,6 +880,11 @@ def test_result_page_reports_outcomes() -> None:
     accepted_page = usecase.result_page(created.request_id)
     assert accepted_page is not None
     assert "Presentation acceptee" in accepted_page
+    # Les claims du credential accepte sont rendus dans la page.
+    assert "<dt>vct</dt>" in accepted_page
+    assert "<dd>urn:eudi:pid:1</dd>" in accepted_page
+    assert "<dt>iss</dt>" in accepted_page
+    assert "<dd>https://issuer.example</dd>" in accepted_page
 
     assert usecase.result_page("missing") is None
 
