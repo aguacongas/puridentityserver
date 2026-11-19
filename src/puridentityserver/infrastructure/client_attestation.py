@@ -108,7 +108,9 @@ class PyJWTClientAttestationVerifier:
         ``client_id`` retenu (§9-13).
         """
         try:
-            claims = pyjwt.decode(attestation, options={"verify_signature": False})
+            claims = pyjwt.decode(  # NOSONAR(S5659) — lecture seule, ré-claussée après verify
+                attestation, options={"verify_signature": False}
+            )
         except (pyjwt.PyJWTError, KeyError, TypeError):
             return ""
         subject = claims.get("sub")
@@ -124,7 +126,9 @@ class PyJWTClientAttestationVerifier:
         contrôlé la signature et l'absence de clé privée (§9-6).
         """
         try:
-            claims = pyjwt.decode(attestation, options={"verify_signature": False})
+            claims = pyjwt.decode(  # NOSONAR(S5659) — lecture seule, ré-claussée après verify
+                attestation, options={"verify_signature": False}
+            )
         except (pyjwt.PyJWTError, KeyError, TypeError):
             return ""
         cnf = claims.get("cnf")
@@ -236,7 +240,8 @@ class PyJWTClientAttestationVerifier:
 def _signed_header(token: str, expected_typ: str, label: str) -> tuple[str | None, str | None]:
     """Algorithme de l'en-tête JWT contrôlé, ou ``None`` + raison du refus (§9-2 à §9-4)."""
     try:
-        header = pyjwt.get_unverified_header(token)
+        # Lecture seule : la signature est vérifiée ensuite (§9-2 à §9-4).
+        header = pyjwt.get_unverified_header(token)  # NOSONAR(S5659)
     except (pyjwt.PyJWTError, KeyError):
         return None, f"{label} illisible (en-tête JWT absent ou malformé)"
     typ = header.get("typ")

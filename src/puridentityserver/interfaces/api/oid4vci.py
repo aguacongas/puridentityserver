@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from puridentityserver.application.oid4vci import OID4VCIIssuerUseCase
 
 _JSON_MEDIA_TYPE = "application/json"
+_JWT_MEDIA_TYPE = "application/jwt"
 
 #: En-têtes des réponses d'offre : ni cache, ni historique navigateur.
 _NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
@@ -72,9 +73,9 @@ def _mount_metadata(
         # signées en envoyant ``Accept: application/jwt``. Sinon on garde le
         # comportement historique en ``application/json`` non signé.
         accept = request.headers.get("accept", "").lower()
-        if usecase is not None and "application/jwt" in accept:
+        if usecase is not None and _JWT_MEDIA_TYPE in accept:
             token = await usecase.signed_issuer_metadata()
-            return Response(content=token, media_type="application/jwt")
+            return Response(content=token, media_type=_JWT_MEDIA_TYPE)
         # Blocs credential_*_encryption publies seulement si la capability
         # est activee (Settings.oid4vci_encryption_enabled).
         encryption_jwk = await usecase.encryption_jwk() if usecase is not None else None
@@ -195,7 +196,7 @@ def _mount_credential(
             return _error(result.status_code, result.error, result.error_description)
         if encryption is not None:
             sealed = await usecase.seal_credential_response(result, encryption)
-            return Response(content=sealed, media_type="application/jwt")
+            return Response(content=sealed, media_type=_JWT_MEDIA_TYPE)
         return JSONResponse(result, media_type=_JSON_MEDIA_TYPE)
 
 
@@ -331,7 +332,7 @@ async def _credential_payload(
     un refus de déchiffrement est rendu tel quel (JSON d'erreur) sans suite.
     """
     media_type = request.headers.get("content-type", "").partition(";")[0].strip().lower()
-    if media_type != "application/jwt":
+    if media_type != _JWT_MEDIA_TYPE:
         return await _json_object(request)
     decrypted = await usecase.decrypt_credential_request(await request.body())
     if isinstance(decrypted, CredentialError):

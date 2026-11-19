@@ -166,7 +166,8 @@ def test_iaca_certificate_obeys_iso_18013_table_b1() -> None:
 
     # keyUsage critique : keyCertSign + cRLSign seuls.
     key_usage = certificate.extensions.get_extension_for_class(x509.KeyUsage).value
-    assert key_usage.key_cert_sign and key_usage.crl_sign
+    assert key_usage.key_cert_sign
+    assert key_usage.crl_sign
     assert not any(
         (
             key_usage.digital_signature,

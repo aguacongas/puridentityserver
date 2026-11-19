@@ -585,7 +585,7 @@ class OID4VCIIssuerUseCase:
         try:
             token = body.decode("ascii")
             header = protected_header(token)
-        except (UnicodeDecodeError, ValueError):
+        except ValueError:  # couvre UnicodeDecodeError (sous-classe)
             return CredentialError("invalid_request", "requête chiffrée illisible")
         header_error = _request_encryption_header_error(header)
         if header_error is not None:
