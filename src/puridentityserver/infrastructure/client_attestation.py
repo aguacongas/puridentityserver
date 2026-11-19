@@ -108,8 +108,9 @@ class PyJWTClientAttestationVerifier:
         ``client_id`` retenu (§9-13).
         """
         try:
-            claims = pyjwt.decode(  # NOSONAR(S5659) — lecture seule, ré-claussée après verify
-                attestation, options={"verify_signature": False}
+            claims = pyjwt.decode(
+                attestation,
+                options={"verify_signature": False},  # NOSONAR(S5659) — lecture seule
             )
         except (pyjwt.PyJWTError, KeyError, TypeError):
             return ""
@@ -126,8 +127,9 @@ class PyJWTClientAttestationVerifier:
         contrôlé la signature et l'absence de clé privée (§9-6).
         """
         try:
-            claims = pyjwt.decode(  # NOSONAR(S5659) — lecture seule, ré-claussée après verify
-                attestation, options={"verify_signature": False}
+            claims = pyjwt.decode(
+                attestation,
+                options={"verify_signature": False},  # NOSONAR(S5659) — lecture seule
             )
         except (pyjwt.PyJWTError, KeyError, TypeError):
             return ""
