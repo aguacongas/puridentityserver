@@ -180,3 +180,9 @@ class DiscoveryDocument(BaseModel):
     client_registration_types_supported: list[str] | None = None
     federation_registration_endpoint: str | None = None
     authorization_details_types_supported: list[str] | None = None
+    # Attestation client (draft-ietf-oauth-attestation-based-client-auth
+    # §10.1) : les deux listes n'accompagnent la méthode
+    # ``attest_jwt_client_auth`` que si un attester de confiance est
+    # configuré (membres absents sinon, via ``exclude_none``).
+    client_attestation_signing_alg_values_supported: list[str] | None = None
+    client_attestation_pop_signing_alg_values_supported: list[str] | None = None

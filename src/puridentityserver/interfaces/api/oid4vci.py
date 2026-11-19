@@ -15,6 +15,7 @@ from puridentityserver.application.oid4vci import (
     issuer_metadata_payload,
 )
 from puridentityserver.infrastructure.mdoc import generate_mdoc_crl
+from puridentityserver.interfaces.api.dpop_proof import extract_dpop_proof
 from puridentityserver.interfaces.api.forwarded import public_url
 
 if TYPE_CHECKING:
@@ -74,7 +75,13 @@ def _mount_metadata(
         if usecase is not None and "application/jwt" in accept:
             token = await usecase.signed_issuer_metadata()
             return Response(content=token, media_type="application/jwt")
-        return JSONResponse(issuer_metadata_payload(normalized), media_type=_JSON_MEDIA_TYPE)
+        # Blocs credential_*_encryption publies seulement si la capability
+        # est activee (Settings.oid4vci_encryption_enabled).
+        encryption_jwk = await usecase.encryption_jwk() if usecase is not None else None
+        return JSONResponse(
+            issuer_metadata_payload(normalized, encryption_jwk=encryption_jwk),
+            media_type=_JSON_MEDIA_TYPE,
+        )
 
     @router.get(
         CREDENTIAL_VCT_PATH,
@@ -148,17 +155,29 @@ def _mount_credential(
         summary="Endpoint `/credential` OID4VCI (issuance SD-JWT)",
         response_model=None,
     )
-    async def credential(request: Request) -> JSONResponse:
+    async def credential(request: Request) -> Response:
         scheme, _, bearer = request.headers.get("authorization", "").partition(" ")
         if scheme.lower() not in {"bearer", "dpop"} or not bearer.strip():
             return _error(401, "invalid_token", _BEARER_OR_DPOP_REQUIRED)
+        proof, proof_error = extract_dpop_proof(request.headers)
+        if proof_error is not None:
+            return _error(400, "invalid_request", proof_error)
         if usecase is None:
             return _error(
                 501,
                 "not_implemented",
                 "issuance OID4VCI pas encore cablee dans ce deploiement.",
             )
-        payload = await _json_object(request)
+        payload = await _credential_payload(request, usecase)
+        if isinstance(payload, JSONResponse):
+            return payload
+        encryption, encryption_error = await usecase.credential_response_encryption(payload)
+        if encryption_error is not None:
+            return _error(
+                encryption_error.status_code,
+                encryption_error.error,
+                encryption_error.error_description,
+            )
         result = await usecase.issue_credential(
             bearer.strip(),
             credential_configuration_id=_optional_str(payload.get("credential_configuration_id")),
@@ -166,12 +185,17 @@ def _mount_credential(
             requested_format=_optional_str(payload.get("format")),
             proofs=_proof_jwts(payload.get("proofs")),
             auth_scheme=scheme.lower(),
-            dpop_proof=request.headers.get("dpop", ""),
+            dpop_proof=proof,
             htu=public_url(request, trust_proxy_headers=trust_proxy_headers),
             method=request.method,
         )
         if isinstance(result, CredentialError):
+            # OID4VCI s8.3.1 : les erreurs restent en JSON non chiffré,
+            # même quand le chiffrement de la réponse est demandé.
             return _error(result.status_code, result.error, result.error_description)
+        if encryption is not None:
+            sealed = await usecase.seal_credential_response(result, encryption)
+            return Response(content=sealed, media_type="application/jwt")
         return JSONResponse(result, media_type=_JSON_MEDIA_TYPE)
 
 
@@ -296,6 +320,23 @@ async def _json_object(request: Request) -> dict[str, object]:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+async def _credential_payload(
+    request: Request, usecase: OID4VCIIssuerUseCase
+) -> dict[str, object] | JSONResponse:
+    """Lit le corps ``/credential`` : JSON, ou JWE ECDH-ES en ``application/jwt``.
+
+    Un corps ``application/jwt`` est déchiffré avec la clé de l'émetteur ;
+    un refus de déchiffrement est rendu tel quel (JSON d'erreur) sans suite.
+    """
+    media_type = request.headers.get("content-type", "").partition(";")[0].strip().lower()
+    if media_type != "application/jwt":
+        return await _json_object(request)
+    decrypted = await usecase.decrypt_credential_request(await request.body())
+    if isinstance(decrypted, CredentialError):
+        return _error(decrypted.status_code, decrypted.error, decrypted.error_description)
+    return decrypted
 
 
 def _optional_str(value: object) -> str | None:

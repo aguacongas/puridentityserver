@@ -1,4 +1,4 @@
-"""Stockage persistant de la PKI mdoc (IACA + document signer)."""
+"""Stockage persistant de la PKI mdoc (IACA seule, document signer minté au boot)."""
 
 from __future__ import annotations
 
@@ -14,19 +14,19 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_private_key,
 )
 
-from puridentityserver.infrastructure.mdoc import MdocIssuerPKI
+from puridentityserver.infrastructure.mdoc import MdocIaca
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class MdocPKIRepository(Protocol):
-    """Contrat de persistance minimal pour la PKI mdoc."""
+    """Contrat de persistance minimal pour l'IACA mdoc."""
 
-    def load(self) -> MdocIssuerPKI | None:
-        """Charge la PKI persistee, ou ``None`` si rien/donnee invalide."""
+    def load(self) -> MdocIaca | None:
+        """Charge l'IACA persistee, ou ``None`` si rien/donnee invalide."""
 
-    def save(self, pki: MdocIssuerPKI) -> None:
-        """Persiste la PKI."""
+    def save(self, iaca: MdocIaca) -> None:
+        """Persiste l'IACA."""
 
 
 class InMemoryMdocPKIRepository:
@@ -34,33 +34,38 @@ class InMemoryMdocPKIRepository:
 
     def __init__(self) -> None:
         """Initialise le depot vide."""
-        self._pki: MdocIssuerPKI | None = None
+        self._iaca: MdocIaca | None = None
 
-    def load(self) -> MdocIssuerPKI | None:
-        """Rend la PKI en memoire, si elle a ete sauvegardee."""
-        return self._pki
+    def load(self) -> MdocIaca | None:
+        """Rend l'IACA en memoire, si elle a ete sauvegardee."""
+        return self._iaca
 
-    def save(self, pki: MdocIssuerPKI) -> None:
-        """Memorise la PKI en memoire."""
-        self._pki = pki
+    def save(self, iaca: MdocIaca) -> None:
+        """Memorise l'IACA en memoire."""
+        self._iaca = iaca
 
 
 class FileMdocPKIRepository:
-    """Depot fichier (JSON de PEM)."""
+    """Depot fichier (JSON de PEM) : les seuls champs IACA sont lus et ecrits.
+
+    Un depot ancien au format 4 champs (IACA + document signer) reste
+    chargeable : ses deux champs d'IACA sont les seuls consultes, le
+    document signer etant reminté a chaque demarrage.
+    """
 
     def __init__(self, path: str | Path) -> None:
         """Stocke le chemin du fichier persistant."""
         self._path = Path(path)
 
-    def load(self) -> MdocIssuerPKI | None:
-        """Charge la PKI depuis le fichier ; ``None`` si absent/invalide."""
+    def load(self) -> MdocIaca | None:
+        """Charge l'IACA depuis le fichier ; ``None`` si absente/invalide."""
         if not self._path.is_file():
             return None
         try:
             raw = self._path.read_text(encoding="utf-8")
             data = json.loads(raw)
         except (OSError, ValueError):
-            _LOGGER.warning("PKI mdoc illisible sur %s, regeneration", self._path)
+            _LOGGER.warning("IACA mdoc illisible sur %s, regeneration", self._path)
             return None
         if not isinstance(data, dict):
             return None
@@ -69,44 +74,28 @@ class FileMdocPKIRepository:
                 _require_str(data, "issuer_key_pem").encode("ascii"),
                 password=None,
             )
-            signer_key = load_pem_private_key(
-                _require_str(data, "signer_key_pem").encode("ascii"),
-                password=None,
-            )
-            if not isinstance(issuer_key, ec.EllipticCurvePrivateKey) or not isinstance(
-                signer_key, ec.EllipticCurvePrivateKey
-            ):
-                _LOGGER.warning("PKI mdoc : cles non EC sur %s, regeneration", self._path)
+            if not isinstance(issuer_key, ec.EllipticCurvePrivateKey):
+                _LOGGER.warning("IACA mdoc : cle non EC sur %s, regeneration", self._path)
                 return None
             issuer_cert = x509.load_pem_x509_certificate(
                 _require_str(data, "issuer_cert_pem").encode("ascii")
             )
-            signer_cert = x509.load_pem_x509_certificate(
-                _require_str(data, "signer_cert_pem").encode("ascii")
-            )
         except (ValueError, TypeError):
-            _LOGGER.warning("PKI mdoc invalide sur %s, regeneration", self._path)
+            _LOGGER.warning("IACA mdoc invalide sur %s, regeneration", self._path)
             return None
-        return MdocIssuerPKI(
-            issuer_private_key=issuer_key,
-            issuer_certificate=issuer_cert,
-            signer_private_key=signer_key,
-            signer_certificate=signer_cert,
-        )
+        return MdocIaca(private_key=issuer_key, certificate=issuer_cert)
 
-    def save(self, pki: MdocIssuerPKI) -> None:
-        """Persiste la PKI en JSON (PEM) dans le fichier."""
+    def save(self, iaca: MdocIaca) -> None:
+        """Persiste l'IACA en JSON (PEM) dans le fichier."""
         data: dict[str, Any] = {
-            "issuer_key_pem": _pem_private(pki.issuer_private_key),
-            "issuer_cert_pem": _pem_cert(pki.issuer_certificate),
-            "signer_key_pem": _pem_private(pki.signer_private_key),
-            "signer_cert_pem": _pem_cert(pki.signer_certificate),
+            "issuer_key_pem": _pem_private(iaca.private_key),
+            "issuer_cert_pem": _pem_cert(iaca.certificate),
         }
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             self._path.write_text(json.dumps(data), encoding="utf-8")
         except OSError:
-            _LOGGER.warning("Impossible de persister la PKI mdoc sur %s", self._path)
+            _LOGGER.warning("Impossible de persister l'IACA mdoc sur %s", self._path)
 
 
 def _require_str(data: dict[str, Any], key: str) -> str:

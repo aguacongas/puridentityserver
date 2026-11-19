@@ -61,6 +61,28 @@ federation_enabled = true
 
 # OpenID4VCI (issue #172) : activation pour la certification locale.
 oid4vci_enabled = true
+# Chiffrement ECDH-ES des credential requests/reponses (OID4VCI 1.0 s8.2,
+# issue #304) : publication des blocs credential_request_encryption /
+# credential_response_encryption dans les metadata et acceptation des
+# corps /credential en application/jwt. La cle EC P-256 est provisionnee a
+# la premiere usage dans le store de clef partage (load balancing).
+oid4vci_encryption_enabled = true
+# PKI de credential commises (issue #304) : ancre x5c du credential SD-JWT
+# (HAIP-6.1, `credential.trust_anchor_pem` des plans) et PKI IACA du mdoc
+# (document signer minte au boot, `mdoc-iaca.pem` injecte dans le plan
+# oid4vci-mdoc). Chemins relatifs a la racine de travail (/app dans l'image
+# Docker, racine du depot pour le harness local).
+credential_pki_path = "certification/pki/credential-pki.json"
+mdoc_pki_path = "certification/pki/mdoc-iaca.json"
+
+# Authentification client par attestation (issue #304, plans HAIP
+# oid4vci / oid4vci-mdoc) : issuer + cle publique de l'attester de confiance
+# (memes valeurs que `client_attestation.issuer` / `attester_jwks` des plans,
+# sans le prouve `d`). Active la methode `attest_jwt_client_auth` sur /token
+# et /par et sa publication au discovery avec les deux listes d'algorithmes
+# exigees par draft-ietf-oauth-attestation-based-client-auth §10.1.
+client_attestation_issuer = "https://client-attester.example.org/"
+client_attestation_jwks = '{"keys": [{"kty": "EC", "crv": "P-256", "x": "p-_IHEO9b_XZIyW2SHyYrRyMndwcWjGhnhS-yF6HRiY", "y": "_6IzIjawRYvQLdrypBlCqeBh27jR2tLNUq8h86deoe8", "kid": "ct_client_attester_key", "alg": "ES256", "use": "sig"}]}'
 
 # OpenID4VP verifier (issue #224) : activation des routes /oid4vp/* pour le
 # plan oid4vp de la suite (voir certification/plans/oid4vp.json).
@@ -318,12 +340,16 @@ id_token_signed_response_alg = "PS256"
 authorization_signed_response_alg = "PS256"
 jwks = [{ kty = "RSA", e = "AQAB", kid = "puridentityserver-fapi2-client2-20261011", alg = "PS256", n = "0ZageizBn1mdYVtlnvfOx7n-J3_MXhgXgttj7WS3OW1nNc0t9DzeRCzNo2ri3sxqZJyLuNWiCQSjZTZnpixqetRwZhMRfEF0LTp3415IJIePJvH32VoKLchVbF-ZZGt7rWFvZRhquDTS7BgjEZGOhT8C8BaSmgcNNI-GfqNWWQZNmsYtGy3X58J2X7XPyEHHyPDFC8SlRzIAp1fJLFYMNW3kH5EQ5PhCF-aa4PNYeaqQswCRXmZLTRkBHvFM7t3IvIxhOLvbDYRXs5bGtsFBy0j5dkYzUpm72uOPwCjhIhlx2MI0XtnXhzE0C_bxkAZ9Mj_oX6ogleKHi6cxVL92dw" }]
 
-# Client statique OID4VCI (issue #172 / #224) : le plan VCI de la suite exige
-# une configuration client statique (condition GetStaticClientConfiguration),
-# donc un enregistrement prealable cote OP (private_key_jwt, DPoP). Les cles
-# privees correspondantes vivent dans certification/plans/oid4vci.json.
-# Cles EC P-256 / ES256 : la suite genere la preuve JWT du wallet avec le
-# meme JWKS et impose ES256 (VCIGenerateJwtProof).
+# Client statique OID4VCI (issue #172 / #224, bascule HAIP issue #304) : le
+# plan VCI de la suite exige une configuration client statique (condition
+# GetStaticClientConfiguration), donc un enregistrement prealable cote OP.
+# Methode `attest_jwt_client_auth` : les deux plans oid4vci (sd_jwt_vc) et
+# oid4vci-mdoc jouent `oid4vci-1_0-issuer-haip-test-plan`, qui authentifie le
+# client par les en-têtes OAuth-Client-Attestation/-PoP signes par l'attester
+# de confiance (`client_attestation_*` en tete de fichier). Les cles du JWKS
+# ci-dessous servent la preuve JWT du wallet cote suite (EC P-256 / ES256,
+# VCIGenerateJwtProof) ; les cles privees vivent dans
+# certification/plans/oid4vci.json.
 [[settings.clients_seed]]
 client_id = "puridentityserver-oid4vci-client"
 redirect_uris = [
@@ -332,9 +358,11 @@ redirect_uris = [
     "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-mdoc/callback",
     "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-mdoc/callback?dummy1=lorem&dummy2=ipsum",
 ]
-scopes = "openid openid4vci"
+scopes = "openid openid4vci offline_access"
 client_type = "confidential"
-token_endpoint_auth_method = "private_key_jwt"
+token_endpoint_auth_method = "attest_jwt_client_auth"
+fapi2_enabled = true
+require_consent = true
 require_dpop = true
 jwks = [{ kty = "EC", crv = "P-256", x = "odKpJUcrMIJz5oZP9zW2WS5uu6aFTXIvjvA1EJ162n0", y = "kYgAhsqEU1rygzwge47pHWdwrKFuAYl2ApbqTphoZCs", kid = "puridentityserver-oid4vci-client-20261028", alg = "ES256", use = "sig" }]
 
@@ -346,8 +374,10 @@ redirect_uris = [
     "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-mdoc/callback",
     "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-mdoc/callback?dummy1=lorem&dummy2=ipsum",
 ]
-scopes = "openid openid4vci"
+scopes = "openid openid4vci offline_access"
 client_type = "confidential"
-token_endpoint_auth_method = "private_key_jwt"
+token_endpoint_auth_method = "attest_jwt_client_auth"
+fapi2_enabled = true
+require_consent = true
 require_dpop = true
 jwks = [{ kty = "EC", crv = "P-256", x = "s_NWNTpQOVcZXjZcZhq7pvX65ELfUuThVzidyRv1fYY", y = "BJf-9WwA5TxH4Jr_O7didISG75fC3r7XRbw-YVUyq1w", kid = "puridentityserver-oid4vci-client2-20261028", alg = "ES256", use = "sig" }]

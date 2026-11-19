@@ -75,20 +75,26 @@ selector_for() {
     # plan ; client_registration=automatic impose (seule combinaison valide
     # avec la variante FederationEntityMetadata du plan).
     federation) echo 'openid-federation-entity-joined-to-test-federation-op-test-plan[server_metadata=discovery][client_registration=automatic]' ;;
-    # OID4VCI (issue #172 / #224) : plan alpha issuer VCI (hors programme de
-    # certification, la reference finale etant le plan HAIP). Profil `vci`
-    # (pas `vci_haip`) + `private_key_jwt` : le profil HAIP impose
-    # l'attestation wallet (client attestation + key attestation), non
-    # implementee — slice dediee. Toutes les variantes sans valeur par defaut
-    # doivent etre explicites, sinon la creation du plan echoue.
-    # Variante wallet-initiated (authorization_code) avec SD-JWT VC.
-    oid4vci) echo 'oid4vci-1_0-issuer-test-plan[fapi_profile=vci][client_auth_type=private_key_jwt][sender_constrain=dpop][fapi_request_method=unsigned][openid=plain_oauth][fapi_response_mode=plain_response][credential_format=sd_jwt_vc][vci_grant_type=authorization_code][vci_authorization_code_flow_variant=wallet_initiated]' ;;
-    # OID4VCI mdoc (issue #273, tranche 4 de #255) : meme plan issuer alpha
-    # que `oid4vci` avec la variante credential_format=mdoc (mso_mdoc, ISO
-    # 18013-5). La configuration `credential.vical`/`trust_anchor_pem` (checks
-    # VICAL mdoc) reste vide : la suite saute ces controles via
-    # `skipIfStringsMissing`, ce ne sont pas des skips de module.
-    oid4vci-mdoc) echo 'oid4vci-1_0-issuer-test-plan[fapi_profile=vci][client_auth_type=private_key_jwt][sender_constrain=dpop][fapi_request_method=unsigned][openid=plain_oauth][fapi_response_mode=plain_response][credential_format=mdoc][vci_grant_type=authorization_code][vci_authorization_code_flow_variant=wallet_initiated]' ;;
+    # OID4VCI (issues #172 / #304) : plan HAIP issuer — bascule depuis le plan
+    # alpha (profil `vci` + `private_key_jwt`). Le profil HAIP impose
+    # l'attestation client (variante `client_attestation` pinsee par le plan) :
+    # cote OP, seeds oid4vci en `attest_jwt_client_auth` et settings
+    # `client_attestation_*` (issuer + cle attester). Toutes les variantes
+    # sans valeur par defaut doivent etre explicites, sinon la creation du
+    # plan echoue. Variante wallet-initiated (authorization_code), SD-JWT VC.
+    # `credential.trust_anchor_pem` / `status_list_trust_anchor_pem` du plan
+    # portent le PEM de la racine de la PKI credential (certification/pki/
+    # credential-root.pem, HAIP-6.1), regenere par certification/generate_pki.py.
+    oid4vci) echo 'oid4vci-1_0-issuer-haip-test-plan[credential_format=sd_jwt_vc][grant_management=disabled][vci_authorization_code_flow_variant=wallet_initiated]' ;;
+    # OID4VCI mdoc (issues #273 / #304) : meme plan HAIP avec la variante
+    # credential_format=mdoc (mso_mdoc, ISO 18013-5) — HAIP 1.0 §5 : au moins
+    # un des deux formats (SD-JWT VC ou ISO mdoc) doit etre supporte. Les deux
+    # champs `credential.trust_anchor_pem` / `status_list_trust_anchor_pem`
+    # portent le PEM IACA commis (certification/pki/mdoc-iaca.pem, HAIP-6.1) ;
+    # la configuration `credential.vical` (checks VICAL mdoc) reste vide : la
+    # suite saute ces controles via `skipIfStringsMissing`, ce ne sont pas des
+    # skips de module.
+    oid4vci-mdoc) echo 'oid4vci-1_0-issuer-haip-test-plan[credential_format=mdoc][grant_management=disabled][vci_authorization_code_flow_variant=wallet_initiated]' ;;
     # OID4VP (issue #172 / #224) : plan HAIP verifier.
     oid4vp) echo 'oid4vp-1final-verifier-haip-test-plan[credential_format=sd_jwt_vc][response_mode=direct_post.jwt]' ;;
     *) return 1 ;;

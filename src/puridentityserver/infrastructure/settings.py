@@ -447,7 +447,25 @@ class Settings(BaseSettings):
     # `oid4vp_enabled` monte les endpoints de presentation (request/response).
     oid4vci_enabled: bool = False
     oid4vp_enabled: bool = False
+    # `mdoc_pki_path` : fichier JSON persistant de l'IACA mdoc (issue #304,
+    # plans oid4vci-mdoc de la certification) ; vide = IACA ephemere
+    # regeneree a chaque demarrage, l'ancre injectee dans le plan de la
+    # suite ne correspond alors plus a l'IACA emise.
     mdoc_pki_path: str = ""
+    # `credential_pki_path` : fichier JSON persistant de la PKI d'emission
+    # SD-JWT (racine + leaf RSA, issue #304) : le credential porte alors
+    # l'en-tete `x5c` (HAIP section 4.5.1) signe par la leaf, l'ancre
+    # etant commise dans le plan de certification ; vide = pas de `x5c`
+    # (signature par la cle active de l'OP, comportement de developpement).
+    credential_pki_path: str = ""
+    # `oid4vci_encryption_enabled` publie les blocs
+    # `credential_request_encryption` / `credential_response_encryption`
+    # dans les metadonnees de l'emetteur et active le chiffrement ECDH-ES
+    # des credential requests/reponses (OID4VCI 1.0 section 8.2, issue
+    # #304) : la cle EC P-256 est provisionnee a la premiere usage dans le
+    # store de clef partage (load balancing). Desactive par defaut : sans
+    # lui, aucune capability d'encryption n'est annoncee ni acceptee.
+    oid4vci_encryption_enabled: bool = False
     # `oid4vp_pki_path` : fichier JSON persistant de la PKI du verifier
     # OpenID4VP (CA racine + leaf de signature, issue #224) ; vide = PKI
     # ephemere regeneree a chaque demarrage, le `client_id` x509_hash change
@@ -466,6 +484,15 @@ class Settings(BaseSettings):
     # localhost.emobix.co.uk (issue #224) ; false partout ailleurs : un
     # verifier ne doit pas aller chercher un statut sur son propre reseau.
     oid4vp_status_list_allow_local_targets: bool = False
+    # `client_attestation_issuer` / `client_attestation_jwks` : identifiant
+    # de l'attester de confiance et clés publiques servant a verifier les
+    # en-têtes d'attestation client (`attest_jwt_client_auth`,
+    # draft-ietf-oauth-attestation-based-client-auth §5.1) ; les deux
+    # renseignes activent la methode : elle est acceptee sur /token et /par
+    # et publiee au discovery avec les deux listes d'algorithmes exigees
+    # par §10.1. Sans configuration, la methode n'est ni acceptee ni publiee.
+    client_attestation_issuer: str = ""
+    client_attestation_jwks: Annotated[tuple[dict[str, object], ...], NoDecode] = ()
     # `federation_entity_identifier` est l'Entity Identifier de l'OP (une URL
     # https sans query ni fragment, spec 1.2) ; vide = l'issuer de l'OP.
     federation_entity_identifier: str = ""
@@ -767,6 +794,28 @@ class Settings(BaseSettings):
             if not isinstance(parsed, dict) or not isinstance(parsed.get("keys"), list):
                 raise ValueError(
                     "PURIDENTITYSERVER_OID4VP_CREDENTIAL_JWKS doit être un objet JWKS "
+                    '({"keys": [...]})'
+                )
+            return tuple(parsed["keys"])
+        return value
+
+    @field_validator("client_attestation_jwks", mode="before")
+    @classmethod
+    def _parse_client_attestation_jwks(cls, value: object) -> object:
+        """Transforme `PURIDENTITYSERVER_CLIENT_ATTESTATION_JWKS` (JWKS JSON).
+
+        La valeur d'environnement porte l'objet JWKS complet
+        (`{"keys": [...]}`) ; seules ses clés en sont extraites. En TOML,
+        la forme native `[[client_attestation_jwks]]` (tableau de tables,
+        une par JWK) est acceptée sans transformation.
+        """
+        if isinstance(value, str):
+            import json
+
+            parsed = json.loads(value)
+            if not isinstance(parsed, dict) or not isinstance(parsed.get("keys"), list):
+                raise ValueError(
+                    "PURIDENTITYSERVER_CLIENT_ATTESTATION_JWKS doit être un objet JWKS "
                     '({"keys": [...]})'
                 )
             return tuple(parsed["keys"])

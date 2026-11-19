@@ -27,6 +27,7 @@ from puridentityserver.infrastructure.mdoc import (
     _issuer_common_name,
     _private_cose_key,
     generate_mdoc_crl,
+    generate_mdoc_iaca,
     generate_mdoc_pki,
 )
 
@@ -128,6 +129,89 @@ def test_document_signer_certificate_obeys_iso_18013_table_b3() -> None:
     assert ski.digest == hashlib.sha1(spki[-65:]).digest()
 
 
+def test_iaca_certificate_obeys_iso_18013_table_b1() -> None:
+    """Profil ISO 18013-5 Table B.1 de l'IACA (ancre de confiance mdoc).
+
+    Régression issue #304 : la suite de conformance valide l'ancre
+    injectée dans le plan (``credential.trust_anchor_pem``) contre ce
+    profil ; tout écart y est un FAILURE bloquant pour le plan
+    ``oid4vci-mdoc`` (ValidateMdocTrustAnchorIacaCertificateProfile).
+    """
+    contact = "https://op.example.com"
+    iaca = generate_mdoc_iaca(contact, datetime(2026, 1, 1, tzinfo=timezone.utc))
+    certificate = iaca.certificate
+    critical = {ext.oid for ext in certificate.extensions if ext.critical}
+
+    # Seuls basicConstraints et keyUsage peuvent être critiques (Table B.1).
+    assert critical == {ExtensionOID.BASIC_CONSTRAINTS, ExtensionOID.KEY_USAGE}
+
+    # Sujet C = FR + CN portant le contact, sujet = issuer (auto-signé).
+    countries = certificate.subject.get_attributes_for_oid(NameOID.COUNTRY_NAME)
+    assert [attribute.value for attribute in countries] == [MDOC_ISSUING_COUNTRY]
+    common_names = certificate.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+    assert [attribute.value for attribute in common_names] == [f"{contact} IACA"]
+    assert certificate.subject == certificate.issuer
+    public_key = certificate.public_key()
+    assert isinstance(public_key, ec.EllipticCurvePublicKey)
+    public_key.verify(
+        certificate.signature,
+        certificate.tbs_certificate_bytes,
+        ec.ECDSA(certificate.signature_hash_algorithm),  # type: ignore[arg-type]
+    )
+
+    # basicConstraints ca + pathLenConstraint = 0, critique.
+    constraints = certificate.extensions.get_extension_for_class(x509.BasicConstraints).value
+    assert constraints.ca is True
+    assert constraints.path_length == 0
+
+    # keyUsage critique : keyCertSign + cRLSign seuls.
+    key_usage = certificate.extensions.get_extension_for_class(x509.KeyUsage).value
+    assert key_usage.key_cert_sign and key_usage.crl_sign
+    assert not any(
+        (
+            key_usage.digital_signature,
+            key_usage.content_commitment,
+            key_usage.key_encipherment,
+            key_usage.data_encipherment,
+            key_usage.key_agreement,
+        )
+    )
+
+    # issuerAltName portant le contact (rfc822Name ou URI exigés).
+    ian = certificate.extensions.get_extension_for_class(x509.IssuerAlternativeName).value
+    assert [name.value for name in ian] == [contact]
+
+    # Validité ≤ 20 ans (7305 j) et SKI = SHA-1 de la clé publique.
+    validity = certificate.not_valid_after_utc - certificate.not_valid_before_utc
+    assert validity <= timedelta(days=7305)
+    ski = certificate.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value
+    spki = certificate.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    assert ski.digest == hashlib.sha1(spki[-65:]).digest()
+
+
+def test_generate_mdoc_pki_reuses_supplied_iaca() -> None:
+    """L'IACA fournie sert d'ancre : le document signer en est émis.
+
+    Le CDP du signer reste calé sur l'émetteur courant (contact runtime),
+    pas sur le contact de documentation de l'IACA persistée.
+    """
+    generated = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    iaca = generate_mdoc_iaca("https://docs.example.com", generated)
+    pki = generate_mdoc_pki("https://op.example.com", generated, iaca=iaca)
+
+    assert pki.issuer_certificate == iaca.certificate
+    assert (
+        pki.issuer_private_key.private_numbers().private_value
+        == iaca.private_key.private_numbers().private_value
+    )
+    assert pki.signer_certificate.issuer == iaca.certificate.subject
+    points = pki.signer_certificate.extensions.get_extension_for_class(
+        x509.CRLDistributionPoints
+    ).value
+    assert points[0].full_name is not None
+    assert [name.value for name in points[0].full_name] == ["https://op.example.com/crl/mdoc.crl"]
+
+
 def test_generate_mdoc_pki_caps_common_names_at_x509_limit() -> None:
     """Les CN restent sous la limite X.509 (64) pour un issuer long.
 
@@ -210,7 +294,8 @@ def test_issue_produces_verifiable_issuer_signed() -> None:
 
     # issuerAuth : COSE Sign1 en tableau nu (sans tag CBOR 18, exigence des
     # parseurs mdoc dont CoseSign1.fromDataItem), signature vérifiable,
-    # x5chain de deux en unprotected.
+    # x5chain du seul document signer en unprotected (l'IACA est l'ancre,
+    # hors chaîne — ISO 18013-5 §9.1.2.4).
     auth = outer["issuerAuth"]
     assert isinstance(auth, list)
     assert len(auth) == 4
@@ -219,7 +304,9 @@ def test_issue_produces_verifiable_issuer_signed() -> None:
     assert message.verify_signature() is True
     protected = cbor2.loads(message.phdr_encoded)
     assert protected[1] == -7
-    assert len(message.uhdr_encoded[X5chain]) == 2
+    assert len(message.uhdr_encoded[X5chain]) == 1
+    chain_der = message.uhdr_encoded[X5chain][0]
+    assert chain_der == pki.signer_certificate.public_bytes(Encoding.DER)
 
 
 def test_issue_embeds_device_key_and_validity() -> None:

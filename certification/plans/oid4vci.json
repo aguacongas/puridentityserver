@@ -5,6 +5,13 @@
   "server": {
     "discoveryUrl": "{OPURL}/.well-known/openid-configuration"
   },
+  "resource": {
+    "resourceUrl": "{OPURL}/protected-resource"
+  },
+  "credential": {
+    "trust_anchor_pem": "-----BEGIN CERTIFICATE-----\nMIIDJzCCAg+gAwIBAgIUMzBWAi0bqGiqEe/6vkl+ajCQjlAwDQYJKoZIhvcNAQEL\nBQAwKjEoMCYGA1UEAwwfUHVySWRlbnRpdHlTZXJ2ZXIgY3JlZGVudGlhbCBDQTAe\nFw0yNjExMTUyMTA0MzBaFw0zNjExMTIyMTA5MzBaMCoxKDAmBgNVBAMMH1B1cklk\nZW50aXR5U2VydmVyIGNyZWRlbnRpYWwgQ0EwggEiMA0GCSqGSIb3DQEBAQUAA4IB\nDwAwggEKAoIBAQDX6Cfy9svDx/FoLTFoJNRsd94Nh3j6TgAhPMIfXAZ6h93RhN3D\n3XNhZq3Weyi3r33hUvte27eJ2nosGT3u4mMlmwK+LCBsCH96CUKw1buyk6fC+CvK\nU4eWCwfgqLBb+Mhef67fqYNdmfoSDEv3iJGeuTWMdDMSXk+i85Icx9wIWSr8eMJR\n1Qk25wS4hAHPuodLBhL8oD6UazE48KxE4C0QZSNFRYpwHFlKX8qbkMIHHKdIuUXJ\npos0WPVQqK9ivG6wLewi/XwUHbvlHNWtih8xUazagHi9EEzcwhInr5CEG6JZg9+o\nstDlZENpclcNFOD8fKI+msaPpj7gY7uMaYwBAgMBAAGjRTBDMBIGA1UdEwEB/wQI\nMAYBAf8CAQAwDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTJKlQPovjpYYzSWxun\n1mRbPvAXZTANBgkqhkiG9w0BAQsFAAOCAQEAego32gxcHONon3ZPFb2YlqPVu+q0\n0PkQYXJiBS0daQElIUCIEVI/l9uHiynp/TdBvVpkHGrDFwFs+0TMHLfL1ND8Y+hY\nPm0wzBW6uFE/gLLmVyjdZr/xVYR432Q6+SxmgYVUcDpVezG/7YtSv4L0zejp5JnR\nqtIPGaCqzkukntv6EFAts3XhNF34S5Mf/XLcsgPqXO4yCCfQIkDvkUXR95o0V9ru\nifwEBsawuQaVZpG60ULaBwC5dZPk5kKp61IEhj87N5M2aiq+Ng0fSykvG4AKKoTF\nVFJcef/u7fBFF7kIR2aj8rKUhKdc9ftjy5qQ0szBeQqC0CT6ZAImYLZTTQ==\n-----END CERTIFICATE-----\n",
+    "status_list_trust_anchor_pem": "-----BEGIN CERTIFICATE-----\nMIIDJzCCAg+gAwIBAgIUMzBWAi0bqGiqEe/6vkl+ajCQjlAwDQYJKoZIhvcNAQEL\nBQAwKjEoMCYGA1UEAwwfUHVySWRlbnRpdHlTZXJ2ZXIgY3JlZGVudGlhbCBDQTAe\nFw0yNjExMTUyMTA0MzBaFw0zNjExMTIyMTA5MzBaMCoxKDAmBgNVBAMMH1B1cklk\nZW50aXR5U2VydmVyIGNyZWRlbnRpYWwgQ0EwggEiMA0GCSqGSIb3DQEBAQUAA4IB\nDwAwggEKAoIBAQDX6Cfy9svDx/FoLTFoJNRsd94Nh3j6TgAhPMIfXAZ6h93RhN3D\n3XNhZq3Weyi3r33hUvte27eJ2nosGT3u4mMlmwK+LCBsCH96CUKw1buyk6fC+CvK\nU4eWCwfgqLBb+Mhef67fqYNdmfoSDEv3iJGeuTWMdDMSXk+i85Icx9wIWSr8eMJR\n1Qk25wS4hAHPuodLBhL8oD6UazE48KxE4C0QZSNFRYpwHFlKX8qbkMIHHKdIuUXJ\npos0WPVQqK9ivG6wLewi/XwUHbvlHNWtih8xUazagHi9EEzcwhInr5CEG6JZg9+o\nstDlZENpclcNFOD8fKI+msaPpj7gY7uMaYwBAgMBAAGjRTBDMBIGA1UdEwEB/wQI\nMAYBAf8CAQAwDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTJKlQPovjpYYzSWxun\n1mRbPvAXZTANBgkqhkiG9w0BAQsFAAOCAQEAego32gxcHONon3ZPFb2YlqPVu+q0\n0PkQYXJiBS0daQElIUCIEVI/l9uHiynp/TdBvVpkHGrDFwFs+0TMHLfL1ND8Y+hY\nPm0wzBW6uFE/gLLmVyjdZr/xVYR432Q6+SxmgYVUcDpVezG/7YtSv4L0zejp5JnR\nqtIPGaCqzkukntv6EFAts3XhNF34S5Mf/XLcsgPqXO4yCCfQIkDvkUXR95o0V9ru\nifwEBsawuQaVZpG60ULaBwC5dZPk5kKp61IEhj87N5M2aiq+Ng0fSykvG4AKKoTF\nVFJcef/u7fBFF7kIR2aj8rKUhKdc9ftjy5qQ0szBeQqC0CT6ZAImYLZTTQ==\n-----END CERTIFICATE-----\n"
+  },
   "browser": [
     {
       "match": "{OPURL}/authorize*",
@@ -96,7 +103,7 @@
   },
   "client": {
     "client_id": "puridentityserver-oid4vci-client",
-    "scope": "openid openid4vci",
+    "scope": "openid openid4vci offline_access",
     "jwks": {
       "keys": [
         {
@@ -114,7 +121,7 @@
   },
   "client2": {
     "client_id": "puridentityserver-oid4vci-client2",
-    "scope": "openid openid4vci",
+    "scope": "openid openid4vci offline_access",
     "jwks": {
       "keys": [
         {
@@ -126,6 +133,99 @@
           "kid": "puridentityserver-oid4vci-client2-20261028",
           "alg": "ES256",
           "use": "sig"
+        }
+      ]
+    }
+  },
+  "override": {
+    "fapi2-security-profile-final-user-rejects-authentication": {
+      "browser": [
+        {
+          "match": "{OPURL}/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "{OPURL}/login*",
+              "commands": [
+                ["text", "name", "username", "alice@example.com"],
+                ["text", "name", "password", "password"],
+                ["click", "css", "button[type=submit]"]
+              ]
+            },
+            {
+              "task": "Consent (refus attendu)",
+              "optional": true,
+              "match": "{OPURL}/consent*",
+              "commands": [
+                ["click", "css", "button[name=action][value=deny]"]
+              ]
+            },
+            {
+              "task": "Attente de l'envoi en query",
+              "optional": true,
+              "match": "{SUITEURL}test/a/*/callback?*",
+              "commands": [
+                ["wait", "id", "submission_complete", 30]
+              ]
+            },
+            {
+              "task": "Attente de l'envoi en fragment",
+              "optional": true,
+              "match": "{SUITEURL}test/a/*/callback#*",
+              "commands": [
+                ["wait", "id", "submission_complete", 30]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "fapi2-security-profile-final-par-ensure-reused-request-uri-prior-to-auth-completion-succeeds": {
+      "browser": [
+        {
+          "match": "{OPURL}/authorize*",
+          "match-limit": 1,
+          "tasks": []
+        },
+        {
+          "match": "{OPURL}/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "{OPURL}/login*",
+              "commands": [
+                ["text", "name", "username", "alice@example.com"],
+                ["text", "name", "password", "password"],
+                ["click", "css", "button[type=submit]"]
+              ]
+            },
+            {
+              "task": "Consent",
+              "optional": true,
+              "match": "{OPURL}/consent*",
+              "commands": [
+                ["click", "css", "button[name=action][value=authorize]"]
+              ]
+            },
+            {
+              "task": "Attente de l'envoi en query",
+              "optional": true,
+              "match": "{SUITEURL}test/a/*/callback?*",
+              "commands": [
+                ["wait", "id", "submission_complete", 30]
+              ]
+            },
+            {
+              "task": "Attente de l'envoi en fragment",
+              "optional": true,
+              "match": "{SUITEURL}test/a/*/callback#*",
+              "commands": [
+                ["wait", "id", "submission_complete", 30]
+              ]
+            }
+          ]
         }
       ]
     }

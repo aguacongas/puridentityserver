@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+import base64
+from datetime import datetime, timedelta, timezone
 
 import jwt as pyjwt
+from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
 
 from puridentityserver.application.oid4vci import (
     CREDENTIAL_CONFIGURATION_ID,
+    REVOKED_ACCESS_TOKEN_ERROR,
     CredentialError,
     OID4VCIIssuerUseCase,
     credential_vct,
@@ -18,8 +21,12 @@ from puridentityserver.application.oid4vci import (
 from puridentityserver.domain.authorization import Scope
 from puridentityserver.domain.dpop import DPoPProof
 from puridentityserver.domain.jwks import JWTAlgorithm
+from puridentityserver.domain.revocation import RevokedToken, token_hash
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
 from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKeyPairRepository
+from puridentityserver.infrastructure.persistence.memory.revoked_tokens import (
+    InMemoryRevokedTokenRepository,
+)
 from puridentityserver.infrastructure.tokens import PyJWTTokenManager
 from puridentityserver.interfaces.domain.dpop import DpopValidationError
 
@@ -84,7 +91,9 @@ def _usecase_with(
     )
 
 
-async def _ready_usecase() -> tuple[OID4VCIIssuerUseCase, str]:
+async def _ready_usecase(
+    revoked_tokens: InMemoryRevokedTokenRepository | None = None,
+) -> tuple[OID4VCIIssuerUseCase, str]:
     """Prépare un émetteur avec une clé active et un access token valide."""
     token_manager = _token_manager()
     now = int(datetime.now(timezone.utc).timestamp())
@@ -103,6 +112,7 @@ async def _ready_usecase() -> tuple[OID4VCIIssuerUseCase, str]:
         key_manager=token_manager._key_manager,
         algorithm=JWTAlgorithm.RS256,
         token_manager=token_manager,
+        revoked_tokens=revoked_tokens,
     )
     return usecase, token
 
@@ -125,11 +135,61 @@ def test_issuer_issues_sdjwt_credential_for_valid_access_token() -> None:
         assert signed.count(".") == 2
         header = pyjwt.get_unverified_header(signed)
         assert header["typ"] == "dc+sd-jwt"
+        # Sans PKI d'émission configurée (dev), aucun ``x5c`` n'est émis.
+        assert "x5c" not in header
         claims = pyjwt.decode(signed, options={"verify_signature": False})
         assert claims["vct"] == credential_vct(ISSUER)
         assert claims["sub"] == "alice"
         # La JWK de la preuve est liée au credential (OID4VCI 1.0 §7.1).
         assert claims["cnf"]["jwk"]["kty"] == "RSA"
+
+    asyncio.run(_task())
+
+
+def test_issued_sdjwt_carries_x5c_signed_by_credential_pki_leaf() -> None:
+    """HAIP section 4.5.1 : ``x5c`` présent et signature vérifiable par la leaf.
+
+    Régression issue #304 : avec `credential_pki_path` configuré, le
+    credential est signé par la leaf RSA de la PKI d'émission (alg RS256
+    comme la metadata l'annonce) et porte la chaîne ``[leaf]`` attendue
+    par ValidateSdJwtCredentialX5cCertificateChain.
+    """
+    from puridentityserver.infrastructure.credential_pki import (
+        InMemoryCredentialPKIRepository,
+        generate_credential_pki,
+    )
+
+    async def _task() -> None:
+        usecase, token = await _ready_usecase()
+        repository = InMemoryCredentialPKIRepository()
+        repository.save(generate_credential_pki())
+        usecase_with_pki = OID4VCIIssuerUseCase(
+            issuer=ISSUER,
+            key_manager=usecase._key_manager,  # type: ignore[attr-defined]
+            algorithm=JWTAlgorithm.RS256,
+            token_manager=usecase._token_manager,  # type: ignore[attr-defined]
+            credential_pki_repository=repository,  # type: ignore[arg-type]
+        )
+        nonce = (await usecase_with_pki.issue_nonce())["c_nonce"]
+        result = await usecase_with_pki.issue_credential(
+            token,
+            credential_configuration_id=CREDENTIAL_CONFIGURATION_ID,
+            proofs=(_proof(nonce),),
+        )
+        assert isinstance(result, dict)
+        signed = result["credentials"][0]["credential"].split("~")[0]
+        header = pyjwt.get_unverified_header(signed)
+        pki = repository.load()
+        assert pki is not None
+        assert header["alg"] == "RS256"
+        assert header["kid"] == pki.kid
+        # ``x5c`` en base64 standard (RFC 7515 §4.1.6), leaf seule.
+        assert header["x5c"] == pki.x5c
+        certificate = x509.load_der_x509_certificate(base64.b64decode(header["x5c"][0]))
+        claims = pyjwt.decode(signed, key=certificate.public_key(), algorithms=["RS256"])
+        assert claims["vct"] == credential_vct(ISSUER)
+        # L'ancre du dépôt est le parent de la leaf (hors chaîne ``x5c``).
+        assert certificate.issuer == pki.root_certificate.subject
 
     asyncio.run(_task())
 
@@ -165,6 +225,37 @@ def test_issuer_rejects_invalid_access_token() -> None:
         )
         assert isinstance(error, CredentialError)
         assert error.error == "invalid_token"
+        assert error.status_code == 401
+
+    asyncio.run(_task())
+
+
+def test_issuer_rejects_revoked_access_token() -> None:
+    """RFC 6749 §4.1.2/§5.2 : un jeton sur la denylist est refuse (401).
+
+    Regression issue #304 (module attempt-reuse-authorization-code) : le
+    rejeu du code revoque l access token, et le credential endpoint doit
+    l opposer avant toute emission.
+    """
+
+    async def _task() -> None:
+        revoked = InMemoryRevokedTokenRepository()
+        usecase, token = await _ready_usecase(revoked)
+        await revoked.save(
+            RevokedToken(
+                token_hash=token_hash(token),
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=600),
+            )
+        )
+        nonce = (await usecase.issue_nonce())["c_nonce"]
+        error = await usecase.issue_credential(
+            token,
+            credential_configuration_id=CREDENTIAL_CONFIGURATION_ID,
+            proofs=(_proof(nonce),),
+        )
+        assert isinstance(error, CredentialError)
+        assert error.error == "invalid_token"
+        assert error.error_description == REVOKED_ACCESS_TOKEN_ERROR
         assert error.status_code == 401
 
     asyncio.run(_task())

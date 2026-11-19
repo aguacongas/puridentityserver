@@ -5,7 +5,7 @@ Le support est désactivé par défaut : aucune route n'est montée dans ce cas.
 
 from __future__ import annotations
 
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlparse, urlsplit
 
 import jwt as _jwt
 import jwt as pyjwt
@@ -149,6 +149,19 @@ def test_credential_rejects_invalid_bearer() -> None:
     assert response.status_code == 401
 
 
+def test_credential_rejects_duplicate_dpop_headers() -> None:
+    # RFC 9449 7.1 : un seul en-tête DPoP par message, sinon invalid_request.
+    settings = Settings(oid4vci_enabled=True)
+    client = TestClient(create_app(settings=settings))
+    response = client.post(
+        "/credential",
+        json={"credential_configuration_id": "puridentityserver-sdjwt-vc"},
+        headers=[("Authorization", "DPoP token"), ("DPoP", "proof-one"), ("DPoP", "proof-two")],
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_request"
+
+
 def test_deferred_and_notification_http() -> None:
     import json as _json
     import time
@@ -232,3 +245,83 @@ def test_deferred_and_notification_http() -> None:
             headers=headers,
         )
         assert accepted.status_code == 204
+
+
+def test_credential_refuses_access_token_after_code_reuse() -> None:
+    """RFC 6749 §4.1.2 : le rejeu du code revoque l AT (401 sur /credential).
+
+    Regression issue #304 (module attempt-reuse-authorization-code) : le
+    credential endpoint du plan HAIP est le « resource endpoint » appele
+    par la suite apres le replay du code — il doit opposer la denylist.
+    """
+    settings = Settings(
+        oid4vci_enabled=True,
+        clients_seed=(
+            {
+                "client_id": "wallet-replay",
+                "client_secret": "secret-replay",
+                "redirect_uris": ["https://app.example/callback"],
+                "scopes": "openid openid4vci",
+                "client_type": "confidential",
+            },
+        ),
+        identity_seed_users={"alice": {"email": "alice@example.com", "password": "password"}},
+    )
+    with TestClient(create_app(settings=settings)) as client:
+        login = client.post(
+            "/login",
+            data={"username": "alice@example.com", "password": "password", "next": "/"},
+            follow_redirects=False,
+        )
+        assert login.status_code == 302
+
+        auth = client.get(
+            "/authorize",
+            params={
+                "response_type": "code",
+                "client_id": "wallet-replay",
+                "redirect_uri": "https://app.example/callback",
+                "scope": "openid openid4vci",
+                "state": "st-replay",
+            },
+            follow_redirects=False,
+        )
+        assert auth.status_code == 302
+        code = parse_qs(urlparse(auth.headers["location"]).query)["code"][0]
+
+        exchange = client.post(
+            "/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": "https://app.example/callback",
+                "client_id": "wallet-replay",
+                "client_secret": "secret-replay",
+            },
+        )
+        assert exchange.status_code == 200, exchange.text
+        token = exchange.json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        body = {"credential_configuration_id": "puridentityserver-sdjwt-vc"}
+
+        # L AT est encore valide : le controle de preuve est le premier refuse.
+        before = client.post("/credential", json=body, headers=headers)
+        assert before.status_code == 400
+        assert before.json()["error"] == "invalid_proof"
+
+        replay = client.post(
+            "/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": "https://app.example/callback",
+                "client_id": "wallet-replay",
+                "client_secret": "secret-replay",
+            },
+        )
+        assert replay.status_code == 400
+        assert replay.json()["error"] == "invalid_grant"
+
+        after = client.post("/credential", json=body, headers=headers)
+        assert after.status_code == 401
+        assert after.json()["error"] == "invalid_token"

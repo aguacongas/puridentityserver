@@ -122,9 +122,12 @@ class TokenEndpointAuthMethod(str, Enum):
     client via en-tête HTTP Basic ou champ de formulaire),
     ``client_secret_jwt`` (assertion JWT signée HMAC avec le secret
     partagé), ``private_key_jwt`` (assertion signée avec une clé privée
-    dont la publique est enregistrée via ``jwks`` / ``jwks_uri``) et
+    dont la publique est enregistrée via ``jwks`` / ``jwks_uri``),
     ``tls_client_auth`` / ``self_signed_tls_client_auth`` (certificat
-    client mTLS, RFC 8705).
+    client mTLS, RFC 8705) et ``attest_jwt_client_auth`` (attestation
+    client en en-têtes HTTP, draft-ietf-oauth-attestation-based-client-auth
+    §6 — publiée au discovery uniquement si un attester de confiance est
+    configuré).
     """
 
     NONE = "none"
@@ -134,6 +137,7 @@ class TokenEndpointAuthMethod(str, Enum):
     PRIVATE_KEY_JWT = "private_key_jwt"
     TLS_CLIENT_AUTH = "tls_client_auth"
     SELF_SIGNED_TLS_CLIENT_AUTH = "self_signed_tls_client_auth"
+    ATTEST_JWT_CLIENT_AUTH = "attest_jwt_client_auth"
 
 
 @dataclass(frozen=True, slots=True)
@@ -496,6 +500,12 @@ class RefreshToken:
     ``pairwise``/``ephemeral`` (ESID 1.0 §4) de l'émission d'origine :
     les renouvellements et le ``/userinfo`` reproduisent exactement la
     même ``sub`` que l'``id_token`` initial.
+
+    ``instance_key`` (OAuth2-ATCA §10.3) porte l'empreinte RFC 7638 de la
+    ``cnf.jwk`` de l'attestation client présentée à l'émission : tout
+    renouvellement doit authentifier le client avec la même instance,
+    sinon le token endpoint refuse. Vide = jeton non lié à une instance
+    client (authentification par secret ou assertion).
     """
 
     token_hash: str
@@ -508,6 +518,7 @@ class RefreshToken:
     dpop_jkt: str = ""
     resource_uris: tuple[str, ...] = ()
     tls_cert_hash: str = ""
+    instance_key: str = ""
 
 
 class DeviceAuthorizationStatus(str, Enum):

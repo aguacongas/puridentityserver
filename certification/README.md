@@ -41,7 +41,7 @@ retenue :
   `fapi1-advanced-final-test-plan`, `fapi2-security-profile-final-test-plan`,
   `fapi2-message-signing-final-test-plan`, `ekyc-test-plan-oidccore`,
   `openid-federation-entity-joined-to-test-federation-op-test-plan`,
-  `oid4vci-1_0-issuer-test-plan` (plans `oid4vci`, format SD-JWT VC, et
+  `oid4vci-1_0-issuer-haip-test-plan` (plans `oid4vci`, format SD-JWT VC, et
   `oid4vci-mdoc`, variante mdoc `credential_format=mdoc`),
   `oid4vp-1final-verifier-haip-test-plan` (plan `oid4vp`, verifier HAIP)),
   le détail des modules testés et leur verdict (PASSED / FAILED / WARNING /
@@ -297,21 +297,54 @@ PR). Les modules REVIEW restent tolérés (verdicts de relecture), leur preuve
 lacunes d'enforcement mTLS CIBA sont corrigées (#147, #149) : le plan ciba
 est à 35/35 PASSED (run 38575847610).
 
-### Plan `oid4vci-mdoc` : format `mso_mdoc` (issue #273)
+### Plan `oid4vci-mdoc` : format `mso_mdoc` (issues #273 / #304)
 
 Plan dédié au format mdoc ISO 18013-5 de l'émetteur : même plan OIDF que
-`oid4vci` (`oid4vci-1_0-issuer-test-plan`) avec la variante
+`oid4vci` (`oid4vci-1_0-issuer-haip-test-plan`, bascule depuis le plan alpha
+`oid4vci-1_0-issuer-test-plan` en issue #304) avec la variante
 `credential_format=mdoc`, et une configuration pointant sur la configuration
 mdoc de l'OP (`vci.credential_configuration_id =
 puridentityserver-mso-mdoc`). Fichiers : `certification/plans/oid4vci-mdoc.json`,
 sélecteur `oid4vci-mdoc` (`certification/selectors.sh`), écarts
 `certification/expected-failures/oid4vci-mdoc.json` (et `-skips.json`).
 
-Les champs de configuration VICAL (`credential.vical`, `credential.vical_url`,
-`credential.trust_anchor_pem`), affichés par la suite quand
+La bascule HAIP s'accompagne de l'authentification client par attestation
+(issues #304 / #172) : les seeds `puridentityserver-oid4vci-client{,2}` de
+`certification/config.render.toml` sont en `attest_jwt_client_auth` et les
+settings `client_attestation_issuer` / `client_attestation_jwks` configurent
+l'attester de confiance attendu par la variante `client_attestation` du plan
+(mêmes valeurs que `client_attestation.issuer` / `attester_jwks` des configs
+de plan).
+
+Le réglage `oid4vci_encryption_enabled = true` de `config.render.toml`
+(issues #304 / #172) active le chiffrement ECDH-ES des credential
+requests / responses (OID4VCI §8.2) : publication des blocs
+`credential_request_encryption` / `credential_response_encryption` dans les
+métadonnées d'émetteur, corps `/credential` acceptés en `application/jwt`
+et réponses scellées en JWE quand le wallet le demande. La clé EC P-256 est
+provisionnée à la première usage dans le store de cléf partagé.
+
+PKI de credential (issue #304) : `credential_pki_path` et `mdoc_pki_path` de
+`config.render.toml` pointent sur `certification/pki/credential-pki.json`
+(racine RSA + leaf x5c du credential SD-JWT, `x5c=[leaf]` à l'émission) et
+`certification/pki/mdoc-iaca.json` (IACA mdoc, profil IACA Table B.1 ; le
+document signer est minté au démarrage avec l'issuer runtime). Les PEM ancre
+des plans (`credential.trust_anchor_pem` +
+`credential.status_list_trust_anchor_pem`, HAIP-6.1) sont
+`pki/credential-root.pem` (plan `oid4vci`) et `pki/mdoc-iaca.pem` (plan
+`oid4vci-mdoc`). Les deux fichiers sont régénérés de façon idempotente par
+`uv run python certification/generate_pki.py` (`--force` pour tout
+re-minter) ; si un PEM change, réinjecter le PEM correspondant dans les deux
+plans.
+
+Les champs de configuration VICAL (`credential.vical`, `credential.vical_url`),
+affichés par la suite quand
 `credential_format=mdoc`, restent vides : les contrôles d'ancre de confiance
 qui les consomment sont court-circuités par `skipIfStringsMissing` (contrôle
 interne de séquence, pas un saut de module — aucun module n'est ignoré).
+`credential.trust_anchor_pem` / `credential.status_list_trust_anchor_pem`,
+eux, sont renseignés (voir ci-dessus) : ce sont les ancre x5c du credential
+et de la status list exigées par HAIP-6.1.
 
 Rejeu : `bash certification/local/run-plan.sh oid4vci-mdoc`, ou
 `workflow_dispatch` avec le filtre de plan `oid4vci-mdoc`.
@@ -546,7 +579,8 @@ stricts verts — 475 modules, 0 hors `PASSED`/`REVIEW`/`SKIPPED`.
 | --- | --- |
 | `render.yaml` / `Dockerfile` / `.dockerignore` | déploiement de l'OP sur Render (SQLite, disque éphémère) |
 | `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`, `subject_pairwise_seed` pour les modules sector du plan dynamic, 4 clients statiques FAPI `private_key_jwt` + JWKS public pour les plans fapi1/fapi2) |
-| `plans/basic|implicit|hybrid|formpost|dynamic|ciba|ciba-ping|fapi1|fapi2|fapi2-message-signing|ekyc|federation|oid4vci|oid4vci-mdoc|oid4vp.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; `ciba`/`ciba-ping` partagent le plan `fapi-ciba-id1-test-plan` en variantes `ciba_mode=poll` / `ciba_mode=ping` — alias distincts ; fapi1/fapi2/fapi2-message-signing portent aussi `client`/`client2` en clé privée et `resource` ; `ekyc` porte la configuration eKYC `ekyc.verified_claims_request_list` ; `federation` porte l'Entity Identifier de l'OP, l'ancre de confiance `{SUITEURL}test/a/puridentityserver-federation/trust-anchor` et les clés de test RP/ancre du template officiel ; `oid4vp` porte le `credential.signing_jwk` et l'ancre `client.request_object_trust_anchor_pem` du verifier) |
+| `generate_pki.py` / `pki/` | génération idempotente (`--force` pour re-minter) des PKI commises : `pki/credential-pki.json` + `credential-root.pem` (racine/leaf x5c du credential SD-JWT, `credential_pki_path`) et `pki/mdoc-iaca.json` + `mdoc-iaca.pem` (IACA mdoc, `mdoc_pki_path` ; le document signer est minté au démarrage de l'OP) — les PEM servent d'ancre `credential.*_pem` aux plans oid4vci |
+| `plans/basic|implicit|hybrid|formpost|dynamic|ciba|ciba-ping|fapi1|fapi2|fapi2-message-signing|ekyc|federation|oid4vci|oid4vci-mdoc|oid4vp.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; `ciba`/`ciba-ping` partagent le plan `fapi-ciba-id1-test-plan` en variantes `ciba_mode=poll` / `ciba_mode=ping` — alias distincts ; fapi1/fapi2/fapi2-message-signing portent aussi `client`/`client2` en clé privée et `resource` ; `ekyc` porte la configuration eKYC `ekyc.verified_claims_request_list` ; `federation` porte l'Entity Identifier de l'OP, l'ancre de confiance `{SUITEURL}test/a/puridentityserver-federation/trust-anchor` et les clés de test RP/ancre du template officiel ; `oid4vp` porte le `credential.signing_jwk` et l'ancre `client.request_object_trust_anchor_pem` du verifier ; `oid4vci`/`oid4vci-mdoc` portent `resource.resourceUrl` (protected-resource), la section `credential` (PEM ancre x5c + status list, HAIP-6.1) et les `override` navigateur (refus de consentement, `match-limit` PAR) empruntés à `fapi2`) |
 | `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) — avec `SCREENSHOTS_DIR` défini (CI), un fichier absent/vide/trop lourd lève une erreur fatale (captures obligatoires, issue #161) ; sans variable (exécution manuelle), le PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode hébergé) |
 | `capture_screenshots.py` | rejoue les scénarios de relecture (4 Core, 6 dynamic, 2 FAPI1 « page », 1 fédéré, 5 positifs du plan `oid4vp` — 18 PNG, issues #214 et #224) contre l'OP (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver — `--base-url` = OP, `--suite-url` = base des callbacks de la suite (hébergée par défaut, `https://localhost.emobix.co.uk:8443` en local) |
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |

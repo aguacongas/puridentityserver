@@ -829,3 +829,15 @@ password_policy = { min_length = 16 }
 # Desactives par defaut hors harness : voir certification/config.render.toml
 # pour l'activation en certification et samples/oid4vp-verifier-client/ pour
 # un exercice pas-a-pas.
+
+# OpenID4VCI - chiffrement des credential requests/reponses (OID4VCI 1.0
+# s8.2, issue #304) : publie les blocs credential_request_encryption /
+# credential_response_encryption dans les metadata de l'emetteur et
+# accepte les corps /credential en application/jwt. La cle EC P-256 est
+# provisionnee a la premiere usage dans le store de clef partage (memoire
+# ou SQL selon `storage_type`), donc partagee entre instances et stable
+# d'un redemarrage a l'autre. Meme remarque que ci-dessus : cles PLATES
+# sous `[settings]`, sans en-tete de table.
+#
+# oid4vci_enabled = true
+# oid4vci_encryption_enabled = true

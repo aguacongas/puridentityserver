@@ -19,6 +19,7 @@ from fastapi.responses import Response
 
 from puridentityserver.application.par import PushedAuthorizationUseCase, PushError
 from puridentityserver.application.resource_indicators import encode_resource_parameter
+from puridentityserver.interfaces.api.client_attestation import extract_client_attestation
 from puridentityserver.interfaces.api.dpop_proof import extract_dpop_proof
 
 _JSON_MEDIA_TYPE = "application/json"
@@ -39,7 +40,19 @@ def par_router(usecase: PushedAuthorizationUseCase) -> APIRouter:
         dpop_proof, dpop_error = extract_dpop_proof(request.headers)
         if dpop_error is not None:
             return _error_response(PushError(error="invalid_request", error_description=dpop_error))
-        result = await usecase.push(params, dpop_proof=dpop_proof)
+        attestation, attestation_pop, attestation_error = extract_client_attestation(
+            request.headers
+        )
+        if attestation_error is not None:
+            return _error_response(
+                PushError(error="invalid_request", error_description=attestation_error)
+            )
+        result = await usecase.push(
+            params,
+            dpop_proof=dpop_proof,
+            client_attestation=attestation,
+            client_attestation_pop=attestation_pop,
+        )
         if isinstance(result, PushError):
             return _error_response(result)
         return Response(

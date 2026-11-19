@@ -68,6 +68,7 @@ def _usecase(
     *,
     requires_initial_access_token: bool = True,
     dcr_allow_full_grants: bool = False,
+    client_attestation_enabled: bool = False,
 ) -> RegistrationUseCase:
     """Construit un RegistrationUseCase avec un registre clients en mémoire."""
     config = RegistrationConfig(
@@ -76,6 +77,7 @@ def _usecase(
         requires_initial_access_token=requires_initial_access_token,
         initial_access_token_hashes=frozenset({hash_secret(_INITIAL_TOKEN)}),
         dcr_allow_full_grants=dcr_allow_full_grants,
+        client_attestation_enabled=client_attestation_enabled,
     )
     return RegistrationUseCase(config, InMemoryClientRepository())
 
@@ -780,10 +782,92 @@ class TestDelete:
         assert run(usecase._clients.find_by_id(registered.client_id)) is not None
 
 
+class TestRegisterAttestMethod:
+    """Couvre la méthode ``attest_jwt_client_auth`` en DCR (issue #304)."""
+
+    def test_rejects_attest_method_without_attester(self) -> None:
+        usecase = _usecase(client_attestation_enabled=False)
+
+        result = run(
+            usecase.register(
+                RegisterRequest(
+                    {**_REGISTRATION, "token_endpoint_auth_method": "attest_jwt_client_auth"},
+                    initial_access_token=_INITIAL_TOKEN,
+                )
+            )
+        )
+
+        assert isinstance(result, RegistrationError)
+        assert result.error == "invalid_client_metadata"
+        assert "attester" in result.error_description
+
+    def test_accepts_attest_method_with_attester(self) -> None:
+        usecase = _usecase(client_attestation_enabled=True)
+
+        result = run(
+            usecase.register(
+                RegisterRequest(
+                    {**_REGISTRATION, "token_endpoint_auth_method": "attest_jwt_client_auth"},
+                    initial_access_token=_INITIAL_TOKEN,
+                )
+            )
+        )
+
+        assert isinstance(result, ClientRegistration)
+        assert result.token_endpoint_auth_method == "attest_jwt_client_auth"
+        assert result.client_type is ClientType.CONFIDENTIAL
+        assert result.client_secret == ""
+
+    def test_attest_method_refuses_symmetric_id_token_alg(self) -> None:
+        """Sans secret partagé, la signature HS* de l'id_token est impossible (§3.1.3.7)."""
+        usecase = _usecase(client_attestation_enabled=True)
+
+        result = run(
+            usecase.register(
+                RegisterRequest(
+                    {
+                        **_REGISTRATION,
+                        "token_endpoint_auth_method": "attest_jwt_client_auth",
+                        "id_token_signed_response_alg": "HS256",
+                    },
+                    initial_access_token=_INITIAL_TOKEN,
+                )
+            )
+        )
+
+        assert isinstance(result, RegistrationError)
+        assert result.error == "invalid_client_metadata"
+
+    def test_attest_method_accepted_for_extended_grants(self) -> None:
+        """L'attestation compte parmi les méthodes fortes des grants étendus (#176)."""
+        usecase = _usecase(dcr_allow_full_grants=True, client_attestation_enabled=True)
+
+        result = run(
+            usecase.register(
+                RegisterRequest(
+                    {
+                        **_REGISTRATION,
+                        "token_endpoint_auth_method": "attest_jwt_client_auth",
+                        "grant_types": ["client_credentials"],
+                    },
+                    initial_access_token=_INITIAL_TOKEN,
+                )
+            )
+        )
+
+        assert isinstance(result, ClientRegistration)
+
+
 class TestRegistrationEndpoint:
     """Couvre les endpoints HTTP POST /register + gestion (RFC 7591/7592)."""
 
-    def _app(self, *, enabled: bool = True) -> FastAPI:
+    def _app(self, *, enabled: bool = True, client_attestation: bool = False) -> FastAPI:
+        attester_settings: dict[str, object] = {}
+        if client_attestation:
+            attester_settings = {
+                "client_attestation_issuer": "https://client-attester.example.org/",
+                "client_attestation_jwks": ({"kty": "EC", "kid": "attester"},),
+            }
         return create_app(
             Settings(
                 issuer=_ISSUER,
@@ -791,6 +875,7 @@ class TestRegistrationEndpoint:
                 jwks_algorithms=("RS256",),
                 registration_enabled=enabled,
                 registration_initial_access_tokens=(_INITIAL_TOKEN,),
+                **attester_settings,
             )
         )
 
@@ -805,6 +890,30 @@ class TestRegistrationEndpoint:
 
         assert response.status_code == 201, response.text
         assert response.json()["userinfo_signed_response_alg"] == "RS256"
+
+    def test_attest_method_rejected_without_attester(self) -> None:
+        """POST /register refuse attest_jwt_client_auth sans attester configuré (issue #304)."""
+        with TestClient(self._app()) as client:
+            response = client.post(
+                "/register",
+                json={**_REGISTRATION, "token_endpoint_auth_method": "attest_jwt_client_auth"},
+                headers={"authorization": f"Bearer {_INITIAL_TOKEN}"},
+            )
+
+        assert response.status_code == 400, response.text
+        assert response.json()["error"] == "invalid_client_metadata"
+
+    def test_attest_method_accepted_with_attester(self) -> None:
+        """POST /register accepte attest_jwt_client_auth dès que l'attester est configuré."""
+        with TestClient(self._app(client_attestation=True)) as client:
+            response = client.post(
+                "/register",
+                json={**_REGISTRATION, "token_endpoint_auth_method": "attest_jwt_client_auth"},
+                headers={"authorization": f"Bearer {_INITIAL_TOKEN}"},
+            )
+
+        assert response.status_code == 201, response.text
+        assert response.json()["token_endpoint_auth_method"] == "attest_jwt_client_auth"
 
     def test_full_registration_lifecycle(self) -> None:
         with TestClient(self._app()) as client:
