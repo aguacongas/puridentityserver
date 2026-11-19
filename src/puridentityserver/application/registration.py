@@ -126,11 +126,17 @@ _ALLOWED_AUTH_METHODS = frozenset(
         "private_key_jwt",
         "tls_client_auth",
         "self_signed_tls_client_auth",
+        "attest_jwt_client_auth",
     }
 )
 _AUTH_METHOD_DEFAULT = "client_secret_basic"
 _TLS_KEY_AUTH_METHODS = frozenset({"tls_client_auth", "self_signed_tls_client_auth"})
-_KEYLESS_AUTH_METHODS = frozenset({"none", "private_key_jwt"}) | _TLS_KEY_AUTH_METHODS
+# ``attest_jwt_client_auth`` n'implique aucun secret client partagé : la
+# preuve naît de l'attester de confiance (§6.2), au même titre que les
+# méthodes sans secret pour la signature HS* de l'id_token.
+_KEYLESS_AUTH_METHODS = frozenset({"none", "private_key_jwt", "attest_jwt_client_auth"}) | (
+    _TLS_KEY_AUTH_METHODS
+)
 # Authentifications admises pour les grants étendus (issue #176) : methods
 # fortes uniquement (``client_secret_post``/``none`` refusés).
 _FULL_GRANT_STRONG_AUTH_METHODS = frozenset(
@@ -140,6 +146,7 @@ _FULL_GRANT_STRONG_AUTH_METHODS = frozenset(
         "private_key_jwt",
         "tls_client_auth",
         "self_signed_tls_client_auth",
+        "attest_jwt_client_auth",
     }
 )
 _FULL_GRANT_NEW_GRANTS = frozenset(
@@ -181,6 +188,7 @@ class RegistrationConfig:
     initial_access_token_mode: str = "static"  # ruff: ignore[hardcoded-password-string] (nom de mode, pas un secret)
     dcr_allow_full_grants: bool = False
     subject_seed: str = ""
+    client_attestation_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -579,6 +587,12 @@ class RegistrationUseCase:
                 "invalid_client_metadata",
                 f"{method} exige tls_client_auth_subject_dn ou tls_client_certificate",
             )
+        if method == "attest_jwt_client_auth" and not self._config.client_attestation_enabled:
+            return RegistrationError(
+                "invalid_client_metadata",
+                "attest_jwt_client_auth exige un attester de confiance configuré "
+                "(client_attestation_issuer / client_attestation_jwks)",
+            )
         return None
 
     def _require_strong_auth(
@@ -602,7 +616,9 @@ class RegistrationUseCase:
         return self._require_strong_auth(
             metadata,
             _FULL_GRANT_STRONG_AUTH_METHODS,
-            "Les grants étendus exigent private_key_jwt, tls_client_auth ou client_secret_basic",
+            "Les grants étendus exigent une méthode forte : client_secret_basic, "
+            "client_secret_jwt, private_key_jwt, tls_client_auth, "
+            "self_signed_tls_client_auth ou attest_jwt_client_auth",
         )
 
     def _validate_fapi_profile(self, metadata: RegistrationMetadata) -> RegistrationError | None:

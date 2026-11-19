@@ -85,7 +85,9 @@ from puridentityserver.infrastructure.backchannel import (
 from puridentityserver.infrastructure.bearer import build_bearer_verifier
 from puridentityserver.infrastructure.claims import UserStoreClaimsProvider
 from puridentityserver.infrastructure.client_assertions import PyJWTClientAssertionVerifier
+from puridentityserver.infrastructure.client_attestation import PyJWTClientAttestationVerifier
 from puridentityserver.infrastructure.client_tls import ClientCertificateHeaderNames
+from puridentityserver.infrastructure.credential_pki import FileCredentialPKIRepository
 from puridentityserver.infrastructure.dpop import PyJWTDpopProofValidator
 from puridentityserver.infrastructure.federation import (
     ClientRegistrySubordinateSource,
@@ -148,7 +150,14 @@ from puridentityserver.interfaces.api.token import token_router
 from puridentityserver.interfaces.api.userinfo import userinfo_router
 from puridentityserver.interfaces.domain.dpop import DpopProofValidator
 from puridentityserver.interfaces.domain.tokens import TokenManager
+from puridentityserver.interfaces.repositories.dpop_replay_repository import DpopReplayRepository
+from puridentityserver.interfaces.repositories.encryption_key_repository import (
+    EncryptionKeyRepository,
+)
 from puridentityserver.interfaces.repositories.readers import ClientReader
+from puridentityserver.interfaces.repositories.revoked_token_repository import (
+    RevokedTokenRepository,
+)
 
 _PACKAGE_VERSION = "0.1.0"
 
@@ -173,13 +182,29 @@ def _mdoc_pki_repository(settings: Settings) -> FileMdocPKIRepository | None:
     return FileMdocPKIRepository(settings.mdoc_pki_path)
 
 
+def _credential_pki_repository(settings: Settings) -> FileCredentialPKIRepository | None:
+    """Résout le dépôt de la PKI d'émission SD-JWT, ou ``None`` (sans x5c)."""
+    if not settings.oid4vci_enabled or not settings.credential_pki_path:
+        return None
+    return FileCredentialPKIRepository(settings.credential_pki_path)
+
+
 def _oid4vci_usecase(
     settings: Settings,
     key_manager: DefaultKeyManager,
     token_manager: TokenManager,
     dpop_validator: DpopProofValidator | None,
+    revoked_tokens: RevokedTokenRepository | None = None,
+    encryption_key_repository: EncryptionKeyRepository | None = None,
 ) -> OID4VCIIssuerUseCase | None:
-    """Construit l émetteur OID4VCI si activé, ``None`` sinon."""
+    """Construit l émetteur OID4VCI si activé, ``None`` sinon.
+
+    ``revoked_tokens`` porte la denylist des access tokens (RFC 6749 §5.2)
+    opposée à l'usage du jeton sur les endpoints de l'émetteur ;
+    ``encryption_key_repository`` stocke la clé ECDH-ES provisionnée à la
+    première usage quand ``oid4vci_encryption_enabled`` est actif (store
+    partagé entre instances).
+    """
     if not settings.oid4vci_enabled:
         return None
     return OID4VCIIssuerUseCase(
@@ -189,6 +214,10 @@ def _oid4vci_usecase(
         token_manager=token_manager,
         dpop=dpop_validator,
         mdoc_pki_repository=_mdoc_pki_repository(settings),
+        credential_pki_repository=_credential_pki_repository(settings),
+        revoked_tokens=revoked_tokens,
+        encryption_enabled=settings.oid4vci_encryption_enabled,
+        encryption_key_repository=encryption_key_repository,
     )
 
 
@@ -216,6 +245,41 @@ def _oid4vp_usecase(settings: Settings) -> OID4VPVerifierUseCase | None:
     )
 
 
+def _client_attestation_enabled(settings: Settings) -> bool:
+    """L'attestation client est-elle configurée (issuer + clés attester) ?"""
+    return bool(settings.client_attestation_issuer) and bool(settings.client_attestation_jwks)
+
+
+def _client_attestation_algs(settings: Settings) -> tuple[str, ...]:
+    """Algorithmes d'attestation client publiés au discovery (§10.1).
+
+    Dérivés des ``alg`` des clés de l'attester de confiance ; à défaut de
+    ``alg`` déclaré sur les clés, les trois familles signantes majeures
+    sont annoncées. Renvoie ``()`` sans attester configuré — la méthode
+    ``attest_jwt_client_auth`` n'est alors pas publiée non plus.
+    """
+    if not _client_attestation_enabled(settings):
+        return ()
+    algorithms = sorted(
+        {str(key["alg"]) for key in settings.client_attestation_jwks if key.get("alg")}
+    )
+    return tuple(algorithms) if algorithms else ("ES256", "PS256", "RS256")
+
+
+def _client_attestation_verifier(
+    settings: Settings, replays: DpopReplayRepository
+) -> PyJWTClientAttestationVerifier | None:
+    """Vérificateur des en-têtes d'attestation client, ou ``None`` si non configuré."""
+    if not _client_attestation_enabled(settings):
+        return None
+    return PyJWTClientAttestationVerifier(
+        issuer=settings.client_attestation_issuer,
+        as_issuer=settings.issuer,
+        jwks=settings.client_attestation_jwks,
+        replays=replays,
+    )
+
+
 def _discovery_config(
     settings: Settings, token_endpoint_auth_methods: tuple[str, ...]
 ) -> DiscoveryConfig:
@@ -228,6 +292,7 @@ def _discovery_config(
     import puridentityserver.application.authorize as _authorize
 
     _authorize.SUPPORTED_ACR_VALUES = settings.acr_values_supported
+    client_attestation_algs = _client_attestation_algs(settings)
     return DiscoveryConfig(
         issuer=settings.issuer,
         base_url=settings.base_url,
@@ -242,6 +307,8 @@ def _discovery_config(
         request_object_encryption_algorithms=settings.request_object_encryption_algorithms,
         request_object_encryption_methods=settings.request_object_encryption_methods,
         token_endpoint_auth_methods=token_endpoint_auth_methods,
+        client_attestation_signing_algorithms=client_attestation_algs,
+        client_attestation_pop_signing_algorithms=client_attestation_algs,
         client_registration_types_supported=(
             ("automatic", "explicit") if settings.federation_enabled else ()
         ),
@@ -387,7 +454,7 @@ class ProtocolDependencies:
             session_grace_period_days=settings.jwks_grace_period_days,
             password_policy=settings.password_policy,
         )
-        self.config = _discovery_config(settings, self._token_endpoint_auth_methods())
+        self.config = _discovery_config(settings, self._token_endpoint_auth_methods(settings))
         self.jwks_usecase = JWKSetUseCase(
             JWKSetConfig(
                 key_size=settings.jwks_key_size,
@@ -405,6 +472,7 @@ class ProtocolDependencies:
         self.secret_cipher = AsymmetricSecretCipher(self.secret_key_manager)
         self.id_token_encrypter = JWEIdTokenEncrypter()
         self.client_assertions = PyJWTClientAssertionVerifier(self.secret_cipher)
+        self.client_attestations = _client_attestation_verifier(settings, stores.dpop_replay)
         self.client_certificate_headers = ClientCertificateHeaderNames(
             certificate=settings.client_certificate_header,
             subject_dn=settings.client_certificate_dn_header,
@@ -455,7 +523,12 @@ class ProtocolDependencies:
             algorithm=_primary_algorithm(settings),
         )
         self.oid4vci_usecase = _oid4vci_usecase(
-            settings, self.key_manager, self.token_manager, self.dpop_validator
+            settings,
+            self.key_manager,
+            self.token_manager,
+            self.dpop_validator,
+            stores.revoked,
+            stores.encryption_key,
         )
         self.oid4vci_offer_usecase = (
             CredentialOfferUseCase(
@@ -463,6 +536,7 @@ class ProtocolDependencies:
                 offer_repository=stores.credential_offer,
                 code_repository=stores.code,
                 token_manager=self.token_manager,
+                revoked_tokens=stores.revoked,
             )
             if settings.oid4vci_enabled
             else None
@@ -552,6 +626,7 @@ class ProtocolDependencies:
                 openid20_migration=self.openid20_migration,
                 identity_assurance=self.identity_assurance,
             ),
+            client_attestations=self.client_attestations,
         )
         self.device_usecase = DeviceAuthorizationUseCase(
             DeviceConfig(
@@ -635,6 +710,7 @@ class ProtocolDependencies:
                 initial_access_token_mode=settings.registration_initial_access_token_mode,
                 subject_seed=settings.subject_pairwise_seed,
                 dcr_allow_full_grants=settings.dcr_allow_full_grants,
+                client_attestation_enabled=_client_attestation_enabled(settings),
             ),
             stores.client,
             self.scope_registry,
@@ -659,17 +735,28 @@ class ProtocolDependencies:
             dpop=self.dpop_validator,
             client_assertions=self.client_assertions,
             request_object_resolver=self.request_object_resolver,
+            client_attestations=self.client_attestations,
         )
         self.consent_usecase = ConsentUseCase(stores.consent)
 
     @staticmethod
-    def _token_endpoint_auth_methods() -> tuple[str, ...]:
+    def _token_endpoint_auth_methods(settings: Settings) -> tuple[str, ...]:
         """Méthodes d'auth du token endpoint publiées au discovery.
 
         La clé de scellement des secrets HMAC (``KeyUse.SECRET``) étant
         générée automatiquement, ``client_secret_jwt`` est toujours annoncé.
+        ``attest_jwt_client_auth`` n'est publiée que si un attester de
+        confiance est configuré (§10.1 : les deux listes d'algorithmes
+        doivent alors l'accompagner, exigées par la suite de certification).
         """
-        return tuple(method.value for method in TokenEndpointAuthMethod)
+        methods = tuple(method.value for method in TokenEndpointAuthMethod)
+        if _client_attestation_enabled(settings):
+            return methods
+        return tuple(
+            method
+            for method in methods
+            if method != TokenEndpointAuthMethod.ATTEST_JWT_CLIENT_AUTH.value
+        )
 
     async def resolve_session_lifetime(self, client_id: str) -> int | None:
         """Retourne la durée de session cookie configurée pour le client, si présente."""

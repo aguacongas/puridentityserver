@@ -90,6 +90,13 @@ bash certification/local/down.sh             # arrêt du harness (--purge : cont
   l'OP **saute** faute de capacité se déclare dans le pendant `<plan>-skips.json`
   (même format, `--expected-skips-file`). Purger une entrée
   dès qu'elle n'est plus consommée : le driver échec `NOT_HAPPEN` sinon.
+- PKI de credential (issue #304) : `certification/generate_pki.py` régénère de façon
+  idempotente `certification/pki/{credential-pki,mdoc-iaca}.json` + les PEM ancre
+  `credential-root.pem` / `mdoc-iaca.pem` ; les PEM sont injectés dans
+  `certification/plans/oid4vci.json` et `oid4vci-mdoc.json` (`credential.trust_anchor_pem`
+  + `credential.status_list_trust_anchor_pem`, HAIP-6.1) et les settings
+  `credential_pki_path` / `mdoc_pki_path` dans `certification/config.render.toml`.
+  Toute régénération (`--force`) impose de réinjecter les PEM dans les deux plans.
 - La CI (`certification-local.yml`) rejoue ces mêmes scripts : toute évolution de la
   procédure doit rester alignée entre local et workflow.
 - **Il n'est pas interdit d'améliorer cette procédure** si un besoin se manifeste

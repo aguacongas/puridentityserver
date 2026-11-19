@@ -9,10 +9,14 @@ Implémente le format compact (RFC 7516 §7.1) :
   ``A128KW`` / ``A256KW`` (RFC 3394, clé d'enveloppe dérivée par
   HKDF-SHA256 du secret partagé du client), ``dir`` (la clé dérivée
   sert directement de clé de contenu) et ``ECDH-ES`` en mode Direct Key
-  Agreement (RFC 7518 §4.6, réservé aux réponses OpenID4VP chiffrées) ;
+  Agreement (RFC 7518 §4.6, réponses OpenID4VP chiffrées et credential
+  requests/réponses OID4VCI) ;
 - chiffrement du contenu (RFC 7518 §5) : ``A*CBC-HS*`` (AES-CBC +
   HMAC sur la moitié gauche/droite de la CEK, RFC 7518 §5.2) et
-  ``A*GCM`` (AES-GCM, IV 96 bits, tag 128 bits).
+  ``A*GCM`` (AES-GCM, IV 96 bits, tag 128 bits) ;
+- compression du contenu ``zip = DEF`` (DEFLATE brut RFC 1951,
+  RFC 7516 §4.1.3), appliquée avant chiffrement et repliée après
+  déchiffrement.
 
 Le wrapper (encodage base64url, AAD, AL, concaténation) suit le RFC ;
 les opérations cryptographiques elles-mêmes passent exclusivement par
@@ -25,6 +29,7 @@ import asyncio
 import base64
 import json
 import os
+import zlib
 from hmac import compare_digest
 from typing import Any, cast
 
@@ -46,7 +51,12 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.concatkdf import ConcatKDFHash
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.padding import PKCS7
-from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    load_pem_private_key,
+)
 
 from puridentityserver.domain.authorization import Client
 from puridentityserver.domain.jwe import (
@@ -87,6 +97,13 @@ _HKDF_INFO = b"puridentityserver:id-token-encryption"
 _ECDH_CURVE = ec.SECP256R1
 _ECDH_CRV = "P-256"
 
+# Compression JWE « DEF » (RFC 7516 §4.1.3) : DEFLATE brut (RFC 1951,
+# wbits négatifs = sans en-tête zlib), comme Nimbus et jwcrypto. Le
+# plafond de décompression protège du zip bomb : les credential
+# responses OID4VCI restent bien en deçà du mégaoctet.
+_DEFLATE_WBITS = -15
+_MAX_INFLATED_SIZE = 1 << 20
+
 
 def b64u(data: bytes) -> str:
     """Encode des octets en base64url sans padding (RFC 7515 §2)."""
@@ -96,6 +113,35 @@ def b64u(data: bytes) -> str:
 def b64u_decode(value: str) -> bytes:
     """Décode du base64url sans padding (padding rétabli pour l'API stdlib)."""
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def deflate_compress(data: bytes) -> bytes:
+    """Compresse ``data`` en DEFLATE brut (RFC 1951, ``zip = DEF``).
+
+    Le format brut (« raw deflate », sans l'en-tête zlib du RFC 1950) est
+    celui exigé par le paramètre ``zip`` d'un en-tête JWE (RFC 7516
+    §4.1.3).
+    """
+    compressor = zlib.compressobj(wbits=_DEFLATE_WBITS)
+    return compressor.compress(data) + compressor.flush()
+
+
+def deflate_decompress(data: bytes) -> bytes:
+    """Décompresse un DEFLATE brut et refuse un contenu abusif (zip bomb).
+
+    ``ValueError`` si le flux est illisible, tronqué, ou si la
+    décompression dépasse le plafond ``_MAX_INFLATED_SIZE``.
+    """
+    decompressor = zlib.decompressobj(wbits=_DEFLATE_WBITS)
+    try:
+        inflated = decompressor.decompress(data, _MAX_INFLATED_SIZE + 1)
+    except zlib.error as exc:
+        raise ValueError("contenu DEFLATE illisible") from exc
+    if len(inflated) > _MAX_INFLATED_SIZE or decompressor.unconsumed_tail:
+        raise ValueError("contenu DEFLATE de taille abusive")
+    if not decompressor.eof:
+        raise ValueError("contenu DEFLATE tronqué")
+    return inflated
 
 
 def derive_content_key(shared_secret: str, size: int) -> bytes:
@@ -225,6 +271,7 @@ def encrypt_compact_ecdh_es(
     kid: str = "",
     apu: bytes = b"",
     apv: bytes = b"",
+    compress: bool = False,
 ) -> str:
     """Chiffre ``plaintext`` en JWE compact par accord de clé ECDH-ES (RFC 7518 §4.6).
 
@@ -232,7 +279,9 @@ def encrypt_compact_ecdh_es(
     l'opération, publiée dans l'en-tête protégé (``epk``), et la CEK est la
     sortie de la Concat KDF — l'``encrypted_key`` du document reste vide.
     ``apu``/``apv`` (RFC 7518 §4.6.1.2/§4.6.1.3) sont encodés base64url dans
-    l'en-tête quand ils sont fournis.
+    l'en-tête quand ils sont fournis. ``compress`` place ``zip = DEF`` dans
+    l'en-tête et compresse le contenu en DEFLATE brut avant chiffrement
+    (RFC 7516 §4.1.3).
     """
     ephemeral = ec.generate_private_key(_ECDH_CURVE())
     header: dict[str, Any] = {
@@ -246,6 +295,8 @@ def encrypt_compact_ecdh_es(
         header["apu"] = b64u(apu)
     if apv:
         header["apv"] = b64u(apv)
+    if compress:
+        header["zip"] = "DEF"
     aad = _protected_b64(header)
     cek = _concat_kdf(
         ephemeral.exchange(ec.ECDH(), recipient_public_key),
@@ -253,6 +304,8 @@ def encrypt_compact_ecdh_es(
         apu=header.get("apu", ""),
         apv=header.get("apv", ""),
     )
+    if compress:
+        plaintext = deflate_compress(plaintext)
     iv, ciphertext, tag = _encrypt_content(method, cek, aad.encode("ascii"), plaintext)
     return ".".join((aad, "", b64u(iv), b64u(ciphertext), b64u(tag)))
 
@@ -262,9 +315,11 @@ def decrypt_compact_ecdh_es(token: str, *, private_key: EllipticCurvePrivateKey)
 
     L'en-tête protégé doit porter ``alg = ECDH-ES``, un ``enc`` supporté et
     ``epk`` (clé éphémère P-256 du coéquipier) ; ``apu``/``apv``, présents
-    quand le wallet les émet, entrent dans la dérivation. Toute incohérence
-    — algorithme inattendu, ``encrypted_key`` non vide, courbe étrangère —
-    lève ``ValueError``, tout comme la violation d'intégrité du contenu.
+    quand le wallet les émet, entrent dans la dérivation. Un ``zip = DEF``
+    déclenche la décompression du contenu après déchiffrement ; tout autre
+    algorithme de compression est refusé. Toute incohérence — algorithme
+    inattendu, ``encrypted_key`` non vide, courbe étrangère — lève
+    ``ValueError``, tout comme la violation d'intégrité du contenu.
     """
     protected, encrypted_key, iv, ciphertext, tag = _split_compact(token)
     header = _decode_protected(protected)
@@ -277,7 +332,7 @@ def decrypt_compact_ecdh_es(token: str, *, private_key: EllipticCurvePrivateKey)
         apu=apu,
         apv=apv,
     )
-    return _decrypt_content(
+    plaintext = _decrypt_content(
         method,
         cek,
         protected.encode("ascii"),
@@ -285,6 +340,12 @@ def decrypt_compact_ecdh_es(token: str, *, private_key: EllipticCurvePrivateKey)
         b64u_decode(ciphertext),
         b64u_decode(tag),
     )
+    zip_value = _header_text(header, "zip")
+    if zip_value == "DEF":
+        return deflate_decompress(plaintext)
+    if zip_value:
+        raise ValueError("algorithme de compression JWE non supporté")
+    return plaintext
 
 
 class JWEIdTokenEncrypter:
@@ -505,6 +566,21 @@ def ec_public_key(value: object) -> EllipticCurvePublicKey:
         return ec.EllipticCurvePublicNumbers(x, y, _ECDH_CURVE()).public_key()
     except (ValueError, TypeError) as exc:
         raise ValueError("epk sans point de courbe valide") from exc
+
+
+def generate_ec_p256_private_key_pem() -> str:
+    """Génère une clé EC P-256 et la sérialise en PEM PKCS#8 non chiffré.
+
+    Sert au provisionnement de la clé de chiffrement de l'émetteur
+    OID4VCI (ECDH-ES), persistée puis rechargée telle quelle par les
+    instances suivantes.
+    """
+    raw = ec.generate_private_key(_ECDH_CURVE()).private_bytes(  # type: ignore[attr-defined]  # méthode abstraite réelle, absente des stubs cryptography
+        encoding=cast(Encoding, Encoding.PEM),
+        format=PrivateFormat.PKCS8,
+        encryption_algorithm=NoEncryption(),
+    )
+    return cast(bytes, raw).decode("ascii")
 
 
 def _concat_kdf(

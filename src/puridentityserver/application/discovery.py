@@ -102,6 +102,13 @@ class DiscoveryConfig:
     # la suite de certification le tient pour inconnu.
     extra_scopes: tuple[str, ...] = ()
     authorization_details_types: tuple[str, ...] = ()
+    # Attestation client (draft-ietf-oauth-attestation-based-client-auth §10.1) :
+    # les deux listes sont MUST dès que ``attest_jwt_client_auth`` figure dans
+    # ``token_endpoint_auth_methods_supported`` ; vides = méthode non publiée
+    # et listes omises (annoncer la méthode sans capacité réelle tromperait
+    # la suite, qui contrôle la présence des deux listes).
+    client_attestation_signing_algorithms: tuple[str, ...] = ()
+    client_attestation_pop_signing_algorithms: tuple[str, ...] = ()
 
 
 #: Types de réponse publiés au discovery ET dans l'entity statement
@@ -138,6 +145,23 @@ class DiscoveryUseCase:
         self._identity_resources = identity_resources
         self._api_resources = api_resources
         self._identity_assurance = identity_assurance
+
+    def _add_client_attestation_algs(self, metadata: dict[str, object]) -> None:
+        """Ajoute les listes d'algorithmes d'attestation client (§10.1).
+
+        Les deux listes sont exigées par la suite de certification dès que
+        ``attest_jwt_client_auth`` figure dans
+        ``token_endpoint_auth_methods_supported`` ; elles restent omises
+        quand la méthode n'est pas publiée.
+        """
+        if not self._config.client_attestation_signing_algorithms:
+            return
+        metadata["client_attestation_signing_alg_values_supported"] = list(
+            self._config.client_attestation_signing_algorithms
+        )
+        metadata["client_attestation_pop_signing_alg_values_supported"] = list(
+            self._config.client_attestation_pop_signing_algorithms
+        )
 
     async def execute(self) -> dict[str, object]:
         """Construit les métadonnées OIDC Discovery (§3 OIDC Discovery 1.0)."""
@@ -283,6 +307,7 @@ class DiscoveryUseCase:
         # signer une preuve — ``none`` et les familles symétriques HS*
         # y sont exclus (le RS partage leur secret : preuve forgeable).
         metadata["dpop_signing_alg_values_supported"] = list(self._config.dpop_signing_algorithms)
+        self._add_client_attestation_algs(metadata)
         # Identité assurance (OpenID Identity Assurance 1.0) : la metadata
         # eKYC décrit ce que l'OP sait servir ; elle est dérivée des profils
         # vérifiés connus et reste absente si l'OP n'en expose aucun.

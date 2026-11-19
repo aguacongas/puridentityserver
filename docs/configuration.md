@@ -43,6 +43,8 @@ Elle est lue au démarrage par [pydantic-settings](https://docs.pydantic.dev/lat
 | `PURIDENTITYSERVER_REGISTRATION_ENABLED` | `false` | Active la Dynamic Client Registration (RFC 7591 + 7592) : endpoint `POST /register` (création de client) et `GET/PUT/DELETE /register/{client_id}` (gestion via le registration access token, RFC 7592). Active aussi la publication de `registration_endpoint` dans le document de discovery. |
 | `PURIDENTITYSERVER_REGISTRATION_REQUIRES_INITIAL_ACCESS_TOKEN` | `true` | Quand vrai, la création d'un client (`POST /register`) exige un initial access token dans l'en-tête `Authorization: Bearer <token>` ; le jeton doit figurer dans `PURIDENTITYSERVER_REGISTRATION_INITIAL_ACCESS_TOKENS` (comparaison par hash SHA-256, jamais en clair). Mettre à `false` pour un mode ouvert — réservé au développement. |
 | `PURIDENTITYSERVER_REGISTRATION_INITIAL_ACCESS_TOKENS` | *(config.toml)* | Liste (séparée par des virgules en environnement) des initial access tokens autorisés à créer des clients. Chaque jeton est stocké uniquement sous forme d'empreinte SHA-256. Exemple : `PURIDENTITYSERVER_REGISTRATION_INITIAL_ACCESS_TOKENS="dev-registrar-token,staging-registrar"`. |
+| `PURIDENTITYSERVER_CLIENT_ATTESTATION_ISSUER` | *(vide)* | Issuer (`iss`) de l'attester de confiance de l'authentification client par attestation (draft-ietf-oauth-attestation-based-client-auth, issues #304 / #172) : le tiers habilité à émettre les attestations `oauth-client-attestation+jwt` présentées dans l'en-tête `OAuth-Client-Attestation`. Vide (défaut) = aucun attester : la méthode `attest_jwt_client_auth` n'est ni publiée au discovery (ni `token_endpoint_auth_methods_supported` ni les deux listes `client_attestation_*_signing_alg_values_supported`) ni acceptée à `POST /register` (`400 invalid_client_metadata`). Comparée en **égalité stricte** à l'`iss` de chaque attestation (barre finale comprise). À définir **avec** `CLIENT_ATTESTATION_JWKS`. |
+| `PURIDENTITYSERVER_CLIENT_ATTESTATION_JWKS` | *(vide)* | JWKS public des clés de l'attester de confiance : en environnement, l'objet complet `{"keys": [...]}` (les clés en sont extraites) ; en TOML, le tableau `[[client_attestation_jwks]]` (une table par JWK). Chaque attestation et chaque preuve PoP (`OAuth-Client-Attestation-PoP`) est signée par une de ces clés, choisie par `kid`. Vide = pas d'attester (voir ci-dessus). |
 | `PURIDENTITYSERVER_PAR_ENABLED` | `true` | Active la Pushed Authorization Request (RFC 9126) : endpoint `POST /par` et publication de `pushed_authorization_request_endpoint` dans le document de discovery. |
 | `PURIDENTITYSERVER_PAR_TTL_SECONDS` | `90` | Durée de vie du `request_uri` retourné par `/par` (secondes, entre 5 et 600). Le `request_uri` est à usage unique : il expire après ce délai et est détruit dès son utilisation à l'endpoint d'autorisation. |
 | `PURIDENTITYSERVER_CIBA_ENABLED` | `false` | Active le **CIBA** (Client-Initiated Backchannel Authentication, OIDC CIBA 1.0) : endpoint `POST /bc-authorize`, grant `urn:openid:params:grant-type:ciba` au token endpoint et métadonnées discovery associées (`backchannel_authentication_endpoint`, `backchannel_token_delivery_modes_supported`, `backchannel_user_code_parameter_supported`, `backchannel_authentication_request_signing_alg_values_supported`). Sans le flag, `/bc-authorize` répond `404` et les métadonnées sont absentes/vides. |
@@ -51,6 +53,9 @@ Elle est lue au démarrage par [pydantic-settings](https://docs.pydantic.dev/lat
 | `PURIDENTITYSERVER_CIBA_INTERVAL_SECONDS` | `5` | Intervalle minimal conseillé (secondes) entre deux polls du client sur `/token` avec le grant CIBA. Le serveur retourne `slow_down` (+ 5 secondes) si le client interroge plus vite. |
 | `PURIDENTITYSERVER_OPENID20_MIGRATION_ENABLED` | `false` | Active le support de la spec **« OpenID 2.0 to OpenID Connect Migration 1.0 »** (OIDF, version finale) : le scope `openid2` est alors accepté à `/authorize` (et à `/par`), le claim `openid2_id` est porté par l'`id_token` quand un identifiant OpenID 2.0 est associé au compte, le paramètre `openid2_realm` est vérifié contre les URI de redirection enregistrées du client (spec §3, OpenID 2.0 §9.2), et l'OP expose son rôle OpenID 2.0 (`/openid20/checkid_setup`, `/openid20/check_authentication`, `/openid20/id/{id}`). **Désactivé par défaut** : sans le flag, le scope `openid2` est refusé en `invalid_scope`, aucune route OpenID 2.0 n'est montée (`404`) et le claim `openid2_id` n'est jamais émis — aucun chemin actif en configuration standard. L'API d'administration (`GET/POST /openid20-identifiers`) n'est montée que si le flag est actif. Parcours RP détaillé dans `docs/openid20-migration.md` ; échantillon `samples/openid20-migration-client/`. |
 | `PURIDENTITYSERVER_OID4VCI_ENABLED` | `false` | Monte l’endpoint minimal OpenID4VCI (`/.well-known/openid-credential-issuer`, `/credential`) stratégie de slice #172 ; sans lui aucune route n’est exposée. |
+| `PURIDENTITYSERVER_OID4VCI_ENCRYPTION_ENABLED` | `false` | Active le chiffrement ECDH-ES des credential requests/réponses OID4VCI (§8.2, issue #304) : publication des blocs `credential_request_encryption` / `credential_response_encryption` dans les métadonnées d'émetteur et acceptation des corps `/credential` en `application/jwt`. La clé EC P-256 est provisionnée à la première usage dans le store de cléf partagé (`STORAGE_TYPE` `memory`/`sql`) — donc partagée entre instances et stable d'un redémarrage à l'autre. Sans le flag, aucune capability n'est annoncée ni acceptée (une demande de chiffrement est refusée en `invalid_encryption_parameters`). Voir `docs/oid4vci.md`. |
+| `PURIDENTITYSERVER_CREDENTIAL_PKI_PATH` | *(vide)* | Chemin du fichier JSON de la PKI d'émission du credential SD-JWT (CA racine + leaf, issue #304). Quand il est renseigné, chaque credential SD-JWT emporte la chaîne `x5c` (leaf seule, base64 standard), signée en RS256 avec `kid` = b64u(SKI de la leaf) ; vide (défaut) = credential sans `x5c`. Chemin relatif à la racine de travail (`certification/pki/credential-pki.json` pour la certification — voir `certification/generate_pki.py`). |
+| `PURIDENTITYSERVER_MDOC_PKI_PATH` | *(vide)* | Chemin du fichier JSON de la PKI mdoc : IACA (clé + certificat auto-signés, profil IACA Table B.1) et leaf du document signer. Le document signer est minté au démarrage avec l'issuer runtime de l'OP (CDP `{issuer}/crl/mdoc.crl`), la chaîne `x5chain` ne porte que le document signer (ancre hors chaîne, §7.1). Vide = mdoc émis sans `x5chain` exploitable. Exemple : `certification/pki/mdoc-iaca.json`. |
 | `PURIDENTITYSERVER_OID4VP_ENABLED` | `false` | Monte les endpoints OpenID4VP de présentation (`/presentation_requests`, `/vp_response`) ; désactivés sans ce flag. | | `false` | Monte le **resource server intégré** (RFC 8707, FAPI-R-6.2.1) : endpoint `GET /protected-resource` qui valide l'access token présenté en `Authorization: Bearer <token>` (signature, `iss`, expiration, denylist de révocation) avant de servir un corps JSON minimal (`message`, `sub`, `scope`). Le transport en query string est refusé (RFC 6750 §2.3) et tout jeton absent/invalide/révoqué reçoit `401` + challenge `WWW-Authenticate` (RFC 6750 §3). Chaque réponse porte `x-fapi-interaction-id` (valeur échoyée, ou `uuid4` générée quand le client n'en envoie pas). Sans le flag, la route répond `404` ; l'URL déclarée en `resource.resourceUrl` des plans de certification y pointe. Échantillon `samples/resource-indicators-client/`. |
 | `PURIDENTITYSERVER_CLIENT_CERTIFICATE_HEADER` | `X-SSL-Client-Cert` | Nom de l'en-tête HTTP posé par le proxy de terminaison TLS et portant le **PEM du certificat client mTLS** (RFC 8705) — lu sur `/token`, `/bc-authorize`, `/userinfo` et `/protected-resource` en l'absence de contexte TLS direct (`ssl_object` d'uvicorn). Configurable pour s'adapter à n'importe quelle plateforme : Cloudflare Transform Rules RFC 9440 (`cf.tls_client_auth.cert`), nginx (`$ssl_client_cert`), Envoy, HAProxy… La valeur est dé-URL encodée (`%0A`) puis les sauts de ligne `\n` littéraux sont rétablis. Les clients avec `tls_client_certificate_bound_access_tokens` (ou `tls_client_certificate_hash`) ne peuvent pas s'en passer. |
 | `PURIDENTITYSERVER_CLIENT_CERTIFICATE_DN_HEADER` | `X-SSL-Client-S-DN` | Nom de l'en-tête HTTP portant le **sujet RFC 4514** du certificat client (repli quand le proxy ne transmet pas le PEM, ex. `tls_client_auth` par sujet). Dé-URL encodé comme le PEM. |
@@ -448,13 +453,46 @@ défaut).
 - Avec `PURIDENTITYSERVER_DCR_ALLOW_FULL_GRANTS=true`, les grants
   `client_credentials`, `urn:ietf:params:oauth:grant-type:device_code` et
   `urn:ietf:params:oauth:grant-type:jwt-bearer` sont autorisés, à condition
-  d'une authentification client forte (`private_key_jwt`, `tls_client_auth` ou
-  `client_secret_basic` — `client_secret_post` et `none` restent refusés).
+  d'une authentification client forte (`private_key_jwt`, `tls_client_auth`,
+  `client_secret_basic`, `client_secret_jwt` ou `attest_jwt_client_auth` —
+  `client_secret_post` et `none` restent refusés).
 - Champs DCR supplémentaires acceptés pour les profils FAPI :
   `fapi_enabled` et `fapi2_enabled` (booléens, mutuellement exclusifs), qui ne
   sont admis qu'avec `private_key_jwt` ou `tls_client_auth`. Les profils FAPI
   1/2 activent ensuite les mêmes exigences que pour les clients seedés
   (JAR, PKCE `S256`, PAR obligatoire selon le profil).
+
+
+## Authentification client par attestation (issue #304)
+
+L'OP supporte la méthode `attest_jwt_client_auth`
+(draft-ietf-oauth-attestation-based-client-auth) sur `/token` et `/par` :
+
+- **Transport** : deux en-têtes par requête — `OAuth-Client-Attestation`
+  (attestation signée par l'attester de confiance : `iss`/`sub`/`exp`/`cnf`,
+  typ `oauth-client-attestation+jwt`) et `OAuth-Client-Attestation-PoP`
+  (preuve de possession signée par la clé `cnf.jwk` de l'attestation :
+  `iss`/`aud`/`iat`/`jti`, typ `oauth-client-attestation-pop+jwt`). Le
+  validateur impose `iss` en égalité stricte avec `CLIENT_ATTESTATION_ISSUER`,
+  l'`aud` du PoP à l'issuer de l'OP, une fenêtre d'horloge tolérée et un `jti`
+  non rejoué (anti-replay, partagé avec les preuves DPoP).
+- **Publication discovery** (§10.1) : `attest_jwt_client_auth` rejoint
+  `token_endpoint_auth_methods_supported` et les listes
+  `client_attestation_proof_signing_alg_values_supported` /
+  `client_attestation_signing_alg_values_supported` sont renseignées —
+  **uniquement** si `CLIENT_ATTESTATION_ISSUER` + `CLIENT_ATTESTATION_JWKS`
+  sont configurés (sinon la méthode reste inconnue de l'OP).
+- **DCR** : `POST /register` accepte
+  `token_endpoint_auth_method = attest_jwt_client_auth` (client confidentiel
+  sans secret) **uniquement** avec un attester configuré, sinon
+  `400 invalid_client_metadata`. La méthode compte parmi les authentifications
+  fortes des grants étendus (voir ci-dessus).
+- **Client seedé** : `token_endpoint_auth_method = "attest_jwt_client_auth"`
+  dans `PURIDENTITYSERVER_CLIENTS_SEED` — même exigence d'attester au
+  démarrage.
+
+Échantillon de bout en bout (DCR + `/par` + `/token` avec les deux en-têtes) :
+`samples/oid4vci-authcode-client/` en mode `CLIENT_AUTH=attest_jwt_client_auth`.
 
 
 ## CIBA — mode push et user_code (issue #175)

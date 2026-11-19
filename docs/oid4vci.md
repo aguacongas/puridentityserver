@@ -105,6 +105,80 @@ a la place de `credential_configuration_id`. Sans `authorization_details`,
 `credential_configuration_id`.
 
 
+## Authentification client par attestation (issues #304 / #172)
+
+Les plans HAIP `oid4vci-1_0-issuer-haip-test-plan` (issues `oid4vci` et
+`oid4vci-mdoc`) attendent une authentification client par attestation sur
+`/par` et `/token` (draft-ietf-oauth-attestation-based-client-auth) : l'OP
+accepte les en-têtes `OAuth-Client-Attestation` et `OAuth-Client-Attestation-PoP`
+pour une méthode `attest_jwt_client_auth` enregistrée (seed ou DCR), dès que
+l'attester de confiance est configuré (`PURIDENTITYSERVER_CLIENT_ATTESTATION_ISSUER`
+/ `..._JWKS` — voir `docs/configuration.md`). Les seeds
+`puridentityserver-oid4vci-client{,2}` de `certification/config.render.toml`
+sont en `attest_jwt_client_auth`.
+
+
+## Émission x5c et PKI de credential (issue #304)
+
+Deux settings de PKI (chemins JSON relatifs à la racine de travail) équipent
+l'émission des credentials :
+
+- **SD-JWT VC** — `PURIDENTITYSERVER_CREDENTIAL_PKI_PATH` : CA racine RSA +
+  leaf RSA. Quand le fichier est chargé, chaque credential SD-JWT emporte la
+  chaîne `x5c` (leaf seule, base64 standard) validée par le wallet contre
+  l'ancre `credential.trust_anchor_pem` (HAIP-6.1), signé en RS256 (alg
+  épinglé) avec `kid` = b64u(SKI de la leaf). Sans le setting, le credential
+  est émis sans `x5c`.
+- **mdoc (ISO 18013-5)** — `PURIDENTITYSERVER_MDOC_PKI_PATH` : IACA
+  (profil IACA Table B.1, `issuer_key_pem` / `issuer_cert_pem`,
+  rétrocompatible 4 champs) + leaf du document signataire. Le document signer est
+  minté au démarrage avec l'issuer runtime de l'OP ; la chaîne `x5chain` ne
+  porte que le document signer (l'ancre reste hors chaîne) et le CDP est
+  `{issuer}/crl/mdoc.crl` (endpoint CRL déjà monté). Sans le setting, pas de
+  `x5chain`.
+
+Les deux fichiers de la certification (`certification/pki/credential-pki.json`
+et `certification/pki/mdoc-iaca.json`) sont régénérés de façon idempotente par
+`uv run python certification/generate_pki.py` ; leurs PEM ancre
+(`credential-root.pem`, `mdoc-iaca.pem`) sont injectés dans les plans
+`certification/plans/oid4vci.json` / `oid4vci-mdoc.json`.
+
+
+## Chiffrement des credential requests / responses (OID4VCI 1.0 s8.2)
+
+Réglage `oid4vci_encryption_enabled` (défaut `false`, actif dans
+`certification/config.render.toml`). Quand il est actif, l'OP :
+
+- publie les blocs `credential_request_encryption` (sa clé publique EC P-256
+  dans `jwks`, avec `kid` = empreinte RFC 7638, `alg` = `ECDH-ES`, `use` =
+  `enc`) et `credential_response_encryption` (`alg_values_supported` =
+  `["ECDH-ES"]`) dans les métadonnées d'émetteur, JSON et signées ;
+  `enc_values_supported` a `A256GCM` en tête (les deux parties retiennent
+  l'élément `[0]` par défaut), `encryption_required` est `false` et
+  `zip_values_supported` vaut `["DEF"]` ;
+- accepte les corps `POST /credential` en `application/jwt` : le credential
+  request est un JWE compact ECDH-ES (mode Direct Key Agreement, courbe
+  P-256) chiffré avec la clé publiée ; un en-tête hors capability
+  (`alg`, `enc` ou `zip` inconnus) oppose
+  `invalid_encryption_parameters`, tout autre échec `invalid_request` ;
+- chiffre la réponse quand le wallet la demande via
+  `credential_response_encryption` (`jwk` EC P-256 du wallet, `enc`, `zip`
+  optionnel) : la réponse est alors un JWE compact en `application/jwt`
+  qui reprend le `kid` du jwk du wallet et `zip = DEF` si demandé.
+
+Sans le réglage, aucune capability n'est annoncée ni acceptée : une demande
+de chiffrement est refusée (`invalid_encryption_parameters`).
+
+La clé privée de chiffrement est provisionnée à la première usage dans le
+store de cléf partagé (`storage_type` = `memory` ou `sql`), donc
+partagée entre instances (load balancing) et stable d'un redémarrage à
+l'autre ; deux instances concurrentes convergent sur la même clé
+(insertion unique, la perdante est ignorée).
+
+Les erreurs `/credential` restent en JSON non chiffré, même quand le
+chiffrement de la réponse est demandé (OID4VCI s8.3.1).
+
+
 ## Divulgations selectives SD-JWT (RFC 9901)
 
 Le credential SD-JWT emis porte les claims `given_name` et `family_name`

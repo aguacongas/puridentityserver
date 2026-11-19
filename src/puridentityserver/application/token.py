@@ -112,6 +112,7 @@ from puridentityserver.interfaces.domain.client_assertions import (
     JWT_BEARER_GRANT_TYPE_URN,
     ClientAssertionVerifier,
 )
+from puridentityserver.interfaces.domain.client_attestation import ClientAttestationVerifier
 from puridentityserver.interfaces.domain.secrets import SecretCipher
 from puridentityserver.interfaces.domain.tokens import (
     IdTokenConditionalClaims,
@@ -180,6 +181,8 @@ class TokenRequest:
     assertion: str = ""
     tls_certificate: ClientCertificate | None = None
     dpop_proof: str = ""
+    client_attestation: str = ""
+    client_attestation_pop: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,6 +270,7 @@ class TokenUseCase:
         scope_registry: ScopeRegistry | None = None,
         client_assertions: ClientAssertionVerifier | None = None,
         dependencies: TokenDependencies = _NO_TOKEN_DEPENDENCIES,
+        client_attestations: ClientAttestationVerifier | None = None,
     ) -> None:
         """Injection de la configuration, des repositories et de l'émetteur de jetons.
 
@@ -289,6 +293,10 @@ class TokenUseCase:
         ``openid2_id`` n'est émis. ``dependencies.identity_assurance`` résout
         les ``verified_claims`` (OpenID Identity Assurance 1.0) : sans
         injection, aucun membre ``verified_claims`` n'est émis.
+        ``client_attestations`` vérifie les en-têtes d'attestation client
+        (draft-ietf-oauth-attestation-based-client-auth §6.2) pour les
+        clients ``attest_jwt_client_auth`` ; sans injection, ces clients
+        sont refusés (fonctionnalité non configurée côté OP).
         """
         self._config = config
         self._clients = client_repository
@@ -300,6 +308,7 @@ class TokenUseCase:
         self._scope_registry = scope_registry
         self._client_assertions = client_assertions
         self._dependencies = dependencies
+        self._client_attestations = client_attestations
 
     @property
     def _claims_provider(self) -> ClaimsProvider | None:
@@ -346,21 +355,45 @@ class TokenUseCase:
         return self._error("unsupported_grant_type")
 
     def _deduce_client_id(self, request: TokenRequest) -> None:
-        """Localise le client par l'``iss`` non vérifié de la ``client_assertion``.
+        """Localise le client par l'identité non vérifiée de l'assertion ou de l'attestation.
 
-        RFC 7523 §2.2 : le corps form peut omettre ``client_id`` quand
-        l'appelant s'authentifie par assertion (formulaire de la suite
-        ``CreateTokenEndpointRequestForAuthorizationCodeGrant``) —
-        l'assertion seule porte l'identité, exactement comme au endpoint
-        PAR. Aucune décision de sécurité sur cette valeur non vérifiée :
-        ``_authenticate_client`` valide ensuite signature, ``iss``/``sub``,
+        RFC 7523 §2.2 (``client_assertion``) et
+        draft-ietf-oauth-attestation-based-client-auth §6.3
+        (``OAuth-Client-Attestation``) : le corps form peut omettre
+        ``client_id`` quand l'appelant s'authentifie par assertion ou par
+        attestation (formulaire de la suite
+        ``CreateTokenEndpointRequestForAuthorizationCodeGrant``) — le jeton
+        seul porte l'identité, exactement comme au endpoint PAR. Aucune
+        décision de sécurité sur cette valeur non vérifiée :
+        ``_authenticate_client`` valide ensuite signature, ``iss``/`sub`,
         ``aud`` et ``exp`` avant tout échange.
         """
-        if request.client_id or not request.client_assertion or self._client_assertions is None:
+        if request.client_id:
             return
-        issuer = self._client_assertions.issuer_of(request.client_assertion)
-        if issuer:
-            request.client_id = issuer
+        if request.client_assertion and self._client_assertions is not None:
+            issuer = self._client_assertions.issuer_of(request.client_assertion)
+            if issuer:
+                request.client_id = issuer
+                return
+        if request.client_attestation and self._client_attestations is not None:
+            subject = self._client_attestations.subject_of(request.client_attestation)
+            if subject:
+                request.client_id = subject
+
+    def _instance_key(self, client: Client, request: TokenRequest) -> str:
+        """Empreinte de l'instance client de l'attestation présentée (ATCA §10.3).
+
+        ``""`` quand le client ne s'authentifie pas par attestation ou que
+        la requête n'en porte pas. La valeur n'est lue qu'après un
+        ``_authenticate_client`` réussi : l'attestation a alors été
+        vérifiée (signature, ``iss``, ``sub``, ``cnf.jwk`` sans clé
+        privée), sans quoi le client n'aurait pas été authentifié.
+        """
+        if client.effective_auth_method is not TokenEndpointAuthMethod.ATTEST_JWT_CLIENT_AUTH:
+            return ""
+        if not request.client_attestation or self._client_attestations is None:
+            return ""
+        return self._client_attestations.instance_key_of(request.client_attestation)
 
     async def _exchange_code(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Échange un code d'autorisation à usage unique contre des jetons."""
@@ -391,7 +424,11 @@ class TokenUseCase:
 
         tls_cert_hash = _tls_certificate_bound_hash(client, request)
         refresh_token = ""
-        if Scope.OFFLINE_ACCESS in auth_code.scopes:
+        # ``offline_access`` peut être retiré de la demande sans être retiré du
+        # client : dans le flux OpenID4VCI la suite de certification remplace le
+        # scope demandé par celui de la credential configuration (``openid4vci``).
+        # Le client enregistré fait alors foi pour l'émission du refresh token.
+        if Scope.OFFLINE_ACCESS in auth_code.scopes or Scope.OFFLINE_ACCESS in client.scopes:
             refresh_token = await self._issue_refresh_token(
                 client,
                 auth_code.subject,
@@ -401,6 +438,7 @@ class TokenUseCase:
                 resources=resources,
                 tls_cert_hash=tls_cert_hash,
                 subject_material=auth_code.subject_material,
+                instance_key=self._instance_key(client, request),
             )
         try:
             parsed_details = parse_authorization_details(auth_code.authorization_details)
@@ -517,6 +555,32 @@ class TokenUseCase:
             )
         )
 
+    def _refresh_bound_error(
+        self, client: Client, request: TokenRequest, stored: RefreshToken, tls_cert_hash: str
+    ) -> TokenError | None:
+        """Contrôle les liens matériels opposés à un renouvellement.
+
+        ``tls_cert_hash`` (RFC 8705 §3.3) exige le même certificat client
+        que celui de l'émission. ``instance_key`` (OAuth2-ATCA §10.3) exige
+        que le client s'authentifie avec la même ``cnf.jwk`` d'attestation
+        que celle de l'émission. Le contrôle des liens est posé après la
+        recherche du refresh token : un jeton d'un autre client est d'abord
+        refusé ``invalid_grant`` par ``_resolve_refresh_grant``.
+        ``None`` signifie qu'aucun lien n'est enfreint.
+        """
+        if stored.tls_cert_hash and tls_cert_hash != stored.tls_cert_hash:
+            return self._error(
+                "invalid_grant",
+                "Refresh token lié au certificat client mTLS (RFC 8705 §3.3) : "
+                "certificat absent ou différent de celui d'émission",
+            )
+        if stored.instance_key and self._instance_key(client, request) != stored.instance_key:
+            return self._error(
+                "invalid_client_attestation",
+                "Refresh token lié à une autre instance client (OAuth2-ATCA §10.3)",
+            )
+        return None
+
     async def _refresh(self, request: TokenRequest) -> TokenResponse | TokenError:
         """Renouvelle les jetons à partir d'un refresh token opaque.
 
@@ -545,12 +609,9 @@ class TokenUseCase:
         stored, scopes = resolved
 
         tls_cert_hash = _tls_certificate_bound_hash(client, request)
-        if stored.tls_cert_hash and tls_cert_hash != stored.tls_cert_hash:
-            return self._error(
-                "invalid_grant",
-                "Refresh token lié au certificat client mTLS (RFC 8705 §3.3) : "
-                "certificat absent ou différent de celui d'émission",
-            )
+        bound_error = self._refresh_bound_error(client, request, stored, tls_cert_hash)
+        if bound_error is not None:
+            return bound_error
 
         now = datetime.now(timezone.utc)
         binding = await self._evaluate_dpop(client, request, bound_jkt=stored.dpop_jkt)
@@ -574,6 +635,7 @@ class TokenUseCase:
                 resources=resources,
                 tls_cert_hash=tls_cert_hash,
                 subject_material=stored.subject_material,
+                instance_key=stored.instance_key,
             )
         issued = await self._issue_tokens(
             client,
@@ -785,6 +847,7 @@ class TokenUseCase:
                 binding,
                 resources,
                 _tls_certificate_bound_hash(client, request),
+                self._instance_key(client, request),
             )
         return await self._device_pending_response(stored, now)
 
@@ -831,6 +894,7 @@ class TokenUseCase:
         binding: DpopBinding,
         resources: tuple[str, ...],
         tls_cert_hash: str = "",
+        instance_key: str = "",
     ) -> TokenResponse | TokenError:
         """Consomme la session appareil approuvée et émet ses jetons (RFC 8628 §3.5)."""
         if self._device_codes is None:
@@ -848,6 +912,7 @@ class TokenUseCase:
                 resources=resources,
                 tls_cert_hash=tls_cert_hash,
                 subject_material=stored.device_code_hash,
+                instance_key=instance_key,
             )
         issued = await self._issue_tokens(
             client,
@@ -916,6 +981,7 @@ class TokenUseCase:
                 binding,
                 resources,
                 _tls_certificate_bound_hash(client, request),
+                self._instance_key(client, request),
             )
         return await self._ciba_pending_response(stored, now)
 
@@ -972,6 +1038,7 @@ class TokenUseCase:
         binding: DpopBinding,
         resources: tuple[str, ...],
         tls_cert_hash: str = "",
+        instance_key: str = "",
     ) -> TokenResponse | TokenError:
         """Consomme la demande CIBA approuvée et émet ses jetons (CIBA §10.1.1)."""
         if self._backchannel_auth is None:
@@ -989,6 +1056,7 @@ class TokenUseCase:
                 resources=resources,
                 tls_cert_hash=tls_cert_hash,
                 subject_material=stored.auth_req_id_hash,
+                instance_key=instance_key,
             )
         issued = await self._issue_tokens(
             client,
@@ -1192,6 +1260,9 @@ class TokenUseCase:
             assertion=request.client_assertion,
             assertion_audience=self._assertion_audiences(client),
             tls_certificate=request.tls_certificate,
+            attestation_verifier=self._client_attestations,
+            attestation=request.client_attestation,
+            attestation_pop=request.client_attestation_pop,
         )
         if detail is None:
             return None
@@ -1458,6 +1529,7 @@ class TokenUseCase:
         resources: tuple[str, ...] = (),
         tls_cert_hash: str = "",
         subject_material: str = "",
+        instance_key: str = "",
     ) -> str:
         """Génère, persiste (empreinte) et retourne un nouveau refresh token opaque.
 
@@ -1470,6 +1542,10 @@ class TokenUseCase:
         présenter le même certificat. ``subject_material`` reprend la
         matière de dérivation de la ``sub`` non publique (ESID 1.0 §4)
         afin que les renouvellements reproduisent la même ``sub``.
+        ``instance_key`` non vide lie le refresh token à l'instance client
+        de l'attestation présentée (OAuth2-ATCA §10.3) : tout
+        renouvellement devra authentifier le client avec la même
+        ``cnf.jwk``.
 
         Un client **confidentiel** ne porte jamais la liaison DPoP : il
         s'authentifie par ``private_key_jwt`` (ou mTLS) et la suite
@@ -1495,6 +1571,7 @@ class TokenUseCase:
                 dpop_jkt=dpop_jkt,
                 resource_uris=resources,
                 tls_cert_hash=tls_cert_hash,
+                instance_key=instance_key,
             )
         )
         return value

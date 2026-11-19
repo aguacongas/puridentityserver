@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from puridentityserver.application.oid4vci import (
     CREDENTIAL_CONFIGURATION_ID,
+    REVOKED_ACCESS_TOKEN_ERROR,
     CredentialError,
     CredentialOfferUseCase,
 )
@@ -24,6 +25,7 @@ from puridentityserver.domain.authorization import (
 )
 from puridentityserver.domain.credential_offer import CredentialOffer
 from puridentityserver.domain.jwks import JWTAlgorithm
+from puridentityserver.domain.revocation import RevokedToken, token_hash
 from puridentityserver.infrastructure.jwks import DefaultKeyManager
 from puridentityserver.infrastructure.persistence.factory import (
     build_credential_offer_repository,
@@ -35,6 +37,9 @@ from puridentityserver.infrastructure.persistence.memory.credential_offers impor
     InMemoryCredentialOfferRepository,
 )
 from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKeyPairRepository
+from puridentityserver.infrastructure.persistence.memory.revoked_tokens import (
+    InMemoryRevokedTokenRepository,
+)
 from puridentityserver.infrastructure.persistence.sql.credential_offers import (
     SQLCredentialOfferRepository,
 )
@@ -181,6 +186,39 @@ def test_user_token_cannot_designate_another_subject() -> None:
     assert isinstance(result, CredentialError)
     assert result.error == "invalid_request"
     assert result.status_code == 403
+
+
+def test_offer_creation_refuses_revoked_access_token() -> None:
+    """RFC 6749 §4.1.2/§5.2 : la denylist refuse aussi la creation d offre.
+
+    Regression issue #304 : le rejeu du code revoque l AT, qui ne doit
+    plus pouvoir creer d offre de credential.
+    """
+    harness = _Harness()
+    revoked = InMemoryRevokedTokenRepository()
+    usecase = CredentialOfferUseCase(
+        issuer=_ISSUER,
+        offer_repository=harness.offers,
+        code_repository=harness.codes,
+        token_manager=harness.tokens,
+        revoked_tokens=revoked,
+    )
+    token = harness.token()
+    run(
+        revoked.save(
+            RevokedToken(
+                token_hash=token_hash(token),
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=300),
+            )
+        )
+    )
+
+    result = run(usecase.create(token))
+
+    assert isinstance(result, CredentialError)
+    assert result.error == "invalid_token"
+    assert result.error_description == REVOKED_ACCESS_TOKEN_ERROR
+    assert result.status_code == 401
 
 
 def test_missing_scope_is_refused() -> None:

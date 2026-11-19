@@ -19,6 +19,7 @@ from puridentityserver.infrastructure.client_tls import (
     ClientCertificateHeaderNames,
     extract_client_certificate,
 )
+from puridentityserver.interfaces.api.client_attestation import extract_client_attestation
 from puridentityserver.interfaces.api.dpop_proof import extract_dpop_proof
 from puridentityserver.interfaces.api.error_description import ascii_error_description
 from puridentityserver.interfaces.api.http_client_auth import parse_basic_auth
@@ -44,6 +45,12 @@ def token_router(
         if dpop_error is not None:
             error = TokenError(error="invalid_request", error_description=dpop_error)
             return _error_response(error)
+        attestation, attestation_pop, attestation_error = extract_client_attestation(
+            request.headers
+        )
+        if attestation_error is not None:
+            error = TokenError(error="invalid_request", error_description=attestation_error)
+            return _error_response(error)
         header_id, header_secret = parse_basic_auth(request)
         form = await request.form()
         client_id = _form_field(form, "client_id") or header_id
@@ -67,6 +74,8 @@ def token_router(
             assertion=_form_field(form, "assertion"),
             tls_certificate=extract_client_certificate(request, certificate_headers),
             dpop_proof=dpop_proof,
+            client_attestation=attestation,
+            client_attestation_pop=attestation_pop,
         )
         result = await usecase.execute(token_request)
         if isinstance(result, TokenError):

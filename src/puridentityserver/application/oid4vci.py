@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -14,6 +15,10 @@ from typing import Any, cast
 
 import jwt as pyjwt
 from cryptography import x509
+from cryptography.hazmat.primitives.asymmetric.ec import (
+    EllipticCurvePrivateKey,
+    EllipticCurvePublicKey,
+)
 from cryptography.hazmat.primitives.serialization import (
     Encoding,
     load_pem_private_key,
@@ -35,12 +40,25 @@ from puridentityserver.domain.credential_offer import (
     credential_offer_payload,
 )
 from puridentityserver.domain.dpop import access_token_hash
+from puridentityserver.domain.jwe import ECDH_ES, JWEEncryptionMethod
 from puridentityserver.domain.jwks import JWTAlgorithm, KeyPair
+from puridentityserver.domain.revocation import token_hash
+from puridentityserver.infrastructure.credential_pki import CredentialPKIRepository
+from puridentityserver.infrastructure.dpop import jwk_thumbprint
+from puridentityserver.infrastructure.jwe import (
+    decrypt_compact_ecdh_es,
+    ec_jwk,
+    ec_public_key,
+    encrypt_compact_ecdh_es,
+    generate_ec_p256_private_key_pem,
+    protected_header,
+)
 from puridentityserver.infrastructure.jwks import DefaultKeyManager, first_active_key
 from puridentityserver.infrastructure.mdoc import (
     MDL_MANDATORY_ELEMENTS,
     MdocBindingError,
     MdocIssuerPKI,
+    generate_mdoc_iaca,
     generate_mdoc_pki,
 )
 from puridentityserver.infrastructure.mdoc_storage import MdocPKIRepository
@@ -51,6 +69,12 @@ from puridentityserver.interfaces.repositories.authorization_code_repository imp
 )
 from puridentityserver.interfaces.repositories.credential_offer_repository import (
     CredentialOfferRepository,
+)
+from puridentityserver.interfaces.repositories.encryption_key_repository import (
+    EncryptionKeyRepository,
+)
+from puridentityserver.interfaces.repositories.revoked_token_repository import (
+    RevokedTokenRepository,
 )
 from puridentityserver.interfaces.schemas.jwks import JWKKeyResponse
 
@@ -94,10 +118,67 @@ def credential_vct(issuer: str) -> str:
     return f"{issuer.rstrip('/')}{CREDENTIAL_VCT_PATH}"
 
 
-def issuer_metadata_payload(issuer: str) -> dict[str, Any]:
-    """Construit le document de métadonnées de l'émetteur OID4VCI (non signé)."""
-    normalized = issuer.rstrip("/")
+#: Valeurs de ``enc`` publiées, A256GCM en tête : émetteur et wallet
+#: (suite OIDF) retiennent l'élément ``[0]`` par défaut (OID4VCI s8.2).
+ENC_VALUES_SUPPORTED: tuple[str, ...] = tuple(
+    dict.fromkeys(
+        (
+            JWEEncryptionMethod.A256GCM.value,
+            *(method.value for method in JWEEncryptionMethod),
+        )
+    )
+)
+#: Algorithmes de gestion de clé asymétriques publiés (OID4VCI s12.2.4) :
+#: seul ECDH-ES en mode Direct Key Agreement sert au chiffrement des
+#: credential requests/réponses.
+ALG_VALUES_SUPPORTED: tuple[str, ...] = (ECDH_ES,)
+#: Seul ``DEF`` est enregistré comme algorithme de compression (RFC 7516 s4.1.3).
+ZIP_VALUES_SUPPORTED: tuple[str, ...] = ("DEF",)
+
+
+def _encryption_metadata_blocks(encryption_jwk: dict[str, Any]) -> dict[str, Any]:
+    """Blocs d'encryption des métadonnées émetteur (OID4VCI 1.0 s12.2.4).
+
+    ``credential_request_encryption`` porte le ``jwks`` de l'émetteur (clé
+    publique ``use = enc`` portant ``kid`` et ``alg``, exigés par la suite
+    OIDF) ; ``credential_response_encryption`` porte les
+    ``alg_values_supported`` asymétriques exigés côté wallet.
+    ``encryption_required = false`` : le chiffrement reste optionnel.
+    """
     return {
+        "credential_request_encryption": {
+            "jwks": {"keys": [encryption_jwk]},
+            "enc_values_supported": list(ENC_VALUES_SUPPORTED),
+            "encryption_required": False,
+            "zip_values_supported": list(ZIP_VALUES_SUPPORTED),
+        },
+        "credential_response_encryption": {
+            "alg_values_supported": list(ALG_VALUES_SUPPORTED),
+            "enc_values_supported": list(ENC_VALUES_SUPPORTED),
+            "encryption_required": False,
+            "zip_values_supported": list(ZIP_VALUES_SUPPORTED),
+        },
+    }
+
+
+def issuer_metadata_payload(
+    issuer: str, *, encryption_jwk: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Construit le document de métadonnées de l'émetteur OID4VCI (non signé).
+
+    Args:
+        issuer: URL de l'émetteur.
+        encryption_jwk: clé publique EC P-256 de chiffrement à publier ;
+            ``None`` (défaut) omet les blocs d'encryption — capability non
+            annoncée.
+
+    Returns:
+        Le document de métadonnées, augmenté des blocs
+        ``credential_request_encryption`` / ``credential_response_encryption``
+        quand ``encryption_jwk`` est fourni (OID4VCI 1.0 s12.2.4).
+    """
+    normalized = issuer.rstrip("/")
+    payload: dict[str, Any] = {
         "credential_issuer": normalized,
         "authorization_servers": [normalized],
         "credential_endpoint": f"{normalized}/credential",
@@ -140,6 +221,9 @@ def issuer_metadata_payload(issuer: str) -> dict[str, Any]:
         "deferred_credential_endpoint": f"{normalized}/deferred_credential",
         "notification_endpoint": f"{normalized}/notification",
     }
+    if encryption_jwk is not None:
+        payload.update(_encryption_metadata_blocks(encryption_jwk))
+    return payload
 
 
 @dataclass(frozen=True)
@@ -157,8 +241,83 @@ class CredentialError:
     status_code: int = 400
 
 
+@dataclass(frozen=True)
+class CredentialResponseEncryption:
+    """Chiffrement de réponse demandé par le wallet (OID4VCI 1.0 s8.2).
+
+    ``kid`` reprend le ``kid`` du jwk du wallet (le déchiffreur côté wallet
+    sélectionne la clé par ``alg`` + ``kid``) ; ``compress`` signale le
+    ``zip = DEF`` demandé, qui doit figurer dans l'en-tête de la réponse.
+    """
+
+    public_key: EllipticCurvePublicKey
+    method: JWEEncryptionMethod
+    kid: str = ""
+    compress: bool = False
+
+
+def _invalid_encryption(description: str) -> CredentialError:
+    """Erreur ``invalid_encryption_parameters`` (OID4VCI 1.0 s8.3.1)."""
+    return CredentialError("invalid_encryption_parameters", description)
+
+
+def _request_encryption_header_error(header: dict[str, Any]) -> str | None:
+    """Vérifie l'en-tête JWE d'une requête chiffrée contre la capability publiée.
+
+    Returns:
+        Le message de refus (opposé en ``invalid_encryption_parameters``),
+        ou ``None`` quand l'en-tête est dans la capability.
+    """
+    if header.get("alg") != ECDH_ES:
+        return "algorithme de gestion de clé non supporté"
+    if header.get("enc") not in ENC_VALUES_SUPPORTED:
+        return "méthode de chiffrement non supportée"
+    zip_value = header.get("zip")
+    if zip_value is not None and zip_value != "DEF":
+        return "algorithme de compression non supporté"
+    return None
+
+
+def _response_encryption_method(
+    value: object,
+) -> tuple[JWEEncryptionMethod, CredentialError | None]:
+    """Résout la méthode ``enc`` demandée, ou oppose l'erreur de capability.
+
+    Sans ``enc``, la première valeur publiée (A256GCM) s'applique, comme
+    le retient la suite OIDF.
+    """
+    if value is None:
+        return (JWEEncryptionMethod.A256GCM, None)
+    if not isinstance(value, str) or value not in ENC_VALUES_SUPPORTED:
+        return (JWEEncryptionMethod.A256GCM, _invalid_encryption(f"enc non supporté : {value}"))
+    return (JWEEncryptionMethod(value), None)
+
+
 # Message d erreur d access token invalide, partage.
 INVALID_ACCESS_TOKEN_ERROR = "access token invalide, expire ou non autorise"  # ruff: ignore[hardcoded-password-string]
+#: Erreur opposée à un access token figure sur la denylist (RFC 6749 §5.2).
+REVOKED_ACCESS_TOKEN_ERROR = "access token revoque"  # ruff: ignore[hardcoded-password-string]
+
+
+async def access_token_revoked(repository: RevokedTokenRepository | None, token: str) -> bool:
+    """Signale un access token placé sur la denylist (RFC 6749 §5.2).
+
+    Sans dépôt injecté, la denylist est inactive et le jeton n'est jamais
+    considéré révoqué. L'empreinte ``SHA-256`` du jeton est calculée ici
+    (``token_hash``), jamais le jeton en clair.
+    """
+    if repository is None:
+        return False
+    return await repository.is_revoked(token_hash(token))
+
+
+@dataclass(frozen=True)
+class _SdJwtSigningMaterial:
+    """Matériel de signature d'un credential SD-JWT (clé, alg, en-têtes)."""
+
+    private_key: Any
+    algorithm: str
+    headers: dict[str, Any]
 
 
 class OID4VCIIssuerUseCase:
@@ -183,8 +342,18 @@ class OID4VCIIssuerUseCase:
         token_manager: TokenManager,
         dpop: DpopProofValidator | None = None,
         mdoc_pki_repository: MdocPKIRepository | None = None,
+        credential_pki_repository: CredentialPKIRepository | None = None,
+        revoked_tokens: RevokedTokenRepository | None = None,
+        encryption_enabled: bool = False,
+        encryption_key_repository: EncryptionKeyRepository | None = None,
     ) -> None:
-        """Initialise l'émetteur et mémorise les dépendances cryptographiques."""
+        """Initialise l'émetteur et mémorise les dépendances cryptographiques.
+
+        ``encryption_enabled`` active la capability de chiffrement des
+        credential requests/réponses (OID4VCI s8.2) ; la clé EC P-256 est
+        alors provisionnée à la première usage dans
+        ``encryption_key_repository`` (store partagé, load balancing).
+        """
         self._issuer = issuer.rstrip("/")
         self._key_manager = key_manager
         self._algorithm = algorithm
@@ -193,6 +362,12 @@ class OID4VCIIssuerUseCase:
         self._notifications: set[str] = set()
         self._mdoc_pki: MdocIssuerPKI | None = None
         self._mdoc_pki_repository: MdocPKIRepository | None = mdoc_pki_repository
+        self._credential_pki_repository: CredentialPKIRepository | None = credential_pki_repository
+        self._revoked_tokens: RevokedTokenRepository | None = revoked_tokens
+        self._encryption_enabled = encryption_enabled
+        self._encryption_key_repository: EncryptionKeyRepository | None = encryption_key_repository
+        self._encryption_public_jwk: dict[str, Any] | None = None
+        self._encryption_private_key: EllipticCurvePrivateKey | None = None
 
     async def issue_nonce(self) -> dict[str, Any]:
         """Émet un ``c_nonce`` signé, sans état (OID4VCI 1.0 §7).
@@ -214,6 +389,8 @@ class OID4VCIIssuerUseCase:
         )
         if claims is None:
             return CredentialError("invalid_token", INVALID_ACCESS_TOKEN_ERROR, 401)
+        if await access_token_revoked(self._revoked_tokens, bearer_token):
+            return CredentialError("invalid_token", REVOKED_ACCESS_TOKEN_ERROR, 401)
         return CredentialError("invalid_transaction_id", "transaction_id inconnu ou deja consomme")
 
     async def notify(
@@ -228,6 +405,8 @@ class OID4VCIIssuerUseCase:
         )
         if claims is None:
             return CredentialError("invalid_token", INVALID_ACCESS_TOKEN_ERROR, 401)
+        if await access_token_revoked(self._revoked_tokens, bearer_token):
+            return CredentialError("invalid_token", REVOKED_ACCESS_TOKEN_ERROR, 401)
         if notification_id not in self._notifications:
             return CredentialError("invalid_notification_id", "notification_id inconnu", 400)
         if event not in {"credential_accepted", "credential_failure", "credential_deleted"}:
@@ -240,23 +419,20 @@ class OID4VCIIssuerUseCase:
     def _ensure_mdoc_pki(self) -> MdocIssuerPKI:
         """Genere la PKI mdoc a la volée si elle n'est pas encore chargee.
 
-        Tranche 3 : si un dépôt persistent est fourni, on tente d abord de
-        charger la PKI qu il contient ; a defaut (absence ou erreur) on genere
-        une nouvelle PKI et on la persiste dans le dépôt.
+        Avec un depot persistant, l'IACA chargee (contact de documentation
+        stable, commis dans le depot de certification) sert d'ancre : le
+        document signer est reminte a chaque demarrage avec le contact et
+        le point de distribution de CRL de l'emetteur courant. Sans depot,
+        IACA et document signer sont generes a la vollee (ephemere local).
         """
         if self._mdoc_pki is not None:
             return self._mdoc_pki
         repository = self._mdoc_pki_repository
-        if repository is None:
-            generated = generate_mdoc_pki(self._issuer)
-            self._mdoc_pki = generated
-            return generated
-        loaded = repository.load()
-        if loaded is not None:
-            self._mdoc_pki = loaded
-            return loaded
-        generated = generate_mdoc_pki(self._issuer)
-        repository.save(generated)
+        iaca = repository.load() if repository is not None else None
+        if repository is not None and iaca is None:
+            iaca = generate_mdoc_iaca(self._issuer)
+            repository.save(iaca)
+        generated = generate_mdoc_pki(self._issuer, iaca=iaca)
         self._mdoc_pki = generated
         return generated
 
@@ -278,6 +454,38 @@ class OID4VCIIssuerUseCase:
         ]
         return result
 
+    async def encryption_jwk(self) -> dict[str, Any] | None:
+        """Retourne la clé publique de chiffrement à publier, ou ``None``.
+
+        Sans activation (``oid4vci_encryption_enabled``) ou sans store, la
+        capability n'est pas annoncée. Sinon la clé EC P-256 est
+        provisionnée à la première usage : chargée du store partagé, ou
+        générée puis inscrite (``save_if_absent``) si le store est vide —
+        le rechargement qui suit fait converger deux instances
+        concurrentes sur la clé retenue. La clé est mise en cache pour la
+        durée de vie du processus.
+        """
+        if not self._encryption_enabled or self._encryption_key_repository is None:
+            return None
+        if self._encryption_public_jwk is not None:
+            return self._encryption_public_jwk
+        repository = self._encryption_key_repository
+        pem = await repository.load()
+        if pem is None:
+            pem = generate_ec_p256_private_key_pem()
+            await repository.save_if_absent(pem)
+            pem = await repository.load() or pem
+        private_key = load_pem_private_key(pem.encode("ascii"), password=None)
+        if not isinstance(private_key, EllipticCurvePrivateKey):
+            raise ValueError("clé de chiffrement OID4VCI attendue en EC P-256")
+        jwk = ec_jwk(private_key.public_key())
+        jwk["kid"] = jwk_thumbprint(jwk)
+        jwk["alg"] = ECDH_ES
+        jwk["use"] = "enc"
+        self._encryption_private_key = private_key
+        self._encryption_public_jwk = jwk
+        return jwk
+
     async def signed_issuer_metadata(self) -> str:
         """Signe les métadonnées de l'émetteur en ``application/jwt``.
 
@@ -290,6 +498,9 @@ class OID4VCIIssuerUseCase:
         private_key = load_pem_private_key(key.private_key_pem.encode("ascii"), password=None)
         now = int(datetime.now(timezone.utc).timestamp())
         payload: dict[str, object] = dict(self.issuer_metadata())
+        encryption_jwk = await self.encryption_jwk()
+        if encryption_jwk is not None:
+            payload.update(_encryption_metadata_blocks(encryption_jwk))
         payload["sub"] = self._issuer
         payload["iss"] = self._issuer
         payload["iat"] = now
@@ -319,6 +530,8 @@ class OID4VCIIssuerUseCase:
         )
         if claims is None:
             return CredentialError("invalid_token", INVALID_ACCESS_TOKEN_ERROR, 401)
+        if await access_token_revoked(self._revoked_tokens, bearer_token):
+            return CredentialError("invalid_token", REVOKED_ACCESS_TOKEN_ERROR, 401)
 
         if not await self._dpop_authorized(
             claims,
@@ -355,6 +568,113 @@ class OID4VCIIssuerUseCase:
             self._notifications.add(notification_id)
             result["notification_id"] = notification_id
         return result
+
+    async def decrypt_credential_request(self, body: bytes) -> dict[str, object] | CredentialError:
+        """Déchiffre une requête ``/credential`` en JWE ECDH-ES (OID4VCI s8.2).
+
+        Le media type ``application/jwt`` du corps désigne un credential
+        request chiffré avec la clé publiée dans
+        ``credential_request_encryption``. Un en-tête hors capability
+        (``alg``, ``enc`` ou ``zip`` inconnus) oppose
+        ``invalid_encryption_parameters`` ; tout autre échec (corps
+        illisible, déchiffrement refusé) oppose ``invalid_request``.
+        """
+        private_key = await self._provisioned_private_key()
+        if private_key is None:
+            return CredentialError("invalid_request", "requête chiffrée non prise en charge")
+        try:
+            token = body.decode("ascii")
+            header = protected_header(token)
+        except ValueError:  # couvre UnicodeDecodeError (sous-classe)
+            return CredentialError("invalid_request", "requête chiffrée illisible")
+        header_error = _request_encryption_header_error(header)
+        if header_error is not None:
+            return CredentialError("invalid_encryption_parameters", header_error)
+        try:
+            payload = json.loads(decrypt_compact_ecdh_es(token, private_key=private_key))
+        except (TypeError, ValueError):
+            return CredentialError("invalid_request", "déchiffrement de la requête impossible")
+        if not isinstance(payload, dict):
+            return CredentialError("invalid_request", "requête chiffrée attendue comme objet JSON")
+        return cast(dict[str, object], payload)
+
+    async def credential_response_encryption(
+        self, payload: dict[str, object]
+    ) -> tuple[CredentialResponseEncryption | None, CredentialError | None]:
+        """Valide ``credential_response_encryption`` d'une requête (OID4VCI s8.2).
+
+        Retourne ``(None, None)`` quand le wallet ne demande aucun
+        chiffrement. Sans capability annoncée, ou avec des paramètres hors
+        capability (``jwk`` absent ou non EC P-256, ``alg``/``enc``/``zip``
+        inconnus), l'erreur typée ``invalid_encryption_parameters`` est
+        opposée avant toute émission.
+        """
+        requested = payload.get("credential_response_encryption")
+        if requested is None:
+            return (None, None)
+        if not isinstance(requested, dict):
+            return (None, _invalid_encryption("credential_response_encryption invalide"))
+        if await self.encryption_jwk() is None:
+            return (None, _invalid_encryption("chiffrement de la réponse non activé"))
+        return self._response_encryption_spec(cast(dict[str, Any], requested))
+
+    def _response_encryption_spec(
+        self, requested: dict[str, Any]
+    ) -> tuple[CredentialResponseEncryption | None, CredentialError | None]:
+        """Extrait et valide les paramètres de chiffrement demandés par le wallet."""
+        jwk = requested.get("jwk")
+        if not isinstance(jwk, dict):
+            return (None, _invalid_encryption("jwk requis dans credential_response_encryption"))
+        algorithm = jwk.get("alg")
+        if algorithm is not None and algorithm != ECDH_ES:
+            return (None, _invalid_encryption(f"alg de chiffrement non supporté : {algorithm}"))
+        try:
+            public_key = ec_public_key(jwk)
+        except ValueError:
+            return (None, _invalid_encryption("jwk de chiffrement attendu en EC P-256"))
+        method, method_error = _response_encryption_method(requested.get("enc"))
+        if method_error is not None:
+            return (None, method_error)
+        zip_value = requested.get("zip")
+        if zip_value is not None and zip_value != "DEF":
+            return (None, _invalid_encryption(f"zip non supporté : {zip_value}"))
+        kid = jwk.get("kid")
+        return (
+            CredentialResponseEncryption(
+                public_key=public_key,
+                method=method,
+                kid=kid if isinstance(kid, str) else "",
+                compress=zip_value == "DEF",
+            ),
+            None,
+        )
+
+    async def seal_credential_response(
+        self, result: dict[str, Any], encryption: CredentialResponseEncryption
+    ) -> str:
+        """Chiffre la réponse ``/credential`` en JWE ECDH-ES (OID4VCI s8.2).
+
+        Le plaintext est le JSON de la réponse ; l'en-tête reprend le
+        ``kid`` du jwk du wallet (sélection côté wallet) et ``zip = DEF``
+        quand le wallet l'a demandé. Le chiffrement est exécuté hors de la
+        boucle d'événements, comme le chiffrement d'id_token ; la
+        capability a été validée par ``credential_response_encryption``
+        avant émission.
+        """
+        plaintext = json.dumps(result, separators=(",", ":")).encode("utf-8")
+        return await asyncio.to_thread(
+            encrypt_compact_ecdh_es,
+            method=encryption.method,
+            plaintext=plaintext,
+            recipient_public_key=encryption.public_key,
+            kid=encryption.kid,
+            compress=encryption.compress,
+        )
+
+    async def _provisioned_private_key(self) -> EllipticCurvePrivateKey | None:
+        """Clé privée de chiffrement provisionnée, ou ``None`` (inactive)."""
+        await self.encryption_jwk()
+        return self._encryption_private_key
 
     @staticmethod
     def _resolve_requested_configuration(
@@ -725,8 +1045,7 @@ class OID4VCIIssuerUseCase:
         Des digests leurres (decoys) masquent le nombre reel de claims
         (RFC 9901 s4.2.6).
         """
-        key: KeyPair = await first_active_key(self._key_manager, self._algorithm)
-        private_key = load_pem_private_key(key.private_key_pem.encode("ascii"), password=None)
+        material = await self._sd_jwt_signing_material()
         now = int(datetime.now(timezone.utc).timestamp())
         # Arrondi à l'heure pour éviter la corrélation inter-credential du lot
         # (RFC 9901 §10.1) ; voir ``VCIEnsureBatchTimeClaimsNotLinkable``.
@@ -777,11 +1096,13 @@ class OID4VCIIssuerUseCase:
             }
             if binding_jwk is not None:
                 payload["cnf"] = {"jwk": binding_jwk}
-            headers = {"typ": SD_JWT_VC_TYP, "kid": key.kid, "alg": self._algorithm.value}
             credential = cast(
                 str,
                 pyjwt.encode(
-                    payload, private_key, algorithm=self._algorithm.value, headers=headers
+                    payload,
+                    material.private_key,
+                    algorithm=material.algorithm,
+                    headers=material.headers,
                 ),
             )
             combined = credential + "~" + "~".join(disclosures) + "~"
@@ -791,6 +1112,40 @@ class OID4VCIIssuerUseCase:
                 }
             )
         return {"credentials": credentials}
+
+    async def _sd_jwt_signing_material(self) -> _SdJwtSigningMaterial:
+        """Materiel de signature du prochain credential SD-JWT.
+
+        Avec un depot `credential_pki_path` charge, le credential est signe
+        par la leaf RSA de la PKI d'emission et porte l'en-tete ``x5c``
+        (HAIP section 4.5.1 ; ``kid`` derive du SKI de la leaf, ``alg``
+        RS256 comme la metadata annonce deja). Sans depot (developpement),
+        la cle active de l'OP signe et aucun ``x5c`` n'est emis.
+        """
+        repository = self._credential_pki_repository
+        pki = repository.load() if repository is not None else None
+        if pki is None:
+            return await self._op_key_signing_material()
+        return _SdJwtSigningMaterial(
+            private_key=pki.leaf_private_key,
+            algorithm="RS256",
+            headers={
+                "typ": SD_JWT_VC_TYP,
+                "kid": pki.kid,
+                "alg": "RS256",
+                "x5c": pki.x5c,
+            },
+        )
+
+    async def _op_key_signing_material(self) -> _SdJwtSigningMaterial:
+        """Materiel de signature adossé à la cle active de l'OP."""
+        key: KeyPair = await first_active_key(self._key_manager, self._algorithm)
+        private_key = load_pem_private_key(key.private_key_pem.encode("ascii"), password=None)
+        return _SdJwtSigningMaterial(
+            private_key=private_key,
+            algorithm=self._algorithm.value,
+            headers={"typ": SD_JWT_VC_TYP, "kid": key.kid, "alg": self._algorithm.value},
+        )
 
     async def _dpop_authorized(
         self,
@@ -863,13 +1218,19 @@ class CredentialOfferUseCase:
         code_repository: AuthorizationCodeRepository,
         token_manager: TokenManager,
         offer_ttl: int = CREDENTIAL_OFFER_TTL,
+        revoked_tokens: RevokedTokenRepository | None = None,
     ) -> None:
-        """Injecte l'émetteur, les stockages et la validation des jetons."""
+        """Injecte l'émetteur, les stockages et la validation des jetons.
+
+        ``revoked_tokens`` porte la denylist des access tokens (RFC 6749
+        §5.2) opposée à la création d'une offre.
+        """
         self._issuer = issuer.rstrip("/")
         self._offers = offer_repository
         self._codes = code_repository
         self._token_manager = token_manager
         self._offer_ttl = offer_ttl
+        self._revoked_tokens = revoked_tokens
 
     async def create(
         self,
@@ -957,6 +1318,8 @@ class CredentialOfferUseCase:
         )
         if claims is None:
             return CredentialError("invalid_token", "access token invalide ou expire", 401)
+        if await access_token_revoked(self._revoked_tokens, access_token):
+            return CredentialError("invalid_token", REVOKED_ACCESS_TOKEN_ERROR, 401)
         scopes = str(claims.get("scope") or "").split()
         if CREDENTIAL_OFFER_SCOPE.value not in scopes:
             return CredentialError(

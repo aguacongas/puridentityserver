@@ -36,6 +36,7 @@ from puridentityserver.domain.authorization import (
 )
 from puridentityserver.domain.dpop import DPoPProof
 from puridentityserver.interfaces.domain.client_assertions import ClientAssertionVerifier
+from puridentityserver.interfaces.domain.client_attestation import ClientAttestationVerifier
 from puridentityserver.interfaces.domain.dpop import DpopProofValidator, DpopValidationError
 from puridentityserver.interfaces.repositories.pushed_authorization_repository import (
     PushedAuthorizationRepository,
@@ -184,6 +185,7 @@ class PushedAuthorizationUseCase:
         dpop: DpopProofValidator | None = None,
         client_assertions: ClientAssertionVerifier | None = None,
         request_object_resolver: RequestObjectResolver | None = None,
+        client_attestations: ClientAttestationVerifier | None = None,
     ) -> None:
         """Prépare le use case avec ses dépendances de configuration et stockage.
 
@@ -195,6 +197,9 @@ class PushedAuthorizationUseCase:
         (RFC 9101 §5) incorpore un ``request`` fourni au push **avant**
         validation — indispensable pour les clients FAPI, dont le request
         object signé porte les vrais paramètres (FAPI1-ADV-5.2.3-8).
+        ``client_attestations`` (draft-ietf-oauth-attestation-based-client-auth
+        §6.2) authentifie un client ``attest_jwt_client_auth`` au push ;
+        sans injection, ces clients sont refusés.
         """
         self._config = par_config
         self._clients = client_repository
@@ -203,6 +208,7 @@ class PushedAuthorizationUseCase:
         self._dpop = dpop
         self._client_assertions = client_assertions
         self._request_object_resolver = request_object_resolver
+        self._client_attestations = client_attestations
 
     def _assertion_audiences(self, client: Client) -> tuple[str, ...]:
         """Audiences admises de la ``client_assertion`` du push (RFC 9126 §2).
@@ -223,7 +229,13 @@ class PushedAuthorizationUseCase:
         )
         return tuple(dict.fromkeys(value.rstrip("/") for value in values if value))
 
-    async def _authenticate_client(self, params: dict[str, str]) -> Client | PushError:
+    async def _authenticate_client(
+        self,
+        params: dict[str, str],
+        *,
+        attestation: str = "",
+        attestation_pop: str = "",
+    ) -> Client | PushError:
         """Authentifie le client du push ; retourne ``PushError`` ``invalid_client`` sinon.
 
         Le client est identifié par ``client_id`` ou, à défaut, par le
@@ -236,6 +248,12 @@ class PushedAuthorizationUseCase:
         du ``/par`` sinon (RFC 9126 §2, exigence FAPI1 ``PAR-2``) —,
         toute autre ``aud`` étant refusée. Un client confidentiel sans
         aucun secret ni assertion est refusé (RFC 6749 §2.3.1).
+
+        ``attestation`` / ``attestation_pop`` portent les en-têtes
+        d'attestation client (§6.1) ; seuls un client
+        ``attest_jwt_client_auth`` les consomme — les deux sont exigés
+        (§6.4 : le ``client_id`` du corps doit valoir le ``sub`` de
+        l'attestation, contrôle rendu par le vérificateur).
         """
         client_id = params.get("client_id", "")
         assertion = params.get("client_assertion", "")
@@ -262,6 +280,9 @@ class PushedAuthorizationUseCase:
             assertion_type=params.get("client_assertion_type", ""),
             assertion=assertion,
             assertion_audience=self._assertion_audiences(client),
+            attestation_verifier=self._client_attestations,
+            attestation=attestation,
+            attestation_pop=attestation_pop,
         )
         if detail is not None:
             return PushError(
@@ -271,7 +292,14 @@ class PushedAuthorizationUseCase:
             )
         return client
 
-    async def push(self, params: dict[str, str], *, dpop_proof: str = "") -> PushResult | PushError:
+    async def push(
+        self,
+        params: dict[str, str],
+        *,
+        dpop_proof: str = "",
+        client_attestation: str = "",
+        client_attestation_pop: str = "",
+    ) -> PushResult | PushError:
         """Authentifie le client et persiste la requête poussée.
 
         La méthode accepte les paramètres de la demande d'autorisation
@@ -287,6 +315,10 @@ class PushedAuthorizationUseCase:
         ``dpop_proof`` porte la preuve DPoP de l'en-tête (RFC 9449 §10.1) :
         validée, elle fixe le ``dpop_jkt`` de la demande à défaut de celui
         déclaré — tout écart entre les deux vaut ``invalid_dpop_proof``.
+
+        ``client_attestation`` / ``client_attestation_pop`` portent les
+        en-têtes d'attestation client (§6.1) du push ; leur rejet
+        invalide vaut ``invalid_client`` (§6.4).
 
         Paramètres invalides → propagation de l'erreur du validateur
         standard (``invalid_request``, ``invalid_scope``…).
@@ -311,7 +343,11 @@ class PushedAuthorizationUseCase:
                 )
             params = resolved
 
-        authenticated = await self._authenticate_client(params)
+        authenticated = await self._authenticate_client(
+            params,
+            attestation=client_attestation,
+            attestation_pop=client_attestation_pop,
+        )
         if isinstance(authenticated, PushError):
             return authenticated
         client_id = authenticated.client_id

@@ -7,9 +7,12 @@ portant les digests des éléments émis, l'intervalle de validité
 et la clé device du wallet, avec la chaîne de certificats du document signer
 dans l'en-tête ``x5chain`` (RFC 9360).
 
-La PKI mdoc se compose d'une IACA (autorité racine auto-signée) et d'un
-document signer émis par cette IACA ; les deux sont générés à la volée et
-vivent en mémoire pour la durée du processus.
+La PKI mdoc se compose d'une IACA (autorité racine auto-signée, profil
+ISO 18013-5 Table B.1) et d'un document signer émis par cette IACA
+(profil Table B.3) : l'IACA peut être persistée seule (dépôt de la
+certification, contact de documentation stable) tandis que le document
+signer est minté à chaque démarrage avec le contact et le point de
+distribution de CRL de l'émetteur courant.
 """
 
 from __future__ import annotations
@@ -123,11 +126,25 @@ class MdocBindingError(ValueError):
 
 
 @dataclass(frozen=True)
+class MdocIaca:
+    """IACA seule (clé + certificat), format du dépôt persistant.
+
+    Le dépôt ne conserve que l'autorité racine : le document signer est
+    minté à chaque démarrage depuis cette IACA (ISO 18013-5 §9.1.2.4, la
+    racine ne figure pas dans ``x5chain``).
+    """
+
+    private_key: ec.EllipticCurvePrivateKey
+    certificate: x509.Certificate
+
+
+@dataclass(frozen=True)
 class MdocIssuerPKI:
     """PKI mdoc d'un émetteur : IACA auto-signée et document signer émis.
 
     La structure conserve les clés privées nécessaires à la signature des
-    ``issuerAuth`` et les deux certificats à embarquer dans ``x5chain``.
+    ``issuerAuth`` et le certificat du document signer à embarquer dans
+    ``x5chain`` (l'IACA en est exclue : ancre de confiance hors chaîne).
     """
 
     issuer_private_key: ec.EllipticCurvePrivateKey
@@ -184,19 +201,46 @@ class MdocIssuerPKI:
         )
 
 
-def generate_mdoc_pki(issuer: str, now: datetime | None = None) -> MdocIssuerPKI:
-    """Génère une PKI mdoc (IACA auto-signée + document signer).
+def generate_mdoc_iaca(contact: str, now: datetime | None = None) -> MdocIaca:
+    """Génère l'IACA seule (profil ISO 18013-5 Table B.1).
 
     Args:
-        issuer: URL de l'émetteur, utilisée comme commune des certificats.
+        contact: URL de contact portée par le ``commonName`` et par le nom
+            alternatif de l'émetteur (issuerAltName). Stable en
+            certification : c'est ce contact qui est committé dans le dépôt.
         now: instant de génération, défaut : UTC courant.
+
+    Returns:
+        La clé et le certificat auto-signé de l'IACA.
+    """
+    generated_at = now or datetime.now(timezone.utc)
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    return MdocIaca(
+        private_key=private_key,
+        certificate=_self_signed_issuer_certificate(private_key, contact, generated_at),
+    )
+
+
+def generate_mdoc_pki(
+    issuer: str, now: datetime | None = None, *, iaca: MdocIaca | None = None
+) -> MdocIssuerPKI:
+    """Génère une PKI mdoc (IACA + document signer émis par celle-ci).
+
+    Args:
+        issuer: URL de l'émetteur, utilisée comme commune des certificats et
+            comme contact (``issuerAltName``) et base d'URI du point de
+            distribution de CRL du document signer.
+        now: instant de génération, défaut : UTC courant.
+        iaca: IACA existante à réutiliser ; à défaut une IACA est générée
+            avec ``issuer`` comme contact (dépôt absent : éphémère local).
 
     Returns:
         La paire IACA / document signer prête à signer des MSO.
     """
     generated_at = now or datetime.now(timezone.utc)
-    issuer_key = ec.generate_private_key(ec.SECP256R1())
-    issuer_certificate = _self_signed_issuer_certificate(issuer_key, issuer, generated_at)
+    effective_iaca = iaca if iaca is not None else generate_mdoc_iaca(issuer, generated_at)
+    issuer_key = effective_iaca.private_key
+    issuer_certificate = effective_iaca.certificate
     signer_key = ec.generate_private_key(ec.SECP256R1())
     signer_certificate = _document_signer_certificate(
         signer_key, issuer_certificate, issuer_key, generated_at, issuer
@@ -310,13 +354,32 @@ def _issuer_common_name(issuer_certificate: x509.Certificate) -> str:
 
 
 def _self_signed_issuer_certificate(
-    private_key: ec.EllipticCurvePrivateKey, issuer: str, generated_at: datetime
+    private_key: ec.EllipticCurvePrivateKey, contact: str, generated_at: datetime
 ) -> x509.Certificate:
-    """Construit le certificat auto-signé de l'IACA (``ca=True``)."""
+    """Construit le certificat auto-signé de l'IACA (profil Table B.1).
+
+    Profil ISO 18013-5 Table B.1 exigé par la suite de conformance :
+    ``countryName`` + ``commonName``, ``basicConstraints`` ca avec
+    ``pathLenConstraint = 0`` critique, ``keyUsage`` critique limité à
+    ``keyCertSign``/``cRLSign``, nom alternatif de l'émetteur portant le
+    contact, ``subjectKeyIdentifier`` (SHA-1 de la clé publique) — seuls
+    ``basicConstraints`` et ``keyUsage`` peuvent être critiques.
+
+    Args:
+        private_key: clé privée EC P-256 auto-signée de l'IACA.
+        contact: URL de contact (``commonName`` et ``issuerAltName``).
+        generated_at: instant de génération.
+
+    Returns:
+        Le certificat IACA auto-signé.
+    """
+    normalized_contact = contact.rstrip("/")
     name = x509.Name(
         [
             x509.NameAttribute(NameOID.COUNTRY_NAME, MDOC_ISSUING_COUNTRY),
-            x509.NameAttribute(NameOID.COMMON_NAME, _capped_common_name(issuer, " IACA")),
+            x509.NameAttribute(
+                NameOID.COMMON_NAME, _capped_common_name(normalized_contact, " IACA")
+            ),
         ]
     )
     return (
@@ -329,7 +392,25 @@ def _self_signed_issuer_certificate(
         .not_valid_after(generated_at + timedelta(days=MDoc_LIFETIME_DAYS * 10))
         .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
         .add_extension(
+            x509.KeyUsage(
+                digital_signature=False,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .add_extension(
             x509.SubjectKeyIdentifier.from_public_key(private_key.public_key()), critical=False
+        )
+        .add_extension(
+            x509.IssuerAlternativeName([x509.UniformResourceIdentifier(normalized_contact)]),
+            critical=False,
         )
         .sign(private_key, hashes.SHA256())
     )
@@ -551,7 +632,10 @@ def _sign_mso(mso: dict[str, Any], pki: MdocIssuerPKI) -> list[Any]:
 
     Le tableau COSE est encodé **sans tag CBOR 18** : les parseurs mdoc
     (dont ``CoseSign1.fromDataItem`` de la suite OIDF) exigent un tableau
-    de 4 éléments nu et rejettent un élément tagué.
+    de 4 éléments nu et rejettent un élément tagué. ``x5chain`` ne porte
+    que le document signer : l'IACA est l'ancre de confiance, hors chaîne
+    (ISO 18013-5 §9.1.2.4), et sa présence ferait échouer le contrôle
+    PKIX de la suite.
     """
     message = Sign1Message(
         phdr={_HEADER_ALG: _ALG_ES256},
@@ -561,7 +645,6 @@ def _sign_mso(mso: dict[str, Any], pki: MdocIssuerPKI) -> list[Any]:
         {
             _X5CHAIN_LABEL: [
                 pki.signer_certificate.public_bytes(cast(Encoding, Encoding.DER)),
-                pki.issuer_certificate.public_bytes(cast(Encoding, Encoding.DER)),
             ]
         }
     )

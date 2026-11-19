@@ -61,11 +61,13 @@ class JWEEncryptionMethod(str, Enum):
 
 #: Algorithme d'accord de clé ECDH-ES en mode « Direct Key Agreement »
 #: (RFC 7518 §4.6) : la clé dérivée par Concat KDF sert directement de CEK
-#: et l'``encrypted_key`` du document est vide. Réservé au déchiffrement des
-#: réponses OpenID4VP chiffrées par le wallet (``direct_post.jwt``, OID4VP
-#: 1.0 Final §8.3) : l'OP ne chiffre jamais un ``id_token`` en ECDH-ES (pas
-#: de clé publique statique de client à cet effet), et l'algorithme ne figure
-#: donc pas dans ``ALL_ENCRYPTION_ALGORITHMS`` — le publier au discovery
+#: et l'``encrypted_key`` du document est vide. Utilisé pour le
+#: déchiffrement des réponses OpenID4VP chiffrées par le wallet
+#: (``direct_post.jwt``, OID4VP 1.0 Final §8.3) et pour le chiffrement des
+#: credential requests/réponses OID4VCI (issue #304) : l'OP ne chiffre
+#: jamais un ``id_token`` en ECDH-ES (pas de clé publique statique de
+#: client à cet effet), et l'algorithme ne figure donc pas dans
+#: ``ALL_ENCRYPTION_ALGORITHMS`` — le publier au discovery OIDC
 #: laisserait croire à un support inexistant.
 ECDH_ES = "ECDH-ES"
 

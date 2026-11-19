@@ -3,7 +3,8 @@
 Factorise la vérification du secret client (comparaison SHA-256 constante)
 et l'authentification complète d'un client selon sa
 ``token_endpoint_auth_method`` (secret, assertion RFC 7523, certificat
-RFC 8705 ou ``none``), partagée par les endpoints exigeant un appelant
+RFC 8705, attestation client draft-ietf-oauth-attestation-based-client-auth
+ou ``none``), partagée par les endpoints exigeant un appelant
 authentifié : token, backchannel authentication (OIDC CIBA 1.0 §7.2)…
 """
 
@@ -24,6 +25,7 @@ from puridentityserver.interfaces.domain.client_assertions import (
     CLIENT_ASSERTION_TYPE_URN,
     ClientAssertionVerifier,
 )
+from puridentityserver.interfaces.domain.client_attestation import ClientAttestationVerifier
 from puridentityserver.interfaces.repositories.readers import ClientReader
 
 CLIENT_UNKNOWN_ERROR = "Client inconnu ou désactivé"
@@ -59,6 +61,9 @@ async def authenticate_client(
     assertion: str = "",
     assertion_audience: str | Sequence[str] = "",
     tls_certificate: ClientCertificate | None = None,
+    attestation_verifier: ClientAttestationVerifier | None = None,
+    attestation: str = "",
+    attestation_pop: str = "",
 ) -> str | None:
     """Authentifie le client selon sa ``token_endpoint_auth_method`` (RFC 6749 §2.3).
 
@@ -69,6 +74,11 @@ async def authenticate_client(
     la ``client_assertion`` : le token endpoint seul, ou — au backchannel
     authentication endpoint (CIBA §7.1) — l'issuer, le token endpoint et
     l'endpoint CIBA.
+
+    ``attestation`` / ``attestation_pop`` portent les en-têtes
+    ``OAuth-Client-Attestation`` et ``OAuth-Client-Attestation-PoP``
+    (§6.1) ; les deux sont exigés pour une méthode
+    ``attest_jwt_client_auth`` et vérifiés par ``attestation_verifier``.
     """
     method = client.effective_auth_method
     if method in (
@@ -96,9 +106,38 @@ async def authenticate_client(
         if not verify_tls_client_certificate(client, tls_certificate):
             return "Certificat client invalide"
         return None
+    if method is TokenEndpointAuthMethod.ATTEST_JWT_CLIENT_AUTH:
+        return await _authenticate_attestation(
+            client,
+            verifier=attestation_verifier,
+            attestation=attestation,
+            attestation_pop=attestation_pop,
+        )
     if method is TokenEndpointAuthMethod.NONE:
         return None
     return "Méthode d'authentification client inconnue"
+
+
+async def _authenticate_attestation(
+    client: Client,
+    *,
+    verifier: ClientAttestationVerifier | None,
+    attestation: str,
+    attestation_pop: str,
+) -> str | None:
+    """Vérifie la paire d'en-têtes d'attestation (draft-attestation-based-client-auth §6.2)."""
+    if verifier is None:
+        return "Authentification par attestation client non configurée (côté OP)"
+    if not attestation or not attestation_pop:
+        return (
+            "En-têtes OAuth-Client-Attestation et OAuth-Client-Attestation-PoP requis "
+            "(draft-ietf-oauth-attestation-based-client-auth §6.1)"
+        )
+    return await verifier.verify(
+        attestation=attestation,
+        pop=attestation_pop,
+        client_id=client.client_id,
+    )
 
 
 async def _authenticate_assertion(
