@@ -149,8 +149,9 @@ et `certification/pki/mdoc-iaca.json`) sont régénérés de façon idempotente 
 Réglage `oid4vci_encryption_enabled` (défaut `false`, actif dans
 `certification/config.render.toml`). Quand il est actif, l'OP :
 
-- publie les blocs `credential_request_encryption` (sa clé publique EC P-256
-  dans `jwks`, avec `kid` = empreinte RFC 7638, `alg` = `ECDH-ES`, `use` =
+- publie les blocs `credential_request_encryption` (ses clés publiques
+  EC P-256 dans `jwks`, **la plus récente en tête** puis les clés encore en
+  drain, chacune avec `kid` = empreinte RFC 7638, `alg` = `ECDH-ES`, `use` =
   `enc`) et `credential_response_encryption` (`alg_values_supported` =
   `["ECDH-ES"]`) dans les métadonnées d'émetteur, JSON et signées ;
   `enc_values_supported` a `A256GCM` en tête (les deux parties retiennent
@@ -158,7 +159,9 @@ Réglage `oid4vci_encryption_enabled` (défaut `false`, actif dans
   `zip_values_supported` vaut `["DEF"]` ;
 - accepte les corps `POST /credential` en `application/jwt` : le credential
   request est un JWE compact ECDH-ES (mode Direct Key Agreement, courbe
-  P-256) chiffré avec la clé publiée ; un en-tête hors capability
+  P-256) chiffré avec l'une des clés publiées ; la clé est résolue par le
+  `kid` de l'en-tête, avec repli sur l'ensemble du trousseau si le wallet a
+  mis en cache une clé antérieure à la rotation ; un en-tête hors capability
   (`alg`, `enc` ou `zip` inconnus) oppose
   `invalid_encryption_parameters`, tout autre échec `invalid_request` ;
 - chiffre la réponse quand le wallet la demande via
@@ -169,11 +172,30 @@ Réglage `oid4vci_encryption_enabled` (défaut `false`, actif dans
 Sans le réglage, aucune capability n'est annoncée ni acceptée : une demande
 de chiffrement est refusée (`invalid_encryption_parameters`).
 
-La clé privée de chiffrement est provisionnée à la première usage dans le
-store de cléf partagé (`storage_type` = `memory` ou `sql`), donc
-partagée entre instances (load balancing) et stable d'un redémarrage à
-l'autre ; deux instances concurrentes convergent sur la même clé
-(insertion unique, la perdante est ignorée).
+Les clés de chiffrement vivent dans la famille dédiée `KeyUse.CREDENTIAL`
+du store `key_pair` partagé (`storage_type` = `memory` ou `sql`) :
+provisionnées à la première usage, donc stables d'un redémarrage à l'autre
+et partagées entre instances (load balancing), puis **mises en rotation au
+démarrage** quand la plus récente dépasse `jwks_rotation_days` (issue
+#310). Les clés antérieures restent en place — jamais purgées : le `jwks`
+publié les toutes, la plus récente en tête, et le déchiffrement les toutes
+accepte (résolution par `kid`, repli sur le trousseau). Deux instances
+concurrentes rechargent le store et publient le même JWKS dans le même
+ordre (tri déterministe `created_at`/`kid`).
+
+**Convergence multi-instances** : la clé *courante* de la famille est
+l'unique ligne de `key_pairs` qui porte le couple `(use, slot)`
+(`slot = oid4vci`), sous contrainte d'unicité — les `slot` NULL des clés en
+drain étant distincts sur les trois dialectes supportés, la contrainte ne
+vise que cette famille et le drain reste inchangé. Au provisionnement
+concurrent, l'instance perdante reçoit un conflit, relit le store et
+**adopte** la clé gagnante au lieu d'en créer une seconde ; de même, si une
+rotation est intervenue entre sa lecture et son écriture, la clé en place
+est adoptée. Un déchiffrement qui échoue sur tout le trousseau en cache
+relecture le store (auto-guérison) avant d'opposer `invalid_request`. Le
+réglage `oid4vci_encryption_key_pem` (PEM EC P-256, facultatif) enregistre
+enfin un seed stable au démarrage quand la famille est vide — miroir de
+`client_secret_seal_key_pem`.
 
 Les erreurs `/credential` restent en JSON non chiffré, même quand le
 chiffrement de la réponse est demandé (OID4VCI s8.3.1).

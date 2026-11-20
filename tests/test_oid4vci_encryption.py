@@ -1,10 +1,12 @@
-"""Tests du chiffrement ECDH-ES des credential requests/réponses OID4VCI (issue #304).
+"""Tests du chiffrement ECDH-ES des credential requests/réponses OID4VCI (issues #304/#310).
 
 Le réglage ``oid4vci_encryption_enabled`` publie les blocs
 ``credential_request_encryption`` / ``credential_response_encryption`` dans
 les métadonnées, accepte les corps ``/credential`` en ``application/jwt`` et
 scelle les réponses demandées (OID4VCI 1.0 §8.2). Désactivé par défaut,
-aucune capability n'est annoncée ni acceptée.
+aucune capability n'est annoncée ni acceptée. La famille de clés
+``KeyUse.CREDENTIAL`` est mise en rotation au démarrage (issue #310) :
+les clés antérieures restent publiées et déchiffrables (drain).
 """
 
 from __future__ import annotations
@@ -13,46 +15,48 @@ import asyncio
 import json
 import time
 import zlib
-from pathlib import Path
+from collections.abc import Awaitable, Callable
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
 import jwt as pyjwt
 import pytest
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from fastapi.testclient import TestClient
 from jwt.algorithms import ECAlgorithm, RSAAlgorithm
 
+from puridentityprotocol.server import ProtocolDependencies
 from puridentityserver.application.oid4vci import (
     ALG_VALUES_SUPPORTED,
     CREDENTIAL_CONFIGURATION_ID,
+    CREDENTIAL_KEY_SIZE,
     CredentialError,
     CredentialResponseEncryption,
     OID4VCIIssuerUseCase,
     issuer_metadata_payload,
 )
 from puridentityserver.domain.jwe import ECDH_ES, JWEEncryptionMethod
-from puridentityserver.domain.jwks import JWTAlgorithm
+from puridentityserver.domain.jwks import JWTAlgorithm, KeyPair, KeyUse
+from puridentityserver.infrastructure.dpop import jwk_thumbprint
 from puridentityserver.infrastructure.jwe import (
     b64u,
     decrypt_compact_ecdh_es,
     deflate_compress,
     deflate_decompress,
+    ec_jwk,
     ec_public_key,
     encrypt_compact_ecdh_es,
-    generate_ec_p256_private_key_pem,
     protected_header,
 )
-from puridentityserver.infrastructure.jwks import DefaultKeyManager
-from puridentityserver.infrastructure.persistence.factory import (
-    build_encryption_key_repository,
-)
-from puridentityserver.infrastructure.persistence.memory.encryption_keys import (
-    InMemoryEncryptionKeyRepository,
+from puridentityserver.infrastructure.jwks import (
+    DefaultKeyManager,
+    load_credential_key_pair,
+    pem_key_kid,
+    rotate_if_stale,
 )
 from puridentityserver.infrastructure.persistence.memory.keys import InMemoryKeyPairRepository
-from puridentityserver.infrastructure.persistence.sql.encryption_keys import (
-    SQLEncryptionKeyRepository,
-)
+from puridentityserver.infrastructure.persistence.stores import build_stores
 from puridentityserver.infrastructure.settings import Settings
 from puridentityserver.infrastructure.tokens import PyJWTTokenManager
 from puridentityserver.server import create_app
@@ -136,18 +140,23 @@ def _fake_jwe(header: dict[str, str]) -> str:
 
 
 def _usecase(
-    *, encryption: bool = True, repository: InMemoryEncryptionKeyRepository | None = None
+    *, encryption: bool = True, encryption_store: InMemoryKeyPairRepository | None = None
 ) -> OID4VCIIssuerUseCase:
-    """Construit un émetteur autonome pour les tests de cas d'usage."""
-    if encryption and repository is None:
-        repository = InMemoryEncryptionKeyRepository()
+    """Construit un émetteur autonome pour les tests de cas d'usage.
+
+    ``encryption_store`` partage le store ``key_pair`` de la famille
+    ``KeyUse.CREDENTIAL`` entre instances simulées (load balancing) ;
+    un store vierge est créé sinon.
+    """
+    if encryption_store is None:
+        encryption_store = InMemoryKeyPairRepository()
     return OID4VCIIssuerUseCase(
         issuer=_ISSUER,
         key_manager=DefaultKeyManager(InMemoryKeyPairRepository()),
         algorithm=JWTAlgorithm.RS256,
         token_manager=PyJWTTokenManager(DefaultKeyManager(InMemoryKeyPairRepository())),
         encryption_enabled=encryption,
-        encryption_key_repository=repository,
+        encryption_key_manager=DefaultKeyManager(encryption_store, use=KeyUse.CREDENTIAL),
     )
 
 
@@ -185,12 +194,12 @@ def test_metadata_omits_capability_when_disabled() -> None:
     assert "credential_response_encryption" not in metadata
 
 
-def test_issuer_metadata_payload_gate_on_encryption_jwk() -> None:
-    """``issuer_metadata_payload`` n'ajoute les blocs que si la clé est fournie."""
+def test_issuer_metadata_payload_gate_on_encryption_jwks() -> None:
+    """``issuer_metadata_payload`` n'ajoute les blocs que si les clés sont fournies."""
     plain = issuer_metadata_payload(_ISSUER)
     assert "credential_request_encryption" not in plain
 
-    sealed = issuer_metadata_payload(_ISSUER, encryption_jwk={"kty": "EC"})
+    sealed = issuer_metadata_payload(_ISSUER, encryption_jwks=[{"kty": "EC"}])
     assert sealed["credential_request_encryption"]["jwks"]["keys"] == [{"kty": "EC"}]
     assert "credential_response_encryption" in sealed
 
@@ -501,19 +510,21 @@ def test_encryption_key_provisioned_once_and_shared() -> None:
     """La clé est provisionnée une fois puis partagée entre instances (load balancing)."""
 
     async def _task() -> None:
-        repository = InMemoryEncryptionKeyRepository()
-        first = _usecase(repository=repository)
-        second = _usecase(repository=repository)
-        jwk_one = await first.encryption_jwk()
-        jwk_two = await second.encryption_jwk()
-        assert jwk_one is not None
-        assert jwk_two is not None
-        assert jwk_one["kid"] == jwk_two["kid"]
-        assert jwk_one["alg"] == ECDH_ES
-        assert jwk_one["use"] == "enc"
-        assert await repository.load() is not None
+        store = InMemoryKeyPairRepository()
+        manager = DefaultKeyManager(store, use=KeyUse.CREDENTIAL)
+        first = _usecase(encryption_store=store)
+        second = _usecase(encryption_store=store)
+        jwks_one = await first.encryption_jwks()
+        jwks_two = await second.encryption_jwks()
+        assert jwks_one is not None
+        assert jwks_two is not None
+        assert len(jwks_one) == 1
+        assert [key["kid"] for key in jwks_one] == [key["kid"] for key in jwks_two]
+        assert jwks_one[0]["alg"] == ECDH_ES
+        assert jwks_one[0]["use"] == "enc"
+        assert len(await manager.get_active_keys()) == 1
         # Mise en cache : la provisionnante ne régénère rien.
-        assert await first.encryption_jwk() is jwk_one
+        assert await first.encryption_jwks() is jwks_one
 
     asyncio.run(_task())
 
@@ -522,8 +533,8 @@ def test_encryption_capability_absent_without_flag_or_store() -> None:
     """Sans activation ou sans store, aucune clé n'est provisionnée."""
 
     async def _task() -> None:
-        disabled = _usecase(encryption=False, repository=InMemoryEncryptionKeyRepository())
-        assert await disabled.encryption_jwk() is None
+        disabled = _usecase(encryption=False)
+        assert await disabled.encryption_jwks() is None
         enabled_without_store = OID4VCIIssuerUseCase(
             issuer=_ISSUER,
             key_manager=DefaultKeyManager(InMemoryKeyPairRepository()),
@@ -531,7 +542,7 @@ def test_encryption_capability_absent_without_flag_or_store() -> None:
             token_manager=PyJWTTokenManager(DefaultKeyManager(InMemoryKeyPairRepository())),
             encryption_enabled=True,
         )
-        assert await enabled_without_store.encryption_jwk() is None
+        assert await enabled_without_store.encryption_jwks() is None
 
     asyncio.run(_task())
 
@@ -577,9 +588,9 @@ def test_decrypt_credential_request_roundtrip_and_rejections() -> None:
 
     async def _task() -> None:
         usecase = _usecase()
-        jwk = await usecase.encryption_jwk()
-        assert jwk is not None
-        public = ec_public_key(jwk)
+        jwks = await usecase.encryption_jwks()
+        assert jwks is not None
+        public = ec_public_key(jwks[0])
         body = {"credential_configuration_id": CREDENTIAL_CONFIGURATION_ID}
         sealed = encrypt_compact_ecdh_es(
             method=JWEEncryptionMethod.A256GCM,
@@ -672,58 +683,408 @@ def test_deflate_rejects_invalid_stream() -> None:
         deflate_decompress(b"\x06")
 
 
-def test_memory_encryption_key_keeps_first_value() -> None:
-    """Le store mémoire conserve la première clé inscrite (save_if_absent)."""
+async def _seed_stale_credential_key(store: InMemoryKeyPairRepository) -> KeyPair:
+    """Insère une clé ``KeyUse.CREDENTIAL`` plus vieille que ``jwks_rotation_days``."""
+    manager = DefaultKeyManager(store, use=KeyUse.CREDENTIAL)
+    key = await manager.generate_key_pair(CREDENTIAL_KEY_SIZE, JWTAlgorithm.ES256)
+    stale = datetime.now(timezone.utc) - timedelta(days=91)  # > jwks_rotation_days (90)
+    await store.update(replace(key, created_at=stale))
+    return key
+
+
+def _jwk_of(key: KeyPair) -> dict[str, object]:
+    """Reconstruit le JWK public (avec ``kid``) d'une paire stockée."""
+    public = serialization.load_pem_public_key(key.public_key_pem.encode("ascii"))
+    assert isinstance(public, ec.EllipticCurvePublicKey)
+    jwk = ec_jwk(public)
+    jwk["kid"] = jwk_thumbprint(jwk)
+    return jwk
+
+
+def test_startup_rotation_generates_on_empty_store() -> None:
+    """Au démarrage, une famille vide reçoit une clé de chiffrement (issue #310)."""
 
     async def _task() -> None:
-        repository = InMemoryEncryptionKeyRepository()
-        await repository.initialise()
-        await repository.save_if_absent("PEM-1")
-        await repository.save_if_absent("PEM-2")
-        assert await repository.load() == "PEM-1"
-        await repository.close()
+        settings = _settings()
+        stores = build_stores(settings)
+        deps = ProtocolDependencies(settings, stores)
+
+        await deps._rotate_credential_encryption_key()
+
+        keys = await deps.credential_encryption_key_manager.get_active_keys()
+        assert len(keys) == 1
+        assert keys[0].use is KeyUse.CREDENTIAL
 
     asyncio.run(_task())
 
 
-def test_factory_builds_memory_encryption_repository() -> None:
-    repository = build_encryption_key_repository(Settings(storage_type="memory"))
-
-    assert isinstance(repository, InMemoryEncryptionKeyRepository)
-
-
-def test_factory_builds_sql_encryption_repository() -> None:
-    repository = build_encryption_key_repository(
-        Settings(storage_type="sql", storage_dsn="sqlite:///memory")
-    )
-
-    assert isinstance(repository, SQLEncryptionKeyRepository)
-
-
-def test_factory_rejects_unknown_encryption_store_type() -> None:
-    settings = Settings.model_construct(storage_type="cassandra")
-
-    with pytest.raises(ValueError, match="non supporté"):
-        build_encryption_key_repository(settings)
-
-
-def test_sql_encryption_key_round_trip_and_restart(tmp_path: Path) -> None:
-    """Le store SQL persiste la clé : premier gagne, relisible après redémarrage."""
-    dsn = f"sqlite+aiosqlite:///{tmp_path / 'enc.db'}"
+def test_startup_rotation_is_noop_when_fresh() -> None:
+    """Une clé fraîche n'est pas remplacée à chaque démarrage."""
 
     async def _task() -> None:
-        repository = SQLEncryptionKeyRepository(dsn)
-        await repository.initialise()
-        assert await repository.load() is None
-        pem = generate_ec_p256_private_key_pem()
-        await repository.save_if_absent(pem)
-        await repository.save_if_absent(generate_ec_p256_private_key_pem())
-        assert await repository.load() == pem
-        await repository.close()
+        settings = _settings()
+        stores = build_stores(settings)
+        manager = DefaultKeyManager(stores.key_pair, use=KeyUse.CREDENTIAL)
+        await manager.generate_key_pair(CREDENTIAL_KEY_SIZE, JWTAlgorithm.ES256)
+        deps = ProtocolDependencies(settings, stores)
 
-        reopened = SQLEncryptionKeyRepository(dsn)
-        await reopened.initialise()
-        assert await reopened.load() == pem
-        await reopened.close()
+        await deps._rotate_credential_encryption_key()
+
+        keys = await deps.credential_encryption_key_manager.get_active_keys()
+        assert len(keys) == 1
+
+    asyncio.run(_task())
+
+
+def test_startup_rotation_keeps_previous_key_in_drain() -> None:
+    """Une clé périmée est remplacée ; l'ancienne reste en drain (jamais purgée)."""
+
+    async def _task() -> None:
+        settings = _settings()
+        stores = build_stores(settings)
+        old = await _seed_stale_credential_key(stores.key_pair)
+        deps = ProtocolDependencies(settings, stores)
+
+        await deps._rotate_credential_encryption_key()
+
+        keys = await deps.credential_encryption_key_manager.get_active_keys()
+        assert len(keys) == 2
+        assert old.kid in {key.kid for key in keys}
+        assert max(keys, key=lambda key: key.created_at).kid != old.kid
+
+    asyncio.run(_task())
+
+
+def test_startup_rotation_skipped_when_encryption_disabled() -> None:
+    """Sans ``oid4vci_encryption_enabled``, aucune clé n'est générée au démarrage."""
+
+    async def _task() -> None:
+        settings = _settings(encryption=False)
+        stores = build_stores(settings)
+        deps = ProtocolDependencies(settings, stores)
+
+        await deps._rotate_credential_encryption_key()
+
+        assert await deps.credential_encryption_key_manager.get_active_keys() == []
+
+    asyncio.run(_task())
+
+
+def test_metadata_publishes_every_living_key_newest_first() -> None:
+    """Le ``jwks`` publié liste toutes les clés vivantes, la plus récente en tête."""
+
+    async def _task() -> None:
+        store = InMemoryKeyPairRepository()
+        old = await _seed_stale_credential_key(store)
+        manager = DefaultKeyManager(store, use=KeyUse.CREDENTIAL)
+        assert await rotate_if_stale(manager, CREDENTIAL_KEY_SIZE, JWTAlgorithm.ES256, 90)
+        usecase = _usecase(encryption_store=store)
+
+        jwks = await usecase.encryption_jwks()
+
+        assert jwks is not None
+        assert len(jwks) == 2
+        kids = [key["kid"] for key in jwks]
+        assert len(set(kids)) == 2
+        assert kids[1] == _jwk_of(old)["kid"]
+        assert all(key["use"] == "enc" and key["alg"] == ECDH_ES for key in jwks)
+
+    asyncio.run(_task())
+
+
+def test_request_encrypted_under_previous_key_still_accepted() -> None:
+    """Après rotation, un credential request chiffré sous l'ancienne clé passe (drain)."""
+
+    async def _task() -> None:
+        store = InMemoryKeyPairRepository()
+        old = await _seed_stale_credential_key(store)
+        manager = DefaultKeyManager(store, use=KeyUse.CREDENTIAL)
+        assert await rotate_if_stale(manager, CREDENTIAL_KEY_SIZE, JWTAlgorithm.ES256, 90)
+        usecase = _usecase(encryption_store=store)
+        jwks = await usecase.encryption_jwks()
+        assert jwks is not None
+        old_jwk = _jwk_of(old)
+        body = {"credential_configuration_id": CREDENTIAL_CONFIGURATION_ID}
+
+        # kid déclaré : résolution directe sur la clé d'origine.
+        sealed_with_kid = encrypt_compact_ecdh_es(
+            method=JWEEncryptionMethod.A256GCM,
+            plaintext=json.dumps(body).encode("utf-8"),
+            recipient_public_key=ec_public_key(old_jwk),
+            kid=str(old_jwk["kid"]),
+        )
+        # Sans kid : repli par essai sur l'ensemble du trousseau.
+        sealed_without_kid = encrypt_compact_ecdh_es(
+            method=JWEEncryptionMethod.A256GCM,
+            plaintext=json.dumps(body).encode("utf-8"),
+            recipient_public_key=ec_public_key(old_jwk),
+        )
+        sealed_new = encrypt_compact_ecdh_es(
+            method=JWEEncryptionMethod.A256GCM,
+            plaintext=json.dumps(body).encode("utf-8"),
+            recipient_public_key=ec_public_key(jwks[0]),
+        )
+
+        for sealed in (sealed_with_kid, sealed_without_kid, sealed_new):
+            decrypted = await usecase.decrypt_credential_request(sealed.encode("ascii"))
+            assert decrypted == body
+
+    asyncio.run(_task())
+
+
+def test_two_instances_converge_on_the_same_published_jwks() -> None:
+    """Deux instances partageant le store publient le même JWKS dans le même ordre."""
+
+    async def _task() -> None:
+        store = InMemoryKeyPairRepository()
+        first = _usecase(encryption_store=store)
+        second = _usecase(encryption_store=store)
+
+        jwks_one = await first.encryption_jwks()
+        jwks_two = await second.encryption_jwks()
+
+        assert jwks_one is not None
+        assert jwks_two is not None
+        assert [key["kid"] for key in jwks_one] == [key["kid"] for key in jwks_two]
+
+    asyncio.run(_task())
+
+
+def test_concurrent_first_provisioning_converges_on_one_key() -> None:
+    """Deux premiers démarrages simultanés n'écrivent qu'une seule clé courante."""
+
+    async def _task() -> None:
+        store = InMemoryKeyPairRepository()
+        first = _usecase(encryption_store=store)
+        second = _usecase(encryption_store=store)
+
+        results = await asyncio.gather(first.encryption_jwks(), second.encryption_jwks())
+
+        jwks_one, jwks_two = results
+        assert jwks_one is not None
+        assert jwks_two is not None
+        # L'arbitrage du slot ``(use, slot)`` fait échouer l'instance perdante,
+        # qui adopte la clé gagnante : le store n'en détient qu'une et les deux
+        # instances publient exactement cette même clé (issue #310).
+        stored = await DefaultKeyManager(store, use=KeyUse.CREDENTIAL).get_active_keys()
+        assert len(stored) == 1
+        expected = {_jwk_of(stored[0])["kid"]}
+        assert {key["kid"] for key in jwks_one} == expected
+        assert {key["kid"] for key in jwks_two} == expected
+
+    asyncio.run(_task())
+
+
+class _ScriptedRepository:
+    """Repository factice rejouant une course de provisionnement (issue #310).
+
+    ``stale_reads`` vide les ``N`` premières lectures : l'instance perdante lit
+    un store que l'autre n'a pas encore écrit. ``after_read`` s'exécute après
+    chaque lecture, ce qui permet à l'instance concurrente d'écrire entre la
+    lecture et l'écriture de celle-ci. Les écritures déléguent toutes au store
+    réel, seul détenteur du verrou d'arbitrage du ``slot``.
+    """
+
+    def __init__(
+        self,
+        delegate: InMemoryKeyPairRepository,
+        *,
+        stale_reads: int = 0,
+        after_read: Callable[[int], Awaitable[None]] | None = None,
+    ) -> None:
+        """Prépare le repository factice autour d'un store réel.
+
+        Args:
+            delegate: store mémoire dépositaire des écritures réelles.
+            stale_reads: nombre de lectures initiales rendant la famille vide.
+            after_read: hook appelé avec le numéro de lecture après lecture.
+        """
+        self._delegate = delegate
+        self._stale_reads = stale_reads
+        self._after_read = after_read
+        self.reads = 0
+
+    async def find_all(self) -> list[KeyPair]:
+        """Retourne l'état du store *avant* le hook (lecture potentiellement périmée)."""
+        keys = await self._delegate.find_all()
+        self.reads += 1
+        if self._stale_reads > 0:
+            self._stale_reads -= 1
+            keys = []
+        if self._after_read is not None:
+            await self._after_read(self.reads)
+        return keys
+
+    async def save(self, key_pair: KeyPair) -> None:
+        """Délègue l'insertion au store réel (arbitrage du ``slot`` inclus)."""
+        await self._delegate.save(key_pair)
+
+    async def update(self, key_pair: KeyPair) -> None:
+        """Délègue la mise à jour au store réel."""
+        await self._delegate.update(key_pair)
+
+    async def delete(self, kid: str) -> None:
+        """Délègue la suppression au store réel."""
+        await self._delegate.delete(kid)
+
+
+def test_stale_first_read_converges_on_the_winner_key() -> None:
+    """Une instance qui lit un store encore vide adopte la clé déjà écrite."""
+
+    async def _task() -> None:
+        store = InMemoryKeyPairRepository()
+        winner = await DefaultKeyManager(store, use=KeyUse.CREDENTIAL).generate_key_pair(
+            CREDENTIAL_KEY_SIZE, JWTAlgorithm.ES256
+        )
+        loser = DefaultKeyManager(_ScriptedRepository(store, stale_reads=1), use=KeyUse.CREDENTIAL)
+
+        adopted = await loser.generate_key_pair(CREDENTIAL_KEY_SIZE, JWTAlgorithm.ES256)
+
+        assert adopted.kid == winner.kid
+        assert [key.kid for key in await store.find_all()] == [winner.kid]
+
+    asyncio.run(_task())
+
+
+def test_rotation_race_adopts_the_key_rotated_by_another_instance() -> None:
+    """Une rotation placée entre lecture et écriture est adoptée : pas de 3e clé."""
+
+    async def _task() -> None:
+        store = InMemoryKeyPairRepository()
+        old = await _seed_stale_credential_key(store)
+
+        async def _concurrent_rotation(reads: int) -> None:
+            if reads != 1:
+                return
+            concurrent = DefaultKeyManager(store, use=KeyUse.CREDENTIAL)
+            rotated = await rotate_if_stale(concurrent, CREDENTIAL_KEY_SIZE, JWTAlgorithm.ES256, 90)
+            assert rotated
+
+        runner = DefaultKeyManager(
+            _ScriptedRepository(store, after_read=_concurrent_rotation),
+            use=KeyUse.CREDENTIAL,
+        )
+
+        rotated = await rotate_if_stale(runner, CREDENTIAL_KEY_SIZE, JWTAlgorithm.ES256, 90)
+
+        assert rotated
+        keys = await store.find_all()
+        # L'ancienne clé passe en drain (slot libéré) et la nouvelle prend le
+        # slot : l'instance perdante n'a écrit aucune troisième clé.
+        assert len(keys) == 2
+        holder = next(key for key in keys if key.slot is not None)
+        assert holder.kid != old.kid
+        assert next(key for key in keys if key.kid == old.kid).slot is None
+
+    asyncio.run(_task())
+
+
+def _ec_p256_seed_pem() -> str:
+    """PEM d'une clé privée EC P-256 servant de seed de chiffrement."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    return key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode("ascii")
+
+
+def test_load_credential_key_pair_is_deterministic() -> None:
+    """Le ``kid`` du seed dérive de la clé publique : stable d'un usage à l'autre."""
+    pem = _ec_p256_seed_pem()
+
+    first = load_credential_key_pair(pem)
+    second = load_credential_key_pair(pem)
+
+    assert first.kid == second.kid == pem_key_kid(first.public_key_pem)
+    assert first.use is KeyUse.CREDENTIAL
+    assert first.algorithm is JWTAlgorithm.ES256
+
+
+def test_startup_registers_encryption_seed_on_empty_family() -> None:
+    """Le seed PEM est enregistré au démarrage quand la famille est vide."""
+
+    async def _task() -> None:
+        settings = _settings()
+        settings.oid4vci_encryption_key_pem = _ec_p256_seed_pem()
+        stores = build_stores(settings)
+        deps = ProtocolDependencies(settings, stores)
+
+        await deps._rotate_credential_encryption_key()
+
+        keys = await deps.credential_encryption_key_manager.get_active_keys()
+        assert len(keys) == 1
+        assert keys[0].kid == load_credential_key_pair(settings.oid4vci_encryption_key_pem).kid
+
+    asyncio.run(_task())
+
+
+def test_startup_ignores_seed_when_family_already_provisioned() -> None:
+    """Famille fraîche : le seed n'est pas consommé et aucune clé n'est ajoutée."""
+
+    async def _task() -> None:
+        settings = _settings()
+        stores = build_stores(settings)
+        manager = DefaultKeyManager(stores.key_pair, use=KeyUse.CREDENTIAL)
+        existing = await manager.generate_key_pair(CREDENTIAL_KEY_SIZE, JWTAlgorithm.ES256)
+        settings.oid4vci_encryption_key_pem = _ec_p256_seed_pem()
+        deps = ProtocolDependencies(settings, stores)
+
+        await deps._rotate_credential_encryption_key()
+
+        keys = await deps.credential_encryption_key_manager.get_active_keys()
+        assert [key.kid for key in keys] == [existing.kid]
+
+    asyncio.run(_task())
+
+
+def test_startup_rejects_non_p256_encryption_seed() -> None:
+    """Un seed qui n'est pas une clé EC P-256 fait échouer le démarrage."""
+
+    async def _task() -> None:
+        settings = _settings()
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        settings.oid4vci_encryption_key_pem = key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ).decode("ascii")
+        stores = build_stores(settings)
+        deps = ProtocolDependencies(settings, stores)
+
+        with pytest.raises(ValueError, match="EC P-256"):
+            await deps._rotate_credential_encryption_key()
+
+    asyncio.run(_task())
+
+
+def test_decrypt_heals_cache_after_concurrent_rotation() -> None:
+    """Un déchiffrement raté relecture le store : la clé d'une autre instance est vue."""
+
+    async def _task() -> None:
+        store = InMemoryKeyPairRepository()
+        manager = DefaultKeyManager(store, use=KeyUse.CREDENTIAL)
+        key_a = await manager.generate_key_pair(CREDENTIAL_KEY_SIZE, JWTAlgorithm.ES256)
+        usecase = _usecase(encryption_store=store)
+        cached = await usecase.encryption_jwks()
+        assert cached is not None
+        assert len(cached) == 1
+        # Une autre instance tourne après la construction du cache local.
+        key_b = await manager.generate_key_pair(
+            CREDENTIAL_KEY_SIZE, JWTAlgorithm.ES256, replace_kid=key_a.kid
+        )
+        body = {"credential_configuration_id": CREDENTIAL_CONFIGURATION_ID}
+        sealed = encrypt_compact_ecdh_es(
+            method=JWEEncryptionMethod.A256GCM,
+            plaintext=json.dumps(body).encode("utf-8"),
+            recipient_public_key=ec_public_key(_jwk_of(key_b)),
+        )
+
+        decrypted = await usecase.decrypt_credential_request(sealed.encode("ascii"))
+
+        assert decrypted == body
+        healed = await usecase.encryption_jwks()
+        assert healed is not None
+        assert len(healed) == 2
 
     asyncio.run(_task())

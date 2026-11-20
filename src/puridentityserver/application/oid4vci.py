@@ -50,7 +50,6 @@ from puridentityserver.infrastructure.jwe import (
     ec_jwk,
     ec_public_key,
     encrypt_compact_ecdh_es,
-    generate_ec_p256_private_key_pem,
     protected_header,
 )
 from puridentityserver.infrastructure.jwks import DefaultKeyManager, first_active_key
@@ -69,9 +68,6 @@ from puridentityserver.interfaces.repositories.authorization_code_repository imp
 )
 from puridentityserver.interfaces.repositories.credential_offer_repository import (
     CredentialOfferRepository,
-)
-from puridentityserver.interfaces.repositories.encryption_key_repository import (
-    EncryptionKeyRepository,
 )
 from puridentityserver.interfaces.repositories.revoked_token_repository import (
     RevokedTokenRepository,
@@ -134,20 +130,60 @@ ENC_VALUES_SUPPORTED: tuple[str, ...] = tuple(
 ALG_VALUES_SUPPORTED: tuple[str, ...] = (ECDH_ES,)
 #: Seul ``DEF`` est enregistré comme algorithme de compression (RFC 7516 s4.1.3).
 ZIP_VALUES_SUPPORTED: tuple[str, ...] = ("DEF",)
+#: Taille de clé demandée au store pour la famille ``KeyUse.CREDENTIAL`` :
+#: ignorée pour ES256 (courbe fixée à P-256), requise par le contrat
+#: ``KeyManager.generate_key_pair``. Partagée avec la rotation au
+#: démarrage (composition root).
+CREDENTIAL_KEY_SIZE = 256
 
 
-def _encryption_metadata_blocks(encryption_jwk: dict[str, Any]) -> dict[str, Any]:
+def _try_decrypt(token: str, private_key: EllipticCurvePrivateKey) -> bytes | None:
+    """Tente le déchiffrement avec une clé candidate, ou ``None``.
+
+    ``ValueError`` (mauvaise clé, contenu altéré) est absorbé : chaque
+    clé du trousseau est essayée à son tour par ``_decrypt_with_any_key``.
+    """
+    try:
+        return decrypt_compact_ecdh_es(token, private_key=private_key)
+    except (TypeError, ValueError):
+        return None
+
+
+def _decrypt_with_any_key(
+    token: str, header: dict[str, Any], keys: dict[str, EllipticCurvePrivateKey]
+) -> bytes | None:
+    """Déchiffre ``token`` avec la clé vivante adaptée, ou ``None``.
+
+    La clé déclarée dans le ``kid`` de l'en-tête (RFC 7518 s4.5) est
+    essayée en premier ; à défaut de correspondance — wallet ayant mis en
+    cache une clé antérieure à la rotation (issue #310) — chaque clé
+    vivante du trousseau est essayée à son tour.
+    """
+    kid = header.get("kid")
+    candidates = list(keys.items())
+    if isinstance(kid, str) and kid in keys:
+        candidates.sort(key=lambda item: item[0] != kid)  # le kid déclaré en tête
+    for _, private_key in candidates:
+        plaintext = _try_decrypt(token, private_key)
+        if plaintext is not None:
+            return plaintext
+    return None
+
+
+def _encryption_metadata_blocks(encryption_jwks: list[dict[str, Any]]) -> dict[str, Any]:
     """Blocs d'encryption des métadonnées émetteur (OID4VCI 1.0 s12.2.4).
 
-    ``credential_request_encryption`` porte le ``jwks`` de l'émetteur (clé
-    publique ``use = enc`` portant ``kid`` et ``alg``, exigés par la suite
-    OIDF) ; ``credential_response_encryption`` porte les
-    ``alg_values_supported`` asymétriques exigés côté wallet.
+    ``credential_request_encryption`` porte le ``jwks`` de l'émetteur (une
+    clé publique ``use = enc`` portant ``kid`` et ``alg``, exigés par la
+    suite OIDF, par clé vivante de la famille ``KeyUse.CREDENTIAL`` : la
+    plus récente d'abord, les anciennes encore en drain derrière) ;
+    ``credential_response_encryption`` porte les ``alg_values_supported``
+    asymétriques exigés côté wallet.
     ``encryption_required = false`` : le chiffrement reste optionnel.
     """
     return {
         "credential_request_encryption": {
-            "jwks": {"keys": [encryption_jwk]},
+            "jwks": {"keys": encryption_jwks},
             "enc_values_supported": list(ENC_VALUES_SUPPORTED),
             "encryption_required": False,
             "zip_values_supported": list(ZIP_VALUES_SUPPORTED),
@@ -162,20 +198,20 @@ def _encryption_metadata_blocks(encryption_jwk: dict[str, Any]) -> dict[str, Any
 
 
 def issuer_metadata_payload(
-    issuer: str, *, encryption_jwk: dict[str, Any] | None = None
+    issuer: str, *, encryption_jwks: list[dict[str, Any]] | None = None
 ) -> dict[str, Any]:
     """Construit le document de métadonnées de l'émetteur OID4VCI (non signé).
 
     Args:
         issuer: URL de l'émetteur.
-        encryption_jwk: clé publique EC P-256 de chiffrement à publier ;
-            ``None`` (défaut) omet les blocs d'encryption — capability non
-            annoncée.
+        encryption_jwks: clés publiques EC P-256 de chiffrement à publier,
+            la plus récente d'abord ; ``None`` (défaut) omet les blocs
+            d'encryption — capability non annoncée.
 
     Returns:
         Le document de métadonnées, augmenté des blocs
         ``credential_request_encryption`` / ``credential_response_encryption``
-        quand ``encryption_jwk`` est fourni (OID4VCI 1.0 s12.2.4).
+        quand ``encryption_jwks`` est fourni (OID4VCI 1.0 s12.2.4).
     """
     normalized = issuer.rstrip("/")
     payload: dict[str, Any] = {
@@ -221,8 +257,8 @@ def issuer_metadata_payload(
         "deferred_credential_endpoint": f"{normalized}/deferred_credential",
         "notification_endpoint": f"{normalized}/notification",
     }
-    if encryption_jwk is not None:
-        payload.update(_encryption_metadata_blocks(encryption_jwk))
+    if encryption_jwks is not None:
+        payload.update(_encryption_metadata_blocks(encryption_jwks))
     return payload
 
 
@@ -345,14 +381,16 @@ class OID4VCIIssuerUseCase:
         credential_pki_repository: CredentialPKIRepository | None = None,
         revoked_tokens: RevokedTokenRepository | None = None,
         encryption_enabled: bool = False,
-        encryption_key_repository: EncryptionKeyRepository | None = None,
+        encryption_key_manager: DefaultKeyManager | None = None,
     ) -> None:
         """Initialise l'émetteur et mémorise les dépendances cryptographiques.
 
         ``encryption_enabled`` active la capability de chiffrement des
-        credential requests/réponses (OID4VCI s8.2) ; la clé EC P-256 est
-        alors provisionnée à la première usage dans
-        ``encryption_key_repository`` (store partagé, load balancing).
+        credential requests/réponses (OID4VCI s8.2) ; les clés EC P-256 de
+        la famille ``KeyUse.CREDENTIAL`` sont alors provisionnées à la
+        première usage dans ``encryption_key_manager`` (store ``key_pair``
+        partagé, load balancing), mises en rotation au démarrage selon
+        ``jwks_rotation_days`` (issue #310).
         """
         self._issuer = issuer.rstrip("/")
         self._key_manager = key_manager
@@ -365,9 +403,9 @@ class OID4VCIIssuerUseCase:
         self._credential_pki_repository: CredentialPKIRepository | None = credential_pki_repository
         self._revoked_tokens: RevokedTokenRepository | None = revoked_tokens
         self._encryption_enabled = encryption_enabled
-        self._encryption_key_repository: EncryptionKeyRepository | None = encryption_key_repository
-        self._encryption_public_jwk: dict[str, Any] | None = None
-        self._encryption_private_key: EllipticCurvePrivateKey | None = None
+        self._encryption_key_manager: DefaultKeyManager | None = encryption_key_manager
+        self._encryption_public_jwks: list[dict[str, Any]] | None = None
+        self._encryption_private_keys: dict[str, EllipticCurvePrivateKey] = {}
 
     async def issue_nonce(self) -> dict[str, Any]:
         """Émet un ``c_nonce`` signé, sans état (OID4VCI 1.0 §7).
@@ -454,37 +492,59 @@ class OID4VCIIssuerUseCase:
         ]
         return result
 
-    async def encryption_jwk(self) -> dict[str, Any] | None:
-        """Retourne la clé publique de chiffrement à publier, ou ``None``.
+    async def encryption_jwks(self) -> list[dict[str, Any]] | None:
+        """Retourne les clés publiques de chiffrement à publier, ou ``None``.
 
         Sans activation (``oid4vci_encryption_enabled``) ou sans store, la
-        capability n'est pas annoncée. Sinon la clé EC P-256 est
-        provisionnée à la première usage : chargée du store partagé, ou
-        générée puis inscrite (``save_if_absent``) si le store est vide —
-        le rechargement qui suit fait converger deux instances
-        concurrentes sur la clé retenue. La clé est mise en cache pour la
-        durée de vie du processus.
+        capability n'est pas annoncée. Sinon les clés EC P-256 vivantes de
+        la famille ``KeyUse.CREDENTIAL`` sont provisionnées à la première
+        usage : chargées du store partagé, ou générée si la famille est
+        vide — le rechargement qui suit fait converger deux instances
+        concurrentes sur le même trousseau (tri déterministe
+        ``created_at``/``kid``). La plus récente est en tête ; les clés
+        antérieures restent en drain (jamais purgées) et déchiffrables.
+        Les JWK sont mis en cache pour la durée de vie du processus.
         """
-        if not self._encryption_enabled or self._encryption_key_repository is None:
+        if not self._encryption_enabled or self._encryption_key_manager is None:
             return None
-        if self._encryption_public_jwk is not None:
-            return self._encryption_public_jwk
-        repository = self._encryption_key_repository
-        pem = await repository.load()
-        if pem is None:
-            pem = generate_ec_p256_private_key_pem()
-            await repository.save_if_absent(pem)
-            pem = await repository.load() or pem
-        private_key = load_pem_private_key(pem.encode("ascii"), password=None)
-        if not isinstance(private_key, EllipticCurvePrivateKey):
-            raise ValueError("clé de chiffrement OID4VCI attendue en EC P-256")
-        jwk = ec_jwk(private_key.public_key())
-        jwk["kid"] = jwk_thumbprint(jwk)
-        jwk["alg"] = ECDH_ES
-        jwk["use"] = "enc"
-        self._encryption_private_key = private_key
-        self._encryption_public_jwk = jwk
-        return jwk
+        if self._encryption_public_jwks is not None:
+            return self._encryption_public_jwks
+        manager = self._encryption_key_manager
+        await manager.ensure_active_key(CREDENTIAL_KEY_SIZE, JWTAlgorithm.ES256)
+        keys = sorted(
+            await manager.get_active_keys(),
+            key=lambda key: (key.created_at, key.kid),
+            reverse=True,
+        )
+        jwks: list[dict[str, Any]] = []
+        private_keys: dict[str, EllipticCurvePrivateKey] = {}
+        for key in keys:
+            private_key = load_pem_private_key(key.private_key_pem.encode("ascii"), password=None)
+            if not isinstance(private_key, EllipticCurvePrivateKey):
+                raise ValueError("clé de chiffrement OID4VCI attendue en EC P-256")
+            jwk = ec_jwk(private_key.public_key())
+            kid = jwk_thumbprint(jwk)
+            jwk["kid"] = kid
+            jwk["alg"] = ECDH_ES
+            jwk["use"] = "enc"
+            jwks.append(jwk)
+            private_keys[kid] = private_key
+        self._encryption_public_jwks = jwks
+        self._encryption_private_keys = private_keys
+        return jwks
+
+    async def _reload_encryption_jwks(self) -> None:
+        """Vide le cache des clés de chiffrement puis le rebâtit depuis le store.
+
+        Sert d'auto-guérison quand le déchiffrement échoue sur tout le
+        trousseau en cache : une clé provisionnée par une autre instance
+        après la construction du cache (course au premier démarrage,
+        issue #310) devient alors utilisable, et le trousseau publié aux
+        wallets est completifié en même temps.
+        """
+        self._encryption_public_jwks = None
+        self._encryption_private_keys = {}
+        await self.encryption_jwks()
 
     async def signed_issuer_metadata(self) -> str:
         """Signe les métadonnées de l'émetteur en ``application/jwt``.
@@ -498,9 +558,9 @@ class OID4VCIIssuerUseCase:
         private_key = load_pem_private_key(key.private_key_pem.encode("ascii"), password=None)
         now = int(datetime.now(timezone.utc).timestamp())
         payload: dict[str, object] = dict(self.issuer_metadata())
-        encryption_jwk = await self.encryption_jwk()
-        if encryption_jwk is not None:
-            payload.update(_encryption_metadata_blocks(encryption_jwk))
+        encryption_jwks = await self.encryption_jwks()
+        if encryption_jwks is not None:
+            payload.update(_encryption_metadata_blocks(encryption_jwks))
         payload["sub"] = self._issuer
         payload["iss"] = self._issuer
         payload["iat"] = now
@@ -573,14 +633,15 @@ class OID4VCIIssuerUseCase:
         """Déchiffre une requête ``/credential`` en JWE ECDH-ES (OID4VCI s8.2).
 
         Le media type ``application/jwt`` du corps désigne un credential
-        request chiffré avec la clé publiée dans
-        ``credential_request_encryption``. Un en-tête hors capability
-        (``alg``, ``enc`` ou ``zip`` inconnus) oppose
+        request chiffré avec une clé publiée dans
+        ``credential_request_encryption`` ; le ``kid`` de l'en-tête cible
+        la clé retenue au chiffrement, avec repli sur l'ensemble du
+        trousseau après rotation (drain, issue #310). Un en-tête hors
+        capability (``alg``, ``enc`` ou ``zip`` inconnus) oppose
         ``invalid_encryption_parameters`` ; tout autre échec (corps
         illisible, déchiffrement refusé) oppose ``invalid_request``.
         """
-        private_key = await self._provisioned_private_key()
-        if private_key is None:
+        if await self.encryption_jwks() is None:
             return CredentialError("invalid_request", "requête chiffrée non prise en charge")
         try:
             token = body.decode("ascii")
@@ -590,8 +651,18 @@ class OID4VCIIssuerUseCase:
         header_error = _request_encryption_header_error(header)
         if header_error is not None:
             return CredentialError("invalid_encryption_parameters", header_error)
+        plaintext = _decrypt_with_any_key(token, header, self._encryption_private_keys)
+        if plaintext is None:
+            # Auto-guérison (issue #310) : le cache local peut avoir été
+            # construit avant qu'une autre instance n'insère sa clé. Une
+            # relecture du store suffit alors — la requête aboutit sans
+            # erreur visible, et le trousseau publié est completifié.
+            await self._reload_encryption_jwks()
+            plaintext = _decrypt_with_any_key(token, header, self._encryption_private_keys)
+        if plaintext is None:
+            return CredentialError("invalid_request", "déchiffrement de la requête impossible")
         try:
-            payload = json.loads(decrypt_compact_ecdh_es(token, private_key=private_key))
+            payload = json.loads(plaintext)
         except (TypeError, ValueError):
             return CredentialError("invalid_request", "déchiffrement de la requête impossible")
         if not isinstance(payload, dict):
@@ -614,7 +685,7 @@ class OID4VCIIssuerUseCase:
             return (None, None)
         if not isinstance(requested, dict):
             return (None, _invalid_encryption("credential_response_encryption invalide"))
-        if await self.encryption_jwk() is None:
+        if await self.encryption_jwks() is None:
             return (None, _invalid_encryption("chiffrement de la réponse non activé"))
         return self._response_encryption_spec(cast(dict[str, Any], requested))
 
@@ -670,11 +741,6 @@ class OID4VCIIssuerUseCase:
             kid=encryption.kid,
             compress=encryption.compress,
         )
-
-    async def _provisioned_private_key(self) -> EllipticCurvePrivateKey | None:
-        """Clé privée de chiffrement provisionnée, ou ``None`` (inactive)."""
-        await self.encryption_jwk()
-        return self._encryption_private_key
 
     @staticmethod
     def _resolve_requested_configuration(

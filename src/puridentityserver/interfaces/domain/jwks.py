@@ -14,8 +14,16 @@ class KeyManager(Protocol):
     par défaut ``DefaultKeyManager``.
     """
 
-    async def generate_key_pair(self, key_size: int, algorithm: JWTAlgorithm) -> KeyPair:
-        """Génère une nouvelle paire de clés et l'ajoute au magasin."""
+    async def generate_key_pair(
+        self, key_size: int, algorithm: JWTAlgorithm, *, replace_kid: str | None = None
+    ) -> KeyPair:
+        """Génère une nouvelle paire de clés et l'ajoute au magasin.
+
+        ``replace_kid`` désigne la clé courante d'une famille à slot que le
+        caller vient de lire comme périmée : si le slot a changé entre-temps
+        (une autre instance a tourné), la clé en place est adoptée au lieu
+        d'être remplacée.
+        """
         ...
 
     async def get_active_keys(self) -> list[KeyPair]:

@@ -28,8 +28,6 @@ détient les clés privées dans le store ``key_pair``, le déchiffre.
 from __future__ import annotations
 
 import base64
-import hashlib
-from datetime import datetime, timedelta, timezone
 from typing import cast
 
 from cryptography.hazmat.primitives import hashes
@@ -44,6 +42,8 @@ from cryptography.hazmat.primitives.serialization import (
 )
 
 from puridentityserver.domain.jwks import JWTAlgorithm, KeyPair, KeyUse
+from puridentityserver.infrastructure.jwks import pem_key_kid
+from puridentityserver.infrastructure.jwks import rotate_if_stale as rotate_stale_keys
 from puridentityserver.interfaces.domain.jwks import KeyManager
 
 _SEAL_ALGORITHM = JWTAlgorithm.RS256
@@ -52,12 +52,6 @@ _SEAL_DEFAULT_KEY_SIZE = 2048
 _PREFIX = ":"
 _MISSING_KEY_ERROR = "aucune clé de scellement (KeyUse.SECRET) dans le store key_pair"
 _OAEP = OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()), algorithm=hashes.SHA256(), label=None)
-
-
-def _key_kid(public_key_pem: str) -> str:
-    """Identifiant stable et autodérivé d'une clé (SHA-256 de sa clé publique)."""
-    digest = hashlib.sha256(public_key_pem.encode("utf-8")).digest()
-    return base64.urlsafe_b64encode(digest[:9]).rstrip(b"=").decode("ascii")
 
 
 def _load_public(public_key_pem: str) -> RSAPublicKey:
@@ -96,7 +90,7 @@ def load_seal_key_pair(private_key_pem: str) -> KeyPair:
     return KeyPair(
         algorithm=_SEAL_ALGORITHM,
         use=KeyUse.SECRET,
-        kid=_key_kid(public_pem),
+        kid=pem_key_kid(public_pem),
         private_key_pem=private_key_pem,
         public_key_pem=public_pem,
     )
@@ -170,18 +164,11 @@ class AsymmetricSecretCipher:
 
         L'ancienne clé reste dans le store (drain) : jamais supprimée
         automatiquement, contrairement aux clés de signature. Retourne
-        ``True`` si une nouvelle clé a été générée.
+        ``True`` si une nouvelle clé a été générée. La logique est celle
+        de ``infrastructure.jwks.rotate_if_stale``, commune aux familles
+        de clés mises en rotation à la première usage.
         """
-        keys = await self._key_manager.get_active_keys()
-        if not keys:
-            await self._key_manager.generate_key_pair(key_size, _SEAL_ALGORITHM)
-            return True
-        newest = max(keys, key=lambda key: key.created_at)
-        deadline = datetime.now(timezone.utc) - timedelta(days=rotation_days)
-        if newest.created_at <= deadline:
-            await self._key_manager.generate_key_pair(key_size, _SEAL_ALGORITHM)
-            return True
-        return False
+        return await rotate_stale_keys(self._key_manager, key_size, _SEAL_ALGORITHM, rotation_days)
 
 
 def _try_decrypt(private: RSAPrivateKey, body: str) -> str | None:

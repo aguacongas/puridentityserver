@@ -52,9 +52,6 @@ from cryptography.hazmat.primitives.kdf.concatkdf import ConcatKDFHash
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.padding import PKCS7
 from cryptography.hazmat.primitives.serialization import (
-    Encoding,
-    NoEncryption,
-    PrivateFormat,
     load_pem_private_key,
 )
 
@@ -566,21 +563,6 @@ def ec_public_key(value: object) -> EllipticCurvePublicKey:
         return ec.EllipticCurvePublicNumbers(x, y, _ECDH_CURVE()).public_key()
     except (ValueError, TypeError) as exc:
         raise ValueError("epk sans point de courbe valide") from exc
-
-
-def generate_ec_p256_private_key_pem() -> str:
-    """Génère une clé EC P-256 et la sérialise en PEM PKCS#8 non chiffré.
-
-    Sert au provisionnement de la clé de chiffrement de l'émetteur
-    OID4VCI (ECDH-ES), persistée puis rechargée telle quelle par les
-    instances suivantes.
-    """
-    raw = ec.generate_private_key(_ECDH_CURVE()).private_bytes(  # type: ignore[attr-defined]  # méthode abstraite réelle, absente des stubs cryptography
-        encoding=cast(Encoding, Encoding.PEM),
-        format=PrivateFormat.PKCS8,
-        encryption_algorithm=NoEncryption(),
-    )
-    return cast(bytes, raw).decode("ascii")
 
 
 def _concat_kdf(

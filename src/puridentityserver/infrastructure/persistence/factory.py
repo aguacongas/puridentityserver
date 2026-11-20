@@ -32,9 +32,6 @@ from puridentityserver.interfaces.repositories.device_authorization_repository i
 from puridentityserver.interfaces.repositories.dpop_replay_repository import (
     DpopReplayRepository,
 )
-from puridentityserver.interfaces.repositories.encryption_key_repository import (
-    EncryptionKeyRepository,
-)
 from puridentityserver.interfaces.repositories.identity_resource_repository import (
     IdentityResourceRepository,
 )
@@ -66,23 +63,6 @@ def build_key_pair_repository(settings: Settings) -> KeyPairRepository:
         from puridentityserver.infrastructure.persistence.sql.keys import SQLKeyPairRepository
 
         return SQLKeyPairRepository(settings.storage_dsn)
-    raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")
-
-
-def build_encryption_key_repository(settings: Settings) -> EncryptionKeyRepository:
-    """Retourne le repository de la clé de chiffrement selon ``storage_type``."""
-    if settings.storage_type == "memory":
-        from puridentityserver.infrastructure.persistence.memory.encryption_keys import (
-            InMemoryEncryptionKeyRepository,
-        )
-
-        return InMemoryEncryptionKeyRepository()
-    if settings.storage_type == "sql":
-        from puridentityserver.infrastructure.persistence.sql.encryption_keys import (
-            SQLEncryptionKeyRepository,
-        )
-
-        return SQLEncryptionKeyRepository(settings.storage_dsn)
     raise ValueError(f"Type de stockage non supporté : {settings.storage_type}")
 
 
