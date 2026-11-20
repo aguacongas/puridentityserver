@@ -184,14 +184,25 @@ def _signing_key_with_slot(kid: str, slot: str) -> KeyPair:
     return KeyPair(algorithm=JWTAlgorithm.RS256, use=KeyUse.SIG, kid=kid, slot=slot)
 
 
+def _save_pair(repo: InMemoryKeyPairRepository | SQLKeyPairRepository, key_pair: KeyPair) -> None:
+    """Écrit une paire de clés dans le store de façon synchrone.
+
+    Sert de corps unique aux tests qui attendent une exception à la
+    ``save`` : le ``with pytest.raises`` ne compte alors qu'une seule
+    invocation possible (règle python:S5778).
+    """
+    asyncio.run(repo.save(key_pair))
+
+
 def test_sql_repo_refuses_second_holder_of_family_slot(tmp_path: Path) -> None:
     """Le couple ``(use, slot)`` n'admet qu'une ligne : la course est tranchée."""
     repo = run(_make_repo(tmp_path))
 
     run(repo.save(_credential_key("first", slot="oid4vci")))
+    rival = _credential_key("second", slot="oid4vci")
 
     with pytest.raises(KeyPairConflictError, match="oid4vci"):
-        run(repo.save(_credential_key("second", slot="oid4vci")))
+        _save_pair(repo, rival)
 
     assert [key.kid for key in run(repo.find_all())] == ["first"]
     _close(repo)
@@ -257,8 +268,9 @@ def test_sql_repo_migrates_legacy_table_without_slot(tmp_path: Path) -> None:
     # le second est refusé (la traduction de ``IntegrityError`` fonctionne aussi
     # sur une table migrée).
     run(repo.save(_credential_key("current", slot="oid4vci")))
+    rival = _credential_key("rival", slot="oid4vci")
     with pytest.raises(KeyPairConflictError, match="oid4vci"):
-        run(repo.save(_credential_key("rival", slot="oid4vci")))
+        _save_pair(repo, rival)
     _close(repo)
 
     # ``create_all`` ignore une table existante : l'index est créé par
@@ -280,8 +292,9 @@ def test_memory_repo_refuses_second_holder_of_family_slot() -> None:
     run(repo.save(_credential_key("first", slot="oid4vci")))
     # Ré-écriture de la même ligne (même ``kid``) : l'upsert reste idempotent.
     run(repo.save(_credential_key("first", slot="oid4vci")))
+    rival = _credential_key("second", slot="oid4vci")
     with pytest.raises(KeyPairConflictError, match="oid4vci"):
-        run(repo.save(_credential_key("second", slot="oid4vci")))
+        _save_pair(repo, rival)
 
     run(repo.save(_credential_key("drain", slot=None)))
 
