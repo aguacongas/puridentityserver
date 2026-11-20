@@ -466,6 +466,14 @@ class Settings(BaseSettings):
     # store de clef partage (load balancing). Desactive par defaut : sans
     # lui, aucune capability d'encryption n'est annoncee ni acceptee.
     oid4vci_encryption_enabled: bool = False
+    # **Seed facultatif** : `oid4vci_encryption_key_pem` fournit la cle
+    # privee EC P-256 (PEM) a enregistrer au demarrage si la famille
+    # `KeyUse.CREDENTIAL` du store `key_pair` est encore vide — utile aux
+    # serveurs en memoire (determinisme d'un redemarrage a l'autre, le kid
+    # derivant de la cle publique). Aucune cle a configurer sinon : la
+    # famille est provisionnee puis tourne suivant `jwks_rotation_days`
+    # (issue #310).
+    oid4vci_encryption_key_pem: str = ""
     # `oid4vp_pki_path` : fichier JSON persistant de la PKI du verifier
     # OpenID4VP (CA racine + leaf de signature, issue #224) ; vide = PKI
     # ephemere regeneree a chaque demarrage, le `client_id` x509_hash change

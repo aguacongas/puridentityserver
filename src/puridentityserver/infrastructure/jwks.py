@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Protocol, cast
@@ -12,6 +14,7 @@ from cryptography.hazmat.primitives.serialization import (
     NoEncryption,
     PrivateFormat,
     PublicFormat,
+    load_pem_private_key,
 )
 
 from puridentityserver.domain.jwks import (
@@ -21,7 +24,10 @@ from puridentityserver.domain.jwks import (
     KeyUse,
 )
 from puridentityserver.interfaces.domain.jwks import KeyManager
-from puridentityserver.interfaces.repositories.key_pair_repository import KeyPairRepository
+from puridentityserver.interfaces.repositories.key_pair_repository import (
+    KeyPairConflictError,
+    KeyPairRepository,
+)
 
 _RSA_ALGORITHMS = (
     JWTAlgorithm.RS256,
@@ -31,6 +37,17 @@ _RSA_ALGORITHMS = (
     JWTAlgorithm.PS384,
     JWTAlgorithm.PS512,
 )
+
+#: Familles dotées d'un **slot de famille** : la paire portant ``(use, slot)``
+#: est la clé *courante*, toutes les autres sont en drain. L'unicité de ce
+#: couple dans le store (les ``NULL`` étant distincts) arbitre le
+#: provisionnement concurrent de deux instances au premier démarrage :
+#: l'instance perdante adopte la clé retenue au lieu d'en créer une seconde
+#: (issue #310). Les familles ``SIG`` et ``SECRET`` en sont exclues : la
+#: première génère avant de désactiver l'ancienne (OIDC Core 1.0 s10.1, une
+#: clé active doit exister en permanence), la seconde doit garder ses
+#: anciennes clés *actives* pour déchiffrer les secrets déjà scellés.
+_FAMILY_SLOTS: dict[KeyUse, str] = {KeyUse.CREDENTIAL: "oid4vci"}
 
 _EC_CURVES: dict[JWTAlgorithm, ec.EllipticCurve] = {
     JWTAlgorithm.ES256: ec.SECP256R1(),
@@ -83,10 +100,38 @@ class DefaultKeyManager:
         """Retourne les clés du repository appartenant à la famille gérée."""
         return [key for key in await self._repository.find_all() if key.use is self._use]
 
-    async def generate_key_pair(self, key_size: int, algorithm: JWTAlgorithm) -> KeyPair:
-        """Génère une paire de clés pour l'algorithme et la persiste."""
+    async def generate_key_pair(
+        self, key_size: int, algorithm: JWTAlgorithm, *, replace_kid: str | None = None
+    ) -> KeyPair:
+        """Génère une paire de clés pour l'algorithme et la persiste.
+
+        Pour une famille à slot (``_FAMILY_SLOTS``), la nouvelle paire
+        devient la clé courante : l'occupant ``replace_kid`` est libéré
+        d'abord. Si une autre instance a pris ou remplacé le slot entre la
+        lecture du caller et l'écriture, sa clé est **adoptée** et la paire
+        générée est abandonnée — deux instances qui démarrent en même temps
+        convergent vers une seule clé courante, sans écraser ni dupliquer
+        (issue #310).
+
+        Args:
+            key_size: taille de la paire demandée (ignorée pour les courbes EC).
+            algorithm: algorithme de la paire à générer.
+            replace_kid: ``kid`` de la clé courante à remplacer, tel que lu
+                par le caller ; ``None`` provisionne une famille vide.
+
+        Returns:
+            La paire persistée, ou la clé courante adoptée en cas de course.
+        """
+        slot = _FAMILY_SLOTS.get(self._use)
+        keys = await self._keys() if slot is not None else []
+        if slot is not None:
+            holder = next((key for key in keys if key.slot == slot), None)
+            if holder is not None and holder.kid != replace_kid:
+                return holder  # la course est tranchée : la clé du store fait foi
+            if holder is not None:
+                await self._repository.update(replace(holder, slot=None))
         generated = _generate_key_pair(key_size, algorithm)
-        key_pair = KeyPair(
+        candidate = KeyPair(
             algorithm=generated.algorithm,
             use=self._use,
             kid=generated.kid,
@@ -94,9 +139,18 @@ class DefaultKeyManager:
             public_key_pem=generated.public_key_pem,
             created_at=generated.created_at,
             is_active=generated.is_active,
+            slot=slot,
         )
-        await self._repository.save(key_pair)
-        return key_pair
+        try:
+            await self._repository.save(candidate)
+        except KeyPairConflictError:
+            if slot is None:
+                raise
+            winner = next((key for key in await self._keys() if key.slot == slot), None)
+            if winner is None:
+                raise
+            return winner
+        return candidate
 
     async def get_active_keys(self) -> list[KeyPair]:
         """Retourne les clés marquées actives, parmi la famille gérée."""
@@ -192,6 +246,37 @@ async def first_active_key(key_manager: KeyManager, algorithm: JWTAlgorithm) -> 
     raise RuntimeError(f"Aucune clé active disponible pour l'algorithme {algorithm.value}")
 
 
+async def rotate_if_stale(
+    key_manager: KeyManager, key_size: int, algorithm: JWTAlgorithm, rotation_days: int
+) -> bool:
+    """Génère une clé si la famille est vide ou si la plus récente est périmée.
+
+    Facteur commun de la rotation « à la première usage » du store
+    ``key_pair`` : quand ``rotation_days`` jours se sont écoulés depuis
+    ``created_at`` de la clé la plus récente de la famille gérée (ou quand
+    la famille est vide), une nouvelle paire est générée. L'ancienne clé
+    reste dans le store (drain), jamais supprimée automatiquement —
+    conforme à ``AsymmetricSecretCipher.rotate_if_stale``, qui délègue à
+    cette fonction. Le ``kid`` de la clé périmée est transmis au
+    gestionnaire : pour une famille à slot, si une autre instance a déjà
+    tourné entre la lecture et l'écriture, sa clé est adoptée (issue #310).
+
+    Returns:
+        ``True`` si la famille a reçu une clé courante — générée ici, ou
+        adoptée après course.
+    """
+    keys = await key_manager.get_active_keys()
+    if not keys:
+        await key_manager.generate_key_pair(key_size, algorithm)
+        return True
+    newest = max(keys, key=lambda key: key.created_at)
+    deadline = datetime.now(timezone.utc) - timedelta(days=rotation_days)
+    if newest.created_at <= deadline:
+        await key_manager.generate_key_pair(key_size, algorithm, replace_kid=newest.kid)
+        return True
+    return False
+
+
 def _generate_key_pair(key_size: int, algorithm: JWTAlgorithm) -> KeyPair:
     """Génère une paire de clés PEM adaptée à l'algorithme demandé.
 
@@ -226,5 +311,50 @@ def _generate_key_pair(key_size: int, algorithm: JWTAlgorithm) -> KeyPair:
     return KeyPair(
         algorithm=algorithm,
         private_key_pem=private_pem,
+        public_key_pem=public_pem,
+    )
+
+
+def pem_key_kid(public_key_pem: str) -> str:
+    """Identifiant stable et autodérivé d'une clé (SHA-256 de sa clé publique).
+
+    Partagé par le seed de scellement (``KeyUse.SECRET``) et le seed de
+    chiffrement OID4VCI (``KeyUse.CREDENTIAL``) : le ``kid`` dérive de la
+    clé publique, il est donc identique d'un redémarrage à l'autre — le
+    store retrouve la même ligne au lieu d'en créer une seconde.
+    """
+    digest = hashlib.sha256(public_key_pem.encode("utf-8")).digest()
+    return base64.urlsafe_b64encode(digest[:9]).rstrip(b"=").decode("ascii")
+
+
+def load_credential_key_pair(private_key_pem: str) -> KeyPair:
+    """Construit la ``KeyPair`` de chiffrement OID4VCI issue d'un PEM.
+
+    Sert de **seed** (mondes déterministes / serveurs en mémoire, cf.
+    ``client_secret_seal_key_pem``, issue #310) : la composition root
+    l'enregistre dans le store ``key_pair`` si la famille
+    ``KeyUse.CREDENTIAL`` est vide, avant la rotation au démarrage. Le
+    ``kid`` dérive de la clé publique, la seed est donc stable d'un
+    redémarrage à l'autre. ``ValueError`` si le PEM n'est pas une clé
+    EC P-256 : la famille chiffre en ECDH-ES sur cette courbe seule.
+    """
+    private = load_pem_private_key(private_key_pem.encode("ascii"), password=None)
+    if not isinstance(private, ec.EllipticCurvePrivateKey) or not isinstance(
+        private.curve, ec.SECP256R1
+    ):
+        raise ValueError("seed de chiffrement OID4VCI : cle EC P-256 attendue")
+    public_pem = (
+        private.public_key()
+        .public_bytes(
+            cast(Encoding, Encoding.PEM),
+            cast(PublicFormat, PublicFormat.SubjectPublicKeyInfo),
+        )
+        .decode("ascii")
+    )
+    return KeyPair(
+        algorithm=JWTAlgorithm.ES256,
+        use=KeyUse.CREDENTIAL,
+        kid=pem_key_kid(public_pem),
+        private_key_pem=private_key_pem,
         public_key_pem=public_pem,
     )

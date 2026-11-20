@@ -78,9 +78,9 @@ def _mount_metadata(
             return Response(content=token, media_type=_JWT_MEDIA_TYPE)
         # Blocs credential_*_encryption publies seulement si la capability
         # est activee (Settings.oid4vci_encryption_enabled).
-        encryption_jwk = await usecase.encryption_jwk() if usecase is not None else None
+        encryption_jwks = await usecase.encryption_jwks() if usecase is not None else None
         return JSONResponse(
-            issuer_metadata_payload(normalized, encryption_jwk=encryption_jwk),
+            issuer_metadata_payload(normalized, encryption_jwks=encryption_jwks),
             media_type=_JSON_MEDIA_TYPE,
         )
 

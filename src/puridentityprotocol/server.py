@@ -49,7 +49,11 @@ from puridentityserver.application.introspect import IntrospectConfig, Introspec
 from puridentityserver.application.jarm import JarmSigner
 from puridentityserver.application.jwks import JWKSetConfig, JWKSetUseCase
 from puridentityserver.application.logout import LogoutConfig, LogoutUseCase
-from puridentityserver.application.oid4vci import CredentialOfferUseCase, OID4VCIIssuerUseCase
+from puridentityserver.application.oid4vci import (
+    CREDENTIAL_KEY_SIZE,
+    CredentialOfferUseCase,
+    OID4VCIIssuerUseCase,
+)
 from puridentityserver.application.oid4vp import OID4VPVerifierUseCase
 from puridentityserver.application.openid20_migration import OpenID20MigrationUseCase
 from puridentityserver.application.openid20_provider import OpenID20ProviderUseCase
@@ -97,7 +101,11 @@ from puridentityserver.infrastructure.federation import (
 )
 from puridentityserver.infrastructure.jarm import PyJarmEnvelopeSigner
 from puridentityserver.infrastructure.jwe import JWEIdTokenEncrypter, JWERequestObjectDecrypter
-from puridentityserver.infrastructure.jwks import DefaultKeyManager
+from puridentityserver.infrastructure.jwks import (
+    DefaultKeyManager,
+    load_credential_key_pair,
+    rotate_if_stale,
+)
 from puridentityserver.infrastructure.mdoc_storage import FileMdocPKIRepository
 from puridentityserver.infrastructure.oid4vp_pki import (
     FileVerifierPKIRepository,
@@ -151,9 +159,6 @@ from puridentityserver.interfaces.api.userinfo import userinfo_router
 from puridentityserver.interfaces.domain.dpop import DpopProofValidator
 from puridentityserver.interfaces.domain.tokens import TokenManager
 from puridentityserver.interfaces.repositories.dpop_replay_repository import DpopReplayRepository
-from puridentityserver.interfaces.repositories.encryption_key_repository import (
-    EncryptionKeyRepository,
-)
 from puridentityserver.interfaces.repositories.readers import ClientReader
 from puridentityserver.interfaces.repositories.revoked_token_repository import (
     RevokedTokenRepository,
@@ -195,15 +200,16 @@ def _oid4vci_usecase(
     token_manager: TokenManager,
     dpop_validator: DpopProofValidator | None,
     revoked_tokens: RevokedTokenRepository | None = None,
-    encryption_key_repository: EncryptionKeyRepository | None = None,
+    encryption_key_manager: DefaultKeyManager | None = None,
 ) -> OID4VCIIssuerUseCase | None:
     """Construit l émetteur OID4VCI si activé, ``None`` sinon.
 
     ``revoked_tokens`` porte la denylist des access tokens (RFC 6749 §5.2)
     opposée à l'usage du jeton sur les endpoints de l'émetteur ;
-    ``encryption_key_repository`` stocke la clé ECDH-ES provisionnée à la
-    première usage quand ``oid4vci_encryption_enabled`` est actif (store
-    partagé entre instances).
+    ``encryption_key_manager`` gère la famille ``KeyUse.CREDENTIAL`` —
+    clés ECDH-ES provisionnées à la première usage et mises en rotation
+    au démarrage (issue #310) quand ``oid4vci_encryption_enabled`` est
+    actif (store ``key_pair`` partagé entre instances).
     """
     if not settings.oid4vci_enabled:
         return None
@@ -217,7 +223,7 @@ def _oid4vci_usecase(
         credential_pki_repository=_credential_pki_repository(settings),
         revoked_tokens=revoked_tokens,
         encryption_enabled=settings.oid4vci_encryption_enabled,
-        encryption_key_repository=encryption_key_repository,
+        encryption_key_manager=encryption_key_manager,
     )
 
 
@@ -445,6 +451,12 @@ class ProtocolDependencies:
         # §10.1, issue #204) : publiée au JWKS et dans l'entity statement
         # fédéré, la clé privée ne quitte jamais le serveur.
         self.encryption_key_manager = DefaultKeyManager(stores.key_pair, use=KeyUse.ENC)
+        # Clés ECDH-ES du chiffrement des credential requests/réponses
+        # OID4VCI (1.0 §8.2, issues #304/#310) : famille dédiée du store
+        # ``key_pair``, mise en rotation au démarrage, jamais purgée (drain).
+        self.credential_encryption_key_manager = DefaultKeyManager(
+            stores.key_pair, use=KeyUse.CREDENTIAL
+        )
         configure_identity(
             session_key_manager=self.session_key_manager,
             reset_token_key_manager=self.reset_key_manager,
@@ -528,7 +540,7 @@ class ProtocolDependencies:
             self.token_manager,
             self.dpop_validator,
             stores.revoked,
-            stores.encryption_key,
+            self.credential_encryption_key_manager,
         )
         self.oid4vci_offer_usecase = (
             CredentialOfferUseCase(
@@ -816,6 +828,7 @@ class ProtocolDependencies:
         ):
             await manager.ensure_active_key(2048, JWTAlgorithm.RS256)
         await self._initialise_seal_key()
+        await self._rotate_credential_encryption_key()
 
     async def _initialise_seal_key(self) -> None:
         """Prépare la clé de scellement des secrets HMAC (``KeyUse.SECRET``).
@@ -832,6 +845,43 @@ class ProtocolDependencies:
         await self.secret_cipher.rotate_if_stale(
             self.settings.jwks_key_size, self.settings.jwks_rotation_days
         )
+
+    async def _rotate_credential_encryption_key(self) -> None:
+        """Fait tourner les clés de chiffrement OID4VCI (issue #310).
+
+        Enregistre d'abord le seed PEM optionnel si la famille
+        ``KeyUse.CREDENTIAL`` est encore vide, puis génère une première
+        clé si elle l'est toujours, ou en ajoute une quand la plus
+        récente dépasse ``jwks_rotation_days`` — uniquement quand le
+        chiffrement des credential requests est activé. Les clés
+        antérieures restent en place (drain, jamais purgées) : elles
+        restent déchiffrables et publiées dans le ``jwks`` des métadonnées
+        de l'émetteur.
+        """
+        if not self.settings.oid4vci_enabled or not self.settings.oid4vci_encryption_enabled:
+            return
+        await self._register_credential_encryption_seed()
+        await rotate_if_stale(
+            self.credential_encryption_key_manager,
+            CREDENTIAL_KEY_SIZE,
+            JWTAlgorithm.ES256,
+            self.settings.jwks_rotation_days,
+        )
+
+    async def _register_credential_encryption_seed(self) -> None:
+        """Enregistre le seed PEM de chiffrement si la famille est vide.
+
+        Miroir de ``_initialise_seal_key`` : le seed n'est consommé qu'au
+        premier démarrage sur famille vide, son ``kid`` dérivant de la clé
+        publique (issue #310). Un PEM invalide fait échouer le démarrage.
+        """
+        if not self.settings.oid4vci_encryption_key_pem:
+            return
+        existing = await self.credential_encryption_key_manager.get_active_keys()
+        if existing:
+            return
+        seed = load_credential_key_pair(self.settings.oid4vci_encryption_key_pem)
+        await self.stores.key_pair.save(seed)
 
     def mount(self, app: FastAPI) -> None:
         """Monte les endpoints de protocole OIDC/OAuth sur ``app``."""
