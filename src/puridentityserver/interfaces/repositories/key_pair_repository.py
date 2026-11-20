@@ -7,6 +7,17 @@ from typing import Protocol
 from puridentityserver.domain.jwks import KeyPair
 
 
+class KeyPairConflictError(Exception):
+    """Conflit d'unicité sur le store ``key_pair``.
+
+    Levée quand une paire portant un ``slot`` de famille ne peut pas le
+    prendre : une autre ligne (provisionnée par une autre instance) porte
+    déjà le couple ``(use, slot)``. Le gestionnaire de clés en déduit que
+    la course est tranchée et adopte la clé retenue par le store, plutôt
+    que d'écraser ou de dupliquer la clé courante (issue #310).
+    """
+
+
 class KeyPairRepository(Protocol):
     """Contrat de stockage des paires de clés.
 

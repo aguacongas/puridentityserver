@@ -46,6 +46,13 @@ class KeyUse(str, Enum):
                  confiance (OpenID Federation 1.1 §2.1, §3) — jamais
                  publiée au JWKS OIDC, la spec recommandant que ces clés
                  ne servent à aucun autre protocole.
+    ``credential``: chiffrement ECDH-ES des credential requests / responses
+                 OID4VCI 1.0 §8.2 (issues #304 / #310) — la clé privée
+                 ne quitte jamais le serveur, la clé publique EC P-256 est
+                 publiée dans le ``jwks`` de ``credential_request_encryption``
+                 des métadonnées de l'émetteur. Mise en rotation
+                 automatiquement mais **jamais purgée** : un credential
+                 request chiffré reste déchiffrable pendant le drain.
     """
 
     SIG = "sig"
@@ -59,6 +66,7 @@ class KeyUse(str, Enum):
     # des clés de signature OIDC : la spec recommande qu'elles ne servent
     # à aucun autre protocole.
     FEDERATION = "federation"
+    CREDENTIAL = "credential"
 
 
 class JWTAlgorithm(str, Enum):
@@ -222,3 +230,9 @@ class KeyPair:
     public_key_pem: str = ""
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     is_active: bool = True
+    # Slot de famille : la ligne portant ``(use, slot)`` est la cle *courante*
+    # de sa famille, toutes les autres sont en drain (``NULL``). L'unicite de
+    # ce couple dans le store — les ``NULL`` etant distincts dans les trois
+    # dialectes supportes — garantit une seule cle courante par famille, y
+    # compris quand deux instances demarrent en meme temps (issue #310).
+    slot: str | None = None

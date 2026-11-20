@@ -1,6 +1,6 @@
 """Conteneur des stores partagés et cycle de vie des stockages.
 
-``Stores`` regroupe les seize repositories de persistance du serveur,
+``Stores`` regroupe les quinze repositories de persistance du serveur,
 construits une seule fois par ``build_stores`` depuis les ``Settings``.
 Le serveur ``full`` partage ces instances entre l'administration et le
 protocole ; les serveurs ``admin`` et ``protocol`` isolés les construisent
@@ -29,7 +29,6 @@ from puridentityserver.infrastructure.persistence.factory import (
     build_credential_offer_repository,
     build_device_authorization_repository,
     build_dpop_replay_repository,
-    build_encryption_key_repository,
     build_identity_resource_repository,
     build_key_pair_repository,
     build_openid20_identifier_repository,
@@ -59,9 +58,6 @@ from puridentityserver.interfaces.repositories.device_authorization_repository i
 from puridentityserver.interfaces.repositories.dpop_replay_repository import (
     DpopReplayRepository,
 )
-from puridentityserver.interfaces.repositories.encryption_key_repository import (
-    EncryptionKeyRepository,
-)
 from puridentityserver.interfaces.repositories.identity_resource_repository import (
     IdentityResourceRepository,
 )
@@ -86,7 +82,6 @@ class Stores:
     """Instances des repositories de persistance du serveur."""
 
     key_pair: KeyPairRepository
-    encryption_key: EncryptionKeyRepository
     client: ClientRepository
     code: AuthorizationCodeRepository
     user: UserRepository
@@ -104,10 +99,9 @@ class Stores:
 
 
 def build_stores(settings: Settings) -> Stores:
-    """Construit les seize repositories selon ``STORAGE_TYPE``/``STORAGE_DSN``."""
+    """Construit les quinze repositories selon ``STORAGE_TYPE``/``STORAGE_DSN``."""
     return Stores(
         key_pair=build_key_pair_repository(settings),
-        encryption_key=build_encryption_key_repository(settings),
         client=build_client_repository(settings),
         code=build_authorization_code_repository(settings),
         user=build_user_repository(settings),
@@ -146,7 +140,6 @@ async def initialise_resources(stores: Stores, settings: Settings) -> None:
 async def initialise_protocol_stores(stores: Stores, settings: Settings) -> None:
     """Ouvre les stockages privés du protocole et seeder les clients."""
     await stores.key_pair.initialise()
-    await stores.encryption_key.initialise()
     await stores.code.initialise()
     await stores.user.initialise()
     await stores.revoked.initialise()
@@ -172,7 +165,6 @@ async def close_resources(stores: Stores) -> None:
 async def close_protocol_stores(stores: Stores) -> None:
     """Ferme les stockages privés du protocole."""
     await stores.key_pair.close()
-    await stores.encryption_key.close()
     await stores.code.close()
     await stores.user.close()
     await stores.revoked.close()

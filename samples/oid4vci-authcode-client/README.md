@@ -143,3 +143,23 @@ Le script lit les blocs `credential_request_encryption` /
 genere sa propre paire EC P-256, demande le chiffrement de la reponse
 (`credential_response_encryption` avec `enc = A256GCM`), puis dechiffre le
 JWE renvoye en `application/jwt` avec `decrypt_compact_ecdh_es`.
+
+Rotation (issue #310) : les cles ECDH-ES de l'emetteur (famille
+`KeyUse.CREDENTIAL`) tournent au demarrage de l'OP selon
+`PURIDENTITYSERVER_JWKS_ROTATION_DAYS` (90 j par defaut). Le `jwks` des
+metadonnees publie alors toutes les cles vivantes, la plus recente en
+tetre : le script, qui chiffre sous la cle publiee, continue de fonctionner
+sans changement, et un credential request chiffre sous une cle anterieure
+reste accepte (drain, resolution par `kid` puis repli sur le trousseau).
+
+Seed facultatif : `PURIDENTITYSERVER_OID4VCI_ENCRYPTION_KEY_PEM` (PEM EC
+P-256) enregistre une cle stable au demarrage si la famille est encore
+vide — utile pour garder la meme cle d'un redemarrage a l'autre en memoire
+(`STORAGE_TYPE=memory`) ; sans lui, la cle est generee automatiquement.
+
+```bash
+PURIDENTITYSERVER_OID4VCI_ENABLED=true \
+PURIDENTITYSERVER_OID4VCI_ENCRYPTION_ENABLED=true \
+PURIDENTITYSERVER_OID4VCI_ENCRYPTION_KEY_PEM="$(cat encryption-key.pem)" \
+uv run python -m puridentityprotocol.server
+```
