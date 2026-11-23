@@ -18,7 +18,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from jwt import PyJWK  # type: ignore[attr-defined]  # non exposé par types-PyJWT
+from jwt import PyJWK
 from jwt.algorithms import RSAAlgorithm
 
 from puridentityserver.application.claim_authorizer import BearerClaimAuthorizer, ClaimRule

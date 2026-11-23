@@ -27,7 +27,8 @@ from collections.abc import Sequence
 from typing import cast
 
 import jwt as pyjwt
-from jwt import PyJWKClient, PyJWKSet  # type: ignore[attr-defined]  # non exposés par types-PyJWT
+from jwt import PyJWKClient, PyJWKSet
+from jwt.types import Options
 
 from puridentityserver.domain.authorization import Client
 from puridentityserver.domain.key_validation import usable_for_signing
@@ -145,9 +146,9 @@ class PyJWTClientAssertionVerifier:
             return None
 
 
-def _required_options(require_iss_eq_sub: bool) -> dict[str, object]:
+def _required_options(require_iss_eq_sub: bool) -> Options:
     """Options PyJWT : ``iss``/``aud`` vérifiés, ``sub`` aligné si client auth."""
-    options: dict[str, object] = {"require": ["exp", "iss", "aud"]}
+    options: Options = {"require": ["exp", "iss", "aud"]}
     if require_iss_eq_sub:
         options["verify_sub"] = False  # contrôlé après décodage (iss == sub)
     return options
@@ -293,7 +294,9 @@ def _decode(
     try:
         claims = pyjwt.decode(
             token,
-            key,  # type: ignore[arg-type]  # clé JWK (types-PyJWT ne couvre pas le cas client)
+            # clé déjà résolue par l'appelant (JWK du client ou PEM) : la
+            # valeur est de type ``object``, le décodeur attend une clé crypto
+            key,  # type: ignore[arg-type]
             algorithms=algorithms,
             audience=audience,
             issuer=issuer,
@@ -319,7 +322,9 @@ def _decode_hint(
     try:
         claims = pyjwt.decode(
             token,
-            key,  # type: ignore[arg-type]  # clé JWK (types-PyJWT ne couvre pas le cas client)
+            # clé déjà résolue par l'appelant (PEM ou JWK) : la valeur est de
+            # type ``object``, le décodeur attend une clé crypto
+            key,  # type: ignore[arg-type]
             algorithms=algorithms,
             options={"verify_aud": False, "verify_iss": False},
         )

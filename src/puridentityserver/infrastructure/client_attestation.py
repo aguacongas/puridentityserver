@@ -176,7 +176,9 @@ class PyJWTClientAttestationVerifier:
         try:
             claims = pyjwt.decode(
                 token,
-                key,  # type: ignore[arg-type]  # clé JWK (types-PyJWT ne couvre pas ce cas)
+                # clé déjà résolue par l'appelant (JWK de l'attester) : la
+                # valeur est de type ``object``, le décodeur attend une clé crypto
+                key,  # type: ignore[arg-type]
                 algorithms=[algorithm],
                 issuer=self._attester_issuer,
                 leeway=_LEEWAY_SECONDS,
@@ -208,7 +210,9 @@ class PyJWTClientAttestationVerifier:
         try:
             claims = pyjwt.decode(
                 token,
-                key,  # type: ignore[arg-type]  # clé JWK (types-PyJWT ne couvre pas ce cas)
+                # clé déjà résolue par l'appelant (``cnf.jwk``) : la valeur
+                # est de type ``object``, le décodeur attend une clé crypto
+                key,  # type: ignore[arg-type]
                 algorithms=[algorithm],
                 audience=self._as_audiences,
                 issuer=client_id,

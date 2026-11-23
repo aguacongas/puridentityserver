@@ -295,15 +295,15 @@ def _generate_key_pair(key_size: int, algorithm: JWTAlgorithm) -> KeyPair:
         pk = cast(_PEMPrivateKey, ec.generate_private_key(_EC_CURVES[algorithm]))
 
     private_pem = pk.private_bytes(
-        cast(Encoding, Encoding.PEM),
-        cast(PrivateFormat, PrivateFormat.PKCS8),
+        Encoding.PEM,
+        PrivateFormat.PKCS8,
         NoEncryption(),
     ).decode("ascii")
     public_pem = (
         pk.public_key()
         .public_bytes(
-            cast(Encoding, Encoding.PEM),
-            cast(PublicFormat, PublicFormat.SubjectPublicKeyInfo),
+            Encoding.PEM,
+            PublicFormat.SubjectPublicKeyInfo,
         )
         .decode("ascii")
     )
@@ -346,8 +346,8 @@ def load_credential_key_pair(private_key_pem: str) -> KeyPair:
     public_pem = (
         private.public_key()
         .public_bytes(
-            cast(Encoding, Encoding.PEM),
-            cast(PublicFormat, PublicFormat.SubjectPublicKeyInfo),
+            Encoding.PEM,
+            PublicFormat.SubjectPublicKeyInfo,
         )
         .decode("ascii")
     )

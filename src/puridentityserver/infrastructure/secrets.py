@@ -28,7 +28,6 @@ détient les clés privées dans le store ``key_pair``, le déchiffre.
 from __future__ import annotations
 
 import base64
-from typing import cast
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
@@ -82,8 +81,8 @@ def load_seal_key_pair(private_key_pem: str) -> KeyPair:
     public_pem = (
         private.public_key()
         .public_bytes(
-            cast(Encoding, Encoding.PEM),
-            cast(PublicFormat, PublicFormat.SubjectPublicKeyInfo),
+            Encoding.PEM,
+            PublicFormat.SubjectPublicKeyInfo,
         )
         .decode("ascii")
     )

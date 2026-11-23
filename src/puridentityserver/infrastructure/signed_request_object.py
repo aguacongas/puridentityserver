@@ -213,7 +213,9 @@ def _claims(
     try:
         claims = pyjwt.decode(
             token,
-            key,  # type: ignore[arg-type]  # clé JWK (types-PyJWT ne couvre pas le cas client)
+            # clé déjà résolue par l'appelant (PEM ou JWK) : la valeur est de
+            # type ``object``, le décodeur attend une clé crypto
+            key,  # type: ignore[arg-type]
             algorithms=[algorithm],
             audience=issuer,
             issuer=client.client_id,

@@ -30,6 +30,7 @@ from cose.messages import Sign1Message  # type: ignore[import-untyped]
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.types import CertificateIssuerPublicKeyTypes
 from cryptography.hazmat.primitives.serialization import Encoding
 from cryptography.x509 import ObjectIdentifier
 from cryptography.x509.oid import NameOID
@@ -308,9 +309,7 @@ def generate_mdoc_crl(pki: MdocIssuerPKI, crl_counter: int | None = None) -> byt
     signer_key = pki.issuer_private_key
     crl = builder.sign(private_key=signer_key, algorithm=hashes.SHA256())
 
-    from typing import cast
-
-    return crl.public_bytes(encoding=cast(SerializationEncoding, SerializationEncoding.DER))
+    return crl.public_bytes(encoding=SerializationEncoding.DER)
 
 
 #: Limite de longueur d'un ``Common Name`` X.509 (RFC 5280 §4.2.1.6).
@@ -486,7 +485,13 @@ def _document_signer_certificate(
             x509.SubjectKeyIdentifier.from_public_key(private_key.public_key()), critical=False
         )
         .add_extension(
-            x509.AuthorityKeyIdentifier.from_issuer_public_key(issuer_certificate.public_key()),
+            # Un certificat X.509 porte toujours une clé signable : le type
+            # public renvoyé par ``public_key()`` inclut des clés hors
+            # ``CertificateIssuerPublicKeyTypes`` (ML-KEM, X25519) qu'un
+            # certificat ne peut pas porter.
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(
+                cast(CertificateIssuerPublicKeyTypes, issuer_certificate.public_key())
+            ),
             critical=False,
         )
         .add_extension(
@@ -545,7 +550,7 @@ def _private_cose_key(private_key: ec.EllipticCurvePrivateKey) -> CoseKey:
             -1: _CRV_P256,
             -2: public_numbers.x.to_bytes(32, "big"),
             -3: public_numbers.y.to_bytes(32, "big"),
-            -4: private_key.private_numbers().private_value.to_bytes(32, "big"),  # type: ignore[attr-defined]  # méthode abstraite réelle, absente des stubs cryptography
+            -4: private_key.private_numbers().private_value.to_bytes(32, "big"),
         }
     )
 
@@ -644,7 +649,7 @@ def _sign_mso(mso: dict[str, Any], pki: MdocIssuerPKI) -> list[Any]:
     message.uhdr_update(
         {
             _X5CHAIN_LABEL: [
-                pki.signer_certificate.public_bytes(cast(Encoding, Encoding.DER)),
+                pki.signer_certificate.public_bytes(Encoding.DER),
             ]
         }
     )

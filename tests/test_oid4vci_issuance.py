@@ -46,7 +46,7 @@ def _proof(
 ) -> str:
     """Construit une preuve ``jwt`` complète, signée pour l'audience demandée."""
     private_key = signing_key or rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    jwk = RSAAlgorithm.to_jwk(private_key.public_key(), as_dict=True)  # type: ignore[attr-defined]
+    jwk = RSAAlgorithm.to_jwk(private_key.public_key(), as_dict=True)
     jwk["alg"] = "RS256"
     now = int(datetime.now(timezone.utc).timestamp())
     return pyjwt.encode(
@@ -497,11 +497,11 @@ def test_key_attestation_valid_signature_accepted() -> None:
     nonce = asyncio.run(usecase.issue_nonce())["c_nonce"]
 
     bind_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    bind_jwk = RSAAlgorithm.to_jwk(bind_key.public_key(), as_dict=True)  # type: ignore[attr-defined]
+    bind_jwk = RSAAlgorithm.to_jwk(bind_key.public_key(), as_dict=True)
     bind_jwk["alg"] = "RS256"
 
     att_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    att_jwk = RSAAlgorithm.to_jwk(att_key.public_key(), as_dict=True)  # type: ignore[attr-defined]
+    att_jwk = RSAAlgorithm.to_jwk(att_key.public_key(), as_dict=True)
     att_jwk["alg"] = "RS256"
     now = int(datetime.now(timezone.utc).timestamp())
     attestation = pyjwt.encode(
@@ -543,11 +543,11 @@ def test_key_attestation_invalid_signature_rejected() -> None:
     nonce = asyncio.run(usecase.issue_nonce())["c_nonce"]
 
     bind_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    bind_jwk = RSAAlgorithm.to_jwk(bind_key.public_key(), as_dict=True)  # type: ignore[attr-defined]
+    bind_jwk = RSAAlgorithm.to_jwk(bind_key.public_key(), as_dict=True)
     bind_jwk["alg"] = "RS256"
 
     att_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    att_jwk = RSAAlgorithm.to_jwk(att_key.public_key(), as_dict=True)  # type: ignore[attr-defined]
+    att_jwk = RSAAlgorithm.to_jwk(att_key.public_key(), as_dict=True)
     att_jwk["alg"] = "RS256"
     now = int(datetime.now(timezone.utc).timestamp())
     attestation = pyjwt.encode(
@@ -603,7 +603,7 @@ def test_key_attestation_x509_valid_accepted() -> None:
     nonce = asyncio.run(usecase.issue_nonce())["c_nonce"]
 
     bind_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    bind_jwk = RSAAlgorithm.to_jwk(bind_key.public_key(), as_dict=True)  # type: ignore[attr-defined]
+    bind_jwk = RSAAlgorithm.to_jwk(bind_key.public_key(), as_dict=True)
     bind_jwk["alg"] = "RS256"
 
     ec_key = _ec.generate_private_key(_ec.SECP256R1())

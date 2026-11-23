@@ -26,6 +26,7 @@ from typing import Any, Protocol, cast
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.types import CertificateIssuerPublicKeyTypes
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from cryptography.x509.oid import NameOID
 
@@ -76,9 +77,7 @@ class VerifierPKI:
     @property
     def leaf_thumbprint(self) -> str:
         """Empreinte SHA-256 (base64url) du certificat leaf, en ``x5t#S256``."""
-        der = self.leaf_certificate.public_bytes(
-            cast(serialization.Encoding, serialization.Encoding.DER)
-        )
+        der = self.leaf_certificate.public_bytes(serialization.Encoding.DER)
         return b64u(hashlib.sha256(der).digest())
 
     @property
@@ -98,17 +97,13 @@ class VerifierPKI:
         Encodage base64 **standard** avec padding (RFC 7515 §4.1.6 — pas du
         base64url) ; la CA reste hors chaîne, exigence PKIX de la suite.
         """
-        der = self.leaf_certificate.public_bytes(
-            cast(serialization.Encoding, serialization.Encoding.DER)
-        )
+        der = self.leaf_certificate.public_bytes(serialization.Encoding.DER)
         return [base64.b64encode(der).decode("ascii")]
 
     @property
     def trust_anchor_pem(self) -> str:
         """Certificat CA au format PEM (ancre de confiance à injecter dans le plan)."""
-        pem = self.ca_certificate.public_bytes(
-            cast(serialization.Encoding, serialization.Encoding.PEM)
-        )
+        pem = self.ca_certificate.public_bytes(serialization.Encoding.PEM)
         return pem.decode("ascii")
 
 
@@ -279,7 +274,11 @@ def _leaf_certificate(
             x509.SubjectKeyIdentifier.from_public_key(private_key.public_key()), critical=False
         )
         .add_extension(
-            x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_certificate.public_key()),
+            # certificat : la cle est toujours signable (sous-ensemble
+            # CertificateIssuerPublicKeyTypes, cf. mdoc.py)
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(
+                cast(CertificateIssuerPublicKeyTypes, ca_certificate.public_key())
+            ),
             critical=False,
         )
         .sign(ca_key, hashes.SHA256())
@@ -304,15 +303,15 @@ def _require_str(data: dict[str, Any], key: str) -> str:
 
 def _pem_private(private_key: ec.EllipticCurvePrivateKey) -> str:
     """Serialise une clé privée EC en PEM PKCS#8."""
-    raw = private_key.private_bytes(  # type: ignore[attr-defined]  # méthode abstraite réelle, absente des stubs cryptography
-        encoding=cast(serialization.Encoding, serialization.Encoding.PEM),
+    raw = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
     )
-    return cast(bytes, raw).decode("ascii")
+    return raw.decode("ascii")
 
 
 def _pem_cert(certificate: x509.Certificate) -> str:
     """Serialise un certificat X.509 en PEM."""
-    pem = certificate.public_bytes(cast(serialization.Encoding, serialization.Encoding.PEM))
+    pem = certificate.public_bytes(serialization.Encoding.PEM)
     return pem.decode("ascii")
