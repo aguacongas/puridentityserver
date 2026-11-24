@@ -30,6 +30,13 @@ mdoc, c_nonce, HAIP) sont traitées dans les sous-issues #222, #223 et #224.
 
 Le harness de certification expose le plan oid4vci (selectors + plan JSON) pour mesurer l'ecart restant.
 
+## Profil HAIP 1.0
+
+Le respect du profil [OpenID4VC High Assurance Interoperability Profile
+1.0](https://openid.net/specs/openid4vc-high-assurance-interoperability-profile-1_0.html)
+sur ce flux est trace exigence par exigence (statut + preuve, ecarts
+documentes) dans [docs/haip.md](haip.md).
+
 
 ## Metadonnees d emetteur signees (OID4VCI 1.0)
 
