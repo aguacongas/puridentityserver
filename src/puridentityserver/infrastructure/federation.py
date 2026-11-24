@@ -17,7 +17,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import jwt as pyjwt
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
-from jwt import PyJWK  # type: ignore[attr-defined]  # non exposé par types-PyJWT
+from jwt import PyJWK
+from jwt.algorithms import AllowedPrivateKeys
 
 from puridentityserver.domain.authorization import Client
 from puridentityserver.domain.federation import (
@@ -55,7 +56,9 @@ class PyJWTFederationTokenManager:
     ) -> str:
         """Signe un entity statement (JWS compact, en-tête ``typ`` dédié)."""
         key = await self._active_key()
-        private_key = load_pem_private_key(key.private_key_pem.encode("ascii"), None)
+        private_key = cast(
+            AllowedPrivateKeys, load_pem_private_key(key.private_key_pem.encode("ascii"), None)
+        )
         return str(
             pyjwt.encode(
                 dict(claims),

@@ -288,7 +288,9 @@ def _check_signature(
             proof,
             key,
             algorithms=[alg],
-            options={"verify_exp": False, "verify_nbf": False, "verify_aud": False},
+            # PyJWS ne contrôle que la signature : ``exp``/``nbf``/``aud``
+            # sont des claims JWT, hors périmètre du décodeur JWS.
+            options={"verify_signature": True},
         )
     except pyjwt.PyJWTError:
         return _reject("Signature de la preuve DPoP invalide")

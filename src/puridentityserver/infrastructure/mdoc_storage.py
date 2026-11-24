@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -108,19 +108,14 @@ def _require_str(data: dict[str, Any], key: str) -> str:
 
 def _pem_private(private_key: ec.EllipticCurvePrivateKey) -> str:
     """Serialise une cle privee EC en PEM PKCS#8."""
-    raw = cast(
-        bytes,
-        private_key.private_bytes(  # type: ignore[attr-defined]
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption(),
-        ),
+    raw = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
     )
     return raw.decode("ascii")
 
 
 def _pem_cert(certificate: x509.Certificate) -> str:
     """Serialise un certificat X509 en PEM."""
-    return certificate.public_bytes(
-        cast(serialization.Encoding, serialization.Encoding.PEM)
-    ).decode("ascii")
+    return certificate.public_bytes(serialization.Encoding.PEM).decode("ascii")

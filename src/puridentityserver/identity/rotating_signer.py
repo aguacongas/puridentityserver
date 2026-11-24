@@ -25,6 +25,7 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_private_key,
     load_pem_public_key,
 )
+from jwt.algorithms import AllowedPrivateKeys, AllowedPublicKeys
 
 from puridentityserver.domain.jwks import JWTAlgorithm, KeyPair
 from puridentityserver.interfaces.domain.jwks import KeyManager
@@ -84,15 +85,15 @@ class RotatingTokenSigner:
         payload = dict(claims)
         payload["iat"] = now
         payload["exp"] = now + lifetime_seconds
-        private_key = load_pem_private_key(key_pair.private_key_pem.encode("ascii"), None)
-        return cast(
-            str,
-            pyjwt.encode(
-                payload,
-                private_key,
-                algorithm=JWTAlgorithm.RS256.value,
-                headers={"kid": key_pair.kid},
-            ),
+        private_key = cast(
+            AllowedPrivateKeys,
+            load_pem_private_key(key_pair.private_key_pem.encode("ascii"), None),
+        )
+        return pyjwt.encode(
+            payload,
+            private_key,
+            algorithm=JWTAlgorithm.RS256.value,
+            headers={"kid": key_pair.kid},
         )
 
     async def read(self, token: str | None) -> dict[str, object] | None:
@@ -108,7 +109,9 @@ class RotatingTokenSigner:
         key_pair = await self._key_manager.get_key_by_kid(kid)
         if key_pair is None:
             return None
-        public_key = load_pem_public_key(key_pair.public_key_pem.encode("ascii"))
+        public_key = cast(
+            AllowedPublicKeys, load_pem_public_key(key_pair.public_key_pem.encode("ascii"))
+        )
         try:
             return pyjwt.decode(
                 token,

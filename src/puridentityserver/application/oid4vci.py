@@ -24,6 +24,7 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_private_key,
     load_pem_public_key,
 )
+from jwt.algorithms import AllowedPrivateKeys, AllowedPublicKeys
 
 from puridentityserver.application.authorization_details import (
     CREDENTIAL_CONFIGURATION_ID,
@@ -484,9 +485,7 @@ class OID4VCIIssuerUseCase:
         result = issuer_metadata_payload(self._issuer)
         pki = self._ensure_mdoc_pki()
         result["mdoc_iaca_certificates"] = [
-            base64.urlsafe_b64encode(
-                pki.issuer_certificate.public_bytes(cast(Encoding, Encoding.DER))
-            )
+            base64.urlsafe_b64encode(pki.issuer_certificate.public_bytes(Encoding.DER))
             .rstrip(b"=")
             .decode("ascii")
         ]
@@ -555,7 +554,9 @@ class OID4VCIIssuerUseCase:
         niveau. La signature est réalisée avec la clé active de l'OP.
         """
         key: KeyPair = await first_active_key(self._key_manager, self._algorithm)
-        private_key = load_pem_private_key(key.private_key_pem.encode("ascii"), password=None)
+        private_key = cast(
+            AllowedPrivateKeys, load_pem_private_key(key.private_key_pem.encode("ascii"), None)
+        )
         now = int(datetime.now(timezone.utc).timestamp())
         payload: dict[str, object] = dict(self.issuer_metadata())
         encryption_jwks = await self.encryption_jwks()
@@ -566,10 +567,7 @@ class OID4VCIIssuerUseCase:
         payload["iat"] = now
         jwk = JWKKeyResponse.from_key_pair(key).model_dump(mode="json", exclude_none=True)
         headers = {"typ": ISSUER_METADATA_TYP, "kid": key.kid, "jwk": jwk}
-        return cast(
-            str,
-            pyjwt.encode(payload, private_key, algorithm=self._algorithm.value, headers=headers),
-        )
+        return pyjwt.encode(payload, private_key, algorithm=self._algorithm.value, headers=headers)
 
     async def issue_credential(
         self,
@@ -995,7 +993,9 @@ class OID4VCIIssuerUseCase:
     async def _sign_nonce(self) -> str:
         """Signe un ``c_nonce`` court avec la clé de signature de l'OP."""
         key: KeyPair = await first_active_key(self._key_manager, self._algorithm)
-        private_key = load_pem_private_key(key.private_key_pem.encode("ascii"), password=None)
+        private_key = cast(
+            AllowedPrivateKeys, load_pem_private_key(key.private_key_pem.encode("ascii"), None)
+        )
         now = int(datetime.now(timezone.utc).timestamp())
         payload: dict[str, object] = {
             "iss": self._issuer,
@@ -1004,10 +1004,7 @@ class OID4VCIIssuerUseCase:
             "jti": uuid.uuid4().hex,
         }
         headers = {"typ": C_NONCE_TYP, "kid": key.kid}
-        return cast(
-            str,
-            pyjwt.encode(payload, private_key, algorithm=self._algorithm.value, headers=headers),
-        )
+        return pyjwt.encode(payload, private_key, algorithm=self._algorithm.value, headers=headers)
 
     async def _c_nonce_valid(self, nonce: str) -> bool:
         """Vérifie qu'un ``c_nonce`` a été signé par l'OP et n'a pas expiré."""
@@ -1024,7 +1021,10 @@ class OID4VCIIssuerUseCase:
         if key is None or key.algorithm is not self._algorithm:
             return False
         try:
-            public_key = load_pem_public_key(key.public_key_pem.encode("ascii"))
+            public_key = cast(
+                AllowedPublicKeys,
+                load_pem_public_key(key.public_key_pem.encode("ascii")),
+            )
             pyjwt.decode(
                 nonce,
                 public_key,
@@ -1162,14 +1162,11 @@ class OID4VCIIssuerUseCase:
             }
             if binding_jwk is not None:
                 payload["cnf"] = {"jwk": binding_jwk}
-            credential = cast(
-                str,
-                pyjwt.encode(
-                    payload,
-                    material.private_key,
-                    algorithm=material.algorithm,
-                    headers=material.headers,
-                ),
+            credential = pyjwt.encode(
+                payload,
+                material.private_key,
+                algorithm=material.algorithm,
+                headers=material.headers,
             )
             combined = credential + "~" + "~".join(disclosures) + "~"
             credentials.append(

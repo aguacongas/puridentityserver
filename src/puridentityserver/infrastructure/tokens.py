@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_private_key,
     load_pem_public_key,
 )
+from jwt.algorithms import AllowedPrivateKeys, AllowedPublicKeys
 
 from puridentityserver.domain.authorization import Scope
 from puridentityserver.domain.jwks import SYMMETRIC_ALGORITHMS, JWTAlgorithm, KeyPair
@@ -220,7 +221,9 @@ class PyJWTTokenManager:
         if key is None:
             return None
 
-        public_key = load_pem_public_key(key.public_key_pem.encode("ascii"))
+        public_key = cast(
+            AllowedPublicKeys, load_pem_public_key(key.public_key_pem.encode("ascii"))
+        )
         try:
             return cast(
                 dict[str, object],
@@ -261,32 +264,28 @@ class PyJWTTokenManager:
         ``id_token_signed_response_alg=none`` (OIDC Core 1.0 §3.1.3.7).
         """
         if algorithm is JWTAlgorithm.NONE:
-            # types-PyJWT limite la clé à un objet crypto : le JWT non signé
-            # n'en porte aucune (JWA RFC 7519 §6).
-            return cast(str, pyjwt.encode(payload, None, algorithm="none"))  # type: ignore[arg-type]
+            # La signature de ``jwt.encode`` n'accepte pas ``None`` alors que
+            # le JWT non signé n'embarque aucune clé (JWA RFC 7519 §6).
+            return pyjwt.encode(payload, None, algorithm="none")  # type: ignore[arg-type]
         if algorithm in _HMAC_ALGORITHMS:
             if not shared_secret:
                 raise ValueError(
                     f"{algorithm.value} signe l'id_token avec le secret partagé du client, absent"
                 )
-            return cast(
-                str,
-                pyjwt.encode(
-                    payload,
-                    shared_secret.encode("utf-8"),
-                    algorithm=algorithm.value,
-                ),
+            return pyjwt.encode(
+                payload,
+                shared_secret.encode("utf-8"),
+                algorithm=algorithm.value,
             )
         key_pair = await self._first_active_key(algorithm)
-        private_key = load_pem_private_key(key_pair.private_key_pem.encode("ascii"), None)
-        return cast(
-            str,
-            pyjwt.encode(
-                payload,
-                private_key,
-                algorithm=algorithm.value,
-                headers={"kid": key_pair.kid},
-            ),
+        private_key = cast(
+            AllowedPrivateKeys, load_pem_private_key(key_pair.private_key_pem.encode("ascii"), None)
+        )
+        return pyjwt.encode(
+            payload,
+            private_key,
+            algorithm=algorithm.value,
+            headers={"kid": key_pair.kid},
         )
 
     async def _first_active_key(self, algorithm: JWTAlgorithm) -> KeyPair:

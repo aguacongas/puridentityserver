@@ -56,7 +56,7 @@ MDL_MANDATORY = {
 def _ec_proof(nonce: str, *, audience: str = ISSUER) -> str:
     """Construit une preuve JWT signée EC P-256 (device key mdoc)."""
     private_key = ec.generate_private_key(ec.SECP256R1())
-    jwk = ECAlgorithm.to_jwk(private_key.public_key(), as_dict=True)  # type: ignore[attr-defined]
+    jwk = ECAlgorithm.to_jwk(private_key.public_key(), as_dict=True)
     jwk["alg"] = "ES256"
     now = int(datetime.now(timezone.utc).timestamp())
     return pyjwt.encode(
@@ -257,7 +257,7 @@ def test_mdoc_rejects_rsa_binding_key() -> None:
         from jwt.algorithms import RSAAlgorithm
 
         private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        jwk = RSAAlgorithm.to_jwk(private_key.public_key(), as_dict=True)  # type: ignore[attr-defined]
+        jwk = RSAAlgorithm.to_jwk(private_key.public_key(), as_dict=True)
         jwk["alg"] = "RS256"
         now = int(datetime.now(timezone.utc).timestamp())
         rsa_proof = pyjwt.encode(

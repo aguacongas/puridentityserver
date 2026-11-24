@@ -57,7 +57,7 @@ def _created(
 def _rsa_jwk() -> dict[str, Any]:
     """Construit un JWK public RSA (algorithme refuse par le verifier)."""
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    jwk = RSAAlgorithm.to_jwk(key.public_key(), as_dict=True)  # type: ignore[attr-defined]
+    jwk = RSAAlgorithm.to_jwk(key.public_key(), as_dict=True)
     return dict(jwk)
 
 
@@ -169,7 +169,9 @@ def test_request_object_header_uses_leaf_x5c_chain() -> None:
     public_key = pki.leaf_certificate.public_key()
     claims = pyjwt.decode(
         created.request_object,
-        public_key,  # type: ignore[arg-type]  # cle EC hors stubs PyJWT
+        # clé publique de certificat : union plus large qu'``AllowedPublicKeys``
+        # (ML-KEM, X25519), qu'un certificat ne peut pas porter
+        public_key,  # type: ignore[arg-type]
         algorithms=["ES256"],
         options={"verify_aud": False},
     )

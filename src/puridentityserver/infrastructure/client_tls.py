@@ -25,7 +25,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from ssl import SSLSocket
-from typing import cast
 from urllib.parse import unquote
 
 from cryptography import x509
@@ -116,9 +115,7 @@ def _der_from_headers(request: Request, header_names: ClientCertificateHeaderNam
     if not pem:
         return None
     try:
-        return x509.load_pem_x509_certificate(pem.encode("ascii")).public_bytes(
-            cast(Encoding, Encoding.DER)
-        )
+        return x509.load_pem_x509_certificate(pem.encode("ascii")).public_bytes(Encoding.DER)
     except ValueError:
         return None
 

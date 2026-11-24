@@ -37,7 +37,7 @@ from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, cast
+from typing import Any
 
 import jwt as pyjwt
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -257,14 +257,11 @@ class OID4VPVerifierUseCase:
             dcql_query=dcql_query,
         )
         header = {"typ": REQUEST_OBJECT_TYP, "x5c": pki.x5c, "kid": pki.leaf_thumbprint}
-        request_object = cast(
-            str,
-            pyjwt.encode(
-                claims,
-                pki.leaf_private_key,  # type: ignore[arg-type]  # clé EC hors stubs PyJWT
-                algorithm="ES256",
-                headers=header,
-            ),
+        request_object = pyjwt.encode(
+            claims,
+            pki.leaf_private_key,
+            algorithm="ES256",
+            headers=header,
         )
         pending = _PendingRequest(
             request_id=request_id,
@@ -310,14 +307,11 @@ class OID4VPVerifierUseCase:
             return pending.request_object
         claims = pyjwt.decode(pending.request_object, options={"verify_signature": False})
         claims["wallet_nonce"] = wallet_nonce
-        return cast(
-            str,
-            pyjwt.encode(
-                claims,
-                pending.signing_key,  # type: ignore[arg-type]  # clé EC hors stubs PyJWT
-                algorithm="ES256",
-                headers=pending.signing_header,
-            ),
+        return pyjwt.encode(
+            claims,
+            pending.signing_key,
+            algorithm="ES256",
+            headers=pending.signing_header,
         )
 
     def validate_presentation_response(
@@ -928,7 +922,7 @@ def _verify_key_binding_signature(key_binding: str, issuer_payload: Mapping[str,
     try:
         pyjwt.decode(
             key_binding,
-            holder_key,  # type: ignore[arg-type]  # clé EC hors stubs PyJWT
+            holder_key,
             algorithms=list(CREDENTIAL_SIGNATURE_ALGORITHMS),
             options={
                 "verify_aud": False,

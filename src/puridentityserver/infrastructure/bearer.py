@@ -21,7 +21,7 @@ from urllib.parse import urljoin
 from urllib.request import urlopen
 
 import jwt as pyjwt
-from jwt import PyJWKClient  # type: ignore[attr-defined]  # non exposé par types-PyJWT
+from jwt import PyJWKClient
 
 from puridentityserver.infrastructure.settings import Settings
 from puridentityserver.interfaces.domain.bearer import BearerTokenVerifier

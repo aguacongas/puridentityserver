@@ -13,11 +13,12 @@ falsifiables ni expirables par le tiers.
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import jwt as pyjwt
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from jwt.algorithms import AllowedPrivateKeys
 
 from puridentityserver.application.openid20_migration import OpenID20MigrationUseCase
 from puridentityserver.domain.jwks import JWTAlgorithm
@@ -168,7 +169,9 @@ class OpenID20ProviderUseCase:
     async def _sign(self, payload: dict[str, Any]) -> str:
         """Signe un jeton d'état OpenID 2.0 (algorithme serveur)."""
         key = await first_active_key(self._key_manager, self._algorithm)
-        private_key = load_pem_private_key(key.private_key_pem.encode("ascii"), None)
+        private_key = cast(
+            AllowedPrivateKeys, load_pem_private_key(key.private_key_pem.encode("ascii"), None)
+        )
         now = int(time.time())
         claims = {
             **payload,
@@ -188,7 +191,9 @@ class OpenID20ProviderUseCase:
     async def _verify(self, token: str, kind: str) -> dict[str, Any]:
         """Vérifie la signature et le type d'un jeton d'état OpenID 2.0."""
         key = await first_active_key(self._key_manager, self._algorithm)
-        private_key = load_pem_private_key(key.private_key_pem.encode("ascii"), None)
+        private_key = cast(
+            AllowedPrivateKeys, load_pem_private_key(key.private_key_pem.encode("ascii"), None)
+        )
         try:
             claims = pyjwt.decode(
                 token,

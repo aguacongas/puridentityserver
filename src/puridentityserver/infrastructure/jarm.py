@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import jwt as pyjwt
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from jwt.algorithms import AllowedPrivateKeys
 
 from puridentityserver.domain.jwks import ASYMMETRIC_ALGORITHMS, JWTAlgorithm
 from puridentityserver.infrastructure.jwks import first_active_key
@@ -48,7 +49,9 @@ class PyJarmEnvelopeSigner:
         if jwt_algorithm is None or jwt_algorithm not in ASYMMETRIC_ALGORITHMS:
             raise ValueError(f"Algorithme JARM non signable côté serveur : {algorithm}")
         key_pair = await first_active_key(self._key_manager, jwt_algorithm)
-        private_key = load_pem_private_key(key_pair.private_key_pem.encode("ascii"), None)
+        private_key = cast(
+            AllowedPrivateKeys, load_pem_private_key(key_pair.private_key_pem.encode("ascii"), None)
+        )
         now = int(datetime.now(timezone.utc).timestamp())
         claims: dict[str, object] = {
             "iss": self._issuer,
@@ -58,12 +61,9 @@ class PyJarmEnvelopeSigner:
             "jti": uuid4().hex,
             **dict(params),
         }
-        return cast(
-            str,
-            pyjwt.encode(
-                claims,
-                private_key,
-                algorithm=algorithm,
-                headers={"kid": key_pair.kid},
-            ),
+        return pyjwt.encode(
+            claims,
+            private_key,
+            algorithm=algorithm,
+            headers={"kid": key_pair.kid},
         )
