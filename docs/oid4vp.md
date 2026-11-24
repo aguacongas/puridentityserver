@@ -3,6 +3,11 @@
 PurIdentityServer implémente le rôle **verifier** d'OpenID4VP 1.0 Final
 (issue #224), en mode `direct_post.jwt` du profil HAIP — désactivé par défaut.
 
+Le respect du profil [OpenID4VC High Assurance Interoperability Profile
+1.0](https://openid.net/specs/openid4vc-high-assurance-interoperability-profile-1_0.html)
+sur ce flux est trace exigence par exigence (statut + preuve, ecarts
+documentes) dans [docs/haip.md](haip.md).
+
 ## Activation
 
 ```toml
