@@ -47,7 +47,7 @@ on:
     inputs:
       plan:
         # Permet un cycle de diagnostic rapide : ne lancer qu'un seul plan au
-        # lieu des treize (~30 min, même en parallèle le gain nul).
+        # lieu des dix-sept (~30 min, même en parallèle le gain nul).
         # `ekyc` (identité assurance) est HORS programme officiel de
         # certification mais est joué dans le run `all` comme les autres.
         # ⚠ Le plan `ekyc-test-plan-oidccore` n'existe que depuis le tag
@@ -56,7 +56,7 @@ on:
         # `ekyc` de `CERTIFICATION_PLANS` (certification/selectors.sh) — le
         # workflow local, lui, épingle la dernière release et n'est pas
         # concerné.
-        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + Dynamic + CIBA + CIBA Ping + FAPI1 + FAPI2 + FAPI2 Message Signing + ekyc + federation + oid4vci + oid4vci-mdoc + oid4vp ; ekyc = identité assurance, federation = OpenID Federation, oid4vp = vérificateur OpenID4VP, hors programme officiel)"
+        description: "Plan(s) à exécuter (all = Basic + Implicit + Hybrid + Form Post + Dynamic + CIBA + CIBA Ping + FAPI1 + FAPI2 + FAPI2 Message Signing + ekyc + federation + oid4vci + oid4vci-mdoc + oid4vci-issuer-initiated + oid4vci-mdoc-issuer-initiated + oid4vp ; ekyc = identité assurance, federation = OpenID Federation, oid4vp = vérificateur OpenID4VP, hors programme officiel)"
         type: choice
         required: false
         default: all
@@ -76,6 +76,8 @@ on:
           - federation
           - oid4vci
           - oid4vci-mdoc
+          - oid4vci-issuer-initiated
+          - oid4vci-mdoc-issuer-initiated
           - oid4vp
 permissions:
   contents: read
@@ -123,7 +125,7 @@ jobs:
         # toute consommation d'infra (deploy hook, Playwright, clone).
         id: matrix
         env:
-          # Vide sur push/schedule : les treize sont joués.
+          # Vide sur push/schedule : les dix-sept sont joués.
           PLAN_FILTER: ${{ inputs.plan || 'all' }}
         run: |
           set -euo pipefail
@@ -424,7 +426,7 @@ jobs:
       - name: Dépendances Python du driver officiel (httpx)
         run: python3 -m pip install --disable-pip-version-check --quiet httpx
 
-      - name: Patch du driver (captures de relecture + libération d'alias + diagnostic d'interruption + rotation des clés + initiateur OID4VP)
+      - name: Patch du driver (captures de relecture + libération d'alias + diagnostic d'interruption + rotation des clés + initiateur OID4VP + initiateur OID4VCI)
         # Issue #132 : conformance-reuse-plan et conformance-stale-plan-recovery
         # retires -> chaque run cree ses plans frais (POST /api/plan).
         run: |
@@ -438,6 +440,8 @@ jobs:
           grep -n "rotate_op_signing_keys" conformance-suite/scripts/run-test-plan.py
           git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-oid4vp-initiator.patch"
           grep -n "oid4vp_rc" conformance-suite/scripts/run-test-plan.py
+          git -C conformance-suite apply "$GITHUB_WORKSPACE/certification/conformance-oid4vci-initiator.patch"
+          grep -n "oid4vci_rc" conformance-suite/scripts/run-test-plan.py
       - name: Timeout par module piloté par CONFORMANCE_MODULE_TIMEOUT
         # Le driver upstream hardcode timeout=240 dans wait_for_state : on rend
         # cette valeur réglable sans dévier du script officiel (patch sémantique).
@@ -505,6 +509,13 @@ jobs:
           # autres plans. L'OP cible est l'instance Render herbergee.
           OID4VP_INITIATOR: ${{ format('{0}/certification/local/oid4vp_initiator.py', github.workspace) }}
           OID4VP_INITIATOR_OP_URL: ${{ env.OP_URL }}
+          # Initiateur OID4VCI (issue #306) : livraison de l'offre de credential
+          # aux modules oid4vci-1_0-issuer-* en etat WAITING (hook WAITING du
+          # driver) ; creation de l'offre cote OP (client certification-admin,
+          # scope openid4vci). Inerte sur les autres plans. L'OP cible est
+          # l'instance Render herbergee.
+          OID4VCI_INITIATOR: ${{ format('{0}/certification/local/oid4vci_initiator.py', github.workspace) }}
+          OID4VCI_INITIATOR_OP_URL: ${{ env.OP_URL }}
         run: |
           # Le driver écrit les exports (.zip) dans --export-dir : le créer
           # sinon chaque téléchargement échoue en FileNotFoundError.

@@ -270,7 +270,9 @@ password = "password"
 client_id = "certification-admin"
 client_secret = "${CERTIFICATION_ADMIN_CLIENT_SECRET}"
 redirect_uris = []
-scopes = "openid"
+# `openid4vci` (issue #306) : le meme jeton client sert a creer les offres de
+# credential (POST /credential-offer) via l'initiateur oid4vci_initiator.py.
+scopes = "openid openid4vci"
 client_type = "confidential"
 
 # Clients statiques FAPI (issue #113) : voir l'en-tête.
@@ -357,6 +359,10 @@ redirect_uris = [
     "https://www.certification.openid.net/test/a/puridentityserver-oid4vci/callback?dummy1=lorem&dummy2=ipsum",
     "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-mdoc/callback",
     "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-mdoc/callback?dummy1=lorem&dummy2=ipsum",
+    "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-issuer-initiated/callback",
+    "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-issuer-initiated/callback?dummy1=lorem&dummy2=ipsum",
+    "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-mdoc-issuer-initiated/callback",
+    "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-mdoc-issuer-initiated/callback?dummy1=lorem&dummy2=ipsum",
 ]
 scopes = "openid openid4vci offline_access"
 client_type = "confidential"
@@ -373,6 +379,10 @@ redirect_uris = [
     "https://www.certification.openid.net/test/a/puridentityserver-oid4vci/callback?dummy1=lorem&dummy2=ipsum",
     "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-mdoc/callback",
     "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-mdoc/callback?dummy1=lorem&dummy2=ipsum",
+    "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-issuer-initiated/callback",
+    "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-issuer-initiated/callback?dummy1=lorem&dummy2=ipsum",
+    "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-mdoc-issuer-initiated/callback",
+    "https://www.certification.openid.net/test/a/puridentityserver-oid4vci-mdoc-issuer-initiated/callback?dummy1=lorem&dummy2=ipsum",
 ]
 scopes = "openid openid4vci offline_access"
 client_type = "confidential"

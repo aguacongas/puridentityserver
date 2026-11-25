@@ -10,7 +10,7 @@
 # `federation` (OpenID Federation 1.1) - HORS programme officiel, mais joues
 # dans les deux workflows a la demande du maintainer (les plans sont publies
 # par la suite dans les deux cas).
-CERTIFICATION_PLANS=(basic implicit hybrid formpost dynamic ciba ciba-ping fapi1 fapi2 fapi2-message-signing ekyc federation oid4vci oid4vci-mdoc oid4vp)
+CERTIFICATION_PLANS=(basic implicit hybrid formpost dynamic ciba ciba-ping fapi1 fapi2 fapi2-message-signing ekyc federation oid4vci oid4vci-mdoc oid4vci-issuer-initiated oid4vci-mdoc-issuer-initiated oid4vp)
 
 # Retourne le selecteur de variante d'un plan sur stdout ; code retour 1 si le
 # plan est inconnu (appelant : message d'erreur + sortie securisee).
@@ -95,6 +95,17 @@ selector_for() {
     # suite saute ces controles via `skipIfStringsMissing`, ce ne sont pas des
     # skips de module.
     oid4vci-mdoc) echo 'oid4vci-1_0-issuer-haip-test-plan[credential_format=mdoc][grant_management=disabled][vci_authorization_code_flow_variant=wallet_initiated]' ;;
+    # OID4VCI issuer-initiated (issues #172 / #306) : meme plan HAIP avec la
+    # variante vci_authorization_code_flow_variant=issuer_initiated — les
+    # modules issuer passent en WAITING et attendent la livraison de l'offre
+    # (initiateur OID4VCI_INITIATOR, patch conformance-oid4vci-initiator) ;
+    # les modules FAPI2SP du plan creent eux-memes l'offre (VCIClientProfileBehavior)
+    # et exigent le champ vci.credential_offer_endpoint des fichiers de plan.
+    oid4vci-issuer-initiated) echo 'oid4vci-1_0-issuer-haip-test-plan[credential_format=sd_jwt_vc][grant_management=disabled][vci_authorization_code_flow_variant=issuer_initiated]' ;;
+    # OID4VCI mdoc issuer-initiated (issue #306) : meme plan avec
+    # credential_format=mdoc (HAIP 1.0 s5 : les deux formats doivent etre
+    # certifies dans les deux variantes de flux).
+    oid4vci-mdoc-issuer-initiated) echo 'oid4vci-1_0-issuer-haip-test-plan[credential_format=mdoc][grant_management=disabled][vci_authorization_code_flow_variant=issuer_initiated]' ;;
     # OID4VP (issue #172 / #224) : plan HAIP verifier.
     oid4vp) echo 'oid4vp-1final-verifier-haip-test-plan[credential_format=sd_jwt_vc][response_mode=direct_post.jwt]' ;;
     *) return 1 ;;
