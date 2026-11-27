@@ -1,0 +1,29 @@
+diff --git a/scripts/run-test-plan.py b/scripts/run-test-plan.py
+--- a/scripts/run-test-plan.py
++++ b/scripts/run-test-plan.py
+@@ -344,8 +344,25 @@
+                                                  '--module-id', module_id,
+                                                  '--alias', parsed_config['alias']])
+                     if oid4vp_rc != 0:
+                         raise Exception('OID4VP initiator failed with exit code {} for {}'.format(oid4vp_rc, module_with_variants))
++                # OID4VCI (issue #306) : les modules issuer en variante
++                # issuer_initiated attendent la livraison de l'offre de
++                # credential sur /test/a/{alias}/credential_offer ; l'initiateur
++                # cree l'offre cote OP puis la livre au module en attente.
++                # Sans OID4VCI_INITIATOR dans l'environnement, le hook est inerte
++                # (le module reste WAITING jusqu'au timeout).
++                if re.match(r'oid4vci-1_0-issuer-.*', module) and os.environ.get('OID4VCI_INITIATOR'):
++                    oid4vci_config_id = parsed_config.get('vci', {}).get('credential_configuration_id')
++                    if not oid4vci_config_id:
++                        raise Exception('vci.credential_configuration_id missing from plan for {}'.format(module_with_variants))
++                    oid4vci_rc = subprocess.call([sys.executable, os.environ['OID4VCI_INITIATOR'],
++                                                  '--module', module,
++                                                  '--module-id', module_id,
++                                                  '--alias', parsed_config['alias'],
++                                                  '--credential-configuration-id', oid4vci_config_id])
++                    if oid4vci_rc != 0:
++                        raise Exception('OID4VCI initiator failed with exit code {} for {}'.format(oid4vci_rc, module_with_variants))
+                 # If it's a client test, we need to run the client.
+                 if op_plan is not None and len(op_plan) > 0:
+                     if op_plan["test_name"] == "sample-openid-client-nodejs":
+                         client_metadata_defaults = op_plan["variants"] if "variants" in op_plan else {}

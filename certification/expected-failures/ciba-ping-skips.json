@@ -1,0 +1,7 @@
+[
+  {
+    "test-name": "fapi-ciba-id1-ensure-mtls-holder-of-key-required-at-non-alias-token-endpoint*",
+    "variant": "*",
+    "configuration-filename": "*"
+  }
+]

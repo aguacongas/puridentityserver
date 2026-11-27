@@ -42,7 +42,11 @@ retenue :
   `fapi2-message-signing-final-test-plan`, `ekyc-test-plan-oidccore`,
   `openid-federation-entity-joined-to-test-federation-op-test-plan`,
   `oid4vci-1_0-issuer-haip-test-plan` (plans `oid4vci`, format SD-JWT VC, et
-  `oid4vci-mdoc`, variante mdoc `credential_format=mdoc`),
+  `oid4vci-mdoc`, variante mdoc `credential_format=mdoc`, en variante de flux
+  `wallet_initiated` ; plans `oid4vci-issuer-initiated` et
+  `oid4vci-mdoc-issuer-initiated`, même plan en variante
+  `issuer_initiated` — offre de credential livrée par l'initiateur
+  `local/oid4vci_initiator.py`, issue #306),
   `oid4vp-1final-verifier-haip-test-plan` (plan `oid4vp`, verifier HAIP)),
   le détail des modules testés et leur verdict (PASSED / FAILED / WARNING /
   REVIEW / SKIPPED) dans le résumé du run ;
@@ -84,7 +88,7 @@ retenue :
 - **En CI — local (courant)** : automatique à **chaque merge sur `main`**
   (sans filtre de chemins) et sur chaque PR touchant `certification/**` ;
   manuellement : *Actions → Certification OIDC (Local) → Run workflow* avec
-  le plan souhaité (défaut : les neuf). Seuls les runs sur `main` ou lancés à
+  le plan souhaité (défaut : `all`, les 17 plans). Seuls les runs sur `main` ou lancés à
   la main publient sur GitHub Pages.
 - **En CI — hébergé (à la demande)** : *Actions → Certification OIDC → Run
   workflow* (plus de cron ni de déclenchement au merge pour l'instant — le
@@ -94,17 +98,17 @@ retenue :
   photographie les `kid` du JWKS, déclenche le deploy hook puis patiente
   (15 min max) jusqu'à ce que les `kid` changent — preuve que le build est
   terminé **et** que le disque éphémère (donc l'état) a été recréé avant le
-  premier enregistrement de client ; joue ensuite les **treize plans** en
+  premier enregistrement de client ; joue ensuite les **dix-sept plans** en
   **deux vagues** : `dynamic` seul d'abord (vague 1, isolée car c'est le seul
   plan qui déclenche la rotation des clés de signature de l'OP partagé — une
   rotation pendant un module des autres plans ferait échouer leurs
-  validations), puis les **douze autres en parallèle** (vague 2 : 12 jobs
+  validations), puis les **seize autres en parallèle** (vague 2 : 16 jobs
   matrix, `fail-fast: false` — ~40 min au lieu de ~3 h
   séquentielles, issue #122, isolation de la rotation en issue #219 ; les plans FAPI1 Advanced, FAPI2 Security
   Profile, FAPI2 Message Signing (JARM, issue #164), Form Post
-  (issue #165), Dynamic (issue #168), Federation (issue #170) et CIBA Ping
-  (issue #293) ont été
-  ajoutés par les issues #113, #164, #165, #168, #170 et #293), chaque
+  (issue #165), Dynamic (issue #168), Federation (issue #170), CIBA Ping
+  (issue #293), OID4VCI issuer-initiated (issue #306) ont été
+  ajoutés par les issues #113, #164, #165, #168, #170, #293 et #306), chaque
   plan exportant son propre
   artefact, puis un job final fusionne les exports et téléverse le rapport
   consolidé en artefact.
@@ -116,7 +120,7 @@ retenue :
   # 2. cloner et démarrer la suite, comme le workflow (release-vX.Y.Z = dernière
   #    release publiée : les workflows la résolvent à l'exécution via
   #    git ls-remote, cf. issue #150 ; l'exemple ci-dessous la pinne) :
-  git clone --depth 1 --branch release-v5.3.4 https://gitlab.com/openid/conformance-suite.git
+  git clone --depth 1 --branch release-v5.3.5 https://gitlab.com/openid/conformance-suite.git
   cd conformance-suite && docker compose -f docker-compose-prebuilt.yml up -d
   # 3. substituer {OPURL} et {SUITEURL} dans les plans puis jouer un plan :
   export CONFORMANCE_SERVER=https://localhost.emobix.co.uk:8443/
@@ -148,7 +152,7 @@ driver (hôte) --API--> suite docker nginx :8443 (alias localhost.emobix.co.uk)
                      OP uvicorn (hôte :8000)
 ```
 
-- la **suite** (dernière release publiée, ex. `release-v5.3.4`) tourne en docker (mongodb + server + nginx) ;
+- la **suite** (dernière release publiée, ex. `release-v5.3.5`) tourne en docker (mongodb + server + nginx) ;
 - l'**OP local** tourne sur l'hôte (uvicorn), avec une config générée à partir de
   `config.render.toml` (issuer `https://op:9443`, `redirect_uris` = callbacks de
   la **suite locale**, SQLite éphémère) ;
@@ -192,7 +196,7 @@ redémarrage, les conteneurs sont réutilisés).
 bash certification/local/setup.sh
 
 # 2. rejouer un plan en une commande (même séquence stricte que la CI)
-bash certification/local/run-plan.sh fapi2   # basic | implicit | hybrid | formpost | dynamic | ciba | ciba-ping | fapi1 | fapi2 | fapi2-message-signing | ekyc | federation | oid4vci | oid4vci-mdoc | oid4vp
+bash certification/local/run-plan.sh fapi2   # basic | implicit | hybrid | formpost | dynamic | ciba | ciba-ping | fapi1 | fapi2 | fapi2-message-signing | ekyc | federation | oid4vci | oid4vci-mdoc | oid4vci-issuer-initiated | oid4vci-mdoc-issuer-initiated | oid4vp
 
 # 3. arrêter / nettoyer
 bash certification/local/down.sh             # OP + op-mtls + conteneurs de la suite
@@ -200,7 +204,7 @@ bash certification/local/down.sh --purge     # + suppression de .harness-local/
 ```
 
 `run-plan.sh` reproduit le job plan du workflow CI : readiness (bootstrap via
-`setup.sh` si besoin), application idempotente des 5 patches du driver
+`setup.sh` si besoin), application idempotente des 6 patches du driver
 (`prepare-suite.sh`), obtention du jeton d'administration
 (`admin-token.sh`), substitution `{OPURL}`/`{SUITEURL}` dans une copie
 générée du clone (`conformance-suite/plans/<plan>.json` — gitignore, le
@@ -256,7 +260,7 @@ le module `oidcc-server-rotate-keys` reproduit alors son écart attendu
 (l'auto-attestation OIDF reste alors possible).
 
 Ainsi, **aucune rotation permanente** n'est configurée sur l'instance de
-certification : les plans locaux (15) et hébergés (15) partagent le même
+certification : les plans locaux (17) et hébergés (17) partagent le même
 mécanisme, sans churn du JWKS sur les plans qui ne portent pas le module.
 
 ### Écarts de modules attendus (mode witness)
@@ -266,12 +270,23 @@ mécanisme, sans churn du JWKS sur les plans qui ne portent pas le module.
 les conditions de modules connues et non résolues. Son pendant
 `certification/expected-failures/<plan>-skips.json` (`--expected-skips-file`,
 même format) déclare les modules que l'OP **saute** faute de capacité. Aucun
-fichier n'est actuellement déclaré : les quinze plans locaux sont sans saut ni
-écart (la rotation des clés de signature de l'OP est livrée — issue #189, le
-module `oidcc-server-rotate-keys` passe ; le chiffrement des request objects
-est livré — issue #204, le module
+`expected-failures` n'est actuellement déclaré : les dix-sept plans locaux sont
+sans écart de condition (la rotation des clés de signature de l'OP est livrée —
+issue #189, le module `oidcc-server-rotate-keys` passe ; le chiffrement des
+request objects est livré — issue #204, le module
 `openid-federation-automatic-client-registration-with-jar-and-encrypted-request-object`
 du plan `federation` y est joué en conditions réelles).
+
+Cinq `-skips.json` (`ciba`, `ciba-ping`, `fapi1`, `fapi2`,
+`fapi2-message-signing`) déclarent le module « …-at-non-alias-token-endpoint »
+apparu en `release-v5.3.5` : il vérifie le `token_endpoint` **hors**
+`mtls_endpoint_aliases` et se skippe lui-même tant que l'OP ne publie pas un
+alias de token endpoint distinct de `token_endpoint`. PurIdentityServer n'en
+publie qu'un seul (le mTLS est terminé par le nginx `op` devant l'uvicorn) :
+l'enforcement est couvert par le module jumeau « …-holder-of-key-required »,
+joué en conditions réelles. Ces entrées sont à purger si l'OP publie un jour un
+deuxième `token_endpoint` (le driver échouerait alors en
+`EXPECTED_SKIPS_NOT_HAPPEN`).
 
 Le driver classe ces conditions en « expected failure » : le plan ne sort en
 code non nul que pour les écarts **inattendus** — la strictude #130 est
@@ -349,6 +364,62 @@ et de la status list exigées par HAIP-6.1.
 Rejeu : `bash certification/local/run-plan.sh oid4vci-mdoc`, ou
 `workflow_dispatch` avec le filtre de plan `oid4vci-mdoc`.
 
+### Plans `oid4vci-issuer-initiated` et `oid4vci-mdoc-issuer-initiated` : variante issuer-initiated (issue #306)
+
+Même plan `oid4vci-1_0-issuer-haip-test-plan` que `oid4vci` /
+`oid4vci-mdoc`, avec la variante
+`vci_authorization_code_flow_variant=issuer_initiated` (sélecteurs dans
+`certification/selectors.sh`, fichiers de plan
+`plans/oid4vci-issuer-initiated.json` et
+`plans/oid4vci-mdoc-issuer-initiated.json`, alias distincts). Deux
+mécanismes coexistent dans ces plans :
+
+- **modules `vci10issuer`** : au démarrage, le module expose son endpoint
+  émulé `/test/a/{alias}/credential_offer` et passe en état `WAITING`,
+  attendant la livraison de l'offre. Le hook `WAITING` du driver (6e patch
+  `conformance-oid4vci-initiator.patch`, appliqué **en dernier** par
+  `prepare-suite.sh`) appelle `OID4VCI_INITIATOR` →
+  `local/oid4vci_initiator.py`, qui obtient un jeton `client_credentials`
+  (client `certification-admin`, scope `openid4vci` ajouté à ses scopes
+  dans `config.render.toml`), crée l'offre auprès de l'OP
+  (`POST /credential-offer`, `subject=alice@example.com`, configuration de
+  credential lue dans le fichier de plan) puis la livre par valeur
+  (`GET .../credential_offer?credential_offer=<json>`) — 404 = échec
+  (code non nul), autres 4xx/5xx = avertissement. L'initiateur ne livre
+  que si le module attend réellement une offre (état `WAITING` via
+  `GET /api/info/{id}`, `credential_offer_endpoint` exposé via
+  `GET /api/runner/{id}`, entrée « Waiting for call to credential offer
+  endpoint » en tête du journal via `GET /api/log/{id}`) : les modules
+  sans attente (`issuer-metadata-test`, qui valide les métadonnées puis se
+  termine) et l'attente transitoire de finalisation de `fireTestFinished()`
+  (le module passe par `WAITING` avant `FINISHED`, endpoint encore exposé)
+  sont écartés sans livraison — livrer dans ces cas produirait un
+  changement d'état illégal et ferait échouer le module. Après chaque
+  livraison, l'initiateur reste attaché au module et relivre une nouvelle
+  offre à chaque nouvel état d'attente (second client de
+  `happy-flow-multiple-clients`, que le driver n'invoque qu'une seule fois)
+  jusqu'au terme du module ou d'un délai total de 1200 s. Sans la variable
+  d'environnement, le hook est inerte ;
+- **modules FAPI2SP du plan** : ils créent eux-mêmes l'offre
+  (`VCIClientProfileBehavior.onStart()`) et l'ouvrent dans leur browser
+  via le champ `vci.credential_offer_endpoint` des fichiers de plan
+  (endpoint émulated du plan, valeur `by_value` par défaut), puis exigent
+  l'écho de l'`issuer_state` dans la demande d'autorisation — d'où les
+  `redirect_uris` des seeds `puridentityserver-oid4vci-client{,2}`
+  étendus aux deux nouveaux alias dans `config.render.toml`.
+
+Rejeu : `bash certification/local/run-plan.sh oid4vci-issuer-initiated`
+(ou `oid4vci-mdoc-issuer-initiated`), ou `workflow_dispatch` avec le
+filtre de plan correspondant.
+
+Fichiers spécifiques :
+
+| Fichier | Rôle |
+| --- | --- |
+| `plans/oid4vci-issuer-initiated.json` / `plans/oid4vci-mdoc-issuer-initiated.json` | configs des plans (alias dédiés, mêmes sections que `oid4vci` / `oid4vci-mdoc` + `vci.credential_offer_endpoint` : endpoint émulated du plan, ouvert par les modules FAPI2SP en `by_value`) |
+| `conformance-oid4vci-initiator.patch` | patch du driver (appliqué **en dernier** par `prepare-suite.sh`) : dans `run-test-plan.py`, à l'état `WAITING`, appelle `OID4VCI_INITIATOR` (script Python) qui crée l'offre côté OP (`POST /credential-offer`, jeton `client_credentials` scope `openid4vci`) puis la livre sur le `credential_offer` émulé de la suite — sans la variable d'environnement, le hook est inerte |
+| `local/oid4vci_initiator.py` | l'initiateur : jeton `certification-admin`, création de l'offre (`subject`, `credential_configuration_id` du plan), livraison par valeur (query `credential_offer`) après contrôle `WAITING` + `credential_offer_endpoint` exposé + marqueur d'attente en tête du journal (porte d'entrée), boucle de relivraison à chaque nouvel état d'attente jusqu'à `FINISHED`/`INTERRUPTED` (délai total 1200 s), 404 = échec (code non nul), autres 4xx/5xx = avertissement |
+
 ### Plan `oid4vp` : verifier OpenID4VP 1.0 Final / HAIP (issue #224)
 
 Plan `oid4vp-1final-verifier-haip-test-plan` (alias `puridentityserver-oid4vp`),
@@ -373,7 +444,7 @@ Fichiers spécifiques :
 | --- | --- |
 | `plans/oid4vp.json` | config du plan : alias, `credential.signing_jwk` (clé d'émission des credentials SD-JWT, membre privé `d`), `client.request_object_trust_anchor_pem` (ancre X.509 du request object), sans section `browser` |
 | `oid4vp-pki.json` | PKI statique du verifier (CA + leaf) référencée par `oid4vp_pki_path` de `config.render.toml` — le `client_id` `x509_hash:` et la chaîne `x5c` des request objects sont stables d'un run à l'autre |
-| `conformance-oid4vp-initiator.patch` | patch du driver (appliqué **en dernier** par `prepare-suite.sh`) : dans `run-test-plan.py`, à l'état `WAITING`, appelle `OID4VP_INITIATOR` (script Python) qui crée la demande côté OP (`POST /oid4vp/presentation_requests`) puis livre le `request_uri` sur l'`/authorize` émulé de la suite — sans la variable d'environnement, le hook est inerte |
+| `conformance-oid4vp-initiator.patch` | patch du driver (appliqué avant `conformance-oid4vci-initiator` par `prepare-suite.sh`) : dans `run-test-plan.py`, à l'état `WAITING`, appelle `OID4VP_INITIATOR` (script Python) qui crée la demande côté OP (`POST /oid4vp/presentation_requests`) puis livre le `request_uri` sur l'`/authorize` émulé de la suite — sans la variable d'environnement, le hook est inerte |
 | `local/oid4vp_initiator.py` | l'initiateur : livraison du `request_uri` (GET ou POST `request_uri_method=post`), 404 = échec (code non nul), autres 4xx/5xx = avertissement |
 
 Le verifier doit être activé côté OP : `oid4vp_enabled = true`,
@@ -561,7 +632,7 @@ flag ON :
 
 1. Basculer le flag dans `certification/config.render.toml`
    (`openid20_migration_enabled = true`).
-2. Rejouer **les 15 plans en matrix** (workflow `Certification OIDC (Local)` sur
+2. Rejouer **les 17 plans en matrix** (workflow `Certification OIDC (Local)` sur
    une branche de test, `plan=all`, sortie stricte) — ou en séquentiel via
    `certification/local/run-plan.sh` — avec les captures REVIEW obligatoires.
 3. Comparer par plan les compteurs `PASSED`/`REVIEW` et vérifier **0 FAILED
@@ -580,7 +651,7 @@ stricts verts — 475 modules, 0 hors `PASSED`/`REVIEW`/`SKIPPED`.
 | `render.yaml` / `Dockerfile` / `.dockerignore` | déploiement de l'OP sur Render (SQLite, disque éphémère) |
 | `config.render.toml` | config de l'instance de certification (registre dynamique ouvert, users de démo, `require_login = true`, `subject_pairwise_seed` pour les modules sector du plan dynamic, 4 clients statiques FAPI `private_key_jwt` + JWKS public pour les plans fapi1/fapi2) |
 | `generate_pki.py` / `pki/` | génération idempotente (`--force` pour re-minter) des PKI commises : `pki/credential-pki.json` + `credential-root.pem` (racine/leaf x5c du credential SD-JWT, `credential_pki_path`) et `pki/mdoc-iaca.json` + `mdoc-iaca.pem` (IACA mdoc, `mdoc_pki_path` ; le document signer est minté au démarrage de l'OP) — les PEM servent d'ancre `credential.*_pem` aux plans oid4vci |
-| `plans/basic|implicit|hybrid|formpost|dynamic|ciba|ciba-ping|fapi1|fapi2|fapi2-message-signing|ekyc|federation|oid4vci|oid4vci-mdoc|oid4vp.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; `ciba`/`ciba-ping` partagent le plan `fapi-ciba-id1-test-plan` en variantes `ciba_mode=poll` / `ciba_mode=ping` — alias distincts ; fapi1/fapi2/fapi2-message-signing portent aussi `client`/`client2` en clé privée et `resource` ; `ekyc` porte la configuration eKYC `ekyc.verified_claims_request_list` ; `federation` porte l'Entity Identifier de l'OP, l'ancre de confiance `{SUITEURL}test/a/puridentityserver-federation/trust-anchor` et les clés de test RP/ancre du template officiel ; `oid4vp` porte le `credential.signing_jwk` et l'ancre `client.request_object_trust_anchor_pem` du verifier ; `oid4vci`/`oid4vci-mdoc` portent `resource.resourceUrl` (protected-resource), la section `credential` (PEM ancre x5c + status list, HAIP-6.1) et les `override` navigateur (refus de consentement, `match-limit` PAR) empruntés à `fapi2`) |
+| `plans/basic|implicit|hybrid|formpost|dynamic|ciba|ciba-ping|fapi1|fapi2|fapi2-message-signing|ekyc|federation|oid4vci|oid4vci-mdoc|oid4vci-issuer-initiated|oid4vci-mdoc-issuer-initiated|oid4vp.json` | configs des plans de la suite (alias **unique par plan**, discovery, règles navigateur login/consent ; `ciba`/`ciba-ping` partagent le plan `fapi-ciba-id1-test-plan` en variantes `ciba_mode=poll` / `ciba_mode=ping` — alias distincts ; fapi1/fapi2/fapi2-message-signing portent aussi `client`/`client2` en clé privée et `resource` ; `ekyc` porte la configuration eKYC `ekyc.verified_claims_request_list` ; `federation` porte l'Entity Identifier de l'OP, l'ancre de confiance `{SUITEURL}test/a/puridentityserver-federation/trust-anchor` et les clés de test RP/ancre du template officiel ; `oid4vp` porte le `credential.signing_jwk` et l'ancre `client.request_object_trust_anchor_pem` du verifier ; `oid4vci`/`oid4vci-mdoc` portent `resource.resourceUrl` (protected-resource), la section `credential` (PEM ancre x5c + status list, HAIP-6.1) et les `override` navigateur (refus de consentement, `match-limit` PAR) empruntés à `fapi2` ; les variantes `*-issuer-initiated` ajoutent `vci.credential_offer_endpoint`, issue #306) |
 | `conformance-screenshots.patch` | patch du driver : remplit les placeholders REVIEW « capture d'écran » avec la **capture réelle** du module (`SCREENSHOTS_DIR/<testName>.png`) — avec `SCREENSHOTS_DIR` défini (CI), un fichier absent/vide/trop lourd lève une erreur fatale (captures obligatoires, issue #161) ; sans variable (exécution manuelle), le PNG 1x1 de secours, après une période de tolérance `SCREENSHOT_FILL_GRACE` (60 s) pendant laquelle le module a le droit de se terminer seul, pour que les modules Core se terminent sans intervention humaine (mode hébergé) |
 | `capture_screenshots.py` | rejoue les scénarios de relecture (4 Core, 6 dynamic, 2 FAPI1 « page », 1 fédéré, 5 positifs du plan `oid4vp` — 18 PNG, issues #214 et #224) contre l'OP (Playwright/chromium headless) et dépose les PNG `screenshots/<testName>.png` ensuite téléversés par le driver — `--base-url` = OP, `--suite-url` = base des callbacks de la suite (hébergée par défaut, `https://localhost.emobix.co.uk:8443` en local) |
 | `conformance-alias-release.patch` | patch du driver : libère l'alias avant chaque création de module (et à la fin du plan), pour qu'un module encore actif ne soit jamais interrompu par « alias conflict » |
@@ -589,8 +660,8 @@ stricts verts — 475 modules, 0 hors `PASSED`/`REVIEW`/`SKIPPED`.
 | `report.py` | génère la page statique GH Pages à partir des JSON exportés ; recopie les captures réelles dans `_site/screenshots/` (`--screenshots`) et les affiche dans la section du module correspondant |
 | `local/setup.sh` | bootstrap du harness **auto-hébergé** : alias réseau, clone + déploiement docker de la suite, cert auto-signé + nginx mTLS `op`, config OP locale (issuer `https://op:9443`), OP uvicorn, attente de disponibilité |
 | `local/nginx-mtls.conf` | nginx de terminaison mTLS devant l'OP local : certificat client optionnel (`optional_no_ca`), extraction `$ssl_client_escaped_cert` → `X-SSL-Client-Cert` (pas de newline brute), proxy vers l'OP uvicorn de l'hôte |
-| `../.github/workflows/certification.yml` | workflow hébergé à la demande (`workflow_dispatch` uniquement) : `prepare` (deploy + captures, une fois), `plan` (les 15 plans en **deux vagues** — `dynamic` seul puis les 14 autres en parallèle, cf. le déroulé du workflow ci-dessous ; les 9 du programme officiel **plus** `ciba-ping`, `ekyc` (identité assurance), `federation` (OpenID Federation 1.1) et les plans `oid4vci` / `oid4vci-mdoc` (émetteur VCI, formats SD-JWT VC et mdoc) et `oid4vp` (verifier OpenID4VP), hors programme officiel — un job matrix chacun, **mode strict** : tout module hors SUCCESS/REVIEW met le job en échec), `report` (fusion des exports en artefact - publication OIDC des résultats à venir) |
-| `../.github/workflows/certification-local.yml` | workflow **auto-hébergé strict** : déclenché à chaque merge sur `main`, sur les PR (`certification/**`) et à la demande ; 15 plans en matrix (les 15 de l'hébergé), code non nul du driver = job en échec, job `capture` **bloquant** (Playwright, artefact `certification-local-screenshots`, #158/#161 : captures REVIEW obligatoires), **publication GitHub Pages** (sauf sur les PR) |
+| `../.github/workflows/certification.yml` | workflow hébergé à la demande (`workflow_dispatch` uniquement) : `prepare` (deploy + captures, une fois), `plan` (les 17 plans en **deux vagues** — `dynamic` seul puis les 16 autres en parallèle, cf. le déroulé du workflow ci-dessous ; les 9 du programme officiel **plus** `ciba-ping`, `ekyc` (identité assurance), `federation` (OpenID Federation 1.1) et les plans `oid4vci` / `oid4vci-mdoc` (émetteur VCI, formats SD-JWT VC et mdoc, variante `wallet_initiated`), `oid4vci-issuer-initiated` / `oid4vci-mdoc-issuer-initiated` (variante `issuer_initiated`, issue #306) et `oid4vp` (verifier OpenID4VP), hors programme officiel — un job matrix chacun, **mode strict** : tout module hors SUCCESS/REVIEW met le job en échec), `report` (fusion des exports en artefact - publication OIDC des résultats à venir) |
+| `../.github/workflows/certification-local.yml` | workflow **auto-hébergé strict** : déclenché à chaque merge sur `main`, sur les PR (`certification/**`) et à la demande ; 17 plans en matrix (les 17 de l'hébergé), code non nul du driver = job en échec, job `capture` **bloquant** (Playwright, artefact `certification-local-screenshots`, #158/#161 : captures REVIEW obligatoires), **publication GitHub Pages** (sauf sur les PR) |
 
 ## Captures d'écran des modules de relecture (modes hébergé et local)
 

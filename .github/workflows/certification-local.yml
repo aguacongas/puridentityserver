@@ -61,6 +61,8 @@ on:
           - federation
           - oid4vci
           - oid4vci-mdoc
+          - oid4vci-issuer-initiated
+          - oid4vci-mdoc-issuer-initiated
           - oid4vp
   pull_request:
     paths:
@@ -258,9 +260,9 @@ jobs:
       - name: Dépendances Python du driver officiel (httpx)
         run: python3 -m pip install --disable-pip-version-check --quiet httpx
 
-      - name: Patch du driver (5 patches, idem job hébergé)
+      - name: Patch du driver (6 patches, idem job hébergé)
         # Helper partage avec le lancement local (run-plan.sh) : application
-        # idempotente des 5 patches + timeout parametrable.
+        # idempotente des 6 patches + timeout parametrable.
         run: bash certification/local/prepare-suite.sh
 
       - name: Récupération des captures d'écran réelles (artefact capture)
@@ -309,6 +311,15 @@ jobs:
           # l'instance locale (meme boucle que le jeton d'administration).
           OID4VP_INITIATOR: ${{ github.workspace }}/certification/local/oid4vp_initiator.py
           OID4VP_INITIATOR_OP_URL: http://127.0.0.1:8000
+          # Initiateur OID4VCI (issue #306) : livraison de l'offre de credential
+          # aux modules oid4vci-1_0-issuer-* en etat WAITING (hook WAITING du
+          # driver, patch applique par prepare-suite.sh) ; creation de l'offre
+          # cote OP (client certification-admin, scope openid4vci). Inerte sur
+          # les autres plans (aucun module WAITING hors variante
+          # issuer_initiated). L'OP cible est l'instance locale (meme boucle
+          # que le jeton d'administration).
+          OID4VCI_INITIATOR: ${{ github.workspace }}/certification/local/oid4vci_initiator.py
+          OID4VCI_INITIATOR_OP_URL: http://127.0.0.1:8000
         run: |
           set +e
           mkdir -p results

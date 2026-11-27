@@ -1,0 +1,7 @@
+[
+  {
+    "test-name": "fapi1-advanced-final-ensure-mtls-holder-of-key-required-at-non-alias-token-endpoint*",
+    "variant": "*",
+    "configuration-filename": "*"
+  }
+]

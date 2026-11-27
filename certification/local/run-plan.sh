@@ -144,6 +144,16 @@ oid4vp_initiator="$REPO_ROOT/certification/local/oid4vp_initiator.py"
 if command -v cygpath >/dev/null 2>&1; then oid4vp_initiator="$(cygpath -m "$oid4vp_initiator")"; fi
 export OID4VP_INITIATOR="$oid4vp_initiator"
 export OID4VP_INITIATOR_OP_URL="http://127.0.0.1:${OP_PORT:-8000}"
+# Initiateur OID4VCI (issue #306) : appele par le hook WAITING du patch
+# conformance-oid4vci-initiator pour creer l'offre de credential cote OP
+# (jeton client certification-admin) puis la livrer aux modules
+# oid4vci-1_0-issuer-* des plans oid4vci-issuer-initiated /
+# id4vci-mdoc-issuer-initiated. Meme forme Windows (cygpath) et meme OP que
+# l'initiateur OID4VP. Inerte pour tous les autres plans.
+oid4vci_initiator="$REPO_ROOT/certification/local/oid4vci_initiator.py"
+if command -v cygpath >/dev/null 2>&1; then oid4vci_initiator="$(cygpath -m "$oid4vci_initiator")"; fi
+export OID4VCI_INITIATOR="$oid4vci_initiator"
+export OID4VCI_INITIATOR_OP_URL="http://127.0.0.1:${OP_PORT:-8000}"
 [ -n "$export_dir" ] || export_dir="$LOCAL_DIR/results/$plan"
 mkdir -p "$export_dir"
 run_log="$LOCAL_DIR/last-$plan.log"
