@@ -26,7 +26,7 @@ set -euo pipefail
 # --- Configuration (surchargeable par env) ------------------------------------
 # Par défaut : dernière release connue. Les workflows la résolvent à
 # l'exécution (git ls-remote, cf. issue #150) et exportent SUITE_VERSION.
-SUITE_VERSION="${SUITE_VERSION:-release-v5.3.4}"
+SUITE_VERSION="${SUITE_VERSION:-release-v5.3.5}"
 REPO_ROOT="${REPO_ROOT:-$(pwd)}"
 SUITE_DIR="${SUITE_DIR:-$REPO_ROOT/conformance-suite}"
 LOCAL_DIR="${LOCAL_DIR:-$REPO_ROOT/.harness-local}"

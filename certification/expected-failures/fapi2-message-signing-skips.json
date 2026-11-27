@@ -1,0 +1,7 @@
+[
+  {
+    "test-name": "fapi2-security-profile-final-ensure-holder-of-key-required-at-non-alias-token-endpoint*",
+    "variant": "*",
+    "configuration-filename": "*"
+  }
+]

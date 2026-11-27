@@ -120,7 +120,7 @@ retenue :
   # 2. cloner et démarrer la suite, comme le workflow (release-vX.Y.Z = dernière
   #    release publiée : les workflows la résolvent à l'exécution via
   #    git ls-remote, cf. issue #150 ; l'exemple ci-dessous la pinne) :
-  git clone --depth 1 --branch release-v5.3.4 https://gitlab.com/openid/conformance-suite.git
+  git clone --depth 1 --branch release-v5.3.5 https://gitlab.com/openid/conformance-suite.git
   cd conformance-suite && docker compose -f docker-compose-prebuilt.yml up -d
   # 3. substituer {OPURL} et {SUITEURL} dans les plans puis jouer un plan :
   export CONFORMANCE_SERVER=https://localhost.emobix.co.uk:8443/
@@ -152,7 +152,7 @@ driver (hôte) --API--> suite docker nginx :8443 (alias localhost.emobix.co.uk)
                      OP uvicorn (hôte :8000)
 ```
 
-- la **suite** (dernière release publiée, ex. `release-v5.3.4`) tourne en docker (mongodb + server + nginx) ;
+- la **suite** (dernière release publiée, ex. `release-v5.3.5`) tourne en docker (mongodb + server + nginx) ;
 - l'**OP local** tourne sur l'hôte (uvicorn), avec une config générée à partir de
   `config.render.toml` (issuer `https://op:9443`, `redirect_uris` = callbacks de
   la **suite locale**, SQLite éphémère) ;
@@ -270,12 +270,23 @@ mécanisme, sans churn du JWKS sur les plans qui ne portent pas le module.
 les conditions de modules connues et non résolues. Son pendant
 `certification/expected-failures/<plan>-skips.json` (`--expected-skips-file`,
 même format) déclare les modules que l'OP **saute** faute de capacité. Aucun
-fichier n'est actuellement déclaré : les dix-sept plans locaux sont sans saut ni
-écart (la rotation des clés de signature de l'OP est livrée — issue #189, le
-module `oidcc-server-rotate-keys` passe ; le chiffrement des request objects
-est livré — issue #204, le module
+`expected-failures` n'est actuellement déclaré : les dix-sept plans locaux sont
+sans écart de condition (la rotation des clés de signature de l'OP est livrée —
+issue #189, le module `oidcc-server-rotate-keys` passe ; le chiffrement des
+request objects est livré — issue #204, le module
 `openid-federation-automatic-client-registration-with-jar-and-encrypted-request-object`
 du plan `federation` y est joué en conditions réelles).
+
+Cinq `-skips.json` (`ciba`, `ciba-ping`, `fapi1`, `fapi2`,
+`fapi2-message-signing`) déclarent le module « …-at-non-alias-token-endpoint »
+apparu en `release-v5.3.5` : il vérifie le `token_endpoint` **hors**
+`mtls_endpoint_aliases` et se skippe lui-même tant que l'OP ne publie pas un
+alias de token endpoint distinct de `token_endpoint`. PurIdentityServer n'en
+publie qu'un seul (le mTLS est terminé par le nginx `op` devant l'uvicorn) :
+l'enforcement est couvert par le module jumeau « …-holder-of-key-required »,
+joué en conditions réelles. Ces entrées sont à purger si l'OP publie un jour un
+deuxième `token_endpoint` (le driver échouerait alors en
+`EXPECTED_SKIPS_NOT_HAPPEN`).
 
 Le driver classe ces conditions en « expected failure » : le plan ne sort en
 code non nul que pour les écarts **inattendus** — la strictude #130 est
