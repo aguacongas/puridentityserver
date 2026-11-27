@@ -54,8 +54,11 @@ Points a verifier :
 
 - `credential_offer.grants` contient
   `urn:ietf:params:oauth:grant-type:pre-authorized_code` avec
-  `pre-authorized_code`, `authorization_server` et, si demande, un objet
-  `tx_code` (`input_mode=numeric`, `length=6`) ;
+  `pre-authorized_code` et, si demande, un objet `tx_code`
+  (`input_mode=numeric`, `length=6`) ; `authorization_server` est absent :
+  ce champ ne sert que si `authorization_servers` des metadonnees de
+  l emitteur en liste plusieurs (OID4VCI 1.0 §4.1.1, « MUST NOT be used
+  otherwise ») ;
 - la reponse de creation porte `tx_code` **une seule fois** (canal separe,
   OID4VCI 1.0 §4.1.1) ; elle est absente des creations suivantes sans
   `tx_code` ;

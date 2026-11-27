@@ -111,7 +111,9 @@ def test_create_offer_for_user_token() -> None:
     assert offer["credential_configuration_ids"] == [CREDENTIAL_CONFIGURATION_ID]
     grant = offer["grants"][PRE_AUTHORIZED_CODE_GRANT_TYPE]
     assert grant["pre-authorized_code"]
-    assert grant["authorization_server"] == _ISSUER
+    # OID4VCI 1.0 §4.1.1 : « MUST NOT be used otherwise » — ce champ ne
+    # sert que si les metadonnees listent plusieurs serveurs d'autorisation.
+    assert "authorization_server" not in grant
     assert "tx_code" not in grant
     assert "tx_code" not in result
     assert result["credential_offer_uri"].startswith(f"{_ISSUER}/credential-offer/")

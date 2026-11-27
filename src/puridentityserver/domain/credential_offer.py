@@ -59,11 +59,17 @@ def credential_offer_payload(offer: CredentialOffer, issuer: str) -> dict[str, o
     ``accepted_credential_configuration_ids`` n'est pas émis : l'offre
     désigne la configuration par identifiant, ce que le wallet consomme
     directement.
+
+    ``authorization_server`` n'est pas émis non plus : ce champ ne désigne
+    un serveur d'autorisation que si ``authorization_servers`` des
+    métadonnées de l'émetteur en liste plusieurs, et « MUST NOT be used
+    otherwise » (OID4VCI 1.0 §4.1.1). L'émetteur n'en publie toujours
+    qu'un seul (``issuer_metadata_payload``) : le wallet retombe sur cet
+    unique serveur.
     """
     normalized = issuer.rstrip("/")
     grant: dict[str, object] = {
         "pre-authorized_code": offer.pre_authorized_code,
-        "authorization_server": normalized,
     }
     if offer.tx_code_required:
         grant["tx_code"] = {
